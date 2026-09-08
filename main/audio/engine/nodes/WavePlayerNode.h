@@ -87,7 +87,7 @@ inline void render(NodeInstance &inst, size_t frames)
         // fade from true silence (envelope 0..1 IS the amplitude), not
         // stack on top of an already-audible constant. fadeGain multiplies
         // on top either way, so gate-off never clicks.
-        const float amp = (ampConnected ? portSample(inst, 0, i) : 1.0f) * s.fadeGain;
+        const float amp = (ampConnected ? portSample(inst, 0, i) : 1.0f) * s.fadeGain * cv::kAudioPeakVolts;
         inst.outL[i] = (l0 + (l1 - l0) * frac) * amp;
         inst.outR[i] = (r0 + (r1 - r0) * frac) * amp;
 

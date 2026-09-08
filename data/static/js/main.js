@@ -1175,6 +1175,11 @@ const LFO_ZERO_MODE_BUTTONS = [
   { id: "fixed", label: "Fixed" },
 ];
 
+const LFO_POLARITY_BUTTONS = [
+  { id: "unipolar", label: "Unipolar" },
+  { id: "bipolar", label: "Bipolar" },
+];
+
 
 
 
@@ -2041,14 +2046,15 @@ function createWidget(type, label, x, y, forcedId) {
       phase: 0, 
       zeroPointFixed: false,
       zeroPoint: 5,
+      bipolar: false,
       oneShot: false,
       oneShotDone: true,
       oneShotAccum: 0,
-      global: false, 
-      cyclePos: 0, 
+      global: false,
+      cyclePos: 0,
       lastTick: null,
       timer: null,
-      syncPrevByVoice: new Map(), 
+      syncPrevByVoice: new Map(),
     });
     audioEngine.createNode(id, "lfo", {
       waveType: "sine",
@@ -2057,6 +2063,7 @@ function createWidget(type, label, x, y, forcedId) {
       phase: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
+      bipolar: false,
       oneShot: false,
       global: false,
     });
@@ -2103,6 +2110,23 @@ function createWidget(type, label, x, y, forcedId) {
       zeroModeButtons.appendChild(btn);
     });
     body.appendChild(zeroModeButtons);
+
+    const polarityButtons = document.createElement("div");
+    polarityButtons.className = "filter-type-buttons lfo-polarity-buttons";
+    LFO_POLARITY_BUTTONS.forEach((m) => {
+      const btn = document.createElement("button");
+      btn.className = "filter-type-btn";
+      btn.textContent = m.label;
+      btn.dataset.polarity = m.id;
+      btn.title = m.id === "bipolar" ? "Audio-style +/-5V swing, centered 0V" : "CV-style 0-10V swing (default)";
+      if (m.id === "unipolar") btn.classList.add("active");
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setLfoPolarity(id, m.id === "bipolar");
+      });
+      polarityButtons.appendChild(btn);
+    });
+    body.appendChild(polarityButtons);
 
     el.appendChild(body);
 
@@ -2173,15 +2197,51 @@ function createWidget(type, label, x, y, forcedId) {
     const dial = document.createElement("div");
     dial.className = "voltmeter-dial";
 
+    const scale = document.createElement("div");
+    scale.className = "voltmeter-scale";
+    for (let tick = 0; tick <= 20; tick += 1) {
+      const mark = document.createElement("span");
+      mark.className = `voltmeter-tick${tick % 5 === 0 ? " voltmeter-tick-major" : ""}`;
+      mark.style.setProperty("--tick-angle", `${-60 + tick * 6}deg`);
+      scale.appendChild(mark);
+    }
+    dial.appendChild(scale);
+
+    const labels = [
+      ["-10", -60],
+      ["-5", -30],
+      ["0", 0],
+      ["+5", 30],
+      ["+10", 60],
+    ];
+    labels.forEach(([text, angle]) => {
+      const radians = angle * Math.PI / 180;
+      const label = document.createElement("span");
+      label.className = "voltmeter-scale-label";
+      label.textContent = text;
+      label.style.left = `${63 + Math.sin(radians) * 36}px`;
+      label.style.top = `${70 - Math.cos(radians) * 36}px`;
+      dial.appendChild(label);
+    });
+
+    const unit = document.createElement("span");
+    unit.className = "voltmeter-unit";
+    unit.textContent = "VOLTS";
+    dial.appendChild(unit);
+
     const needle = document.createElement("div");
     needle.className = "voltmeter-needle";
     needle.dataset.role = "voltmeter-needle";
     dial.appendChild(needle);
 
+    const pivot = document.createElement("div");
+    pivot.className = "voltmeter-pivot";
+    dial.appendChild(pivot);
+
     const readout = document.createElement("div");
     readout.className = "voltmeter-readout";
     readout.dataset.role = "voltmeter-readout";
-    readout.textContent = "0.00 V";
+    readout.textContent = "+0.00 V";
 
     body.appendChild(dial);
     body.appendChild(readout);
@@ -2430,6 +2490,10 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = "debug-value";
         valueSpan.textContent = "–";
         row.appendChild(valueSpan);
+      }
+      if (type === "voltmeter" && port.id === "in") {
+        const readout = el.querySelector('[data-role="voltmeter-readout"]');
+        if (readout) row.appendChild(readout);
       }
       if (type === "midi-in" && port.id === "voices") {
         const state = midiInStates.get(id);
@@ -6040,7 +6104,7 @@ function tickLfo(widgetId) {
   
   
   const halfSwing = state.amplitude / 2;
-  const center = state.zeroPointFixed ? state.zeroPoint : halfSwing;
+  const center = state.bipolar ? 0 : (state.zeroPointFixed ? state.zeroPoint : halfSwing);
   
   
   
@@ -6065,7 +6129,9 @@ function tickLfo(widgetId) {
     }
   }
 
-  const value = clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
+  const value = state.bipolar
+    ? clamp(center + raw * halfSwing, -AUDIO_PEAK_VOLTS, AUDIO_PEAK_VOLTS)
+    : clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
   propagate(widgetId, "value", roundFloat(value, 4));
 }
 
@@ -6121,6 +6187,29 @@ function setLfoZeroPointMode(widgetId, fixed) {
   sendLiveParamUpdate(widgetId, { zeroPointFixed: fixed });
 }
 
+function updateLfoPolarityButtons(widgetId) {
+  const state = lfoStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  el.querySelectorAll(".lfo-polarity-buttons .filter-type-btn").forEach((btn) => {
+    btn.classList.toggle("active", (btn.dataset.polarity === "bipolar") === state.bipolar);
+  });
+  // Fixed Zero Point only means anything in unipolar mode - center is
+  // always 0V while bipolar (see LfoNode.h::render()).
+  el.querySelectorAll(".lfo-zero-mode-buttons .filter-type-btn, [data-role='lfo-zeropoint-port-slider']").forEach((elm) => {
+    elm.disabled = state.bipolar;
+  });
+}
+
+function setLfoPolarity(widgetId, bipolar) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  state.bipolar = bipolar;
+  audioEngine.setParam(widgetId, "bipolar", bipolar);
+  updateLfoPolarityButtons(widgetId);
+  sendLiveParamUpdate(widgetId, { bipolar });
+}
+
 function setLfoZeroPoint(widgetId, volts) {
   const state = lfoStates.get(widgetId);
   if (!state) return;
@@ -6171,6 +6260,7 @@ function updateLfoVisual(widgetId) {
   });
 
   updateLfoZeroModeButtons(widgetId);
+  updateLfoPolarityButtons(widgetId);
   const zpPortSlider = el.querySelector('[data-role="lfo-zeropoint-port-slider"]');
   if (zpPortSlider) zpPortSlider.value = String(state.zeroPoint);
   const zpPortValue = el.querySelector('[data-role="lfo-zeropoint-port-value"]');
@@ -8709,9 +8799,15 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const volts = Number.isNaN(num) ? 0 : num;
     if (state) state.value = volts;
     const readout = el.querySelector('[data-role="voltmeter-readout"]');
-    if (readout) readout.textContent = `${formatNumber(volts)} V`;
+    const displayVolts = clamp(volts, -CV_MAX_VOLTS, CV_MAX_VOLTS);
+    if (readout) {
+      const sign = displayVolts >= 0 ? "+" : "";
+      readout.textContent = `${sign}${displayVolts.toFixed(2)} V`;
+      readout.classList.toggle("voltmeter-negative", displayVolts < 0);
+      readout.classList.toggle("voltmeter-positive", displayVolts > 0);
+    }
     const needle = el.querySelector('[data-role="voltmeter-needle"]');
-    if (needle) needle.style.transform = `rotate(${knobAngle(clamp((volts / CV_MAX_VOLTS) * 127, 0, 127))}deg)`;
+    if (needle) needle.style.transform = `rotate(${(displayVolts / CV_MAX_VOLTS) * 60}deg)`;
   }
 
   if (el.dataset.widgetType === "multiplier") {
@@ -9346,6 +9442,7 @@ function noteToFrequency(note) {
 
 
 const CV_MAX_VOLTS = 10;
+const AUDIO_PEAK_VOLTS = 5; // mirrors cv::kAudioPeakVolts / audio-engine.js's AUDIO_PEAK_VOLTS
 const HAMMOND_DRAWBAR_STEP_V = CV_MAX_VOLTS / 8; // 1.25V per detent, 9 positions 0-8
 const GATE_ON_VOLTS = 10;
 const GATE_OFF_VOLTS = 0;
@@ -9979,6 +10076,7 @@ const WIDGET_ENGINES = {
             phase: state.phase,
             zeroPointFixed: state.zeroPointFixed,
             zeroPoint: state.zeroPoint,
+            bipolar: state.bipolar,
             oneShot: state.oneShot,
             global: state.global,
           }
@@ -9993,6 +10091,7 @@ const WIDGET_ENGINES = {
       state.phase = clamp(params.phase ?? 0, -180, 180);
       state.zeroPointFixed = params.zeroPointFixed === true;
       state.zeroPoint = params.zeroPoint ?? 5;
+      state.bipolar = params.bipolar === true;
       state.oneShot = params.oneShot === true;
       state.global = params.global === true;
       
@@ -10005,6 +10104,7 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "phase", state.phase);
       audioEngine.setParam(id, "zeroPointFixed", state.zeroPointFixed);
       audioEngine.setParam(id, "zeroPoint", state.zeroPoint);
+      audioEngine.setParam(id, "bipolar", state.bipolar);
       audioEngine.setParam(id, "oneShot", state.oneShot);
       audioEngine.setParam(id, "global", state.global);
       updateLfoWaveButtons(id);

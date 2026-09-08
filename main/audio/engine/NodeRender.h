@@ -191,7 +191,7 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
             {
                 for (size_t i = 0; i < frames; ++i)
                 {
-                    const float gainMul = cv::vcaGain(portSample(inst, 5, i), false);
+                    const float gainMul = cv::vcaGain(portSample(inst, 5, i), false) * cv::kAudioPeakVolts;
                     inst.outL[i] *= gainMul;
                     inst.outR[i] *= gainMul;
                 }
@@ -200,7 +200,7 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
             {
                 for (size_t i = 0; i < frames; ++i)
                 {
-                    const float gainMul = s.gainSmooth.process(gainTarget);
+                    const float gainMul = s.gainSmooth.process(gainTarget) * cv::kAudioPeakVolts;
                     inst.outL[i] *= gainMul;
                     inst.outR[i] *= gainMul;
                 }

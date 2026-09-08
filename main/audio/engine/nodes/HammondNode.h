@@ -52,8 +52,8 @@ inline float sineLookup(uint32_t phase)
 // confirm() prompt (see main.js).
 constexpr float kDefaultRatio[kDrawbarCount] = {0.5f, 1.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 8.0f};
 // Nine unit-amplitude sines can sum to 9.0 at full 888888888 registration -
-// this keeps |out| <= 1 like every other generator here.
-constexpr float kDrawbarNorm = 1.0f / static_cast<float>(kDrawbarCount);
+// this keeps |out| <= cv::kAudioPeakVolts like every other generator here.
+constexpr float kDrawbarNorm = cv::kAudioPeakVolts / static_cast<float>(kDrawbarCount);
 
 struct HammondState
 {

@@ -45,6 +45,11 @@ inline void render(NodeInstance &inst, size_t frames)
     // + auto mode reproduces the old fixed-5V-center/full-swing behavior
     // exactly.
     const float halfSwing = s.amplitude * 0.5f;
+    // Bipolar mode ignores zeroPointFixed/zeroPoint - center is always 0V,
+    // and the output clamps to the audio domain's +/-kAudioPeakVolts instead
+    // of the CV domain's 0-kMaxVolts (see LfoState::bipolar in NodeState.h).
+    const float clampLo = s.bipolar ? -cv::kAudioPeakVolts : 0.0f;
+    const float clampHi = s.bipolar ? cv::kAudioPeakVolts : cv::kMaxVolts;
     // "zeroPoint" (port 3, control-only - see isControlOnlyInput): same
     // dual-source-fed check as sync/oneShot/global above. A connected CV
     // SUBSTITUTES the "Fixed Zero Point" slider's own zeroPoint outright
@@ -54,7 +59,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // zeroPoint slider, unchanged from before.
     const bool zeroPointFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     const float zeroPointVolts = zeroPointFed ? portSample(inst, 3, 0) : s.zeroPoint;
-    const float center = s.zeroPointFixed ? zeroPointVolts : halfSwing;
+    const float center = s.bipolar ? 0.0f : (s.zeroPointFixed ? zeroPointVolts : halfSwing);
     // Degrees -> 0..1 fraction, added on every phaseGen evaluation (see
     // PhaseOsc::currentSample/process) - so a sync reset
     // (phaseGen.resetPhase() below) automatically lands exactly at this
@@ -117,13 +122,13 @@ inline void render(NodeInstance &inst, size_t frames)
                     }
                 }
             }
-            inst.outL[i] = clampf(center + raw * halfSwing, 0.0f, cv::kMaxVolts);
+            inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);
         }
         return;
     }
-    const float start = clampf(center + s.phaseGen.currentSample(s.wave, phaseOffset) * halfSwing, 0.0f, cv::kMaxVolts);
+    const float start = clampf(center + s.phaseGen.currentSample(s.wave, phaseOffset) * halfSwing, clampLo, clampHi);
     s.phaseGen.advance(s.rate, kSampleRate, frames);
-    const float end = clampf(center + s.phaseGen.currentSample(s.wave, phaseOffset) * halfSwing, 0.0f, cv::kMaxVolts);
+    const float end = clampf(center + s.phaseGen.currentSample(s.wave, phaseOffset) * halfSwing, clampLo, clampHi);
     const float increment = (end - start) / static_cast<float>(frames);
     float value = start;
     for (size_t i = 0; i < frames; ++i)
@@ -141,6 +146,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.lfo.phaseOffsetDeg = p.lfoPhaseDeg;
     inst.lfo.zeroPointFixed = p.lfoZeroPointFixed;
     inst.lfo.zeroPoint = p.lfoZeroPoint;
+    inst.lfo.bipolar = p.lfoBipolar;
     inst.lfo.oneShot = p.lfoOneShot;
     inst.lfo.global = p.lfoGlobal;
 }
@@ -171,6 +177,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.zeroPoint = value;
         return true;
     }
+    if (strcmp(name, "bipolar") == 0)
+    {
+        inst.lfo.bipolar = value >= 0.5f;
+        return true;
+    }
     return false;
 }
 
@@ -182,6 +193,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.lfoPhaseDeg = presetparser::getFloat(p, "phase", 0.0f);
     out.lfoZeroPointFixed = presetparser::getBool(p, "zeroPointFixed", false);
     out.lfoZeroPoint = presetparser::getFloat(p, "zeroPoint", 5.0f);
+    out.lfoBipolar = presetparser::getBool(p, "bipolar", false);
     out.lfoOneShot = presetparser::getBool(p, "oneShot", false);
     out.lfoGlobal = presetparser::getBool(p, "global", false);
 }

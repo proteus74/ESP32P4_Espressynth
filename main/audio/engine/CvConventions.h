@@ -6,20 +6,34 @@
 
 // Eurorack-style Control-Voltage convention: all control-rate ports (gate/
 // velocity/knob output/pitch-CV/...) follow 0-10V instead of individual
-// ad-hoc scales (0-1, 0-127, 0/1, ...). The internal audio signal path itself
-// (oscillator/filter sample values, the actual waveform) is deliberately
-// excluded - see PortTables.h. But every DEDICATED CV input/output of an
-// audio-rate node now also follows 0-10V: Lfo's "value" output (center 5V,
-// amplitude is the modulation depth as a fraction of the full +/-5V swing,
-// see NodeInstance.cpp's Lfo case), Adsr's "out" output
+// ad-hoc scales (0-1, 0-127, 0/1, ...). Every DEDICATED CV input/output of an
+// audio-rate node also follows 0-10V: Lfo's "value" output (center 5V unless
+// switched to bipolar, see LfoState::bipolar), Adsr's "out" output
 // (envelope*velocity*10V) and Oscillator's "amplitude" input (mapped back
 // to 0..1 via vcaGain()), so that e.g. an Adsr->Oscillator.amplitude cable
-// works exactly like any other CV cable. Must match the JS reference in
-// static/js/main.js (CV_MAX_VOLTS/GATE_ON_VOLTS/GATE_OFF_VOLTS/
+// works exactly like any other CV cable.
+//
+// The audio signal path itself (oscillator/filter/Hammond/sample-player
+// waveform values) follows its OWN voltage convention, kAudioPeakVolts
+// (+/-5V nominal peak) - deliberately half of kMaxVolts, so that audio
+// (+/-5V) and CV (0-10V) share the same numeric neighborhood and can be
+// freely mixed/patched together (any Mixer/Adder input accepts either kind
+// today, see GraphBuilder.h's "audio and CV ports are treated equally").
+// Audio-rate generators bake this in as a final multiply by kAudioPeakVolts
+// (e.g. OscillatorNode.h, HammondNode.h's kDrawbarNorm); the hardware output
+// stage (OutputNodes.h) divides back by kAudioPeakVolts before its
+// SoftLimiter, so downstream code (SynthEngine.h's PCM conversion) is
+// unaffected. Must match the JS reference in static/js/audio-engine.js
+// (CV_MAX_VOLTS/AUDIO_PEAK_VOLTS/GATE_ON_VOLTS/GATE_OFF_VOLTS/
 // GATE_THRESHOLD_VOLTS/noteToVoltage/velocityToVoltage) 1:1.
 namespace cv
 {
 constexpr float kMaxVolts = 10.0f;
+// Nominal peak amplitude of the AUDIO signal domain (oscillator/filter/
+// Hammond/sample-player waveform values), as opposed to kMaxVolts (the CV
+// domain). See the file-level comment above.
+constexpr float kAudioPeakVolts = 5.0f;
+constexpr float kInvAudioPeakVolts = 1.0f / kAudioPeakVolts; // same reciprocal-multiply reasoning as kInvMaxVolts below
 // Reciprocal instead of division - without -ffast-math/-freciprocal-math
 // (this project builds with plain -O2) the compiler does not fold
 // "x / kMaxVolts" into a multiplication by itself, even though kMaxVolts is

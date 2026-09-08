@@ -50,8 +50,12 @@ inline void render(NodeInstance &inst, size_t frames)
     }
     for (size_t i = 0; i < frames; ++i)
     {
-        float l = portSample(inst, 0, i) * s.leftLevel;
-        float r = portSample(inst, 1, i) * s.rightLevel;
+        // portSample() arrives in the +/-5V audio domain (cv::kAudioPeakVolts)
+        // - rescale back to the limiter's native +/-1.0 domain before calling
+        // it, so SoftLimiter/the downstream int16 PCM conversion in
+        // SynthEngine.h stay completely unchanged.
+        float l = portSample(inst, 0, i) * s.leftLevel * cv::kInvAudioPeakVolts;
+        float r = portSample(inst, 1, i) * s.rightLevel * cv::kInvAudioPeakVolts;
         s.limiter.process(l, r);
         s.muteSmoothed = muteCoeff * s.muteSmoothed + (1.0f - muteCoeff) * targetMute;
         inst.outL[i] = l * s.muteSmoothed;

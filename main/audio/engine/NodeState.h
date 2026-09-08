@@ -59,6 +59,12 @@ struct LfoState
     float phaseOffsetDeg = 0.0f;
     bool zeroPointFixed = false; // false = auto (center = amplitude/2)
     float zeroPoint = 5.0f;      // 0-10V, used only when zeroPointFixed
+    // false (default) = unipolar CV convention (0-10V, see above). true =
+    // bipolar audio convention (center 0V, swing +/-cv::kAudioPeakVolts) -
+    // makes this Lfo behave like an audio-rate signal (see CvConventions.h)
+    // instead of a CV signal; zeroPointFixed/zeroPoint are ignored in this
+    // mode (center is always 0V). See LfoNode.h::render().
+    bool bipolar = false;
     // Rising-edge state for the "sync" input (control-rate, see PortTables) -
     // a rising edge across kGateThresholdVolts restarts phaseGen from 0 (see
     // processNodeBlock's Lfo case).

@@ -118,7 +118,7 @@ inline void render(NodeInstance &inst, size_t frames)
             const float gainMul =
                 gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
             const float sample = s.phaseGen.process(wave, hz, kSampleRate);
-            inst.outL[i] = sample * amp * gainMul;
+            inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
         }
         return;
     }
@@ -135,7 +135,7 @@ inline void render(NodeInstance &inst, size_t frames)
         const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
         const float gainMul = gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
         const float sample = s.phaseGen.process(wave, hz, kSampleRate);
-        inst.outL[i] = sample * amp * gainMul;
+        inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
 }
 

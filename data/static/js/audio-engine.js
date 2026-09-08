@@ -25,6 +25,10 @@ function parseValueList(str) {
 
 
 const CV_MAX_VOLTS = 10;
+// Nominal peak amplitude of the AUDIO signal domain (oscillator/Hammond/
+// sample-player waveform values), as opposed to CV_MAX_VOLTS (the CV
+// domain) - mirrors cv::kAudioPeakVolts in CvConventions.h 1:1.
+const AUDIO_PEAK_VOLTS = 5;
 const GATE_THRESHOLD_VOLTS = 5;
 
 
@@ -517,7 +521,7 @@ export class AudioEngine {
     if (params.program !== undefined) entry.program = params.program;
     if (params.gain !== undefined) {
       entry.gain = params.gain;
-      const g = (Number(params.gain) || 0) / CV_MAX_VOLTS;
+      const g = ((Number(params.gain) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
       const now = this.ctx.currentTime;
       [entry.leftOut, entry.rightOut].forEach((node) => {
         node.gain.cancelScheduledValues(now);
@@ -1088,7 +1092,7 @@ export class AudioEngine {
         
         
         const outGain = ctx.createGain();
-        outGain.gain.value = (params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS;
+        outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
         const gainCv = this._createCvGainChain(ctx, "linear");
         gainCv.waveShaper.connect(outGain.gain);
         ampGain.connect(outGain);
@@ -1200,7 +1204,7 @@ export class AudioEngine {
           Array.isArray(params.ratios) && params.ratios.length === 9
             ? params.ratios
             : [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];
-        const NORM = 1 / 9; // mirrors kDrawbarNorm - nine unit sines -> <=1.0 at full registration
+        const NORM = AUDIO_PEAK_VOLTS / 9; // mirrors kDrawbarNorm - nine unit sines -> <=AUDIO_PEAK_VOLTS at full registration
 
         const ampGain = ctx.createGain();
         ampGain.gain.value = 0;
@@ -1208,7 +1212,7 @@ export class AudioEngine {
         ampCv.waveShaper.connect(ampGain.gain);
 
         const outGain = ctx.createGain();
-        outGain.gain.value = (params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS;
+        outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
         const gainCv = this._createCvGainChain(ctx, "linear");
         gainCv.waveShaper.connect(outGain.gain);
 
@@ -1327,7 +1331,10 @@ export class AudioEngine {
         
         const amplitude = params.amplitude ?? CV_MAX_VOLTS;
         const halfSwing = amplitude / 2;
-        const center = params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing;
+        const bipolar = params.bipolar === true;
+        // Bipolar mode ignores zeroPointFixed/zeroPoint - center is always
+        // 0V (mirrors LfoNode.h::render()'s "s.bipolar ? 0.0f : ...").
+        const center = bipolar ? 0 : (params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing);
         const rate = params.rate ?? 2;
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
@@ -1384,6 +1391,7 @@ export class AudioEngine {
           lfoPhase: phase,
           lfoZeroPointFixed: params.zeroPointFixed === true,
           lfoZeroPoint: params.zeroPoint ?? 5,
+          lfoBipolar: bipolar,
         };
       }
       case "const":
@@ -1415,11 +1423,13 @@ export class AudioEngine {
       case "wm8960-out": {
         const leftGain = ctx.createGain();
         const rightGain = ctx.createGain();
-        
-        
-        
-        leftGain.gain.value = 1;
-        rightGain.gain.value = 1;
+        // leftGain/rightGain double as the AUDIO_PEAK_VOLTS -> native +/-1.0
+        // rescale point (mirrors OutputNodes.h's "* cv::kInvAudioPeakVolts"
+        // right before its SoftLimiter) - folded into the same trim multiply
+        // instead of a separate node, since GainNode.gain already multiplies
+        // whatever's connected either way.
+        leftGain.gain.value = 1 / AUDIO_PEAK_VOLTS;
+        rightGain.gain.value = 1 / AUDIO_PEAK_VOLTS;
         const merger = ctx.createChannelMerger(2);
         const outputGain = ctx.createGain();
         outputGain.gain.value = Math.max(0, Math.min(1, (params.gain ?? 10) / 10));
@@ -2147,10 +2157,18 @@ export class AudioEngine {
         const releaseGain = ctx.createGain();
         releaseGain.gain.value = 1;
         const ampGain = ctx.createGain();
-        ampGain.gain.value = 1; 
+        ampGain.gain.value = 1;
         releaseGain.connect(ampGain);
+        // Fixed rescale to the audio domain's peak (mirrors WavePlayerNode.h's
+        // "* cv::kAudioPeakVolts") - kept as its own node, separate from
+        // ampGain, so a connected amplitude cable (which zeroes ampGain's own
+        // base value and drives it additively instead, see connectEdge()
+        // below) doesn't also wipe out this fixed scale.
+        const peakScale = ctx.createGain();
+        peakScale.gain.value = AUDIO_PEAK_VOLTS;
+        ampGain.connect(peakScale);
         const splitter = ctx.createChannelSplitter(2);
-        ampGain.connect(splitter);
+        peakScale.connect(splitter);
         const leftOut = ctx.createGain();
         const rightOut = ctx.createGain();
         splitter.connect(leftOut, 0, 0);
@@ -2160,6 +2178,7 @@ export class AudioEngine {
           type,
           releaseGain,
           ampGain,
+          peakScale,
           splitter,
           leftOut,
           rightOut,
@@ -2184,7 +2203,7 @@ export class AudioEngine {
         const splitter = ctx.createChannelSplitter(2);
         const leftOut = ctx.createGain();
         const rightOut = ctx.createGain();
-        const initialGain = (Number(params.gain ?? CV_MAX_VOLTS) || 0) / CV_MAX_VOLTS;
+        const initialGain = ((Number(params.gain ?? CV_MAX_VOLTS) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
         leftOut.gain.value = initialGain;
         rightOut.gain.value = initialGain;
         splitter.connect(leftOut, 0, 0);
@@ -2697,7 +2716,7 @@ export class AudioEngine {
           
           
           
-          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, (Number(value) || 0) / CV_MAX_VOLTS);
+          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         } else if (paramName === "gate") {
           if (value > GATE_THRESHOLD_VOLTS) this.retriggerOscillatorEntry(entry);
         }
@@ -2732,7 +2751,7 @@ export class AudioEngine {
           applyRamp(entry.ampGain.gain);
         } else if (paramName === "gain") {
           entry.gain = value;
-          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, (Number(value) || 0) / CV_MAX_VOLTS);
+          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         }
         // No "gate" case on purpose: free-running tonewheels are never
         // retriggered (see nodes/HammondNode.h - no phase reset on note-on).
@@ -2748,7 +2767,7 @@ export class AudioEngine {
           entry.outputGain.gain.setTargetAtTime(Math.max(0, Math.min(1, (Number(value) || 0) / 10)), now, 0.01);
         } else if (paramName === "left" || paramName === "right") {
           const target = paramName === "left" ? entry.leftGain : entry.rightGain;
-          applyRamp(target.gain);
+          applyRampValue(target.gain, (Number(value) || 0) / AUDIO_PEAK_VOLTS);
         }
         break;
       case "gain": {
@@ -2939,12 +2958,14 @@ export class AudioEngine {
           entry.lfoZeroPointFixed = value === true || value === 1;
         } else if (paramName === "zeroPoint") {
           entry.lfoZeroPoint = value;
+        } else if (paramName === "bipolar") {
+          entry.lfoBipolar = value === true || value === 1;
         } else if (paramName === "waveType") {
           entry.lfoOsc.type = value;
         }
-        if (paramName === "amplitude" || paramName === "zeroPointFixed" || paramName === "zeroPoint") {
+        if (paramName === "amplitude" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "bipolar") {
           const halfSwing = entry.lfoAmplitude / 2;
-          const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
+          const center = entry.lfoBipolar ? 0 : (entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing);
           applyRampValue(entry.lfoGain.gain, halfSwing);
           applyRampValue(entry.centerOffset.offset, center);
         }
@@ -3508,7 +3529,7 @@ export class AudioEngine {
         try {
           from.disconnect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = false;
-          toEntry.outGain.gain.value = (toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS;
+          toEntry.outGain.gain.value = ((toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
         } catch (err) {
 
         }
