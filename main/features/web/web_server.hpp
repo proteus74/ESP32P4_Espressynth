@@ -6,6 +6,7 @@
 #include "esp_http_server.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
+#include "lwip/sockets.h"
 #include <cstdio>
 #include <cstring>
 
@@ -35,6 +36,17 @@ constexpr size_t FILE_READ_CHUNK_SIZE = 8192;
 
 httpd_handle_t server = nullptr;
 
+// Disables Nagle's algorithm on every accepted connection. Without this, a chunked-transfer
+// response (this handler's own static_file_handler, or a synth API route's larger JSON
+// replies) can sit waiting for the peer's delayed ACK of the previous chunk instead of going
+// out immediately - worth tens of ms per chunk, the usual cause of a large asset (main.js-sized
+// bundles) taking seconds to load over LAN.
+esp_err_t socket_open_callback(httpd_handle_t /*hd*/, int sockfd) {
+    int one = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    return ESP_OK;
+}
+
 const char* content_type_for(const char* path) {
     const char* dot = std::strrchr(path, '.');
     if (dot == nullptr) return "application/octet-stream";
@@ -53,7 +65,10 @@ const char* content_type_for(const char* path) {
 // mount and streams it back in chunks. "/" serves "/index.html".
 esp_err_t static_file_handler(httpd_req_t* req) {
     char uri_path[CONFIG_HTTPD_MAX_URI_LEN + 1] = {};
-    std::strncpy(uri_path, req->uri, sizeof(uri_path) - 1);
+    // snprintf, not strncpy: always null-terminates within sizeof(uri_path), avoiding
+    // -Wstringop-truncation (GCC can't prove strncpy's result stays terminated here purely
+    // from this call site, even though the array's zero-init already guarantees it).
+    std::snprintf(uri_path, sizeof(uri_path), "%s", req->uri);
     char* query = std::strchr(uri_path, '?');
     if (query != nullptr) *query = '\0';
     if (std::strstr(uri_path, "..") != nullptr) {
@@ -124,12 +139,26 @@ esp_err_t static_file_handler(httpd_req_t* req) {
 } // namespace
 
 /**
- * @brief Mount the "www" LittleFS partition and start the HTTP server serving its
- *        contents on port 80. Safe to call even if the web assets image hasn't been
- *        flashed yet -- logs and returns an error instead of formatting the partition
- *        out from under a pending flash.
+ * @brief The running httpd server handle, valid once begin() has returned ESP_OK. Lets other
+ *        feature modules (e.g. features/synth/synth_web_api.hpp) register additional routes
+ *        on the same server instead of standing up their own - see register_catch_all()'s
+ *        comment for why that must happen between the two calls.
  */
-inline esp_err_t init() {
+inline httpd_handle_t handle() {
+    return server;
+}
+
+/**
+ * @brief Mount the "www" LittleFS partition and start the HTTP server on port 80. Does NOT
+ *        register the catch-all static-file route yet -- call register_catch_all() only after
+ *        every other feature module that wants to add routes (e.g. Feature::Synth's WS/REST
+ *        API) has registered them on handle(). esp_http_server tries registered handlers in
+ *        registration order and the catch-all's wildcard URI pattern matches everything, so
+ *        any route added after it would never be reached. Safe to call even if the web assets
+ *        image hasn't been flashed yet -- logs and returns an error instead of formatting the
+ *        partition out from under a pending flash.
+ */
+inline esp_err_t begin() {
     esp_vfs_littlefs_conf_t fs_conf = {};
     fs_conf.base_path = MOUNT_POINT;
     fs_conf.partition_label = PARTITION_LABEL;
@@ -155,6 +184,19 @@ inline esp_err_t init() {
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.lru_purge_enable = true;
+    // Headroom for the synth API's WS connection (stays open for the whole session) plus
+    // overlapping preset/sample-list/file-explorer requests and static asset fetches -
+    // default (7, 3 reserved internally) exhausts under that load and stalls httpd's TCP
+    // send long enough to trip the task watchdog. Needs CONFIG_LWIP_MAX_SOCKETS raised to
+    // match (see sdkconfig.defaults) - httpd's own socket count is capped by that ceiling.
+    // Harmless overhead when the synth feature is disabled - just a few more socket slots.
+    config.max_open_sockets = 12;
+    config.max_uri_handlers = 24; // ws, preset get/post/list, samples/soundfonts, files
+                                  // list/upload/delete/rename, midi devices, version, memory
+                                  // diagnostics, static "/*"
+    config.stack_size = 10240; // default (4096) is too tight for the file-explorer handlers'
+                                // path-building locals plus the upload handler's streaming buffer
+    config.open_fn = &socket_open_callback;
 
     const esp_err_t start_err = httpd_start(&server, &config);
     if (start_err != ESP_OK) {
@@ -162,17 +204,27 @@ inline esp_err_t init() {
         return start_err;
     }
 
+    ESP_LOGI(TAG, "Web server listening on port %u, serving %s (partition '%s')",
+             config.server_port, MOUNT_POINT, PARTITION_LABEL);
+    return ESP_OK;
+}
+
+/**
+ * @brief Registers the catch-all wildcard static-file route. Call this LAST, after begin() and
+ *        after every other feature module has registered its own routes on handle() - see
+ *        begin()'s comment for why the order matters.
+ */
+inline void register_catch_all() {
     const httpd_uri_t catch_all = {
         .uri = "/*",
         .method = HTTP_GET,
         .handler = static_file_handler,
         .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
     };
     httpd_register_uri_handler(server, &catch_all);
-
-    ESP_LOGI(TAG, "Web server listening on port %u, serving %s (partition '%s')",
-             config.server_port, MOUNT_POINT, PARTITION_LABEL);
-    return ESP_OK;
 }
 
 } // namespace Feature::Web

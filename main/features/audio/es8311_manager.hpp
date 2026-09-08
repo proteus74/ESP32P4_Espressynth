@@ -65,9 +65,11 @@ inline esp_err_t init() {
     chan_cfg.auto_clear_after_cb = true;
     // See the identical comment in wm8960_manager.hpp: default DMA buffer (6*240 frames,
     // ~32.6ms) is thin enough that a brief writer stall (e.g. the "tone" CLI command,
-    // cmd_audio.hpp, running on the CLI task) audibly clicks. More headroom here (~87ms).
-    chan_cfg.dma_desc_num = 8;
-    chan_cfg.dma_frame_num = 480;
+    // cmd_audio.hpp, running on the CLI task) audibly clicks. More headroom avoids that
+    // (~87ms via 8*480) but adds latency -- TEST: back to default 6*240 to measure/hear
+    // the tradeoff. Revert to 8/480 if clicks reappear.
+    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_frame_num = 240;
     i2s_chan_handle_t tx_handle = nullptr;
     i2s_chan_handle_t rx_handle = nullptr;
     // See the detailed comment in wm8960_manager.hpp: tx+rx are created together deliberately.

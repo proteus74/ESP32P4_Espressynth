@@ -1,15 +1,655 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<title>ESP32P4_Template</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espressynth P4</title>
+<link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-<h1>ESP32P4_Template web server</h1>
-<p>
-  Served from the "www" LittleFS partition (main/features/web/web_server.hpp).
-  Replace this file, add more under this data/ directory, then run
-  <code>idf.py www-flash</code> to rebuild and flash just this partition.
-</p>
+
+<nav class="menubar">
+  <div class="menu-item">
+    <span>File</span>
+    <div class="dropdown">
+      <button id="menuNew">New</button>
+      <button id="menuSave">Save</button>
+      <button id="menuSaveAs">Save As</button>
+      <button id="menuExport">Export</button>
+      <button id="menuImport">Import</button>
+      <button id="menuFileExplorer">File Explorer</button>
+      <button id="menuBleConnect">BLE Connect</button>
+      <button id="menuSettings">Settings</button>
+    </div>
+  </div>
+  <div class="menu-item">
+    <span>Edit</span>
+    <div class="dropdown">
+      <button>Undo</button>
+      <button>Copy</button>
+      <button id="menuShowLog">Show Log Window</button>
+      <button id="menuToggleNodeCpu">Show Node CPU %</button>
+    </div>
+  </div>
+  <div class="menu-item menu-item-static" id="menuInfo">
+    <span>Info</span>
+  </div>
+  <div class="preset-inline">
+    <span class="preset-label">Preset:</span>
+    <select id="presetSelect"></select>
+  </div>
+
+  <span class="app-title">ESPressSynth</span>
+
+  <div class="header-right">
+    <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
+    <span id="midiNoDevice" class="midi-name">No device</span>
+    <div id="midiDeviceList" class="midi-device-list"></div>
+    <span id="midiActivity" class="midi-activity"></span>
+  </div>
+</nav>
+
+<div class="page-tabs">
+  <button class="page-tab active" data-page="generator">Sound Generation</button>
+  <button class="page-tab" data-page="fx">FX &amp; Output</button>
+  <div class="mem-stats" id="memStats">
+    <div class="preset-load-progress hidden" id="presetLoadProgress">
+      <span class="preset-load-progress-label" id="presetLoadProgressLabel">Loading preset…</span>
+      <div class="preset-load-progress-track"><div class="preset-load-progress-fill" id="presetLoadProgressFill"></div></div>
+    </div>
+    <div class="stat-group" title="Free PSRAM / internal RAM">
+      <button id="panicBtn" class="panic-btn" title="Stop MIDI notes and reload current preset">Panic</button>
+      <span class="panic-separator" aria-hidden="true"></span>
+      <span class="stat-icon">💾</span>
+      <span class="mem-stat-label">PS</span>
+      <span class="mem-stat-value" id="psMemValue">–</span>
+      <span class="mem-stat-label">Sys</span>
+      <span class="mem-stat-value" id="sysMemValue">–</span>
+    </div>
+  </div>
+  <div class="cpu-load" id="cpuLoad" title="CPU load per core (Core 1 = audio render task)">
+    <span class="stat-icon">🖥️</span>
+    <span class="cpu-load-label">CPU</span>
+    <span class="cpu-load-core">C0</span>
+    <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="cpuLoadCore0Fill"></div></div>
+    <span class="cpu-load-value" id="cpuLoadCore0Value">–</span>
+    <span class="cpu-load-core">C1</span>
+    <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="cpuLoadCore1Fill"></div></div>
+    <span class="cpu-load-value" id="cpuLoadCore1Value">–</span>
+    <span class="cpu-load-core" id="cpuLoadOverrunsLabel" title="Audio-Block-Deadline verpasst seit Start - jeder Zaehler-Sprung ist ein hoerbarer Klick/Knacken (Buffer-Underrun)">Overruns</span>
+    <span class="cpu-load-value" id="cpuLoadOverrunsValue">–</span>
+  </div>
+</div>
+
+<div class="workspace">
+  <main class="canvas" id="canvas-generator">
+    <div class="canvas-content" id="canvasContent-generator">
+      <svg id="connectionsLayer-generator" class="connections-layer"></svg>
+    </div>
+    <div id="lassoBox-generator" class="lasso-box hidden"></div>
+  </main>
+  <main class="canvas hidden" id="canvas-fx">
+    <div class="canvas-content" id="canvasContent-fx">
+      <svg id="connectionsLayer-fx" class="connections-layer"></svg>
+    </div>
+    <div id="lassoBox-fx" class="lasso-box hidden"></div>
+  </main>
+</div>
+
+<div id="zoomIndicator" class="zoom-indicator">100%</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<div id="settingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Settings</h3>
+
+    <h4 class="modal-section-title">Ethernet</h4>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="ethDhcpInput" checked>
+      <span>DHCP</span>
+    </label>
+    <div class="modal-field-group" id="ethStaticFields" hidden>
+      <div class="modal-field-row">
+        <label class="modal-field">
+          <span>IP Address</span>
+          <input type="text" id="ethIpInput" placeholder="192.168.1.62">
+        </label>
+        <label class="modal-field">
+          <span>Subnet Mask</span>
+          <input type="text" id="ethMaskInput" placeholder="255.255.255.0">
+        </label>
+      </div>
+      <div class="modal-field-row">
+        <label class="modal-field">
+          <span>Gateway</span>
+          <input type="text" id="ethGwInput" placeholder="192.168.1.1">
+        </label>
+        <label class="modal-field">
+          <span>DNS</span>
+          <input type="text" id="ethDnsInput" placeholder="8.8.8.8">
+        </label>
+      </div>
+    </div>
+
+    <div id="wifiSettingsSection">
+      <h4 class="modal-section-title">Wi-Fi</h4>
+      <label class="modal-field modal-field-checkbox">
+        <input type="checkbox" id="wifiEnabledInput">
+        <span>Enable Wi-Fi station</span>
+      </label>
+      <div class="modal-field-row">
+        <label class="modal-field">
+          <span>SSID</span>
+          <input type="text" id="wifiSsidInput" maxlength="32" autocomplete="off">
+        </label>
+        <label class="modal-field">
+          <span>Password</span>
+          <input type="password" id="wifiPasswordInput" maxlength="64" placeholder="Leave blank to keep saved password" autocomplete="new-password">
+        </label>
+      </div>
+      <div class="modal-field">
+        <div class="modal-actions modal-inline-actions">
+          <button id="wifiScan" type="button" class="btn-secondary">Scan Networks</button>
+          <span id="wifiStatus" class="modal-field-readout">Wi-Fi disabled</span>
+        </div>
+        <div id="wifiNetworks" class="wifi-network-list" hidden></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button id="settingsCancel" class="btn-secondary">Cancel</button>
+      <button id="settingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="infoOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Info</h3>
+    <label class="modal-field">
+      <span>Version</span>
+      <span id="infoVersionValue">–</span>
+    </label>
+    <div class="modal-actions">
+      <button id="infoClose" class="btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="bleConnectOverlay" class="modal-overlay hidden">
+  <div class="modal ble-connect-modal">
+    <h3>BLE Connect</h3>
+    <p id="bleConnectStatus" class="modal-field-readout">Loading Bluetooth status…</p>
+    <div id="bleDeviceList" class="ble-device-list"></div>
+    <div class="modal-actions">
+      <button id="bleScan" class="btn-secondary">Scan Devices</button>
+      <button id="bleConnectClose" class="btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="presetImportInput" accept=".json,application/json" hidden>
+
+<div id="saveAsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Save As</h3>
+    <label class="modal-field">
+      <span>Name</span>
+      <input type="text" id="saveAsNameInput" placeholder="Preset name">
+    </label>
+    <div class="modal-actions">
+      <button id="saveAsCancel" class="btn-secondary">Cancel</button>
+      <button id="saveAsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="widgetPickerOverlay" class="modal-overlay hidden">
+  <div class="modal widget-picker">
+    <div class="modal-title-row">
+      <h3>Add Widget</h3>
+      <button id="widgetPickerClose" class="widget-instance-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="widget-picker-list" id="widgetPickerList"></div>
+  </div>
+</div>
+
+<div id="knobSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Knob Settings</h3>
+    <label class="modal-field">
+      <span>Learned CC Number</span>
+      <input type="text" id="knobCcDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="knobLearnBtn" class="btn-secondary">Learn</button>
+    </div>
+    <label class="modal-field">
+      <span>Value list (comma-separated, e.g. "10,100") - takes priority over linear mapping once it has 2+ numbers</span>
+      <input type="text" id="knobValueListInput" placeholder="10,100">
+    </label>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>Point A: MIDI Value (0–127)</span>
+        <input type="text" inputmode="decimal" id="knobPoint1InInput" value="0">
+      </label>
+      <label class="modal-field">
+        <span>Point A: Output Value</span>
+        <input type="text" inputmode="decimal" id="knobPoint1OutInput" value="0">
+      </label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>Point B: MIDI Value (0–127)</span>
+        <input type="text" inputmode="decimal" id="knobPoint2InInput" value="127">
+      </label>
+      <label class="modal-field">
+        <span>Point B: Output Value</span>
+        <input type="text" inputmode="decimal" id="knobPoint2OutInput" value="10">
+      </label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>Output never below (optional)</span>
+        <input type="text" inputmode="decimal" id="knobConstraintMinInput" placeholder="no limit">
+      </label>
+      <label class="modal-field">
+        <span>Output never above (optional)</span>
+        <input type="text" inputmode="decimal" id="knobConstraintMaxInput" placeholder="no limit">
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="knobSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="knobSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="buttonSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Button Settings</h3>
+    <label class="modal-field">
+      <span>Learned CC Number</span>
+      <input type="text" id="buttonCcDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="buttonLearnBtn" class="btn-secondary">Learn</button>
+    </div>
+    <label class="modal-field">
+      <span>Value list (comma-separated, e.g. "10,100") - takes priority once it has 2+ numbers, cycles one step per press</span>
+      <input type="text" id="buttonValueListInput" placeholder="10,100">
+    </label>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>Value at MIDI 0</span>
+        <input type="text" inputmode="decimal" id="buttonValue0Input" value="0">
+      </label>
+      <label class="modal-field">
+        <span>Value at MIDI 127</span>
+        <input type="text" inputmode="decimal" id="buttonValue127Input" value="10">
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="buttonSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="buttonSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="upDownButtonSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Up/Down Button Settings</h3>
+    <label class="modal-field">
+      <span>Learned CC Number (Up)</span>
+      <input type="text" id="upDownButtonCcUpDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="upDownButtonLearnUpBtn" class="btn-secondary">Learn</button>
+    </div>
+    <label class="modal-field">
+      <span>Learned CC Number (Down)</span>
+      <input type="text" id="upDownButtonCcDownDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="upDownButtonLearnDownBtn" class="btn-secondary">Learn</button>
+    </div>
+    <label class="modal-field">
+      <span>Value list (comma-separated, e.g. "10,100") - takes priority once it has 2+ numbers, Up/Down step forward/back</span>
+      <input type="text" id="upDownButtonValueListInput" placeholder="10,100">
+    </label>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>Min</span>
+        <input type="text" inputmode="decimal" id="upDownButtonMinInput" value="0">
+      </label>
+      <label class="modal-field">
+        <span>Max</span>
+        <input type="text" inputmode="decimal" id="upDownButtonMaxInput" value="10">
+      </label>
+      <label class="modal-field">
+        <span>Step</span>
+        <input type="text" inputmode="decimal" id="upDownButtonStepInput" value="1">
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="upDownButtonSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="upDownButtonSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="switchSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Switch Settings</h3>
+    <label class="modal-field">
+      <span>Learned CC Number</span>
+      <input type="text" id="switchCcDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="switchLearnBtn" class="btn-secondary">Learn</button>
+    </div>
+    <p class="modal-hint">Press-Flanke (CC-Wert &gt;= 64) schaltet um (In 1 &lt;-&gt; In 2), latching.</p>
+    <div class="modal-actions">
+      <button id="switchSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="switchSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="midiInSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Midi-In Settings</h3>
+    <label class="modal-field">
+      <span>Channel</span>
+      <select id="midiInChannelSelect"></select>
+    </label>
+    <label class="modal-field">
+      <span>On overflow (all voices in use)</span>
+      <select id="midiInOverflowModeSelect">
+        <option value="steal-oldest">Steal oldest voice</option>
+        <option value="ignore">Ignore new note</option>
+      </select>
+    </label>
+    <div class="modal-actions">
+      <button id="midiInSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="midiInSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="midiSplitSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal midi-split-modal">
+    <h3>Midi-Split Settings</h3>
+    <div class="midi-split-zone-toolbar">
+      <span>Zones (max 4)</span>
+      <button id="midiSplitAddZoneButton" type="button" class="btn-secondary">+ Add Zone</button>
+    </div>
+    <div class="midi-split-zone-chips" id="midiSplitZoneChips"></div>
+    <div class="piano-keyboard-container" id="midiSplitKeyboardContainer"></div>
+    <div class="modal-actions">
+      <button id="midiSplitSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="midiSplitSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="multiplierSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Multiplier Settings</h3>
+    <label class="modal-field">
+      <span>Number of Inputs (2–8)</span>
+      <input type="number" id="multiplierCountInput" min="2" max="8" value="2">
+    </label>
+    <div class="modal-actions">
+      <button id="multiplierSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="multiplierSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="adderSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Adder Settings</h3>
+    <label class="modal-field">
+      <span>Number of Inputs (2–8)</span>
+      <input type="number" id="adderCountInput" min="2" max="8" value="2">
+    </label>
+    <div class="modal-actions">
+      <button id="adderSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="adderSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="clockSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Clock Settings</h3>
+    <label class="modal-field">
+      <span>Pulse Duration (ms)</span>
+      <input type="text" inputmode="decimal" id="clockPulseMsInput" value="100">
+    </label>
+    <label class="modal-field">
+      <span>Minimum BPM at 0 V</span>
+      <input type="number" min="0" step="0.1" inputmode="decimal" id="clockMinBpmInput" value="0">
+    </label>
+    <label class="modal-field">
+      <span>Maximum BPM at 10 V</span>
+      <input type="number" min="0" step="0.1" inputmode="decimal" id="clockMaxBpmInput" value="240">
+    </label>
+    <div class="modal-actions">
+      <button id="clockSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="clockSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="mixerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Mixer Settings</h3>
+    <label class="modal-field">
+      <span>Number of Inputs (2–8)</span>
+      <input type="number" id="mixerCountInput" min="2" max="8" value="2">
+    </label>
+    <div class="modal-actions">
+      <button id="mixerSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="mixerSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="wavePlayerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Wave Player Settings</h3>
+    <label class="modal-field">
+      <span>Sample</span>
+      <select id="wavePlayerSampleSelect"></select>
+    </label>
+    <label class="modal-field">
+      <span>Root Note</span>
+      <select id="wavePlayerRootNoteSelect"></select>
+    </label>
+    <div class="modal-actions">
+      <button id="wavePlayerSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="wavePlayerSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="soundFontPlayerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>SoundFont Player Settings</h3>
+    <label class="modal-field"><span>SoundFont (SF2)</span><select id="soundFontPlayerFileSelect"></select></label>
+    <div class="modal-field"><span>Preset</span><span id="soundFontPlayerPresetDisplay" class="modal-field-readout">–</span></div>
+    <label class="modal-field"><span>Internal SF2 Voices (4–128)</span><input type="number" id="soundFontPlayerVoicesInput" min="4" max="128" value="32"></label>
+    <p class="modal-hint">Bank/Program are set on the widget itself. Place files in /storage/soundfonts or /sdcard/soundfonts. Plays on the ESP32-P4 and, approximately, in this browser preview.</p>
+    <div class="modal-actions"><button id="soundFontPlayerSettingsCancel" class="btn-secondary">Cancel</button><button id="soundFontPlayerSettingsSave">Save</button></div>
+  </div>
+</div>
+
+<div id="soundFontPresetPickerOverlay" class="modal-overlay hidden">
+  <div class="modal soundfont-preset-picker-modal">
+    <h3>Select Preset</h3>
+    <label class="modal-field"><span>Filter</span><input type="text" id="soundFontPresetPickerFilter" placeholder="Bank, program, or name…" autocomplete="off"></label>
+    <div class="soundfont-preset-picker-list" id="soundFontPresetPickerList"></div>
+    <div class="modal-actions"><button id="soundFontPresetPickerCancel" class="btn-secondary">Cancel</button></div>
+  </div>
+</div>
+
+<div id="adsrSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>ADSR Settings</h3>
+    <p class="modal-hint">Attack/Decay/Release inputs are 0-10V CV. Sets how that voltage maps to seconds.</p>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Attack Max (s)</span><input type="text" inputmode="decimal" id="adsrAttackMaxInput" value="4"></label>
+      <label class="modal-field"><span>Attack Curve</span><select id="adsrAttackCurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Decay Max (s)</span><input type="text" inputmode="decimal" id="adsrDecayMaxInput" value="4"></label>
+      <label class="modal-field"><span>Decay Curve</span><select id="adsrDecayCurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Release Max (s)</span><input type="text" inputmode="decimal" id="adsrReleaseMaxInput" value="4"></label>
+      <label class="modal-field"><span>Release Curve</span><select id="adsrReleaseCurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <p class="modal-hint">Sustain is always linear 0-10V → 0-1 (a level, not a time).</p>
+    <div class="modal-actions"><button id="adsrSettingsCancel" class="btn-secondary">Cancel</button><button id="adsrSettingsSave">Save</button></div>
+  </div>
+</div>
+
+<div id="numericEditOverlay" class="modal-overlay hidden">
+  <div class="modal modal-numeric-edit">
+    <h3 id="numericEditLabel">Value</h3>
+    <div class="numeric-edit-row">
+      <input type="number" step="any" id="numericEditInput" class="numeric-edit-input">
+      <span id="numericEditUnit" class="numeric-edit-unit"></span>
+    </div>
+    <div class="modal-actions"><button id="numericEditCancel" class="btn-secondary">Cancel</button><button id="numericEditSave">Save</button></div>
+  </div>
+</div>
+
+<div id="filterSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Filter Settings</h3>
+    <p class="modal-hint">Cutoff/Resonance inputs are 0-10V CV. Sets how that voltage maps to Hz/Q.</p>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Cutoff Min (Hz)</span><input type="text" inputmode="decimal" id="filterCutoffMinInput" value="20"></label>
+      <label class="modal-field"><span>Cutoff Max (Hz)</span><input type="text" inputmode="decimal" id="filterCutoffMaxInput" value="20000"></label>
+      <label class="modal-field"><span>Cutoff Curve</span><select id="filterCutoffCurveSelect"><option value="log">Log</option><option value="linear">Linear</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Resonance Min (Q)</span><input type="text" inputmode="decimal" id="filterResonanceMinInput" value="0.1"></label>
+      <label class="modal-field"><span>Resonance Max (Q)</span><input type="text" inputmode="decimal" id="filterResonanceMaxInput" value="20"></label>
+      <label class="modal-field"><span>Resonance Curve</span><select id="filterResonanceCurveSelect"><option value="log">Log</option><option value="linear">Linear</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field" title="Only affects audio-rate cutoff/resonance modulation (a genuine cable wired into Cutoff/Resonance CV) - only recompute the filter's coefficients every Nth sample instead of every sample. 1x = fully sample-accurate (most CPU). Higher values save CPU but modulation gets slightly stepped/aliased - inaudible for slow modulators (ADSR/LFO), more noticeable for fast ones (e.g. an oscillator FM'ing the cutoff).">
+        <span>Cutoff/Resonance Update Rate</span>
+        <select id="filterCoeffStrideSelect">
+          <option value="1">Every sample (1x, most CPU)</option>
+          <option value="2">Every 2nd sample</option>
+          <option value="3">Every 3rd sample</option>
+          <option value="4" selected>Every 4th sample (default)</option>
+          <option value="5">Every 5th sample</option>
+          <option value="6">Every 6th sample</option>
+          <option value="7">Every 7th sample</option>
+          <option value="8">Every 8th sample</option>
+          <option value="9">Every 9th sample</option>
+          <option value="10">Every 10th sample</option>
+          <option value="11">Every 11th sample</option>
+          <option value="12">Every 12th sample</option>
+          <option value="13">Every 13th sample</option>
+          <option value="14">Every 14th sample</option>
+          <option value="15">Every 15th sample</option>
+          <option value="16">Every 16th sample (least CPU)</option>
+        </select>
+      </label>
+    </div>
+    <div class="modal-actions"><button id="filterSettingsCancel" class="btn-secondary">Cancel</button><button id="filterSettingsSave">Save</button></div>
+  </div>
+</div>
+
+<div id="effectCvSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3 id="effectCvSettingsTitle">Effect Settings</h3>
+    <p class="modal-hint">Every input is 0-10V CV. Sets how that voltage maps onto each parameter's real range.</p>
+    <div id="effectCvSettingsFields"></div>
+    <div class="modal-actions"><button id="effectCvSettingsCancel" class="btn-secondary">Cancel</button><button id="effectCvSettingsSave">Save</button></div>
+  </div>
+</div>
+
+<div id="valueMapperSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Value Mapper Settings</h3>
+    <label class="modal-field">
+      <span>Value list (comma-separated, e.g. "10,100") - takes priority over linear mapping once it has 2+ numbers</span>
+      <input type="text" id="valueMapperValueListInput" placeholder="10,100">
+    </label>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Point A: Input Value</span><input type="text" inputmode="decimal" id="valueMapperPoint1InInput" value="0"></label>
+      <label class="modal-field"><span>Point A: Output Value</span><input type="text" inputmode="decimal" id="valueMapperPoint1OutInput" value="0"></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Point B: Input Value</span><input type="text" inputmode="decimal" id="valueMapperPoint2InInput" value="127"></label>
+      <label class="modal-field"><span>Point B: Output Value</span><input type="text" inputmode="decimal" id="valueMapperPoint2OutInput" value="10"></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Output never below (optional)</span><input type="text" inputmode="decimal" id="valueMapperConstraintMinInput" placeholder="no limit"></label>
+      <label class="modal-field"><span>Output never above (optional)</span><input type="text" inputmode="decimal" id="valueMapperConstraintMaxInput" placeholder="no limit"></label>
+    </div>
+    <p class="modal-hint">Default Point A/B maps a MIDI-CC-style 0-127 input onto 0-10V CV - edit freely for any other range (e.g. CV-to-CC by swapping A/B).</p>
+    <div class="modal-actions">
+      <button id="valueMapperSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="valueMapperSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="fileExplorerOverlay" class="modal-overlay hidden">
+  <div class="modal file-explorer-modal">
+    <h3>File Explorer</h3>
+    <div class="file-explorer-volume-tabs">
+      <button id="fileExplorerFlashVolume" class="file-explorer-volume active">Flash LittleFS</button>
+      <button id="fileExplorerSdVolume" class="file-explorer-volume">SD Card</button>
+    </div>
+    <div class="file-explorer-toolbar">
+      <div class="file-explorer-breadcrumb" id="fileExplorerBreadcrumb"></div>
+      <div class="file-explorer-space" id="fileExplorerSpace"></div>
+    </div>
+    <div class="file-explorer-dropzone" id="fileExplorerDropzone">
+      <div class="file-explorer-list" id="fileExplorerList"></div>
+    </div>
+    <div class="file-explorer-upload-progress hidden" id="fileExplorerUploadProgress">
+      <span id="fileExplorerUploadProgressLabel">Uploading…</span>
+      <div class="file-explorer-upload-progress-track"><div class="file-explorer-upload-progress-fill" id="fileExplorerUploadProgressFill"></div></div>
+    </div>
+    <input type="file" id="fileExplorerUploadInput" class="hidden" multiple>
+    <audio id="fileExplorerAudioPreview" class="hidden"></audio>
+    <div class="modal-actions">
+      <button id="fileExplorerUploadButton" class="btn-secondary">Upload</button>
+      <button id="fileExplorerClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="connectionColorOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Connection Color</h3>
+    <div class="color-swatch-grid" id="colorSwatchGrid"></div>
+    <div class="modal-actions">
+      <button id="connectionColorCancel" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="logWindow" class="log-window hidden">
+  <div class="log-window-header" id="logWindowHeader">
+    <span>Log</span>
+    <button id="logWindowClose" class="widget-instance-close">×</button>
+  </div>
+  <div class="log-window-body" id="logWindowBody"></div>
+</div>
+
+<script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

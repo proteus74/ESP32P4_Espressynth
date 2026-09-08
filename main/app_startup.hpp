@@ -50,6 +50,13 @@
     #include "features/audio/wm8960_manager.hpp"
 #endif
 
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    #include "features/synth/synth_manager.hpp"
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    #include "features/synth/synth_web_api.hpp"
+#endif
+#endif
+
 #if defined(CONFIG_APP_ENABLE_SDCARD)
     #include "features/sd_card/sd_card_manager.hpp"
 #endif
@@ -202,9 +209,16 @@ inline void init() {
 
 #if defined(CONFIG_APP_ENABLE_WEBSERVER)
     ESP_LOGI(TAG, "Feature: Web Server enabled -> Initializing...");
-    const esp_err_t web_err = Feature::Web::init();
+    const esp_err_t web_err = Feature::Web::begin();
     if (web_err != ESP_OK) {
         ESP_LOGW(TAG, "Web server unavailable: %s", esp_err_to_name(web_err));
+    } else {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+        // Registers the synth engine's WS + REST routes on Feature::Web's server. Must run
+        // between begin() and register_catch_all() - see both their comments.
+        Feature::Synth::register_web_routes();
+#endif
+        Feature::Web::register_catch_all();
     }
 #endif
 
@@ -226,6 +240,16 @@ inline void init() {
     const esp_err_t wm8960_err = Feature::Audio::WM8960::init();
     if (wm8960_err != ESP_OK) {
         ESP_LOGW(TAG, "WM8960 codec unavailable: %s", esp_err_to_name(wm8960_err));
+    }
+#endif
+
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    // After both onboard codec(s) above (needs an open ES8311 handle, an optional WM8960 TX
+    // handle) and LittleFS earlier (needs /littlefs mounted for presets/samples/soundfonts).
+    ESP_LOGI(TAG, "Feature: Synth Engine enabled -> Initializing...");
+    const esp_err_t synth_err = Feature::Synth::init();
+    if (synth_err != ESP_OK) {
+        ESP_LOGW(TAG, "Synth engine unavailable: %s", esp_err_to_name(synth_err));
     }
 #endif
 

@@ -202,6 +202,19 @@ inline bool is_connected(uint16_t conn_handle) {
 }
 
 /**
+ * @brief Number of currently subscribed BLE-MIDI peers (0..MAX_MIDI_CONNECTIONS). Lets a
+ *        status display (e.g. GET /api/midi/devices) show whether any BLE-MIDI peer is
+ *        connected without the caller needing to already know a conn_handle.
+ */
+inline uint8_t connected_count() {
+    uint8_t count = 0;
+    for (const auto& c : Feature::BLE::midi_connections) {
+        if (c.conn_handle != 0xffff && c.chr_handle != 0) ++count;
+    }
+    return count;
+}
+
+/**
  * @brief Send a MIDI channel message (e.g. {0x90, 0x3C, 0x7F} for Note On) to the BLE-MIDI
  *        device on the given connection. Returns ESP_ERR_INVALID_STATE if not connected/
  *        subscribed on that connection.

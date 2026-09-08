@@ -240,8 +240,11 @@ extern "C" __attribute__((used)) void usb_hid_keyboard_start() {
     keyboard_queue = xQueueCreate(64, sizeof(Feature::Keyboard::Event));
     mouse_queue = xQueueCreate(1, sizeof(Feature::Mouse::Event));
     // HID input, not audio -- main core (see app_core.hpp).
-    xTaskCreatePinnedToCore(keyboard_task, "usb_keyboard", 3072, nullptr, 4, nullptr, App::MAIN_CORE);
-    xTaskCreatePinnedToCore(mouse_task, "usb_mouse", 3072, nullptr, 4, nullptr, App::MAIN_CORE);
+    // 1536: measured peak usage (CLI "top") is ~430B for keyboard_task / ~350B for mouse_task -
+    // both parse a small, fixed-size HID report with no recursion/deep call chains, so this
+    // leaves >3x headroom over the observed worst case rather than the original 3072's ~7x.
+    xTaskCreatePinnedToCore(keyboard_task, "usb_keyboard", 1536, nullptr, 4, nullptr, App::MAIN_CORE);
+    xTaskCreatePinnedToCore(mouse_task, "usb_mouse", 1536, nullptr, 4, nullptr, App::MAIN_CORE);
     ESP_LOGI(TAG, "TinyUSB HID host enabled");
 }
 

@@ -1,0 +1,1153 @@
+#pragma once
+
+#include <cinttypes>
+#include <cstdio>
+#include <cstring>
+#include <new>
+
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "cJSON.h"
+#include "esp_app_desc.h"
+#include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_http_server.h"
+#include "esp_littlefs.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_vfs_fat.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+
+#include "LiveParamMsg.h"
+#include "MemoryDiagnostics.h"
+#include "PresetChangedMsg.h"
+#include "PresetPaths.h"
+#include "SamplePaths.h"
+#include "UsbMidiEvent.h"
+#include "features/filesystem/littlefs_manager.hpp"
+#include "features/sd_card/sd_card_manager.hpp"
+#include "features/web/web_server.hpp"
+#include "synth_manager.hpp"
+
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    #include "features/usb/host/usb_midi_host.hpp"
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    #include "features/ble/ble_midi_host.hpp"
+#endif
+
+// REST + WebSocket API for the synth engine's browser patch-editor UI (data/index.html,
+// data/static/* - ported from JoLa-EspressynthP4's web/WebServer.cpp/.h, ~2200 lines there).
+// Registers its routes on Feature::Web's shared httpd server; see
+// Feature::Web::begin()/register_catch_all()'s comments for why register_web_routes() must run
+// between those two calls.
+//
+// Deliberately NOT ported here: WebServer.cpp's /api/settings/network, /api/wifi/*, /api/ble/*
+// routes and its UsbMidiClassDriver-based multi-device MIDI port list/connect/disconnect
+// (/api/midi/connect, /api/midi/connect, /api/midi/disconnect) - this project already has its
+// own Wi-Fi/Ethernet/BLE configuration surface, and its MIDI transports (features/usb/host/
+// usb_midi_host.hpp, features/usb/device/usb_device_midi.hpp, features/ble/ble_midi_host.hpp)
+// don't expose the multi-device tracking/selection API that port list needs. GET
+// /api/midi/devices below reports simple per-transport availability instead.
+namespace Feature::Synth {
+
+namespace {
+constexpr const char *WEB_API_TAG = "SynthWebApi";
+constexpr size_t kMaxPathLen = 300;
+constexpr size_t kMaxPresetBodyLen = 256 * 1024;
+constexpr const char *kEmptyPresetJson = "{\"widgets\":[],\"connections\":[]}";
+constexpr size_t kUploadSafetyMarginBytes = 4096; // headroom below reported free space
+constexpr size_t kMaxWsClients = 12; // must cover Feature::Web::begin()'s config.max_open_sockets
+
+struct BroadcastWork {
+    // 1536: enough for the largest message sent today (nodeCpu, up to kMaxWidgets=64 entries)
+    // with headroom - broadcast_json() otherwise silently discards a too-long message
+    // (truncation guard below) instead of truncating it.
+    char json[1536];
+};
+
+void broadcast_work(void *arg) {
+    BroadcastWork *work = static_cast<BroadcastWork *>(arg);
+    httpd_handle_t server = Feature::Web::handle();
+    int client_fds[kMaxWsClients];
+    size_t fd_count = kMaxWsClients;
+    if (httpd_get_client_list(server, &fd_count, client_fds) == ESP_OK) {
+        httpd_ws_frame_t frame = {};
+        frame.type = HTTPD_WS_TYPE_TEXT;
+        frame.payload = reinterpret_cast<uint8_t *>(work->json);
+        frame.len = strlen(work->json);
+        for (size_t i = 0; i < fd_count; ++i) {
+            const int fd = client_fds[i];
+            if (httpd_ws_get_fd_info(server, fd) == HTTPD_WS_CLIENT_WEBSOCKET &&
+                httpd_ws_send_frame_async(server, fd, &frame) != ESP_OK) {
+                // Browser reloads and link loss can invalidate a socket between enumeration
+                // and send. Stop broadcasting to it.
+                httpd_sess_trigger_close(server, fd);
+            }
+        }
+    }
+    delete work;
+}
+} // namespace
+
+/**
+ * @brief Broadcasts an already-serialized JSON text frame to every connected /ws client. Safe
+ *        to call from any task (e.g. the USB-MIDI dispatch task) - a no-op if the web server
+ *        isn't running yet.
+ */
+inline void broadcast_json(const char *json) {
+    httpd_handle_t server = Feature::Web::handle();
+    if (server == nullptr) return;
+    BroadcastWork *work = new (std::nothrow) BroadcastWork();
+    if (work == nullptr) return;
+    const int length = snprintf(work->json, sizeof(work->json), "%s", json);
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(work->json) ||
+        httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
+        delete work;
+    }
+}
+
+/**
+ * @brief Broadcasts an incoming MIDI event to the browser (the {status,data1,data2} shape
+ *        shared by every transport - see dispatch_midi()) so the web UI's MIDI activity log
+ *        updates live. Safe to call from any task; a no-op if the web server isn't running.
+ */
+inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
+    if (Feature::Web::handle() == nullptr) return;
+    const UsbMidiEvent event = from_transport(status, data1, data2);
+    char json[256];
+    if (event.toJson(json, sizeof(json), static_cast<uint32_t>(esp_timer_get_time() / 1000), "MIDI") > 0) {
+        broadcast_json(json);
+    }
+}
+
+/**
+ * @brief Periodic engine-status broadcast: "cpuLoad" (matches main.js's updateCpuLoadDisplay()/
+ *        updateMemStatsDisplay() field names exactly - core0/core1/peakUs/budgetUs/overruns/
+ *        midiDrops/sfVoices/ps*Kb/sys*Kb/...), "nodeCpu" (per-widget load, main.js's
+ *        updateNodeCpuDisplay()) and, on change, "voicesCapped". Call roughly once a second
+ *        from the main loop (see main.cpp) - a no-op if the web server isn't running.
+ */
+inline void broadcast_status_tick() {
+    if (Feature::Web::handle() == nullptr) return;
+
+    static uint32_t last_voices_cap_id = 0;
+    const uint32_t voices_cap_id = engine().voicesCapEventId();
+    if (voices_cap_id != last_voices_cap_id) {
+        last_voices_cap_id = voices_cap_id;
+        char json[180];
+        snprintf(json, sizeof(json), "{\"type\":\"voicesCapped\",\"requested\":%u,\"effective\":%u,\"reason\":\"%s\"}",
+                 static_cast<unsigned>(engine().voicesCapRequested()), static_cast<unsigned>(engine().voicesCapEffective()),
+                 engine().voicesCapReason() == 1 ? "cpu" : "psram");
+        broadcast_json(json);
+    }
+
+    // Core 0 (Ethernet/USB/httpd/this task): generic FreeRTOS idle-task share, capped 0-100%.
+    // Core 1 (the engine's render task, exclusive): audioCoreLoadPercent() - block-budget-based,
+    // deliberately not replaced by the generic idle-task value since it can exceed 100% on a
+    // real overrun (see SynthEngine::taskLoop).
+    static int64_t previous_sample_us = 0;
+    static uint32_t previous_idle_runtime = 0;
+    const int64_t sample_us = esp_timer_get_time();
+    const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(0);
+    float core0_load = 0.0f;
+    if (previous_sample_us != 0) {
+        const uint32_t idle_delta = idle_runtime - previous_idle_runtime;
+        const int64_t total_delta = sample_us - previous_sample_us;
+        if (total_delta > 0) {
+            core0_load = 100.0f * (1.0f - static_cast<float>(idle_delta) / static_cast<float>(total_delta));
+            if (core0_load < 0.0f) core0_load = 0.0f;
+            if (core0_load > 100.0f) core0_load = 100.0f;
+        }
+    }
+    previous_idle_runtime = idle_runtime;
+    previous_sample_us = sample_us;
+
+    constexpr float kBlockBudgetUs = 1000000.0f * static_cast<float>(synth::kBlockSize) / static_cast<float>(synth::kSampleRate);
+    const unsigned long ps_free_kb = static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned long ps_total_kb = static_cast<unsigned long>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned long sys_free_kb = static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+    const unsigned long sys_total_kb = static_cast<unsigned long>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL) / 1024);
+
+    const memorydiag::HeapSnapshot memory = memorydiag::snapshot();
+    memorydiag::State memory_state;
+    memorydiag::read(memory_state);
+
+    char json[512];
+    snprintf(json, sizeof(json),
+             "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,\"peakUs\":%lu,\"budgetUs\":%lu,"
+             "\"overruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
+             "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
+             "\"sysLargestKb\":%lu,\"sysMinKb\":%lu,\"psLargestKb\":%lu,\"psMinKb\":%lu,"
+             "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u}",
+             static_cast<double>(core0_load), static_cast<double>(engine().audioCoreLoadPercent()),
+             static_cast<unsigned long>(engine().renderPeakUs()), static_cast<unsigned long>(kBlockBudgetUs),
+             static_cast<unsigned long>(engine().renderOverrunCount()), static_cast<unsigned long>(engine().midiDropCount()),
+             engine().activeSoundFontVoices(), ps_free_kb, ps_total_kb, sys_free_kb, sys_total_kb,
+             static_cast<unsigned long>(memory.internalLargest / 1024), static_cast<unsigned long>(memory.internalMinimum / 1024),
+             static_cast<unsigned long>(memory.psramLargest / 1024), static_cast<unsigned long>(memory.psramMinimum / 1024),
+             static_cast<unsigned long>(memory.synthStackHighWaterBytes), static_cast<unsigned long>(memory_state.generation),
+             static_cast<unsigned>(memory_state.phase));
+    broadcast_json(json);
+
+    char node_cpu_json[1536];
+    int offset = snprintf(node_cpu_json, sizeof(node_cpu_json), "{\"type\":\"nodeCpu\",\"w\":[");
+    const uint16_t widget_load_count = engine().widgetLoadCount();
+    bool first = true;
+    for (uint16_t i = 0; i < widget_load_count && offset > 0 && static_cast<size_t>(offset) < sizeof(node_cpu_json); ++i) {
+        char widget_id[24];
+        float widget_percent = 0.0f;
+        if (!engine().widgetLoadAt(i, widget_id, sizeof(widget_id), &widget_percent)) continue;
+        offset += snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset), "%s[\"%s\",%.1f]",
+                            first ? "" : ",", widget_id, static_cast<double>(widget_percent));
+        first = false;
+    }
+    if (offset > 0 && static_cast<size_t>(offset) < sizeof(node_cpu_json)) {
+        snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset), "]}");
+        broadcast_json(node_cpu_json);
+    }
+}
+
+namespace {
+
+// ---- request helpers (adapted from JoLa-EspressynthP4's web/WebServer.cpp) ----
+
+bool extract_query_param(httpd_req_t *req, const char *key, char *out_decoded, size_t out_size) {
+    char query[256];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) return false;
+    char encoded[kMaxPathLen];
+    if (httpd_query_key_value(query, key, encoded, sizeof(encoded)) != ESP_OK) return false;
+    presetpaths::urlDecode(encoded, out_decoded, out_size);
+    return true;
+}
+
+bool extract_preset_name_param(httpd_req_t *req, char *out_name, size_t out_size) {
+    return extract_query_param(req, "name", out_name, out_size);
+}
+
+bool is_safe_rel_path(const char *path) {
+    if (path == nullptr) return false;
+    if (strstr(path, "..") != nullptr) return false;
+    if (path[0] == '/' || path[0] == '\\') return false;
+    for (const char *p = path; *p != '\0'; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        if (c == '\\' || c < 0x20) return false;
+    }
+    return true;
+}
+
+bool is_safe_bare_name(const char *name) {
+    if (name == nullptr || name[0] == '\0') return false;
+    const size_t len = strlen(name);
+    if (len >= 128) return false;
+    if (name[0] == '.') return false;
+    for (size_t i = 0; i < len; ++i) {
+        const unsigned char c = static_cast<unsigned char>(name[i]);
+        if (c == '/' || c == '\\' || c == '"' || c < 0x20) return false;
+    }
+    return true;
+}
+
+// Streams `file` to `req` in chunks, then closes it. Buffer is MALLOC_CAP_INTERNAL, not
+// PSRAM-preferred like a generic file server might use - LittleFS's lfs_bd_read() bypasses its
+// own cache for large, block-aligned reads and has esp_partition_read() write straight into
+// this buffer while the flash cache is disabled; ESP-IDF asserts the calling task's *stack* is
+// entirely internal RAM at that point (see Feature::Web's static_file_handler for the identical
+// hazard), and a buffer the cache-disabled DMA/read path itself writes into needs the same care.
+esp_err_t stream_file_chunked(httpd_req_t *req, FILE *file) {
+    constexpr size_t kBufferSize = 8192;
+    auto *buffer = static_cast<char *>(heap_caps_malloc(kBufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (buffer == nullptr) {
+        fclose(file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    esp_err_t result = ESP_OK;
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, kBufferSize, file)) > 0) {
+        if (httpd_resp_send_chunk(req, buffer, bytes_read) != ESP_OK) {
+            result = ESP_FAIL;
+            break;
+        }
+    }
+    if (result == ESP_OK) {
+        httpd_resp_send_chunk(req, nullptr, 0);
+    }
+    heap_caps_free(buffer);
+    fclose(file);
+    return result;
+}
+
+enum class ExplorerVolume { Flash, Sd };
+
+ExplorerVolume explorer_volume_from_request(httpd_req_t *req) {
+    char volume[16] = {};
+    extract_query_param(req, "volume", volume, sizeof(volume));
+    return strcmp(volume, "sd") == 0 ? ExplorerVolume::Sd : ExplorerVolume::Flash;
+}
+
+bool explorer_volume_available(ExplorerVolume volume) {
+    return volume == ExplorerVolume::Flash || Feature::SDCard::is_mounted();
+}
+
+const char *explorer_volume_base_path(ExplorerVolume volume) {
+    return volume == ExplorerVolume::Sd ? Feature::SDCard::MOUNT_POINT : Feature::LittleFS::MOUNT_POINT;
+}
+
+// Builds "<selected volume base path>[/relPath]". The client selects only a fixed volume ID;
+// it can never supply a mount path.
+void build_storage_path(ExplorerVolume volume, const char *rel_path, char *out, size_t out_size) {
+    if (rel_path == nullptr || rel_path[0] == '\0') {
+        snprintf(out, out_size, "%s", explorer_volume_base_path(volume));
+    } else {
+        snprintf(out, out_size, "%s/%s", explorer_volume_base_path(volume), rel_path);
+    }
+}
+
+// ---- /api/files/* (file explorer) ----
+
+esp_err_t files_list_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    const ExplorerVolume volume = explorer_volume_from_request(req);
+    if (!explorer_volume_available(volume)) {
+        httpd_resp_sendstr(req, "{\"available\":false,\"dir\":\"\",\"entries\":[]}");
+        return ESP_OK;
+    }
+
+    char dir[kMaxPathLen] = {};
+    extract_query_param(req, "dir", dir, sizeof(dir));
+    if (!is_safe_rel_path(dir)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid dir");
+        return ESP_FAIL;
+    }
+
+    char fs_dir[kMaxPathLen + 16];
+    build_storage_path(volume, dir, fs_dir, sizeof(fs_dir));
+
+    DIR *d = opendir(fs_dir);
+    if (d == nullptr) {
+        httpd_resp_sendstr(req, "{\"dir\":\"\",\"entries\":[]}");
+        return ESP_OK;
+    }
+
+    constexpr size_t kBufSize = 8192;
+    auto *json = static_cast<char *>(heap_caps_malloc(kBufSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (json == nullptr) {
+        closedir(d);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+
+    int offset = snprintf(json, kBufSize, "{\"dir\":\"%s\",\"entries\":[", dir);
+    bool first = true;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != nullptr && offset > 0 && static_cast<size_t>(offset) < kBufSize) {
+        const char *fname = entry->d_name;
+        if (fname[0] == '.') continue; // hidden/marker files (e.g. presets/.last)
+
+        char entry_path[kMaxPathLen + 16 + 256];
+        snprintf(entry_path, sizeof(entry_path), "%s/%s", fs_dir, fname);
+        struct stat st;
+        if (stat(entry_path, &st) != 0) continue;
+        const bool is_dir = S_ISDIR(st.st_mode);
+
+        offset += snprintf(json + offset, kBufSize - static_cast<size_t>(offset),
+                            "%s{\"name\":\"%s\",\"isDir\":%s,\"size\":%lu}", first ? "" : ",", fname,
+                            is_dir ? "true" : "false", static_cast<unsigned long>(st.st_size));
+        first = false;
+    }
+    closedir(d);
+
+    if (offset > 0 && static_cast<size_t>(offset) < kBufSize) {
+        snprintf(json + offset, kBufSize - static_cast<size_t>(offset), "]}");
+        httpd_resp_sendstr(req, json);
+    } else {
+        httpd_resp_sendstr(req, "{\"dir\":\"\",\"entries\":[]}");
+    }
+    heap_caps_free(json);
+    return ESP_OK;
+}
+
+// Cache for the file-explorer's storage-usage panel - esp_littlefs_info()/esp_vfs_fat_info()
+// walk the whole filesystem to compute free space, expensive enough to matter if polled on
+// every navigation/upload/delete/rename. Serves a couple-seconds-old answer instead of
+// re-scanning every time.
+struct FsInfoCache {
+    bool valid = false;
+    uint64_t total = 0;
+    uint64_t used = 0;
+    int64_t timestamp_us = 0;
+};
+FsInfoCache fs_info_cache[2]; // index: ExplorerVolume::Flash=0, Sd=1
+constexpr int64_t kFsInfoCacheTtlUs = 3'000'000; // 3s
+
+void build_files_info_json(ExplorerVolume volume, const char *volume_str, char *json, size_t json_size) {
+    if (!explorer_volume_available(volume)) {
+        snprintf(json, json_size,
+                 "{\"type\":\"filesInfo\",\"volume\":\"%s\",\"available\":false,\"totalBytes\":0,\"usedBytes\":0,"
+                 "\"freeBytes\":0}",
+                 volume_str);
+        return;
+    }
+
+    FsInfoCache &cache = fs_info_cache[volume == ExplorerVolume::Sd ? 1 : 0];
+    const int64_t now_us = esp_timer_get_time();
+    if (!cache.valid || (now_us - cache.timestamp_us) > kFsInfoCacheTtlUs) {
+        uint64_t total = 0;
+        uint64_t used = 0;
+        if (volume == ExplorerVolume::Flash) {
+            size_t lfs_total = 0;
+            size_t lfs_used = 0;
+            if (esp_littlefs_info(Feature::LittleFS::PARTITION_LABEL, &lfs_total, &lfs_used) != ESP_OK) {
+                snprintf(json, json_size,
+                         "{\"type\":\"filesInfo\",\"volume\":\"%s\",\"available\":false,\"totalBytes\":0,"
+                         "\"usedBytes\":0,\"freeBytes\":0}",
+                         volume_str);
+                return;
+            }
+            total = lfs_total;
+            used = lfs_used;
+        } else {
+            uint64_t fat_total = 0;
+            uint64_t fat_free = 0;
+            if (esp_vfs_fat_info(Feature::SDCard::MOUNT_POINT, &fat_total, &fat_free) != ESP_OK) {
+                snprintf(json, json_size,
+                         "{\"type\":\"filesInfo\",\"volume\":\"%s\",\"available\":true,\"totalBytes\":0,"
+                         "\"usedBytes\":0,\"freeBytes\":0}",
+                         volume_str);
+                return;
+            }
+            total = fat_total;
+            used = total > fat_free ? total - fat_free : 0;
+        }
+        cache.total = total;
+        cache.used = used;
+        cache.timestamp_us = now_us;
+        cache.valid = true;
+    }
+
+    snprintf(json, json_size,
+             "{\"type\":\"filesInfo\",\"volume\":\"%s\",\"available\":true,\"totalBytes\":%" PRIu64
+             ",\"usedBytes\":%" PRIu64 ",\"freeBytes\":%" PRIu64 "}",
+             volume_str, cache.total, cache.used, cache.total - cache.used);
+}
+
+esp_err_t files_upload_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    const ExplorerVolume volume = explorer_volume_from_request(req);
+    if (!explorer_volume_available(volume)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "volume unavailable");
+        return ESP_FAIL;
+    }
+
+    char dir[kMaxPathLen] = {};
+    extract_query_param(req, "dir", dir, sizeof(dir));
+    char name[128] = {};
+    extract_query_param(req, "name", name, sizeof(name));
+    if (!is_safe_rel_path(dir) || !is_safe_bare_name(name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid path");
+        return ESP_FAIL;
+    }
+    if (req->content_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty body");
+        return ESP_FAIL;
+    }
+
+    size_t total = 0;
+    size_t used = 0;
+    if (volume == ExplorerVolume::Flash &&
+        esp_littlefs_info(Feature::LittleFS::PARTITION_LABEL, &total, &used) == ESP_OK) {
+        const size_t free_bytes = total > used ? total - used : 0;
+        if (free_bytes < kUploadSafetyMarginBytes || req->content_len > free_bytes - kUploadSafetyMarginBytes) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "not enough space");
+            return ESP_FAIL;
+        }
+    }
+
+    char rel_path[kMaxPathLen + 128];
+    if (dir[0] == '\0') {
+        snprintf(rel_path, sizeof(rel_path), "%s", name);
+    } else {
+        snprintf(rel_path, sizeof(rel_path), "%s/%s", dir, name);
+    }
+    char fs_path[kMaxPathLen + 128 + 16];
+    build_storage_path(volume, rel_path, fs_path, sizeof(fs_path));
+
+    FILE *file = fopen(fs_path, "wb");
+    if (file == nullptr) {
+        ESP_LOGE(WEB_API_TAG, "%s could not be opened for writing", fs_path);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not open file");
+        return ESP_FAIL;
+    }
+
+    // Streamed straight to disk (unlike preset_post_handler's malloc-the-whole-body approach) -
+    // uploaded files (WAV samples, SF2 banks) can be several MB, too large to buffer wholesale.
+    char buffer[2048];
+    size_t received = 0;
+    bool write_error = false;
+    while (received < req->content_len) {
+        int to_read = static_cast<int>(req->content_len - received);
+        if (to_read > static_cast<int>(sizeof(buffer))) to_read = static_cast<int>(sizeof(buffer));
+        int ret = httpd_req_recv(req, buffer, to_read);
+        if (ret <= 0) {
+            write_error = true;
+            break;
+        }
+        if (fwrite(buffer, 1, static_cast<size_t>(ret), file) != static_cast<size_t>(ret)) {
+            write_error = true;
+            break;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    fclose(file);
+
+    if (write_error) {
+        unlink(fs_path); // don't leave a truncated/partial file behind
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "{\"saved\":true}");
+    return ESP_OK;
+}
+
+esp_err_t files_delete_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    const ExplorerVolume volume = explorer_volume_from_request(req);
+    if (!explorer_volume_available(volume)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "volume unavailable");
+        return ESP_FAIL;
+    }
+
+    char rel_path[kMaxPathLen] = {};
+    if (!extract_query_param(req, "path", rel_path, sizeof(rel_path)) || !is_safe_rel_path(rel_path) ||
+        rel_path[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid path");
+        return ESP_FAIL;
+    }
+
+    char fs_path[kMaxPathLen + 16];
+    build_storage_path(volume, rel_path, fs_path, sizeof(fs_path));
+
+    struct stat st;
+    if (stat(fs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "not a file");
+        return ESP_FAIL;
+    }
+    if (unlink(fs_path) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not delete file");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "{\"deleted\":true}");
+    return ESP_OK;
+}
+
+// Streams a file's raw bytes back - used by the browser-side (JS reference) synth engine to
+// fetch .sf2/.wav sample data it can't play natively, unlike the on-device C++ engine which
+// reads straight off the filesystem. Same volume/path resolution as the other /api/files/*
+// handlers.
+esp_err_t files_download_handler(httpd_req_t *req) {
+    const ExplorerVolume volume = explorer_volume_from_request(req);
+    if (!explorer_volume_available(volume)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "volume unavailable");
+        return ESP_FAIL;
+    }
+
+    char rel_path[kMaxPathLen] = {};
+    if (!extract_query_param(req, "path", rel_path, sizeof(rel_path)) || !is_safe_rel_path(rel_path) ||
+        rel_path[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid path");
+        return ESP_FAIL;
+    }
+
+    char fs_path[kMaxPathLen + 16];
+    build_storage_path(volume, rel_path, fs_path, sizeof(fs_path));
+
+    struct stat st;
+    if (stat(fs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "file not found");
+        return ESP_FAIL;
+    }
+
+    FILE *file = fopen(fs_path, "rb");
+    if (file == nullptr) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "file not found");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    return stream_file_chunked(req, file);
+}
+
+esp_err_t files_rename_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    const ExplorerVolume volume = explorer_volume_from_request(req);
+    if (!explorer_volume_available(volume)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "volume unavailable");
+        return ESP_FAIL;
+    }
+
+    char rel_path[kMaxPathLen] = {};
+    char new_name[128] = {};
+    if (!extract_query_param(req, "path", rel_path, sizeof(rel_path)) || !is_safe_rel_path(rel_path) ||
+        rel_path[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid path");
+        return ESP_FAIL;
+    }
+    extract_query_param(req, "newName", new_name, sizeof(new_name));
+    if (!is_safe_bare_name(new_name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid name");
+        return ESP_FAIL;
+    }
+
+    char fs_path[kMaxPathLen + 16];
+    build_storage_path(volume, rel_path, fs_path, sizeof(fs_path));
+
+    struct stat st;
+    if (stat(fs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "not a file");
+        return ESP_FAIL;
+    }
+
+    // Rename stays within the same directory as the source - a plain-name swap, not a move.
+    char rel_dir[kMaxPathLen];
+    snprintf(rel_dir, sizeof(rel_dir), "%s", rel_path);
+    char *last_slash = strrchr(rel_dir, '/');
+    char new_rel_path[kMaxPathLen + 128];
+    if (last_slash != nullptr) {
+        *last_slash = '\0';
+        snprintf(new_rel_path, sizeof(new_rel_path), "%s/%s", rel_dir, new_name);
+    } else {
+        snprintf(new_rel_path, sizeof(new_rel_path), "%s", new_name);
+    }
+
+    char new_fs_path[kMaxPathLen + 128 + 16];
+    build_storage_path(volume, new_rel_path, new_fs_path, sizeof(new_fs_path));
+
+    struct stat existing;
+    if (stat(new_fs_path, &existing) == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "target already exists");
+        return ESP_FAIL;
+    }
+    if (rename(fs_path, new_fs_path) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not rename file");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "{\"renamed\":true}");
+    return ESP_OK;
+}
+
+// ---- /api/preset, /api/presets ----
+
+esp_err_t preset_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+
+    char raw_name[presetpaths::kMaxNameLen] = {};
+    const bool has_name_param = extract_preset_name_param(req, raw_name, sizeof(raw_name));
+
+    char resolved_path[kMaxPathLen];
+    char resolved_name[presetpaths::kMaxNameLen] = {};
+    if (has_name_param && presetpaths::isSafeName(raw_name)) {
+        presetpaths::pathForName(raw_name, resolved_path, sizeof(resolved_path));
+        snprintf(resolved_name, sizeof(resolved_name), "%s", raw_name);
+        // Opening a named preset makes it the active one for subsequent unnamed saves/boot.
+        presetpaths::writeLastMarker(raw_name);
+    } else {
+        presetpaths::resolveActivePath(resolved_path, sizeof(resolved_path), resolved_name, sizeof(resolved_name));
+    }
+
+    // Lets the browser learn which preset this is in the same round trip.
+    httpd_resp_set_hdr(req, "X-Preset-Name", resolved_name);
+
+    FILE *file = fopen(resolved_path, "rb");
+    if (file == nullptr) {
+        httpd_resp_sendstr(req, kEmptyPresetJson);
+        return ESP_OK;
+    }
+    return stream_file_chunked(req, file);
+}
+
+esp_err_t preset_post_handler(httpd_req_t *req) {
+    if (req->content_len == 0 || req->content_len > kMaxPresetBodyLen) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset size");
+        return ESP_FAIL;
+    }
+
+    char raw_name[presetpaths::kMaxNameLen] = {};
+    const bool has_name_param = extract_preset_name_param(req, raw_name, sizeof(raw_name));
+    if (has_name_param && !presetpaths::isSafeName(raw_name)) {
+        // Unlike GET, a save with an invalid name is rejected outright rather than silently
+        // falling back to the unnamed slot.
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset name");
+        return ESP_FAIL;
+    }
+
+    auto *body = static_cast<char *>(heap_caps_malloc(req->content_len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (body == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
+            heap_caps_free(body);
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(ret);
+    }
+
+    char target_path[kMaxPathLen];
+    if (has_name_param) {
+        presetpaths::pathForName(raw_name, target_path, sizeof(target_path));
+    } else {
+        snprintf(target_path, sizeof(target_path), "%s", presetpaths::unnamedPath());
+    }
+
+    // Ignore mkdir failure: directory is created by Feature::Synth::init() on first boot, this
+    // is only a defensive fallback if a save races ahead of that.
+    mkdir(presetpaths::kDir, 0775);
+
+    FILE *file = fopen(target_path, "wb");
+    if (file == nullptr) {
+        heap_caps_free(body);
+        ESP_LOGE(WEB_API_TAG, "%s could not be opened for writing", target_path);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not write preset");
+        return ESP_FAIL;
+    }
+    fwrite(body, 1, received, file);
+    fclose(file);
+    heap_caps_free(body);
+
+    presetpaths::writeLastMarker(has_name_param ? raw_name : "");
+
+    QueueHandle_t preset_queue = preset_changed_queue();
+    if (preset_queue != nullptr) {
+        PresetChangedMsg msg;
+        snprintf(msg.path, sizeof(msg.path), "%s", target_path);
+        // Length-1 overwrite queue: a burst of rapid saves just coalesces into "rebuild once
+        // more from the latest file" - exactly what's wanted here.
+        xQueueOverwrite(preset_queue, &msg);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"saved\":true}");
+    return ESP_OK;
+}
+
+esp_err_t presets_list_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+
+    DIR *dir = opendir(presetpaths::kDir);
+    if (dir == nullptr) {
+        httpd_resp_sendstr(req, "{\"presets\":[]}");
+        return ESP_OK;
+    }
+
+    char json[1024];
+    int offset = snprintf(json, sizeof(json), "{\"presets\":[");
+    bool first = true;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr && offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        const char *fname = entry->d_name;
+        if (fname[0] == '.') continue;
+        const size_t len = strlen(fname);
+        if (len < 6 || strcmp(fname + len - 5, ".json") != 0) continue;
+        if (strcmp(fname, "current.json") == 0) continue; // unnamed slot is not a "named" preset
+
+        char name_only[presetpaths::kMaxNameLen];
+        size_t name_len = len - 5;
+        if (name_len >= sizeof(name_only)) name_len = sizeof(name_only) - 1;
+        memcpy(name_only, fname, name_len);
+        name_only[name_len] = '\0';
+
+        offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s\"%s\"",
+                            first ? "" : ",", name_only);
+        first = false;
+    }
+    closedir(dir);
+
+    if (offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
+        httpd_resp_sendstr(req, json);
+    } else {
+        httpd_resp_sendstr(req, "{\"presets\":[]}");
+    }
+    return ESP_OK;
+}
+
+// ---- /api/samples, /api/soundfonts ----
+
+esp_err_t samples_list_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+
+    DIR *dir = opendir(samplepaths::kDir);
+    if (dir == nullptr) {
+        httpd_resp_sendstr(req, "{\"samples\":[]}");
+        return ESP_OK;
+    }
+
+    char json[1024];
+    int offset = snprintf(json, sizeof(json), "{\"samples\":[");
+    bool first = true;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr && offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        const char *fname = entry->d_name;
+        if (fname[0] == '.') continue;
+        const size_t len = strlen(fname);
+        if (len < 5 || strcmp(fname + len - 4, ".wav") != 0) continue;
+        offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s\"%s\"",
+                            first ? "" : ",", fname);
+        first = false;
+    }
+    closedir(dir);
+
+    if (offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
+        httpd_resp_sendstr(req, json);
+    } else {
+        httpd_resp_sendstr(req, "{\"samples\":[]}");
+    }
+    return ESP_OK;
+}
+
+bool has_sf2_extension(const char *name) {
+    const size_t len = name != nullptr ? strlen(name) : 0;
+    if (len < 4) return false;
+    const char *ext = name + len - 4;
+    return ext[0] == '.' && (ext[1] == 's' || ext[1] == 'S') && (ext[2] == 'f' || ext[2] == 'F') && ext[3] == '2';
+}
+
+void append_soundfonts(const char *root, const char *volume, char *json, size_t size, int &offset, bool &first) {
+    char dir_path[256];
+    snprintf(dir_path, sizeof(dir_path), "%s/soundfonts", root);
+    DIR *dir = opendir(dir_path);
+    if (dir == nullptr) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr && offset > 0 && static_cast<size_t>(offset) < size) {
+        if (entry->d_name[0] == '.' || !has_sf2_extension(entry->d_name)) continue;
+        // Headroom for GCC's -Wformat-truncation: dir_path (256) and entry->d_name (dirent's
+        // own array, up to 255) both worst-cased by the compiler.
+        char full_path[256 + 1 + 255];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+        struct stat st = {};
+        if (stat(full_path, &st) != 0 || S_ISDIR(st.st_mode)) continue;
+        offset += snprintf(json + offset, size - static_cast<size_t>(offset),
+                            "%s{\"volume\":\"%s\",\"path\":\"soundfonts/%s\",\"name\":\"%s\",\"size\":%llu}",
+                            first ? "" : ",", volume, entry->d_name, entry->d_name,
+                            static_cast<unsigned long long>(st.st_size));
+        first = false;
+    }
+    closedir(dir);
+}
+
+esp_err_t soundfonts_list_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[4096];
+    int offset = snprintf(json, sizeof(json), "{\"soundfonts\":[");
+    bool first = true;
+    append_soundfonts(Feature::LittleFS::MOUNT_POINT, "flash", json, sizeof(json), offset, first);
+    if (Feature::SDCard::is_mounted()) {
+        append_soundfonts(Feature::SDCard::MOUNT_POINT, "sd", json, sizeof(json), offset, first);
+    }
+    if (offset <= 0 || static_cast<size_t>(offset) >= sizeof(json) - 2) {
+        httpd_resp_sendstr(req, "{\"soundfonts\":[]}");
+        return ESP_OK;
+    }
+    snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// ---- /api/midi/devices ----
+
+// The frontend (main.js's renderMidiDevices()) expects "devices" as a flat array of display-
+// name strings - NOT objects - and treats any name starting with "BLE-MIDI " as a BLE chip
+// (right-click to disconnect). USB Device MIDI (this board acting as a class-compliant MIDI
+// device a PC/host would see) is deliberately not listed here - it is the reverse relationship
+// of "an external keyboard connected to this board", which is what this list is for.
+esp_err_t midi_devices_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[256];
+    int offset = snprintf(json, sizeof(json), "{\"devices\":[");
+    bool first = true;
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    if (Feature::MIDI::is_connected()) {
+        offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s\"USB MIDI (device %u)\"",
+                            first ? "" : ",", static_cast<unsigned>(Feature::MIDI::connected_device_address()));
+        first = false;
+    }
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    const uint8_t ble_count = Feature::BLE::MIDI::connected_count();
+    for (uint8_t i = 0; i < ble_count && offset > 0 && static_cast<size_t>(offset) < sizeof(json); ++i) {
+        offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s\"BLE-MIDI %u\"",
+                            first ? "" : ",", static_cast<unsigned>(i + 1));
+        first = false;
+    }
+#endif
+    if (offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
+        httpd_resp_sendstr(req, json);
+    } else {
+        httpd_resp_sendstr(req, "{\"devices\":[]}");
+    }
+    return ESP_OK;
+}
+
+// ---- /api/version, /api/diagnostics/memory ----
+
+esp_err_t version_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    const esp_app_desc_t *desc = esp_app_get_description();
+    char json[160];
+    snprintf(json, sizeof(json), "{\"version\":\"%s\",\"wm8960\":%s}", desc->version,
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+             "true"
+#else
+             "false"
+#endif
+    );
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+esp_err_t memory_diagnostics_handler(httpd_req_t *req) {
+    memorydiag::State state;
+    memorydiag::read(state);
+    const memorydiag::HeapSnapshot current = memorydiag::snapshot();
+
+    httpd_resp_set_type(req, "application/json");
+    char json[768];
+    int length = snprintf(
+        json, sizeof(json),
+        "{\"generation\":%" PRIu32 ",\"phase\":\"%s\",\"phaseId\":%u,\"inProgress\":%s,\"success\":%s,"
+        "\"current\":{\"internalFree\":%" PRIu32 ",\"internalLargest\":%" PRIu32 ",\"internalMinimum\":%" PRIu32
+        ",\"psramFree\":%" PRIu32 ",\"psramLargest\":%" PRIu32 ",\"psramMinimum\":%" PRIu32
+        ",\"synthStackHighWaterBytes\":%" PRIu32 "},"
+        "\"graph\":{\"instances\":%" PRIu32 ",\"nodeInstanceBytes\":%" PRIu32 ",\"blockBuffers\":%" PRIu32
+        ",\"blockBufferBytes\":%" PRIu32 ",\"instancesInternal\":%s},\"phases\":{",
+        state.generation, memorydiag::phaseName(state.phase), static_cast<unsigned>(state.phase),
+        state.inProgress ? "true" : "false", state.success ? "true" : "false", current.internalFree,
+        current.internalLargest, current.internalMinimum, current.psramFree, current.psramLargest,
+        current.psramMinimum, current.synthStackHighWaterBytes, state.graph.instanceCount,
+        state.graph.nodeInstanceBytes, state.graph.blockBufferCount, state.graph.blockBufferBytes,
+        state.graph.instancesInternal ? "true" : "false");
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||
+        httpd_resp_send_chunk(req, json, static_cast<ssize_t>(length)) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    bool first = true;
+    for (uint8_t i = 0; i < static_cast<uint8_t>(memorydiag::ReloadPhase::Count); ++i) {
+        if ((state.validPhaseMask & (1U << i)) == 0) continue;
+        const auto phase = static_cast<memorydiag::ReloadPhase>(i);
+        const memorydiag::HeapSnapshot &snap = state.phases[i];
+        length = snprintf(json, sizeof(json),
+                           "%s\"%s\":{\"internalFree\":%" PRIu32 ",\"internalLargest\":%" PRIu32
+                           ",\"internalMinimum\":%" PRIu32 ",\"psramFree\":%" PRIu32 ",\"psramLargest\":%" PRIu32
+                           ",\"psramMinimum\":%" PRIu32 ",\"synthStackHighWaterBytes\":%" PRIu32 "}",
+                           first ? "" : ",", memorydiag::phaseName(phase), snap.internalFree, snap.internalLargest,
+                           snap.internalMinimum, snap.psramFree, snap.psramLargest, snap.psramMinimum,
+                           snap.synthStackHighWaterBytes);
+        if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||
+            httpd_resp_send_chunk(req, json, static_cast<ssize_t>(length)) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        first = false;
+    }
+    if (httpd_resp_send_chunk(req, "}}", 2) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// ---- /ws ----
+
+void log_client_connected(httpd_req_t *req) {
+    ESP_LOGI(WEB_API_TAG, "WebSocket client connected (fd=%d)", httpd_req_to_sockfd(req));
+}
+
+esp_err_t websocket_handler(httpd_req_t *req) {
+    if (req->method == HTTP_GET) {
+        // GET on a ws:// URI only fires once, for the upgrade handshake - esp_http_server has
+        // already completed it by the time we get here.
+        log_client_connected(req);
+        return ESP_OK;
+    }
+
+    httpd_ws_frame_t frame = {};
+    esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(WEB_API_TAG, "WebSocket frame length could not be read: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    if (frame.len == 0) return ESP_OK; // control frame (ping/pong/close) without payload
+
+    // +1 for a trailing NUL so a text payload can be logged/parsed as a C string.
+    auto *payload = static_cast<uint8_t *>(malloc(frame.len + 1));
+    if (payload == nullptr) return ESP_ERR_NO_MEM;
+    frame.payload = payload;
+    ret = httpd_ws_recv_frame(req, &frame, frame.len);
+    if (ret == ESP_OK && frame.type == HTTPD_WS_TYPE_TEXT) {
+        payload[frame.len] = '\0';
+        ESP_LOGD(WEB_API_TAG, "WebSocket message: %s", reinterpret_cast<char *>(payload));
+
+        bool handled_locally = false;
+        cJSON *root = cJSON_Parse(reinterpret_cast<char *>(payload));
+        if (root != nullptr) {
+            cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+            if (cJSON_IsString(type) && strcmp(type->valuestring, "midiTest") == 0) {
+                cJSON *midi_type = cJSON_GetObjectItemCaseSensitive(root, "midiType");
+                cJSON *channel = cJSON_GetObjectItemCaseSensitive(root, "channel");
+                cJSON *note = cJSON_GetObjectItemCaseSensitive(root, "note");
+                cJSON *velocity = cJSON_GetObjectItemCaseSensitive(root, "velocity");
+                if (cJSON_IsString(midi_type) && cJSON_IsNumber(channel) && cJSON_IsNumber(note) &&
+                    cJSON_IsNumber(velocity) && channel->valueint >= 0 && channel->valueint < 16 &&
+                    note->valueint >= 0 && note->valueint < 128 && velocity->valueint >= 0 &&
+                    velocity->valueint < 128) {
+                    const bool on = strcmp(midi_type->valuestring, "note_on") == 0;
+                    const uint8_t status = static_cast<uint8_t>((on ? 0x90 : 0x80) | channel->valueint);
+                    const uint8_t data1 = static_cast<uint8_t>(note->valueint);
+                    const uint8_t data2 = static_cast<uint8_t>(velocity->valueint);
+                    dispatch_midi(status, data1, data2);
+
+                    UsbMidiEvent event = from_transport(status, data1, data2);
+                    char midi_json[256];
+                    if (event.toJson(midi_json, sizeof(midi_json),
+                                      static_cast<uint32_t>(esp_timer_get_time() / 1000),
+                                      "Web MIDI test") > 0) {
+                        httpd_ws_frame_t reply = {};
+                        reply.type = HTTPD_WS_TYPE_TEXT;
+                        reply.payload = reinterpret_cast<uint8_t *>(midi_json);
+                        reply.len = strlen(midi_json);
+                        httpd_ws_send_frame(req, &reply);
+                    }
+                    handled_locally = true;
+                }
+            } else if (cJSON_IsString(type) && strcmp(type->valuestring, "filesInfo") == 0) {
+                cJSON *volume_item = cJSON_GetObjectItemCaseSensitive(root, "volume");
+                const bool is_sd = cJSON_IsString(volume_item) && strcmp(volume_item->valuestring, "sd") == 0;
+                const char *volume_str = is_sd ? "sd" : "flash";
+                char info_json[192];
+                build_files_info_json(is_sd ? ExplorerVolume::Sd : ExplorerVolume::Flash, volume_str, info_json,
+                                       sizeof(info_json));
+                httpd_ws_frame_t reply = {};
+                reply.type = HTTPD_WS_TYPE_TEXT;
+                reply.payload = reinterpret_cast<uint8_t *>(info_json);
+                reply.len = strlen(info_json);
+                httpd_ws_send_frame(req, &reply);
+                handled_locally = true;
+            }
+            cJSON_Delete(root);
+        }
+
+        // Forward browser->device messages (currently only "paramUpdate") to the engine's
+        // render task for parsing/application - kept minimal here so the httpd worker never
+        // touches the live graph.
+        QueueHandle_t param_queue = live_param_queue();
+        if (!handled_locally && param_queue != nullptr && frame.len < sizeof(LiveParamMsg::json)) {
+            LiveParamMsg msg;
+            memcpy(msg.json, payload, frame.len + 1); // includes the NUL appended above
+            xQueueSend(param_queue, &msg, 0);
+        }
+    }
+    free(payload);
+    return ret;
+}
+
+} // namespace
+
+/**
+ * @brief Registers the synth engine's WS + REST routes on Feature::Web's shared httpd server.
+ *        Call between Feature::Web::begin() and Feature::Web::register_catch_all() - see both
+ *        their comments for why the order matters.
+ */
+inline void register_web_routes() {
+    httpd_handle_t server = Feature::Web::handle();
+    if (server == nullptr) return;
+
+    static const httpd_uri_t ws_uri = {
+        .uri = "/ws",
+        .method = HTTP_GET,
+        .handler = &websocket_handler,
+        .user_ctx = nullptr,
+        .is_websocket = true,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server, &ws_uri);
+
+    static const httpd_uri_t preset_get_uri = {
+        .uri = "/api/preset", .method = HTTP_GET, .handler = &preset_get_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_get_uri);
+
+    static const httpd_uri_t preset_post_uri = {
+        .uri = "/api/preset", .method = HTTP_POST, .handler = &preset_post_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_post_uri);
+
+    static const httpd_uri_t presets_list_uri = {
+        .uri = "/api/presets", .method = HTTP_GET, .handler = &presets_list_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &presets_list_uri);
+
+    static const httpd_uri_t samples_list_uri = {
+        .uri = "/api/samples", .method = HTTP_GET, .handler = &samples_list_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &samples_list_uri);
+
+    static const httpd_uri_t soundfonts_list_uri = {
+        .uri = "/api/soundfonts", .method = HTTP_GET, .handler = &soundfonts_list_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &soundfonts_list_uri);
+
+    static const httpd_uri_t files_list_uri = {
+        .uri = "/api/files/list", .method = HTTP_GET, .handler = &files_list_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &files_list_uri);
+
+    static const httpd_uri_t files_upload_uri = {
+        .uri = "/api/files/upload", .method = HTTP_POST, .handler = &files_upload_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &files_upload_uri);
+
+    static const httpd_uri_t files_delete_uri = {
+        .uri = "/api/files/delete", .method = HTTP_POST, .handler = &files_delete_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &files_delete_uri);
+
+    static const httpd_uri_t files_download_uri = {
+        .uri = "/api/files/download", .method = HTTP_GET, .handler = &files_download_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &files_download_uri);
+
+    static const httpd_uri_t files_rename_uri = {
+        .uri = "/api/files/rename", .method = HTTP_POST, .handler = &files_rename_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &files_rename_uri);
+
+    static const httpd_uri_t midi_devices_uri = {
+        .uri = "/api/midi/devices", .method = HTTP_GET, .handler = &midi_devices_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &midi_devices_uri);
+
+    static const httpd_uri_t version_uri = {
+        .uri = "/api/version", .method = HTTP_GET, .handler = &version_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &version_uri);
+
+    static const httpd_uri_t memory_diagnostics_uri = {
+        .uri = "/api/diagnostics/memory", .method = HTTP_GET, .handler = &memory_diagnostics_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &memory_diagnostics_uri);
+
+    ESP_LOGI(WEB_API_TAG, "Synth web API routes registered");
+}
+
+} // namespace Feature::Synth

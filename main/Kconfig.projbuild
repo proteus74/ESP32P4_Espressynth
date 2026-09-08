@@ -289,6 +289,20 @@ menu "Application Features"
                         feature entirely.
             endif
 
+            config APP_ENABLE_SYNTH
+                bool "Enable Node-Graph Synth Engine"
+                default n
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
+                help
+                    Polyphonic node-graph synth engine (oscillators, filters,
+                    ADSR, effects, WAV/SoundFont playback), rendering to
+                    whichever codec(s) are enabled above at 44.1 kHz. Board-
+                    agnostic - depends only on the codec(s), not on the
+                    selected board. For the browser patch-editor UI, also
+                    enable "Web Server" and "LittleFS" below; for note input,
+                    enable a MIDI transport (USB Host/Device MIDI or BLE
+                    MIDI).
+
             config USB_DEV_ENABLE_UAC2
                 bool "Enable USB Sound Card (UAC2, via USB Device Composite)"
                 default y

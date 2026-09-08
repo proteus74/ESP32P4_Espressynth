@@ -27,9 +27,23 @@ extern "C" esp_err_t esp_vfs_fat_mount_initialized(
 
 namespace Feature::SDCard {
 
+constexpr const char* MOUNT_POINT = "/sdcard";
+
+namespace {
+// Set once esp_vfs_fat_mount_initialized() actually succeeds below - lets callers (e.g.
+// the synth engine's SoundFont loader, main/audio/engine/SoundFontPlayer.h) tell an
+// absent/unformatted card apart from one that mounted fine, without re-probing the
+// hardware or duplicating init()'s own mount-result handling.
+inline bool s_mounted = false;
+} // namespace
+
+/** @brief True once init() has successfully mounted a FAT filesystem on the SD card. */
+inline bool is_mounted() {
+    return s_mounted;
+}
+
 inline esp_err_t init() {
     constexpr const char* TAG = "FeatureSDCard";
-    constexpr const char* MOUNT_POINT = "/sdcard";
 
     if (CurrentBoard::PIN_SDMMC_PWR_EN != GPIO_NUM_NC) {
         esp_err_t power_err = gpio_set_direction(CurrentBoard::PIN_SDMMC_PWR_EN, GPIO_MODE_OUTPUT);
@@ -134,6 +148,7 @@ inline esp_err_t init() {
         return err;
     }
     ESP_LOGI(TAG, "SD card FAT filesystem mounted at %s", MOUNT_POINT);
+    s_mounted = true;
 
     const char* test_file_path = "/sdcard/hello.txt";
     FILE* file = std::fopen(test_file_path, "r");

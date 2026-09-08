@@ -29,6 +29,7 @@ struct midi_packet_t { uint8_t data[4]; };
 inline QueueHandle_t queue = nullptr;
 inline Feature::MIDI::EventCallback event_callback = nullptr;
 inline uint8_t connected_idx = 0;
+inline uint8_t connected_address = 0;
 inline bool connected = false;
 
 inline void midi_task(void*) {
@@ -61,6 +62,15 @@ inline bool is_connected() {
 }
 
 /**
+ * @brief USB device address of the currently mounted MIDI device (tuh_midi_mount_cb_t::daddr).
+ *        Only meaningful while is_connected() is true - lets a status display (e.g. GET
+ *        /api/midi/devices) tell devices apart without a product-string lookup.
+ */
+inline uint8_t connected_device_address() {
+    return connected_address;
+}
+
+/**
  * @brief Send raw MIDI stream bytes (e.g. {0x90, 0x3C, 0x7F} for Note On) to the
  *        connected device on the given virtual cable. Returns ESP_ERR_INVALID_STATE
  *        if no device is connected.
@@ -80,7 +90,11 @@ extern "C" __attribute__((used)) void usb_midi_host_start() {
     queue = xQueueCreate(64, sizeof(midi_packet_t));
     // MIDI is sound data, so this relay task runs on the audio core (see app_core.hpp),
     // separate from the mixed USB Host task (HID + raw MIDI byte parsing) that feeds it.
-    xTaskCreatePinnedToCore(midi_task, "usb_midi_task", 3072, nullptr, 5, nullptr, App::AUDIO_CORE);
+    // 2048: measured peak usage (CLI "top") is ~1170B - each loop iteration just decodes one
+    // fixed-size 4-byte USB-MIDI packet and forwards it via the event callback (dispatch_midi
+    // -> onMidiEvent -> a bounded xQueueSend), no recursion/unbounded depth - leaves ~1.7x
+    // headroom over the observed worst case rather than the original 3072's ~2.6x.
+    xTaskCreatePinnedToCore(midi_task, "usb_midi_task", 2048, nullptr, 5, nullptr, App::AUDIO_CORE);
     ESP_LOGI(TAG, "TinyUSB MIDI host enabled");
 }
 
@@ -88,6 +102,7 @@ extern "C" __attribute__((used)) void tuh_midi_mount_cb(uint8_t idx, const tuh_m
     using namespace Feature::MIDI;
     ESP_LOGI(TAG, "MIDI mounted: address=%u index=%u", data->daddr, idx);
     connected_idx = idx;
+    connected_address = data->daddr;
     connected = true;
 }
 

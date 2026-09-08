@@ -51,6 +51,13 @@
     #include "features/audio/wm8960_manager.hpp"
 #endif
 
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    #include "features/synth/synth_manager.hpp"
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    #include "features/synth/synth_web_api.hpp"
+#endif
+#endif
+
 // Demo glue code: wires the optional feature modules (USB/BLE HID, MIDI, USB
 // Device CDC/MIDI/Audio, onboard codecs) together so app_main() itself stays
 // limited to App::init() and the main loop. Replace the handlers below with
@@ -166,6 +173,12 @@ void on_mouse_event(const Feature::Mouse::Event& event) {
 void on_midi_event(const Feature::MIDI::Event& event) {
     ESP_LOGI(TAG, "MIDI in: status=0x%02x data=%u,%u channel=%u",
              event.status, event.data1, event.data2, event.channel + 1);
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    Feature::Synth::dispatch_midi(event.status, event.data1, event.data2);
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    Feature::Synth::broadcast_midi_event(event.status, event.data1, event.data2);
+#endif
+#endif
 }
 #endif
 
@@ -201,6 +214,12 @@ void on_ble_hid_report(const Feature::BLE::HID::Event& event) {
 void on_ble_midi_event(const Feature::BLE::MIDI::Event& event) {
     ESP_LOGI(TAG, "BLE-MIDI in: conn=%u status=0x%02x data=%u,%u channel=%u",
              event.conn_handle, event.status, event.data1, event.data2, event.channel + 1);
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    Feature::Synth::dispatch_midi(event.status, event.data1, event.data2);
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    Feature::Synth::broadcast_midi_event(event.status, event.data1, event.data2);
+#endif
+#endif
 }
 #endif
 
@@ -227,6 +246,12 @@ void on_device_midi_event(const Feature::USBDevice::MIDI::Event& event) {
     if (result != ESP_OK) {
         ESP_LOGW(TAG, "USB Device MIDI echo failed: %s", esp_err_to_name(result));
     }
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    Feature::Synth::dispatch_midi(event.status, event.data1, event.data2);
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    Feature::Synth::broadcast_midi_event(event.status, event.data1, event.data2);
+#endif
+#endif
 }
 #endif
 
@@ -248,6 +273,13 @@ Wm8960PlaybackStatistics wm8960_playback_stats;
 #endif
 
 void on_device_speaker_audio(const int16_t* samples, size_t frame_count) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    // Once the synth engine is running it owns both the UAC2 mic-in tap (setUsbAudioTap,
+    // see synth_manager.hpp) and the codec write path (its own render task) - a second writer
+    // here would tear the output. Just hand the host's speaker audio to the engine's mix-in
+    // ring instead; the engine mixes it into the render block and writes once, itself.
+    Feature::Synth::usb_speaker_submit(samples, frame_count);
+#else
     Feature::USBDevice::Audio::write_mic(samples, frame_count);
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
     esp_codec_dev_handle_t codec = Feature::Audio::ES8311::get_handle();
@@ -285,6 +317,7 @@ void on_device_speaker_audio(const int16_t* samples, size_t frame_count) {
         }
     }
 #endif
+#endif // CONFIG_APP_ENABLE_SYNTH
 }
 #endif
 

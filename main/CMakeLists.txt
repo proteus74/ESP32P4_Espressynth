@@ -9,6 +9,9 @@
     "features/display/touch/esp_lcd_touch_gt911.c"
     "features/display/touch/esp_lcd_jd9365.c"
     "features/display/touch/esp_lcd_jd9165.c"
+    "features/synth/PresetPaths.cpp"
+    "features/synth/SamplePaths.cpp"
+    "features/synth/MemoryDiagnostics.cpp"
 )
 
 set(COMPONENT_ADD_INCLUDEDIRS
@@ -17,6 +20,8 @@ set(COMPONENT_ADD_INCLUDEDIRS
     "features"
     "features/display/touch"
     "cli"
+    "audio/engine"
+    "features/synth"
 )
 
 # NOTE: REQUIRES is resolved before Kconfig, so it cannot depend on CONFIG_ options
@@ -28,6 +33,6 @@ set(COMPONENT_ADD_INCLUDEDIRS
 idf_component_register(
     SRCS ${COMPONENT_SRCS}
     INCLUDE_DIRS ${COMPONENT_ADD_INCLUDEDIRS}
-    REQUIRES tinyusb driver esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ppa esp_lcd esp_timer freertos log esp_netif esp_eth fatfs sdmmc esp_wifi nvs_flash bt esp_partition esp_app_format bootloader_support console spi_flash esp_hw_support lwip esp_http_server dns_server joltwallet__littlefs espressif__esp_codec_dev jonlidgard__wm8960 waveshare__esp_lcd_jd9365_10_1 lvgl esp_lvgl_port
+    REQUIRES tinyusb driver esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ppa esp_lcd esp_timer freertos log esp_netif esp_eth fatfs sdmmc esp_wifi nvs_flash bt esp_partition esp_app_format bootloader_support console spi_flash esp_hw_support lwip esp_http_server dns_server joltwallet__littlefs espressif__esp_codec_dev jonlidgard__wm8960 waveshare__esp_lcd_jd9365_10_1 lvgl esp_lvgl_port espressif__cjson espressif__esp_audio_effects tiny_soundfont
     WHOLE_ARCHIVE
 )

@@ -206,19 +206,21 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
 void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
-    (void)area;
-
-    // The panel is natively landscape, so the rendered frame goes to the DSI engine as is.
-    // Waiting for the following VSYNC keeps LVGL from redrawing the buffer while the DPI
-    // driver is still copying it out.
+    // LV_DISPLAY_RENDER_MODE_PARTIAL: px_map holds only the [area] rectangle (a small,
+    // internal-RAM-preferred strip buffer - see lv_display_set_buffers() below), not the
+    // whole screen. esp_lcd_panel_draw_bitmap() on a DPI panel handle copies just that
+    // rectangle into the panel's own continuously-scanned framebuffer at the given offset -
+    // this is what actually cuts the PSRAM traffic per flush (previously a full 1024x600x2B
+    // frame every redraw, regardless of how much of the screen actually changed).
+    // Waiting for the following VSYNC keeps the DPI engine from scanning the rectangle while
+    // it's still being written (tearing), same as the old full-frame path.
     if (s_dpi_vsync != nullptr) {
         while (xSemaphoreTake(s_dpi_vsync, 0) == pdTRUE) {
         }
     }
 
     const esp_err_t draw_result = esp_lcd_panel_draw_bitmap(
-        s_panel, 0, 0, CurrentBoard::DISPLAY_NATIVE_WIDTH,
-        CurrentBoard::DISPLAY_NATIVE_HEIGHT, px_map);
+        s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
     if (draw_result != ESP_OK) {
         ESP_LOGE("FeatureLVGL", "Display frame switch failed: %s",
                  esp_err_to_name(draw_result));
@@ -515,9 +517,25 @@ inline esp_err_t init() {
         return ESP_ERR_NO_MEM;
     }
 
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+    // Partial mode: a small strip buffer (1/10 of screen height) instead of a full
+    // 1024x600x2B (~1.2MB) frame buffer. flush_cb() above now draws only the changed
+    // rectangle via esp_lcd_panel_draw_bitmap()'s partial-rect support, so most UI updates
+    // (a label, the touch popup, button feedback) write a small fraction of what a full
+    // repaint did - measured on real hardware to remove a periodic PSRAM-bandwidth-
+    // contention burst that was pushing the synth render task's block time over budget at
+    // higher voice counts (see project notes). Only this board's flush_cb is partial-rect-
+    // aware; other boards keep the full-frame path below untouched.
+    const size_t draw_buffer_size = CurrentBoard::DISPLAY_NATIVE_WIDTH *
+                                    (CurrentBoard::DISPLAY_NATIVE_HEIGHT / 10) *
+                                    sizeof(lv_color16_t);
+    const lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_PARTIAL;
+#else
     const size_t draw_buffer_size = CurrentBoard::DISPLAY_NATIVE_WIDTH *
                                     CurrentBoard::DISPLAY_NATIVE_HEIGHT *
                                     sizeof(lv_color16_t);
+    const lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_FULL;
+#endif
     s_lvgl_frame_buffer = static_cast<uint8_t*>(
         heap_caps_malloc(draw_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (s_lvgl_frame_buffer == nullptr) {
@@ -530,8 +548,7 @@ inline esp_err_t init() {
         return ESP_ERR_NO_MEM;
     }
 
-    lv_display_set_buffers(display, s_lvgl_frame_buffer, nullptr, draw_buffer_size,
-                            LV_DISPLAY_RENDER_MODE_FULL);
+    lv_display_set_buffers(display, s_lvgl_frame_buffer, nullptr, draw_buffer_size, render_mode);
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(display, flush_cb);
 

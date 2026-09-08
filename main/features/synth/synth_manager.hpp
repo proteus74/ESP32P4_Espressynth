@@ -1,0 +1,224 @@
+#pragma once
+
+#include <cstdio>
+#include <sys/stat.h>
+
+#include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
+#include "freertos/queue.h"
+
+#include "LiveParamMsg.h"
+#include "PresetChangedMsg.h"
+#include "PresetPaths.h"
+#include "SynthEngine.h"
+#include "UsbMidiEvent.h"
+#include "features/filesystem/littlefs_manager.hpp"
+
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    #include "features/audio/es8311_manager.hpp"
+#endif
+
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    #include "features/audio/wm8960_manager.hpp"
+#endif
+
+#if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
+    #include "features/usb/device/usb_device_audio.hpp"
+#endif
+
+// Adapter layer wiring the ported node-graph synth engine (audio/engine/SynthEngine.h) into
+// this project's codec managers, USB Audio device, and MIDI transports. The engine itself is
+// transport-agnostic (drives esp_codec_dev for the primary/ES8311 sink and a raw I2S TX handle
+// for the optional WM8960 sink, and only knows USB-MIDI-shaped {status,data1,data2} events) -
+// everything here just adapts this project's existing feature APIs to that shape.
+namespace Feature::Synth {
+
+inline SynthEngine s_engine;
+inline QueueHandle_t s_presetChangedQueue = nullptr;
+inline QueueHandle_t s_liveParamQueue = nullptr;
+
+/** @brief The live SynthEngine instance - valid once init() has returned successfully. */
+inline SynthEngine &engine() {
+    return s_engine;
+}
+
+/** @brief Queue POST /api/preset (synth_web_api.hpp) writes PresetChangedMsg onto. */
+inline QueueHandle_t preset_changed_queue() {
+    return s_presetChangedQueue;
+}
+
+/** @brief Queue the /ws handler (synth_web_api.hpp) writes raw paramUpdate JSON onto. */
+inline QueueHandle_t live_param_queue() {
+    return s_liveParamQueue;
+}
+
+#if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
+namespace {
+// Host (USB speaker, i.e. whatever the PC plays) -> onboard-codec mix-in ring, drained by
+// tap_mix() on the engine's render task. Simple lock-free ring (one producer: the USB device
+// task's speaker callback via usb_speaker_submit(); one consumer: the render task via
+// setUsbAudioTap's TapMix) - same approach used upstream for the identical purpose
+// (JoLa-EspressynthP4's UsbAudioDevice.cpp RingBuffer/mixHostAudioInto).
+constexpr size_t kHostInRingSamples = 4096; // ~46ms at 44.1kHz stereo
+
+struct HostInRing {
+    int16_t data[kHostInRingSamples];
+    volatile size_t head = 0;
+    volatile size_t tail = 0;
+
+    size_t available() const { return head - tail; }
+    size_t free() const { return kHostInRingSamples - (head - tail); }
+
+    void push(const int16_t *src, size_t count) {
+        count = (count < free()) ? count : free();
+        for (size_t i = 0; i < count; ++i) {
+            data[(head + i) % kHostInRingSamples] = src[i];
+        }
+        head += count;
+    }
+
+    size_t pop(int16_t *dst, size_t count) {
+        count = (count < available()) ? count : available();
+        for (size_t i = 0; i < count; ++i) {
+            dst[i] = data[(tail + i) % kHostInRingSamples];
+        }
+        tail += count;
+        return count;
+    }
+};
+
+inline HostInRing s_hostInRing;
+} // namespace
+
+/**
+ * @brief Feeds a block of host (USB speaker, host->device) audio into the engine's mix-in
+ *        ring. Call this - instead of writing the samples straight to a codec - from the UAC2
+ *        speaker callback whenever CONFIG_APP_ENABLE_SYNTH is on: the engine's render task owns
+ *        the codec write path once it's running, so a second writer would tear the output.
+ */
+inline void usb_speaker_submit(const int16_t *samples, size_t frame_count) {
+    s_hostInRing.push(samples, frame_count * 2);
+}
+
+namespace {
+// TapSubmit: engine -> USB microphone (device->host). write_mic() returns the number of
+// frames actually queued (size_t); TapSubmit is void-returning, hence this thin wrapper.
+void tap_submit(const int16_t *interleaved, size_t samples) {
+    Feature::USBDevice::Audio::write_mic(interleaved, samples / 2);
+}
+
+// TapMix: mixes whatever host audio usb_speaker_submit() queued into the block being
+// rendered, additively (so it layers with the synth voices rather than replacing them).
+void tap_mix(float *blockL, float *blockR, size_t frames) {
+    const size_t need = frames * 2;
+    const size_t avail = s_hostInRing.available();
+    const size_t take = (avail < need) ? avail : need;
+
+    int16_t tmp[256 * 2];
+    size_t taken = 0;
+    while (taken < take) {
+        const size_t chunk = (take - taken) < (sizeof(tmp) / sizeof(tmp[0])) ? (take - taken)
+                                                                              : (sizeof(tmp) / sizeof(tmp[0]));
+        const size_t got = s_hostInRing.pop(tmp, chunk);
+        if (got == 0) break;
+        for (size_t i = 0; i < got / 2; ++i) {
+            blockL[i + taken / 2] += static_cast<float>(tmp[i * 2]) * (1.0f / 32768.0f);
+            blockR[i + taken / 2] += static_cast<float>(tmp[i * 2 + 1]) * (1.0f / 32768.0f);
+        }
+        taken += got;
+    }
+}
+} // namespace
+#endif // CONFIG_APP_ENABLE_USB_DEVICE && CONFIG_USB_DEV_ENABLE_UAC2
+
+/**
+ * @brief Converts a {status, data1, data2} MIDI message - the shape shared by every transport
+ *        in this project (Feature::MIDI::Event, Feature::USBDevice::MIDI::Event,
+ *        Feature::BLE::MIDI::Event all carry these three fields) - into the engine's
+ *        UsbMidiEvent wire format. codeIndex is simply the status byte's high nibble, which
+ *        matches the USB-MIDI Event Packet Code Index Number for every channel-voice message
+ *        the engine handles (note on/off 0x8/0x9, poly aftertouch 0xA, CC 0xB, program change
+ *        0xC, channel aftertouch 0xD, pitch bend 0xE - see UsbMidiEvent.h).
+ */
+inline UsbMidiEvent from_transport(uint8_t status, uint8_t data1, uint8_t data2) {
+    UsbMidiEvent event{};
+    event.cable = 0;
+    event.codeIndex = static_cast<uint8_t>(status >> 4);
+    event.status = status;
+    event.data1 = data1;
+    event.data2 = data2;
+    return event;
+}
+
+/** @brief Forwards a MIDI message to the running engine. Non-blocking, safe from any task. */
+inline void dispatch_midi(uint8_t status, uint8_t data1, uint8_t data2) {
+    s_engine.onMidiEvent(from_transport(status, data1, data2));
+}
+
+namespace {
+constexpr const char *TAG = "FeatureSynth";
+
+// The "littlefs" partition ships blank (see partitions.csv - unlike "www", it is never
+// re-imaged on flash) - create the directories the engine/web API expect on first boot.
+// mkdir failure (already exists, every boot after the first) is silently ignored.
+void ensure_storage_directories() {
+    char dir[64];
+    snprintf(dir, sizeof(dir), "%s/presets", Feature::LittleFS::MOUNT_POINT);
+    mkdir(dir, 0775);
+    snprintf(dir, sizeof(dir), "%s/samples", Feature::LittleFS::MOUNT_POINT);
+    mkdir(dir, 0775);
+    snprintf(dir, sizeof(dir), "%s/soundfonts", Feature::LittleFS::MOUNT_POINT);
+    mkdir(dir, 0775);
+}
+} // namespace
+
+/**
+ * @brief Brings up the synth engine: creates the preset/sample/soundfont directories (first
+ *        boot only), wires whichever codec(s)/USB-audio tap are enabled, and starts the
+ *        engine's render + preset-loader tasks. Call once, after Feature::LittleFS::init() and
+ *        the enabled codec manager(s)' init() have both already succeeded.
+ */
+inline esp_err_t init() {
+#if !defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    ESP_LOGE(TAG, "Synth engine requires ONBOARD_AUDIO_ES8311 (primary output) to be enabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    esp_codec_dev_handle_t codec = Feature::Audio::ES8311::get_handle();
+    if (codec == nullptr) {
+        ESP_LOGE(TAG, "ES8311 codec not initialized - cannot start synth engine");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ensure_storage_directories();
+
+    s_presetChangedQueue = xQueueCreate(1, sizeof(PresetChangedMsg));
+    // Event-rate only (WebSocket live-parameter updates, not sample-rate) - PSRAM-backed to
+    // keep this out of the internal-RAM budget (mirrors upstream JoLa-EspressynthP4).
+    s_liveParamQueue = xQueueCreateWithCaps(32, sizeof(LiveParamMsg), MALLOC_CAP_SPIRAM);
+
+    char initialPresetPath[300];
+    char initialPresetName[presetpaths::kMaxNameLen];
+    presetpaths::resolveActivePath(initialPresetPath, sizeof(initialPresetPath), initialPresetName,
+                                    sizeof(initialPresetName));
+
+    i2s_chan_handle_t secondaryI2sTxHandle = nullptr;
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    secondaryI2sTxHandle = Feature::Audio::WM8960::get_tx_handle();
+#endif
+
+#if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
+    s_engine.setUsbAudioTap(&tap_submit, &tap_mix);
+#endif
+
+    s_engine.begin(codec, secondaryI2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
+
+    ESP_LOGI(TAG, "Synth engine started (preset: %s)",
+             initialPresetName[0] != '\0' ? initialPresetName : "current.json");
+    return ESP_OK;
+#endif
+}
+
+} // namespace Feature::Synth

@@ -1,6 +1,12 @@
 dependencies:
   espressif/cjson: "*"
   espressif/esp_codec_dev: ^1.6.2
+  # Pinned exactly (not "^1.3.0"): 1.4.x's reverb (and possibly other effects)
+  # requires ESP32-P4 chip revision >=3.0, but this project targets rev 1.0
+  # boards (see CONFIG_ESP32P4_SELECTS_REV_LESS_V3/REV_MIN_100 in
+  # sdkconfig.defaults). Used by main/audio/engine/EspEqEffect.h and
+  # EspAdditionalEffects.h (ALC/channel-convert/mixer/sonic/DRC/MBC nodes).
+  espressif/esp_audio_effects: 1.3.0
   # WM8960 register-level codec driver for the Waveshare WM8960 Audio HAT. See
   # main/features/audio/wm8960_manager.hpp.
   jonlidgard/wm8960: ^0.0.3

@@ -1,0 +1,177 @@
+#pragma once
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#include "../CvConventions.h"
+#include "../NodeInstance.h"
+#include "../PresetParser.h"
+#include "../SynthConfig.h"
+
+// Phase-accumulator oscillator (sine/square/triangle/sawtooth/noise) driven
+// by pitchCv/tune (1V/oct-ish CV, see CvConventions.h). OscillatorState
+// (value member) stays in NodeState.h.
+namespace nodes::oscillator
+{
+
+namespace
+{
+// Oscillator's "waveform" CV port (see PortTables.h): 0-10V split into 5
+// equal 2V bands, in WaveType enum order (Sine/Square/Triangle/Sawtooth/
+// Noise) - matches main.js's mapWaveformValue() 1:1. 10V itself must still
+// resolve to Noise (last band), not fall off the end.
+inline WaveType waveTypeFromCv(float volts)
+{
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 5.0f));
+    if (idx < 0)
+        idx = 0;
+    if (idx > 4)
+        idx = 4;
+    switch (idx)
+    {
+    case 0: return WaveType::Sine;
+    case 1: return WaveType::Square;
+    case 2: return WaveType::Triangle;
+    case 3: return WaveType::Sawtooth;
+    default: return WaveType::Noise;
+    }
+}
+} // namespace
+
+inline void render(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    const float kSampleRate = static_cast<float>(synth::kSampleRate);
+    auto &s = inst.osc;
+    // pitchCv (port 1) and tune (port 2): a genuine DSP edge
+    // (audioConnectedPortMask) now re-evaluates hz every sample below - true
+    // audio-rate FM/vibrato (see the pitchAudioFed/tuneAudioFed branch
+    // further down). A ControlRoute-only pitchCv (MidiIn's pitchCv -
+    // controlConnectedPortMask, MIDI note held for the whole block) or an
+    // unconnected/manual tune still only need one evaluation per block - no
+    // audible benefit from finer resolution there. pitchCv defaults to
+    // center (no note played) when unconnected. tune works the same as
+    // Filter's cutoff/resonance: a connected CV SUBSTITUTES the Tune
+    // slider's own tuneVolts outright (not an additional offset on top of
+    // it), so feeding a given voltage sounds identical to dragging the
+    // slider to that same voltage, and the web UI mirrors this by moving
+    // the slider to match (see main.js's oscillator "tune" port handling).
+    //
+    // tune must NOT check controlPortConnected: a ControlRoute here
+    // (Knob/Button by paramName) already lands directly in s.tuneVolts via
+    // ParamDispatch's "tune" case, and Graph::renderBlock deliberately
+    // skips filling inPorts[2]/controlValue for it (its
+    // oscillatorDedicatedField special-case, to avoid double-applying a
+    // Knob's value once the additive model above was replaced) - so
+    // portSample(2) would read a stale unconnected-default, not the Knob's
+    // live value. Only a real DSP edge (e.g. an LFO/Oscillator wired
+    // directly for vibrato/FM) needs the portSample() read here.
+    constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
+    const bool pitchAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
+    const bool pitchControlRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 1)) != 0;
+    const bool pitchControlFed = controlPortConnected(inst, 1);
+    const bool tuneAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    // "waveform" (port 3) is control-only too (see isControlOnlyInput) -
+    // stays read once per block: an audio-rate switch between discrete
+    // waveforms has no meaningful "signal shape" (unlike cutoff/pitch), it
+    // would just glitch. Not wired: falls back to the widget's own waveform
+    // dropdown (s.wave), unchanged from before.
+    const bool waveFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const WaveType wave = waveFed ? waveTypeFromCv(portSample(inst, 3, 0)) : s.wave;
+    // "gain" (Port-Index 4) is a real audio-rate port (like Gain's
+    // "amount") - 0-10V CV, 10V = unchanged output signal. When wired, the
+    // CV already arrives natively per sample (no smoothing needed); when
+    // unwired, the manual gainCv scalar is smoothed PER SAMPLE, same
+    // pattern/reason as GainState::amountSmooth.
+    const bool gainFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    const float gainTarget = cv::vcaGain(s.gainCv, false);
+    const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
+    if (pitchAudioFed || pitchControlRamping || tuneAudioFed)
+    {
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const float pitchCv =
+                (pitchAudioFed || pitchControlRamping) ? portSample(inst, 1, i) : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts);
+            const float tuneVolts = tuneAudioFed ? portSample(inst, 2, i) : s.tuneVolts;
+            const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * s.detuneMul;
+            const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
+            const float gainMul =
+                gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
+            const float sample = s.phaseGen.process(wave, hz, kSampleRate);
+            inst.outL[i] = sample * amp * gainMul;
+        }
+        return;
+    }
+    const float pitchCv = pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts;
+    const float hz = cv::hzFromPitchCv(pitchCv + (s.tuneVolts - kCenterVolts)) * s.detuneMul;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        // A genuine DSP edge on "amplitude" (e.g. an ADSR/LFO output) is
+        // 0-10V CV like every other CV-carrying port (see CvConventions.h)
+        // - vcaGain() turns it back into the 0..1 multiplier this additive
+        // amp expects. Unconnected (or ControlRoute-only, e.g. MIDI
+        // velocity via the dedicated s.amplitude field above) reads 0V
+        // here -> vcaGain(0)=0, i.e. no change from before.
+        const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
+        const float gainMul = gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
+        const float sample = s.phaseGen.process(wave, hz, kSampleRate);
+        inst.outL[i] = sample * amp * gainMul;
+    }
+}
+
+inline void build(NodeInstance &inst, const WidgetParams &p)
+{
+    inst.osc.wave = p.waveType;
+    inst.osc.tuneVolts = p.tuneVolts;
+    inst.osc.detuneCents = p.detune;
+    inst.osc.detuneMul = powf(2.0f, p.detune / 1200.0f);
+    inst.osc.amplitude = p.amplitude;
+    inst.osc.gainCv = p.gain;
+    // Same cutoff/reason as Gain's amountSmooth - see NodeState.h.
+    inst.osc.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
+}
+
+inline bool setParam(NodeInstance &inst, const char *name, float value)
+{
+    if (name == nullptr)
+    {
+        return false;
+    }
+    if (strcmp(name, "tune") == 0)
+    {
+        inst.osc.tuneVolts = value;
+        return true;
+    }
+    if (strcmp(name, "amplitude") == 0)
+    {
+        inst.osc.amplitude = value;
+        return true;
+    }
+    if (strcmp(name, "detune") == 0)
+    {
+        inst.osc.detuneCents = value;
+        inst.osc.detuneMul = powf(2.0f, value / 1200.0f);
+        return true;
+    }
+    if (strcmp(name, "gain") == 0)
+    {
+        inst.osc.gainCv = value;
+        return true;
+    }
+    return false;
+}
+
+inline void parsePreset(cJSON *p, WidgetParams &out)
+{
+    out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"));
+    // main.js's WIDGET_ENGINES.oscillator serializes the Tune slider under
+    // the key "tune" (0-10V pitch-CV domain, 5V default).
+    out.tuneVolts = presetparser::getFloat(p, "tune", 5.0f);
+    out.detune = presetparser::getFloat(p, "detune", 0.0f);
+    out.amplitude = presetparser::getFloat(p, "amplitude", 1.0f);
+    out.gain = presetparser::getFloat(p, "gain", 10.0f);
+}
+
+} // namespace nodes::oscillator

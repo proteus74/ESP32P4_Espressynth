@@ -568,10 +568,11 @@ inline esp_err_t init() {
     // that: any writer stall longer than ~33ms (a CLI/REPL task on MAIN_CORE briefly losing the
     // CPU to something else) underruns it, and auto_clear_after_cb fills the gap with silence
     // instead of repeating stale audio -- audible either way as a discontinuity. More than
-    // doubling the buffer here (~87ms) buys much more slack against that without giving up
-    // the underrun-clears-to-silence safety net.
-    chan_cfg.dma_desc_num = 8;
-    chan_cfg.dma_frame_num = 480;
+    // doubling the buffer (~87ms via 8*480) buys much more slack against that without giving up
+    // the underrun-clears-to-silence safety net, at the cost of latency -- TEST: back to
+    // default 6*240 to measure/hear the tradeoff. Revert to 8/480 if clicks reappear.
+    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_frame_num = 240;
     // tx+rx created together (not as two separate i2s_new_channel calls): with a shared BCLK/WS
     // pair, requesting I2S_ROLE_MASTER for both used to make the driver auto-downgrade rx to
     // slave for us at i2s_channel_init_std_mode() time (i2s_channel_try_to_constitute_duplex(),

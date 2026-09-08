@@ -18,6 +18,14 @@
 
 CONFIG_IDF_TARGET="esp32p4"
 
+# --- Compiler optimization: ESP-IDF defaults to "Debug (-Og)". Measured on real hardware
+# (main/audio/engine/SynthEngine.h's render task): a trivial 4-voice patch (one oscillator +
+# one ADSR per voice) already overran its ~2.9ms block budget continuously at -Og (render alone
+# took ~3.0-3.3ms), causing audible dropouts. "Optimization for Performance (-O2)" brings the
+# same patch down to ~2.2ms peak - comfortably under budget, zero overruns - so this is a
+# correctness requirement for the audio engine, not just a nice-to-have speedup. ---
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # --- PSRAM: every supported board's ESP32-P4NRW32 module has 32 MB of PSRAM stacked in the
 # package. Off by default in ESP-IDF, so enable it explicitly; HEX line mode / 200 MHz are this
 # chip's only supported PSRAM settings and are already the Kconfig defaults once CONFIG_SPIRAM
@@ -75,3 +83,12 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y
+
+# --- Web server capacity for the synth engine's browser UI (main/features/synth/
+# synth_web_api.hpp): a persistent /ws connection for the whole session, on top of overlapping
+# preset/sample-list/file-explorer requests and static asset fetches. Off/at their default by
+# default in ESP-IDF, so enable/raise explicitly; harmless overhead when Feature::Web/Synth are
+# disabled. CONFIG_LWIP_MAX_SOCKETS must cover httpd's own config.max_open_sockets (see
+# main/features/web/web_server.hpp's begin()), which is otherwise capped by this ceiling. ---
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_LWIP_MAX_SOCKETS=16

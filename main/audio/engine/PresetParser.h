@@ -1,0 +1,261 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#include "cJSON.h"
+
+#include "NodeTypes.h"
+#include "SynthConfig.h"
+
+// Every widget-type-specific param this engine understands, flattened into
+// one struct (only the fields relevant to a widget's actual type are
+// populated/used - see GraphBuilder). Mirrors the "params" object per
+// widget in the preset JSON.
+struct WidgetParams
+{
+    // oscillator - tuneVolts is the Tune slider's value (0-10V pitch-CV
+    // domain, 5V = no transpose - see CvConventions.h/OscillatorState)
+    WaveType waveType = WaveType::Sine;
+    float tuneVolts = 5.0f;
+    float detune = 0.0f;
+    float amplitude = 1.0f;
+    // "gain" (0-10V CV, 10V = unchanged - see OscillatorState::gainCv)
+    // shares the "gain" field further down with AudioOut/UsbOut/Es8311Out/
+    // Wm8960Out/SoundFontPlayer (same 10.0f default convention there).
+    // lfo - amplitude is 0-10V peak swing (see LfoState); zeroPointFixed
+    // selects fixed (zeroPoint) vs auto (amplitude/2) center; oneShot plays
+    // one cycle per sync edge then freezes (see NodeInstance's Lfo case).
+    // lfoGlobal is the "global" port's UI-toggle fallback (see LfoState::
+    // global), only consulted when the port itself has no DSP-edge/
+    // ControlRoute wired.
+    float lfoRate = 2.0f;
+    float lfoAmplitude = 10.0f;
+    float lfoPhaseDeg = 0.0f;
+    bool lfoZeroPointFixed = false;
+    float lfoZeroPoint = 5.0f;
+    bool lfoOneShot = false;
+    bool lfoGlobal = false;
+    // detune
+    float detuneAmount = 0.0f;
+    float detuneMaxVolts = 0.5f;
+    // frequency-divider
+    float frequencyDivider = 2.0f;
+    // adsr - attack/decay/sustain/release are the final seconds/level value
+    // (what ramp.configure() uses directly); attackMaxSeconds/attackLog etc.
+    // mirror the settings dialog (main.js) and are only consulted when the
+    // matching CV port has a real audio-rate edge (see AdsrState).
+    float attack = 0.1f, decay = 0.1f, sustain = 0.7f, release = 0.2f;
+    float attackMaxSeconds = 4.0f, decayMaxSeconds = 4.0f, releaseMaxSeconds = 4.0f;
+    bool attackLog = false, decayLog = false, releaseLog = false;
+    // filter - "cutoff"/"resonance" are raw 0-10V CV (see CvConventions.h),
+    // mapped to Hz/Q via the min/max/log fields below at DSP time.
+    FilterKind filterType = FilterKind::LowPass;
+    float cutoffCv = 5.0f, cutoffMinHz = 20.0f, cutoffMaxHz = 20000.0f;
+    bool cutoffLog = true;
+    float resonanceCv = 5.0f, resonanceMinQ = 0.1f, resonanceMaxQ = 20.0f;
+    bool resonanceLog = true;
+    // How often (in samples) the biquad coefficients get recomputed under a
+    // genuine audio-rate cutoff/resonance edge - 1-16, default 4 (see
+    // FilterState::coeffStride in NodeState.h).
+    uint8_t coeffStride = 4;
+    // filterGlobal is the "global" port's UI-toggle fallback (see
+    // FilterState::global), same pattern as gainGlobal.
+    bool filterGlobal = false;
+    // esp-eq: one stereo band, filter type switchable (peak/shelf/hi-lo-pass)
+    EqFilterKind eqFilterType = EqFilterKind::Peak;
+    float eqFrequency = 1000.0f;
+    float eqQ = 1.0f;
+    float eqGainDb = 0.0f;
+    // Generic ESP effect parameters. Kept scalar for first UI/API slice.
+    float espParam[16] = {};
+    // gain - "amount" is raw CV (0-10V, see CvConventions.h), 10V = unity-
+    // gain default (see GainState). gainGlobal is the "global" port's
+    // UI-toggle fallback (see GainState::global), same pattern as lfoGlobal.
+    float amount = 10.0f;
+    bool amountExponential = false;
+    bool gainGlobal = false;
+    // mixer/multiplier/adder
+    uint8_t inputCount = 2;
+    float mixerGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    float outputGain = 1.0f;
+    // chorus
+    float rate = 1.5f, offset = 0.02f, depth = 0.003f;
+    // delay (always stereo, "echo" was only ever delay-with-feedback) -
+    // time/feedback/mixMin/Max/Log mirror main.js's Settings-Dialog
+    // (openEffectCvSettings/EFFECT_CV_PARAMS), only consulted when the
+    // matching CV port has a real audio-rate edge (see DelayState).
+    float delayTimeMs = 300.0f, delayFeedback = 0.3f, delayMix = 0.35f;
+    float timeMin = 0.0f, timeMax = 2000.0f, feedbackMin = 0.0f, feedbackMax = 0.95f, mixMin = 0.0f, mixMax = 1.0f;
+    bool timeLog = false, feedbackLog = false, mixLog = false;
+    // reverb (always stereo) - param semantics follow esp_ae_reverb_para_t
+    // (see NodeState.h's ReverbState). roomSize/damping/wetLevel/dryLevel/
+    // preDelayMin/Max/Log likewise mirror the settings dialog.
+    float reverbRoomSize = 0.5f, reverbDamping = 0.5f;
+    float reverbWetLevelDb = -6.0f, reverbDryLevelDb = 0.0f, reverbPreDelayMs = 0.0f;
+    bool reverbBypass = false;
+    float roomSizeMin = 0.0f, roomSizeMax = 1.0f, dampingMin = 0.0f, dampingMax = 1.0f;
+    float wetLevelMin = -96.0f, wetLevelMax = 0.0f, dryLevelMin = -96.0f, dryLevelMax = 0.0f;
+    float preDelayMin = 0.0f, preDelayMax = 200.0f;
+    bool roomSizeLog = false, dampingLog = false, wetLevelLog = false, dryLevelLog = false, preDelayLog = false;
+    // audio-out
+    bool muted = false;
+    float left = 1.0f, right = 1.0f, gain = 10.0f;
+    // clock - "cvVolts" is raw CV (0-10V), scaled linearly between minBpm/
+    // maxBpm (see ClockState); pulseMs is the pulse width in ms.
+    float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
+    // midi-in
+    int8_t channel = -1;
+    uint8_t voices = 1;
+    OverflowMode overflowMode = OverflowMode::StealOldest;
+    bool glide = false;
+    float glideTime = 0.0f;
+    // midi-split
+    uint8_t midiSplitZoneCount = 0; // starts empty - no zone until the user adds one
+    int8_t midiSplitZoneFrom[4] = {0, 0, 0, 0};
+    int8_t midiSplitZoneTo[4] = {127, 127, 127, 127};
+    int8_t midiSplitZoneOctave[4] = {0, 0, 0, 0};
+    // const
+    float constValue = 0.0f;
+    // knob
+    int16_t knobCc = -1;
+    int8_t knobChannel = -1;
+    float knobRaw = 0.0f;
+    float point1In = 0.0f, point1Out = 0.0f;
+    float point2In = 127.0f, point2Out = 127.0f;
+    bool hasConstraintMin = false, hasConstraintMax = false;
+    float constraintMin = 0.0f, constraintMax = 0.0f;
+    // knob/button "value list" - shared storage, only one type ever
+    // populates it for a given widget instance. Wins automatically over
+    // linear/fixed once it has >=2 entries (see KnobState/ButtonState).
+    float valueList[synth::kValueListMax] = {};
+    uint8_t valueListCount = 0;
+    // button
+    int16_t buttonCc = -1;
+    int8_t buttonChannel = -1;
+    float buttonValue0 = 0.0f;
+    float buttonValue127 = 1.0f;
+    uint8_t buttonListIndex = 0;
+    bool buttonWasAbove = false;
+    // up-down-button - shares valueList/valueListCount above
+    int16_t upDownCcUp = -1;
+    int8_t upDownChannelUp = -1;
+    int16_t upDownCcDown = -1;
+    int8_t upDownChannelDown = -1;
+    float upDownMin = 0.0f;
+    float upDownMax = 10.0f;
+    float upDownStep = 1.0f;
+    uint8_t upDownListIndex = 0;
+    float upDownCurrentValue = 0.0f;
+    // switch
+    int16_t switchCc = -1;
+    int8_t switchChannel = -1;
+    bool switchSelectIn2 = false;
+    // wave-player
+    char sampleFile[40] = {};
+    int rootNoteMidi = 60; // C4 (scientific pitch notation, A4=69)
+    // soundfont-player
+    char soundFontVolume[8] = "flash";
+    char soundFontPath[160] = {};
+    int soundFontBank = 0;
+    int soundFontProgram = 0;
+    int soundFontMaxVoices = 32;
+    bool soundFontEnableCc = false;
+    bool soundFontEnableModWheel = false;
+    bool soundFontEnablePitchWheel = false;
+};
+
+struct WidgetDesc
+{
+    char id[24] = {};
+    NodeType type = NodeType::Unknown;
+    WidgetParams params;
+};
+
+struct ConnectionDesc
+{
+    char fromWidget[24] = {};
+    char fromPort[16] = {};
+    char toWidget[24] = {};
+    char toPort[16] = {};
+};
+
+// Flat intermediate representation: generator+fx pages concatenated (the
+// page split is a pure UI concept the engine doesn't need - see
+// GraphBuilder for how audio-output-link/audio-input-link recover the
+// "boundary between pages" semantics structurally).
+struct PresetDoc
+{
+    WidgetDesc widgets[synth::kMaxWidgets];
+    uint16_t widgetCount = 0;
+    ConnectionDesc connections[synth::kMaxConnections];
+    uint16_t connectionCount = 0;
+};
+
+// parsePreset() itself lives in PresetFill.h, not here - it needs every
+// nodes/*.h's full definition, but every nodes/*.h needs WidgetParams
+// (declared above) first. See PresetFill.h.
+
+// Small per-widget-params JSON accessors shared by every node type's own
+// parsePreset(cJSON*, WidgetParams&) (see nodes/*.h) - kept here (not
+// duplicated per node header) since every one of them needs cJSON anyway.
+namespace presetparser
+{
+inline float getFloat(cJSON *obj, const char *key, float def)
+{
+    if (obj == nullptr)
+        return def;
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsNumber(v) ? static_cast<float>(v->valuedouble) : def;
+}
+
+inline const char *getString(cJSON *obj, const char *key, const char *def)
+{
+    if (obj == nullptr)
+        return def;
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsString(v) ? v->valuestring : def;
+}
+
+inline bool getBool(cJSON *obj, const char *key, bool def)
+{
+    if (obj == nullptr)
+        return def;
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (v == nullptr)
+        return def;
+    return cJSON_IsBool(v) ? cJSON_IsTrue(v) : def;
+}
+
+inline int getInt(cJSON *obj, const char *key, int def)
+{
+    if (obj == nullptr)
+        return def;
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsNumber(v) ? v->valueint : def;
+}
+
+// Parses a JSON array of numbers into `out` (up to maxCount entries),
+// returning how many were written. Used by Knob/Button's "valueList" - the
+// comma-separated string main.js's parseValueList() validates client-side
+// arrives here already split into a proper JSON number array.
+inline uint8_t getFloatArray(cJSON *obj, const char *key, float *out, uint8_t maxCount)
+{
+    if (obj == nullptr)
+        return 0;
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!cJSON_IsArray(arr))
+        return 0;
+    uint8_t count = 0;
+    cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, arr)
+    {
+        if (count >= maxCount)
+            break;
+        out[count] = cJSON_IsNumber(item) ? static_cast<float>(item->valuedouble) : 0.0f;
+        ++count;
+    }
+    return count;
+}
+} // namespace presetparser
