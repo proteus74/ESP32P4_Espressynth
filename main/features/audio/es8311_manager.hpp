@@ -61,7 +61,7 @@ inline esp_err_t init() {
     const int i2s_port = CONFIG_ONBOARD_AUDIO_ES8311_I2S_PORT;
 
     // --- I2S data interface (BCLK/LRCK/DOUT/DIN, optional MCLK) ---
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_SLAVE);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_MASTER);
     chan_cfg.auto_clear_after_cb = true;
     // See the identical comment in wm8960_manager.hpp: default DMA buffer (6*240 frames,
     // ~32.6ms) is thin enough that a brief writer stall (e.g. the "tone" CLI command,

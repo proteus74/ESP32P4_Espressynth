@@ -561,7 +561,7 @@ inline esp_err_t init() {
     // No audio will play in this configuration since there's no clock source for either chip
     // to run off; if I2C failures persist anyway, that rules out I2S clock activity as the
     // cause outright rather than just narrowing the timing window.
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_SLAVE);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_MASTER);
     chan_cfg.auto_clear_after_cb = true;
     // Default is 6 desc * 240 frames = 1440 frames (~32.6ms @ 44.1kHz) of DMA buffer -- audible
     // clicks/pops during playback (e.g. the "tone" CLI command, cmd_audio.hpp) trace back to
