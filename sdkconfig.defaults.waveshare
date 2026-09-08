@@ -1,0 +1,31 @@
+# Board selection plus this specific unit's setup for the Waveshare ESP32-P4-WIFI6-DEV-KIT:
+# an external WM8960 codec HAT on the 40-pin header (instead of the onboard ES8311),
+# on-board Ethernet enabled, and USB Device mode for a class-compliant USB MIDI/audio synth.
+# Combine with the common sdkconfig.defaults - see the header comment there for the
+# idf.py -D SDKCONFIG_DEFAULTS invocation. If your unit doesn't have the WM8960 HAT wired up,
+# drop the CONFIG_ONBOARD_AUDIO_WM8960* lines below and set CONFIG_ONBOARD_AUDIO_ES8311=y
+# instead to use the onboard codec.
+CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD=y
+CONFIG_APP_ENABLE_ETHERNET=y
+CONFIG_APP_ENABLE_USB_DEVICE=y
+CONFIG_APP_ENABLE_AUDIO=y
+# ES8311 and the SD card slot are kept off: both share GPIOs with the WM8960 codec's
+# standard 40-pin-header pin mapping below (LRCK/GPIO53 with the onboard ES8311 PA-enable
+# line, DOUT/GPIO45 with the TF card's power-enable line - see main/boards/*.hpp
+# RESERVED_PINS and main/features/audio/wm8960_manager.hpp for the compile-time check).
+# CONFIG_ONBOARD_AUDIO_ES8311 is not set
+CONFIG_ONBOARD_AUDIO_WM8960=y
+CONFIG_ONBOARD_AUDIO_WM8960_I2S_PORT=1
+CONFIG_ONBOARD_AUDIO_WM8960_I2C_PORT=0
+CONFIG_ONBOARD_AUDIO_WM8960_PIN_BCLK=22
+CONFIG_ONBOARD_AUDIO_WM8960_PIN_LRCK=53
+CONFIG_ONBOARD_AUDIO_WM8960_PIN_DIN=-1
+CONFIG_ONBOARD_AUDIO_WM8960_PIN_DOUT=45
+CONFIG_ONBOARD_AUDIO_WM8960_PIN_BUTTON=21
+# CONFIG_APP_ENABLE_SDCARD is not set
+
+# --- USB: ESP32-P4 has exactly one internal FSLS PHY block, shared between USB-Serial/JTAG
+# (secondary console, IDF default) and the RHPORT0 TinyUSB Device (this project's composite
+# CDC+MIDI+UAC2, main/features/usb/device/usb_device_manager.hpp). Disabling the secondary
+# console here frees that PHY for TinyUSB Device instead. ---
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

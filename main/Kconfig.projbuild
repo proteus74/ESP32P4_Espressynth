@@ -1,0 +1,629 @@
+menu "Board Configuration"
+
+    choice BOARD_TARGET
+        prompt "Select Target Board"
+        default BOARD_JC8012P4A1
+        help
+            Select the target ESP32-P4 development board.
+
+        config BOARD_JC8012P4A1
+            bool "JC8012P4A1 Board (10.1\" 1280x800 MIPI DSI, C6 Hosted)"
+            help
+                Board support for JC8012P4A1 development board.
+                Includes MIPI DSI display (JD9365), GSL3680 touch, ES8311 audio,
+                and ESP32-C6 hosted co-processor over SDIO.
+
+        config BOARD_JC1060P470C_7_INCH
+            bool "JC1060P470C 7\" Board (1024x600 MIPI DSI, C6 Hosted)"
+            help
+                Board support for the Guition JC1060P470C 7-inch board
+                (JC-ESP32P4-M3 module). Includes MIPI DSI display (JD9165),
+                GT911 touch, ES8311 audio, RX8025T RTC, IP101 Ethernet,
+                MAX485 RS485 and an ESP32-C6 hosted co-processor over SDIO.
+
+        config WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            bool "Waveshare ESP32-P4-WIFI6-DEV-KIT"
+            select ESP32P4_SELECTS_REV_LESS_V3
+            help
+                Board support for Waveshare ESP32-P4-WIFI6-DEV-KIT development board.
+                Includes ESP32-C6 Wi-Fi 6/BLE 5 co-processor via SDIO, ES8311 I2S Audio Codec,
+                100M Ethernet, TF Card slot, and MIPI DSI/CSI interfaces.
+                This board uses an ESP32-P4 v1.x and therefore requires the pre-v3
+                compatibility mode and a 360 MHz CPU clock.
+
+        config BOARD_CUSTOM_P4
+            bool "Custom ESP32-P4 Board"
+            help
+                Define a custom pinout and configuration for your own ESP32-P4 board.
+    endchoice
+
+    if BOARD_JC1060P470C_7_INCH
+        menu "JC1060P470C Settings"
+            config JC1060P470C_PIN_LCD_RST
+                int "JD9165 panel reset GPIO (-1 to disable)"
+                default 27
+                range -1 54
+                help
+                    The vendor demo bundle is inconsistent about this line: Guition's own
+                    board file (xiaozhi guition-jc1060p470-new) drives GPIO27, while the
+                    ESP32-P4 BSP copy shipped in the same bundle uses GPIO0. GPIO27 is
+                    also the RS485 receive line on the RS485-equipped variants. If the
+                    panel stays dark, try 0 here, or -1 to leave the panel reset
+                    untouched (the panel then relies on its power-on reset).
+        endmenu
+    endif
+
+    if BOARD_CUSTOM_P4
+        menu "Custom Board Settings"
+            config CUSTOM_BOARD_NAME
+                string "Board Name"
+                default "Custom ESP32-P4"
+
+            config CUSTOM_DISPLAY_WIDTH
+                int "Display Width (px)"
+                default 800
+
+            config CUSTOM_DISPLAY_HEIGHT
+                int "Display Height (px)"
+                default 480
+        endmenu
+    endif
+
+endmenu
+
+choice ESP32P4_REV_MIN
+    default ESP32P4_REV_MIN_100 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+endchoice
+
+menu "Application Features"
+
+    menu "I2C Subsystem"
+
+        config APP_ENABLE_I2C
+            bool "Enable I2C Subsystem"
+            default y
+            help
+                Master switch for the ESP32-P4's I2C controllers (I2C0/I2C1),
+                used by onboard peripherals such as the ES8311/WM8960 audio
+                codecs. Disable to compile out I2C entirely.
+
+        if APP_ENABLE_I2C
+
+            config APP_ENABLE_I2C0
+                bool "Enable I2C Port 0"
+                default y
+                help
+                    Primary I2C bus. Most boards' onboard peripherals (audio
+                    codec control, touch, RTC) are wired here by default.
+
+            if APP_ENABLE_I2C0
+                config I2C0_PIN_SDA
+                    int "I2C0 SDA GPIO"
+                    default 7
+
+                config I2C0_PIN_SCL
+                    int "I2C0 SCL GPIO"
+                    default 8
+            endif
+
+            config APP_ENABLE_I2C1
+                bool "Enable I2C Port 1"
+                default n
+                help
+                    Optional second, independent I2C bus - e.g. to wire a
+                    WM8960 codec to different pins than the board's default
+                    I2C bus.
+
+            if APP_ENABLE_I2C1
+                config I2C1_PIN_SDA
+                    int "I2C1 SDA GPIO"
+                    default -1
+
+                config I2C1_PIN_SCL
+                    int "I2C1 SCL GPIO"
+                    default -1
+            endif
+
+        endif
+
+    endmenu
+
+    menu "Audio Subsystem"
+
+        config APP_ENABLE_AUDIO
+            bool "Enable Audio Subsystem"
+            default n
+            help
+                Master switch for all audio functionality: the onboard ES8311
+                codec, the generic WM8960 codec, and/or the USB Audio Class 2.0
+                (UAC2) sound card. All audio paths run at a fixed 44.1 kHz.
+                Disable to compile out all audio support.
+
+        if APP_ENABLE_AUDIO
+
+            config ONBOARD_AUDIO_ES8311
+                bool "Enable ES8311 Audio Codec (I2S + I2C)"
+                default n
+                help
+                    ES8311 mono audio codec support, e.g. the one found onboard the
+                    Waveshare ESP32-P4-WIFI6-DEV-KIT and JC8012P4A1, or an external
+                    ES8311 breakout wired to a CONFIG_BOARD_CUSTOM_P4 board. The codec
+                    is driven via I2S (audio data) and I2C (register control) using
+                    the esp_codec_dev component. Pins below default to the selected
+                    board's onboard wiring where one exists; override for a different
+                    wiring.
+
+            if ONBOARD_AUDIO_ES8311
+                config ONBOARD_AUDIO_ES8311_I2S_PORT
+                    int "I2S Port Number (0-2)"
+                    range 0 2
+                    default 0
+                    help
+                        Selects which I2S peripheral instance (I2S0, I2S1 or I2S2)
+                        drives the ES8311 codec's audio data lines
+                        (MCLK/BCLK/LRCK/DOUT/DIN). Must differ from
+                        ONBOARD_AUDIO_WM8960_I2S_PORT if both codecs are enabled.
+
+                config ONBOARD_AUDIO_ES8311_I2C_PORT
+                    int "I2C Port Number (0-1)"
+                    range 0 1
+                    default 0
+                    help
+                        Selects which I2C bus (see "I2C Subsystem" above) carries
+                        the ES8311's register control interface. That port must
+                        be enabled there, or ES8311 init fails at runtime.
+
+                config ONBOARD_AUDIO_ES8311_PIN_MCLK
+                    int "I2S MCLK GPIO (-1 to disable)"
+                    default 13 if BOARD_JC8012P4A1
+                    default 13 if BOARD_JC1060P470C_7_INCH
+                    default 13 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+                    help
+                        ES8311 master clock input. -1 (GPIO_NUM_NC) if the codec
+                        derives its clock without an explicit MCLK line.
+
+                config ONBOARD_AUDIO_ES8311_PIN_BCLK
+                    int "I2S BCLK GPIO"
+                    default 12 if BOARD_JC8012P4A1
+                    default 12 if BOARD_JC1060P470C_7_INCH
+                    default 12 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+                    help
+                        -1 (GPIO_NUM_NC) leaves the codec disabled at runtime.
+
+                config ONBOARD_AUDIO_ES8311_PIN_LRCK
+                    int "I2S LRCLK (word-select) GPIO"
+                    default 10 if BOARD_JC8012P4A1
+                    default 10 if BOARD_JC1060P470C_7_INCH
+                    default 10 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+
+                config ONBOARD_AUDIO_ES8311_PIN_DOUT
+                    int "I2S DOUT GPIO (ESP32 -> ES8311 DAC, speaker data)"
+                    default 9 if BOARD_JC8012P4A1
+                    default 9 if BOARD_JC1060P470C_7_INCH
+                    default 9 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+
+                config ONBOARD_AUDIO_ES8311_PIN_DIN
+                    int "I2S DIN GPIO (ES8311 ADC -> ESP32, microphone data)"
+                    default 11 if BOARD_JC8012P4A1
+                    default 48 if BOARD_JC1060P470C_7_INCH
+                    default 11 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+                    help
+                        Set to -1 for playback-only operation.
+
+                config ONBOARD_AUDIO_ES8311_PIN_PA
+                    int "PA enable GPIO, active high (-1 to disable)"
+                    default 20 if BOARD_JC8012P4A1
+                    default 11 if BOARD_JC1060P470C_7_INCH
+                    default 53 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default -1
+            endif
+
+            config ONBOARD_AUDIO_WM8960
+                bool "Enable WM8960 Audio Codec (I2S + I2C)"
+                default n
+                help
+                    Generic WM8960 stereo codec support (e.g. a Waveshare WM8960
+                    Audio HAT on a Raspberry-Pi-compatible 40-pin header, or any
+                    other WM8960 wiring). Register control uses I2C (shared board
+                    I2C bus, address 0x1A); audio data uses I2S on the four pins
+                    configured below. Can be enabled alongside the onboard ES8311
+                    codec - just pick a different I2S port and non-conflicting
+                    pins (checked at compile time against the current board's
+                    reserved pins).
+
+            if ONBOARD_AUDIO_WM8960
+                config ONBOARD_AUDIO_WM8960_I2S_PORT
+                    int "I2S Port Number (0-2)"
+                    range 0 2
+                    default 1
+                    help
+                        Selects which I2S peripheral instance drives the WM8960's
+                        audio data lines. Must differ from
+                        ONBOARD_AUDIO_ES8311_I2S_PORT if both codecs are enabled
+                        (the I2S driver rejects a duplicate claim at runtime if
+                        not).
+
+                config ONBOARD_AUDIO_WM8960_I2C_PORT
+                    int "I2C Port Number (0-1)"
+                    range 0 1
+                    default 0
+                    help
+                        Selects which I2C bus (see "I2C Subsystem" above) drives
+                        the WM8960's register control interface. That port must
+                        be enabled there, or WM8960 init fails at runtime.
+
+                config ONBOARD_AUDIO_WM8960_PIN_BCLK
+                    int "I2S BCLK GPIO"
+                    default -1
+                    help
+                        Bit clock, driven by the ESP32-P4 (WM8960 runs as I2S
+                        peripheral). -1 (GPIO_NUM_NC) leaves the codec disabled
+                        at runtime.
+
+                config ONBOARD_AUDIO_WM8960_PIN_LRCK
+                    int "I2S LRCLK (word-select) GPIO"
+                    default -1
+
+                config ONBOARD_AUDIO_WM8960_PIN_DIN
+                    int "I2S DIN GPIO (WM8960 ADC -> ESP32, microphone data)"
+                    default -1
+                    help
+                        WM8960 microphone/ADC data input. Set to -1 for playback-only
+                        operation. GPIO26 and GPIO27 are reserved for USB Device D-/D+.
+
+                config ONBOARD_AUDIO_WM8960_PIN_DOUT
+                    int "I2S DOUT GPIO (ESP32 -> WM8960 DAC, speaker data)"
+                    default -1
+
+                config ONBOARD_AUDIO_WM8960_PIN_BUTTON
+                    int "Onboard button GPIO (-1 to disable)"
+                    default -1
+                    help
+                        Active-low push-button on the WM8960 board/HAT, if
+                        present and wired. -1 (GPIO_NUM_NC) disables the button
+                        feature entirely.
+            endif
+
+            config USB_DEV_ENABLE_UAC2
+                bool "Enable USB Sound Card (UAC2, via USB Device Composite)"
+                default y
+                depends on APP_ENABLE_USB_DEVICE
+                help
+                    Exposes a USB Audio Class 2.0 (UAC2) sound card with 2-channel
+                    (stereo) speaker output and 2-channel (stereo) microphone input,
+                    as part of the composite USB device. Requires "Enable USB 1.1
+                    Device Mode" above to be enabled. Fixed at 44.1 kHz.
+
+        endif
+
+    endmenu
+
+    config APP_ENABLE_MIPI_DSI
+        bool "Enable MIPI DSI Display Output"
+        default y
+        help
+            Brings up the board's MIPI DSI panel (backlight, DSI PHY/LDO, DSI bus
+            and panel init). Required before LVGL can be enabled below, since LVGL
+            renders onto this display.
+
+    config APP_ENABLE_LVGL
+        bool "Enable LVGL GUI Engine"
+        default y
+        depends on APP_ENABLE_MIPI_DSI
+        help
+            Enables LVGL graphics library and display rendering pipeline.
+
+    config APP_ENABLE_HOSTED_COPROCESSOR
+        bool "ESP32-C6 Hosted Co-processor populated (SDIO)"
+        default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+        default n
+        help
+            Confirms an ESP32-C6 co-processor is actually wired up over SDIO to run
+            ESP-Hosted -- required before Wi-Fi or Bluetooth LE (both below) can be
+            enabled at all, since this project has no other transport for either.
+            Pre-selected and effectively fixed for the three built-in boards, which
+            all ship with the C6 soldered on; for a Custom ESP32-P4 Board, enable this
+            only if you've actually wired one up yourself.
+
+    if APP_ENABLE_HOSTED_COPROCESSOR
+        config APP_ENABLE_WIFI
+            bool "Enable Wi-Fi Subsystem (ESP-Hosted / SDIO)"
+            default y
+            help
+                Enables Wi-Fi connectivity via ESP-Hosted co-processor (ESP32-C6).
+
+        if APP_ENABLE_WIFI
+            config WIFI_SSID
+                string "Wi-Fi SSID"
+                default ""
+                help
+                    Network to join in station mode. Leave empty to bring the Wi-Fi
+                    link up without auto-connecting (e.g. to drive it from application code).
+
+            config WIFI_PASSWORD
+                string "Wi-Fi Password"
+                default ""
+                help
+                    Passphrase for WIFI_SSID. Leave empty for an open network.
+
+            config WIFI_MAXIMUM_RETRY
+                int "Maximum connection retries"
+                default 5
+                help
+                    Number of reconnect attempts after a disconnect before giving up.
+
+            config APP_ENABLE_WIFI_CAPTIVE_PORTAL
+                bool "Fall back to an Access Point + Captive Portal if the station can't connect"
+                default y
+                select APP_ENABLE_WEBSERVER
+                help
+                    Once WIFI_MAXIMUM_RETRY consecutive station connection attempts fail
+                    (wrong password, AP out of range, AP down, ...), start a SoftAP (SSID/
+                    password below) alongside the still-retrying station and run a captive
+                    portal on it: a DNS server (components/dns_server) answers every query
+                    with the ESP32's own AP IP, and the web server (auto-enabled by this
+                    option) redirects unknown paths to "/" so a phone joining the AP is
+                    dropped straight onto that page via its OS's captive-portal detection,
+                    the same way a hotel/airport Wi-Fi portal works. The station keeps
+                    retrying in the background; as soon as it gets an IP, the AP and
+                    captive portal shut down automatically and normal 404s come back.
+                    See main/features/wifi/wifi_manager.hpp.
+
+            if APP_ENABLE_WIFI_CAPTIVE_PORTAL
+                config WIFI_CAPTIVE_PORTAL_SSID
+                    string "Captive Portal AP SSID"
+                    default "ESP32P4-Setup"
+                    help
+                        SSID the fallback Access Point broadcasts while no station
+                        connection is up.
+
+                config WIFI_CAPTIVE_PORTAL_PASSWORD
+                    string "Captive Portal AP Password"
+                    default ""
+                    help
+                        Passphrase for WIFI_CAPTIVE_PORTAL_SSID. Leave empty for an open
+                        network (recommended -- a password here just adds a step before a
+                        phone can reach the portal used to configure Wi-Fi in the first place).
+
+                config WIFI_CAPTIVE_PORTAL_RETRY_INTERVAL_SEC
+                    int "Background station reconnect interval while the portal is up (seconds)"
+                    default 30
+                    range 5 3600
+                    help
+                        While the captive portal AP is up, how often to retry joining
+                        WIFI_SSID in the background (another WIFI_MAXIMUM_RETRY-sized burst
+                        of attempts each time) so the device reconnects on its own once the
+                        real network is reachable again, without needing a reboot.
+            endif
+        endif
+
+        config APP_ENABLE_BLUETOOTH
+            bool "Enable Bluetooth LE Subsystem (ESP-Hosted / NimBLE)"
+            default n
+            help
+                Enables Bluetooth LE via the same ESP-Hosted co-processor (ESP32-C6) used
+                for Wi-Fi: a NimBLE host stack runs on the ESP32-P4 and talks to the BT
+                controller on the co-processor over ESP-Hosted's virtual HCI, multiplexed
+                on the shared SDIO link. Runs as a central, scanning for and connecting to
+                BLE HID (keyboards, generic HID devices) and BLE-MIDI peripherals.
+
+        if APP_ENABLE_BLUETOOTH
+            menu "Enabled BLE Central Profiles"
+                config BLE_ENABLE_HID_HOST
+                    bool "HID over GATT Host (BLE Keyboards / generic HID devices)"
+                    default y
+
+                config BLE_ENABLE_MIDI_HOST
+                    bool "BLE-MIDI Host (wireless MIDI Keyboards / Controllers)"
+                    default y
+            endmenu
+        endif
+    endif
+
+    config APP_ENABLE_COPROCESSOR_OTA
+        bool "Push co-processor firmware update from the P4 at boot (Hosted OTA)"
+        default n
+        depends on APP_ENABLE_WIFI || APP_ENABLE_BLUETOOTH
+        help
+            Checks the ESP32-C6 co-processor's firmware version at boot and, if it
+            differs from the image staged in the "slave_fw" partition, pushes it
+            over the existing ESP-Hosted link and restarts. No-op if already up to
+            date, so this is safe to leave enabled. See coprocessor_fw/README.md
+            for how to build the co-processor firmware and stage it into that
+            partition; main/features/hosted/hosted_ota.hpp does the push.
+
+    config APP_ENABLE_ETHERNET
+        bool "Enable Ethernet / LAN (RMII EMAC)"
+        default n
+        depends on !BOARD_JC8012P4A1
+        help
+            Enables 100M RJ45 Ethernet connection using the internal EMAC and PHY.
+            Not available on the JC8012P4A1 board, which has no Ethernet PHY.
+
+    config APP_ENABLE_WEBSERVER
+        bool "Enable Web Server (HTTP, Wi-Fi + Ethernet)"
+        default n
+        depends on APP_ENABLE_WIFI || APP_ENABLE_ETHERNET
+        help
+            Starts an HTTP server (esp_http_server) serving static files from a
+            dedicated "www" LittleFS partition (see partitions.csv) -- separate
+            from the general-purpose "littlefs" data partition, so the web
+            assets can be rebuilt and reflashed independently of the app image.
+            Populate the project's data/ directory with the files to serve; see
+            main/features/web/web_server.hpp and the root CMakeLists.txt for how
+            that directory becomes a flashable partition image. Reachable over
+            whichever of Wi-Fi/Ethernet is up, no separate wiring per interface.
+
+    config APP_ENABLE_USB_HOST
+        bool "Enable TinyUSB Host & USB Hub Support"
+        default y
+        help
+            Enables USB Host stack via TinyUSB and
+            on-board USB Hub power management.
+
+    if APP_ENABLE_USB_HOST
+        config APP_ENABLE_USB_HUB_4PORT
+            bool "Enable On-Board 4-Port USB Hub Support"
+            default y if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default n
+            depends on WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            help
+                Enables power switching and downstream port management for the on-board
+                4-port USB Hub. Only the Waveshare ESP32-P4-WIFI6-DEV-KIT has one (see
+                HAS_4PORT_USB_HUB in main/boards/*.hpp) -- not selectable for other boards.
+
+        menu "Enabled USB Host Classes"
+            config USB_HOST_CLASS_MIDI
+                bool "MIDI (USB MIDI Keyboards / Controllers / Synthesizers)"
+                default y
+
+            config USB_HOST_CLASS_HID
+                bool "HID (Keyboard / Mouse)"
+                default y
+
+            config USB_HOST_CLASS_MSC
+                bool "MSC (USB Flash Drive / Mass Storage)"
+                default n
+
+            config USB_HOST_CLASS_CDC
+                bool "CDC-ACM (Virtual COM / Serial Devices)"
+                default n
+
+            help
+                Select all USB classes that may be used concurrently.
+        endmenu
+    endif
+
+    config APP_ENABLE_USB_DEVICE
+        bool "Enable USB 1.1 Device Mode (USB-Serial-JTAG port as Custom Device)"
+        default n
+        help
+            Reconfigures the secondary USB 1.1 Full-Speed port (USB1 / Serial-JTAG port)
+            as a TinyUSB Device (CDC Serial, MIDI, Keyboard/Mouse HID, Mass Storage, DFU).
+
+    if APP_ENABLE_USB_DEVICE
+        menu "USB Device Configuration (VID/PID & Descriptors)"
+
+            config USB_DEV_VID
+                hex "Vendor ID (VID)"
+                default 0x303A
+                help
+                    USB Vendor ID (default is 0x303A for Espressif).
+
+            config USB_DEV_PID
+                hex "Product ID (PID)"
+                default 0x4002
+                help
+                    USB Product ID.
+
+            config USB_DEV_MANUFACTURER
+                string "Manufacturer Name"
+                default "JoLaBI"
+
+            config USB_DEV_PRODUCT_NAME
+                string "Product Name"
+                default "Synth"
+
+            config USB_DEV_SERIAL_NUMBER
+                string "Serial Number"
+                default "123456"
+
+            menu "Enabled USB Device Classes (Composite Device)"
+
+                config USB_DEV_ENABLE_CDC
+                    bool "Enable CDC-ACM (Virtual Serial / COM Port)"
+                    default y
+                    help
+                        Exposes a Virtual COM Port over USB.
+
+                config USB_DEV_ENABLE_MIDI
+                    bool "Enable USB MIDI (Musical Instrument Device)"
+                    default y
+                    help
+                        Exposes a standard USB MIDI IN/OUT streaming interface.
+
+                comment "USB Sound Card (UAC2) moved to Application Features > Audio Subsystem"
+
+                config USB_DEV_ENABLE_HID_KEYBOARD
+                    bool "Enable HID Keyboard"
+                    default n
+                    help
+                        Enables USB Human Interface Device (Keyboard emulation).
+
+                config USB_DEV_ENABLE_HID_MOUSE
+                    bool "Enable HID Mouse"
+                    default n
+                    help
+                        Enables USB Human Interface Device (Mouse emulation).
+
+                config USB_DEV_ENABLE_HID_GAMEPAD
+                    bool "Enable HID Gamepad / Joystick"
+                    default n
+                    help
+                        Enables Gamepad/Joystick input device emulation.
+
+                config USB_DEV_ENABLE_MSC
+                    bool "Enable MSC (Mass Storage Device / Flash Drive)"
+                    default n
+                    help
+                        Exposes on-board storage (RAM/Flash/SD-Card) as a USB Flash Drive to the PC.
+
+                config USB_DEV_ENABLE_DFU
+                    bool "Enable DFU (Device Firmware Upgrade)"
+                    default n
+                    help
+                        Allows flashing firmware over USB DFU protocol.
+
+            endmenu
+
+        endmenu
+    endif
+
+    config APP_ENABLE_SDCARD
+        bool "Enable SD Card Storage (SDMMC / TF Card)"
+        default n
+        help
+            Enables SDMMC Slot storage driver.
+
+    config SDMMC_LDO_CHANNEL
+        int "SDMMC on-chip LDO channel"
+        default 4 if BOARD_JC8012P4A1
+        default 4 if BOARD_JC1060P470C_7_INCH
+        default 4 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+        default 1
+        range 1 4
+        depends on SOC_SDMMC_IO_POWER_EXTERNAL
+        help
+            On ESP32-P4 the dedicated SDMMC pins use the on-chip LDO for their
+            signal voltage. Select the LDO channel connected to the SDMMC IO
+            supply. The JC8012P4A1 and Waveshare P4 boards use LDO_VO4, which
+            is channel 4. Check the board schematic before changing this value.
+
+    config APP_ENABLE_LITTLEFS
+        bool "Enable LittleFS Storage (on-chip flash, \"littlefs\" partition)"
+        default y
+        help
+            Mounts the "littlefs" data partition (see partitions.csv) as a LittleFS
+            filesystem at /littlefs, via the joltwallet/littlefs component.
+
+    config APP_ENABLE_CAMERA
+        bool "Enable MIPI CSI Camera"
+        default n
+        help
+            Enables MIPI CSI camera sensor driver.
+
+    config APP_ENABLE_CLI
+        bool "Enable Serial CLI (interactive console)"
+        default y
+        help
+            Enables an interactive command-line interface (REPL) over the
+            active console port, with command history (Up/Down) and Tab
+            completion. New commands can be added under main/cli/commands/.
+            Type "help" for a list of available commands.
+
+endmenu

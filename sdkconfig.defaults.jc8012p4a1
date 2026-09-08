@@ -1,0 +1,6 @@
+# Board selection for JC8012P4A1 (10.1" 1280x800 MIPI DSI, C6 Hosted).
+# Combine with the common sdkconfig.defaults - see the header comment there for the
+# idf.py -D SDKCONFIG_DEFAULTS invocation. Onboard ES8311 audio pins and the SDMMC LDO
+# channel already default correctly for this board via the "if BOARD_JC8012P4A1" conditionals
+# in main/Kconfig.projbuild once it's selected - no need to repeat them here.
+CONFIG_BOARD_JC8012P4A1=y

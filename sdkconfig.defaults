@@ -1,0 +1,77 @@
+# This file was generated using idf.py save-defconfig, then hand-merged with the
+# ESP-Hosted/NimBLE and flash-layout settings this template's WiFi/BLE/OTA features need.
+# Espressif IoT Development Framework (ESP-IDF) 6.1.0 Project Minimal Configuration
+#
+# Settings here apply to every board this template supports. Board selection and anything
+# tied to one physical board/peripheral combo (audio codec choice, Ethernet, USB Device mode,
+# ...) lives in a matching sdkconfig.defaults.<board> file instead, so switching boards
+# doesn't drag another board's peripheral choices along with it (see main/Kconfig.projbuild
+# and main/boards/board_config.hpp for the board list).
+#
+# To configure for a specific board from a clean sdkconfig:
+#   Remove-Item sdkconfig -ErrorAction SilentlyContinue
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.jc1060" reconfigure
+# (swap the second file for sdkconfig.defaults.jc8012p4a1 / .waveshare / .custom_p4)
+# idf.py only fills in symbols not already present in sdkconfig from these files, so this only
+# has full effect on a fresh/deleted sdkconfig - once generated, menuconfig changes persist on
+# their own regardless of these files.
+
+CONFIG_IDF_TARGET="esp32p4"
+
+# --- PSRAM: every supported board's ESP32-P4NRW32 module has 32 MB of PSRAM stacked in the
+# package. Off by default in ESP-IDF, so enable it explicitly; HEX line mode / 200 MHz are this
+# chip's only supported PSRAM settings and are already the Kconfig defaults once CONFIG_SPIRAM
+# is on. ---
+CONFIG_SPIRAM=y
+
+# --- Flash layout: all supported boards ship 16 MB of flash; the default single-app table only
+# used 2 MB (and left the app 96% full). Custom table adds "slave_fw", a staging
+# partition for the ESP32-C6 co-processor image pushed by Feature::Hosted::OTA
+# (see main/partitions.csv, main/features/hosted/hosted_ota.hpp, coprocessor_fw/). ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- ESP-Hosted: Wi-Fi + Bluetooth LE co-processor link (ESP32-P4 -> ESP32-C6 over
+# the on-board SDIO bus). Used by JC8012P4A1, JC1060P470C and the Waveshare dev kit - all three
+# wire an ESP32-C6 over SDIO (see PIN_SDIO_* in main/boards/*.hpp). A custom board without that
+# co-processor should turn these back off in its own sdkconfig.defaults.custom_p4.
+# See main/features/wifi/wifi_manager.hpp and main/features/ble/ble_manager.hpp.
+# Bluetooth LE itself only takes effect once "Application Features -> Enable
+# Bluetooth LE Subsystem" is turned on; left configured here so menuconfig doesn't
+# need options hand-tuned across two unrelated submenus to flip it on. ---
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+CONFIG_ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN=n
+CONFIG_ESP_HOSTED_HOST_FEAT_WIFI=y
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+CONFIG_ESP_HOSTED_HOST_FEAT_BT=y
+
+# NimBLE connection/GATT timing assumes a 1kHz FreeRTOS tick.
+CONFIG_FREERTOS_HZ=1000
+
+# CLI "top" command (main/cli/commands/cmd_top.hpp) needs uxTaskGetSystemState() and
+# per-task/per-core run time stats (CPU%), all compiled out unless this is on. Also selects
+# CONFIG_FREERTOS_USE_TRACE_FACILITY and CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
+# Adds TaskStatus_t::xCoreID (core a task is pinned to), used by the "top" command's
+# Core column. Only valid for the classic (non-SMP) kernel this project builds.
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
+# Run time stats clock is esp_timer_get_time() (64-bit microseconds since boot). With the
+# default uint32_t counter type that value gets truncated and wraps every ~71.6 minutes of
+# uptime, corrupting "top"/"htop" CPU% (stale pre-wrap per-task counters read against a
+# post-wrap total -- e.g. an idle task's counter can compute as 300-400%+). uint64_t avoids
+# the wrap.
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
+
+# This project pins every task it creates to MAIN_CORE or AUDIO_CORE (see main/app_core.hpp);
+# pin lwip's tcpip_thread the same way instead of leaving it as CONFIG_LWIP_TCPIP_TASK_AFFINITY_NO_AFFINITY.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# LVGL default theme in dark mode.
+CONFIG_LV_THEME_DEFAULT_DARK=y

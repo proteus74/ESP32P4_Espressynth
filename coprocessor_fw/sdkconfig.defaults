@@ -1,0 +1,25 @@
+# Role: COPROCESSOR (works with the ESP32P4_Template host over SDIO)
+CONFIG_ESP_HOSTED=y
+CONFIG_ESP_HOSTED_CP=y
+CONFIG_ESP_HOSTED_CP_FOR_MCU=y
+CONFIG_ESP_HOSTED_CP_RPC_V2=y
+CONFIG_ESP_HOSTED_CP_FEAT_WIFI=y
+CONFIG_ESP_HOSTED_CP_FEAT_BT=y
+
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+
+# BT controller only -- the P4 host runs the NimBLE stack (see ble_manager.hpp);
+# this chip just exposes the controller over the hosted HCI byte pipe (VHCI,
+# multiplexed on the same SDIO link as Wi-Fi -- no extra UART wiring needed).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_ONLY=y
+CONFIG_BT_LE_HCI_INTERFACE_USE_RAM=y
+
+# OTA: dual app slots so Feature::Hosted::OTA on the P4 host can push updates
+# over the existing SDIO link (see coprocessor_fw/README.md).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_eh_cp_ota_4m.csv"
+
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_WIFI_NVS_ENABLED=y
