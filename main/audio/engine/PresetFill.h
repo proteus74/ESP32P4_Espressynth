@@ -22,6 +22,7 @@
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/GainNode.h"
+#include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
 #include "nodes/MidiInNode.h"
@@ -56,6 +57,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     {
     case NodeType::Oscillator:
         nodes::oscillator::parsePreset(p, out);
+        break;
+    case NodeType::Hammond:
+        nodes::hammond::parsePreset(p, out);
         break;
     case NodeType::Lfo:
         nodes::lfo::parsePreset(p, out);

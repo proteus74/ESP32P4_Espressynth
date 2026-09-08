@@ -164,6 +164,13 @@ struct WidgetParams
     bool soundFontEnableCc = false;
     bool soundFontEnableModWheel = false;
     bool soundFontEnablePitchWheel = false;
+    // hammond - drawbar LEVELS (0-10V CV, default 888000000) and their
+    // harmonic RATIOS (settings-dialog-only, default the classic Hammond
+    // footages). Two independent 9-element arrays - see nodes/HammondNode.h.
+    // tuneVolts/amplitude/gain above are reused, same convention as Oscillator.
+    float hammondDrawbar[9] = {10, 10, 10, 0, 0, 0, 0, 0, 0};
+    float hammondRatio[9] = {0.5f, 1.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 8.0f};
+    uint8_t hammondModulationStride = 4;
 };
 
 struct WidgetDesc

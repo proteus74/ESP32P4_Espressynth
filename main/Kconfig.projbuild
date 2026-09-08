@@ -289,6 +289,78 @@ menu "Application Features"
                         feature entirely.
             endif
 
+            config AUDIO_I2S_DMA_DESC_NUM
+                int "I2S DMA descriptor count (onboard codecs)"
+                range 2 16
+                default 6
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
+                help
+                    Part 1 of the I2S output buffer's size, shared by every
+                    onboard I2S codec (ES8311 and/or WM8960 -- NOT the USB
+                    UAC2 sound card, which has its own separate buffering).
+
+                    Background: the I2S peripheral streams audio out of RAM
+                    via DMA (Direct Memory Access) without CPU involvement
+                    per sample. The driver organizes that RAM as a ring of
+                    N fixed-size chunks ("descriptors"); the DMA hardware
+                    walks the ring continuously while the app keeps writing
+                    fresh audio into the chunk behind it. This option sets
+                    N, i.e. how many chunks the ring has. AUDIO_I2S_DMA_FRAME_NUM
+                    below sets how many audio frames (see its help) fit in
+                    *each* chunk -- the two multiply together into the
+                    ring's total capacity.
+
+                    Formula:
+                        total_frames = AUDIO_I2S_DMA_DESC_NUM * AUDIO_I2S_DMA_FRAME_NUM
+                        latency_ms   = total_frames / 44100 * 1000
+
+                    Default 6 * 240 = 1440 frames = 1440 / 44100 * 1000
+                    ~= 32.6 ms. That is roughly how long it takes a sample
+                    written to the buffer right now to actually reach the
+                    speaker -- the I2S half of the app's total output
+                    latency (the synth engine adds its own share, see
+                    AUDIO_SYNTH_BLOCK_SIZE below).
+
+                    Raising DESC_NUM (or FRAME_NUM) grows the ring, buying
+                    more headroom against a writer stall -- e.g. the "tone"
+                    CLI command or any other task briefly starving the audio
+                    writer of CPU time -- at the cost of latency. A stall
+                    longer than the ring's total playtime underruns it, and
+                    auto_clear_after_cb (es8311_manager.hpp /
+                    wm8960_manager.hpp) fills the gap with silence instead of
+                    repeating stale audio -- audible as a click/pop either
+                    way. Lowering DESC_NUM (or FRAME_NUM) shrinks the ring
+                    for less latency, at the cost of less stall headroom.
+                    Needs at least 2 descriptors for the driver to have a
+                    "currently playing" chunk and a "being filled next" chunk
+                    at all times.
+
+            config AUDIO_I2S_DMA_FRAME_NUM
+                int "I2S DMA frames per descriptor (onboard codecs)"
+                range 32 960
+                default 240
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
+                help
+                    Part 2 of the I2S output buffer's size -- see
+                    AUDIO_I2S_DMA_DESC_NUM above for the full explanation,
+                    the ring-buffer background, and the latency formula.
+
+                    "Frame" here means one sample per channel, for both
+                    channels at once (this project is fixed at 16-bit
+                    stereo): 1 frame = 2 samples = 4 bytes. This option sets
+                    how many such frames fit in each of the
+                    AUDIO_I2S_DMA_DESC_NUM ring chunks, i.e. how large a
+                    single DMA transfer is.
+
+                    Default 240 frames/descriptor * 6 descriptors = 1440
+                    frames total ~= 32.6 ms @ 44.1kHz. The upper end of the
+                    range (960) is headroom under the I2S driver's hard
+                    per-descriptor buffer ceiling (4095 bytes,
+                    I2S_DMA_BUFFER_MAX_SIZE in esp_driver_i2s/i2s_common.c)
+                    -- at 4 bytes/frame that ceiling is 1023 frames, so 960
+                    stays safely under it with room for the driver's own
+                    alignment rounding. Not a value chosen for its latency.
+
             config APP_ENABLE_SYNTH
                 bool "Enable Node-Graph Synth Engine"
                 default n
@@ -302,6 +374,59 @@ menu "Application Features"
                     enable "Web Server" and "LittleFS" below; for note input,
                     enable a MIDI transport (USB Host/Device MIDI or BLE
                     MIDI).
+
+            config AUDIO_SYNTH_MAX_VOICES
+                int "Maximum graph-polyphony voices"
+                range 1 32
+                default 16
+                depends on APP_ENABLE_SYNTH
+                help
+                    Compile-time ceiling for polyphonic graph expansion.
+                    Presets may request fewer voices, and the runtime builder
+                    can reduce this count further when internal RAM does not
+                    fit. Higher values increase Graph metadata in PSRAM and
+                    per-voice node buffers/state, primarily in internal RAM.
+
+            config AUDIO_SYNTH_BLOCK_SIZE
+                int "Synth engine render block size (samples)"
+                range 16 1024
+                default 128
+                depends on APP_ENABLE_SYNTH
+                help
+                    Background: the node-graph synth engine (SynthEngine.h)
+                    runs a dedicated render task that works in fixed-size
+                    chunks called "blocks", not sample by sample -- each loop
+                    iteration it walks the whole node graph (oscillators,
+                    filters, envelopes, effects, ...) once per block to
+                    produce this many samples, then blocking-writes that
+                    block to the codec (or USB speaker mix). This option is
+                    synth::kBlockSize in SynthConfig.h, i.e. how many samples
+                    one such iteration produces.
+
+                    Formula (fixed 44.1kHz sample rate):
+                        block_time_ms = AUDIO_SYNTH_BLOCK_SIZE / 44100 * 1000
+
+                    Default 128 samples ~= 2.9 ms/block -- that is both the
+                    engine's per-block real-time CPU budget (see
+                    audioCoreLoadPercent() / "top"'s audio-core load, which
+                    is measured against exactly this budget -- >=100% means
+                    a block took longer to render than it takes to play,
+                    i.e. underrun risk) and roughly its contribution to
+                    end-to-end output latency: a MIDI note-on can only affect
+                    audio from the start of the *next* block, so on average
+                    it waits half a block, up to a full block in the worst
+                    case, before it's heard.
+
+                    Smaller values shrink that latency contribution but
+                    raise overhead, since fixed per-block costs (node graph
+                    walk/dispatch, control-rate parameter smoothing,
+                    envelope/LFO updates, ...) then repeat more often per
+                    second of audio; larger values do the opposite -- more
+                    efficient per sample, but coarser timing. Independent of
+                    AUDIO_I2S_DMA_DESC_NUM/AUDIO_I2S_DMA_FRAME_NUM above,
+                    which set the codec's I2S DMA buffering downstream of
+                    this -- total output latency is roughly the sum of both
+                    stages.
 
             config USB_DEV_ENABLE_UAC2
                 bool "Enable USB Sound Card (UAC2, via USB Device Composite)"

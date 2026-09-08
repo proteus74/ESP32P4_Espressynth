@@ -93,7 +93,15 @@ public:
         return true;
     }
 
-    uint32_t renderPeakUs() { return renderPeakUs_.exchange(0, std::memory_order_relaxed); }
+    struct TimingSnapshot
+    {
+        uint32_t sampleCount = 0;
+        uint32_t p50Us = 0;
+        uint32_t p95Us = 0;
+        uint32_t p99Us = 0;
+        uint32_t peakUs = 0;
+    };
+    TimingSnapshot consumeTimingSnapshot();
     uint32_t renderOverrunCount() const { return renderOverrunCount_.load(std::memory_order_relaxed); }
     uint32_t midiDropCount() const { return midiDropCount_.load(std::memory_order_relaxed); }
     uint16_t activeSoundFontVoices() const { return activeSoundFontVoices_.load(std::memory_order_relaxed); }
@@ -145,11 +153,9 @@ public:
     // index: 0=USB, 1=ES8311, 2=WM8960
     const SinkParams &sink(size_t index) const { return sink_[index]; }
 
-    // Applies a reserved "@out:*" paramUpdate to a hardware output sink
-    // (gain/mute). Returns true if the widgetId was one of the reserved ids,
-    // false if it was a graph id (caller should feed it to the graph then).
-    // Only ever called on the render task (see applyLiveOrOutputParam helper).
-    bool applyOutputParam(const char *json);
+    // Applies an already-parsed reserved "@out:*" paramUpdate to a hardware
+    // output sink. Only ever called on the render task.
+    bool applyOutputParam(const char *widgetId, cJSON *params);
 
 private:
     static void taskEntry(void *arg);
@@ -167,7 +173,8 @@ private:
     // the request could never be answered. Harmless either way at boot
     // anyway: liveGraph_ there is already just the trivial Graph::allocate()
     // placeholder, so there is no old-graph RAM to free.
-    Graph *buildFromFile(const char *path, uint16_t voiceCeiling = SYNTH_VOICE_COUNT, bool allowPreFree = true);
+    Graph *buildFromFile(const char *path, uint16_t voiceCeiling = SYNTH_VOICE_COUNT, bool allowPreFree = true,
+                         bool forcePreFree = false);
 
     // JSON parse + GraphBuilder::build can "easily take tens of ms" (see the
     // overrun log comment below) - far above the ~2.7ms block budget at
@@ -192,6 +199,7 @@ private:
     QueueHandle_t liveParamQueue_ = nullptr;
     QueueHandle_t midiEventQueue_ = nullptr;
     QueueHandle_t builtGraphQueue_ = nullptr; // length 1; loader task -> render task, fully-built Graph* ready to swap in
+    QueueHandle_t retiredGraphQueue_ = nullptr; // render task -> loader task; heap destruction stays off the real-time core
     TaskHandle_t taskHandle_ = nullptr;
     TaskHandle_t loaderTaskHandle_ = nullptr;
     char currentPresetPath_[300] = {}; // matches PresetChangedMsg::path - see its comment for the sizing rationale; render-task-owned (only ever written at swap time in taskLoop), see loaderKnownPresetPath_ below for the loader task's own copy
@@ -259,6 +267,9 @@ private:
     uint32_t widgetLoadGeneration_ = 0;
 
     std::atomic<uint32_t> renderPeakUs_{0};
+    static constexpr uint32_t kTimingHistogramBinWidthUs = 64;
+    static constexpr size_t kTimingHistogramBinCount = 128;
+    std::atomic<uint32_t> timingHistogram_[kTimingHistogramBinCount] = {};
     std::atomic<uint32_t> renderOverrunCount_{0};
     std::atomic<uint32_t> midiDropCount_{0};
     std::atomic<uint16_t> activeSoundFontVoices_{0};
@@ -325,10 +336,9 @@ constexpr size_t kSynthEngineOutputFadeSamples =
     static_cast<size_t>(synth::kSampleRate * kSynthEngineOutputFadeMs / 1000.0f);
 constexpr float kSynthEngineOutputFadeStep = 1.0f / static_cast<float>(kSynthEngineOutputFadeSamples);
 
-// Parses one raw /ws text frame ({"type":"paramUpdate","widgetId":"...",
-// "params":{...}}) and applies it directly to `graph` if it matches that
-// shape. Anything else (other message types, malformed JSON) is ignored.
-void applyLiveParamMessage(Graph &graph, const char *json)
+// Parse each queued frame once, then route the resolved fields either to the
+// engine's hardware sinks or to the live graph.
+void applyLiveParamMessage(SynthEngine &engine, Graph &graph, const char *json)
 {
     cJSON *root = cJSON_Parse(json);
     if (root == nullptr)
@@ -338,39 +348,19 @@ void applyLiveParamMessage(Graph &graph, const char *json)
     cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
     cJSON *widgetId = cJSON_GetObjectItemCaseSensitive(root, "widgetId");
     cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
-    if (cJSON_IsString(type) && strcmp(type->valuestring, "paramUpdate") == 0 && cJSON_IsString(widgetId) &&
-        cJSON_IsObject(params))
-    {
-        graph.applyLiveParams(widgetId->valuestring, params);
-    }
-    cJSON_Delete(root);
-}
-
-// Reserved output-widget IDs that are routed to SynthEngine's per-sink
-// hardware outputs rather than the DSP graph (see SynthEngine::applyOutputParam).
-// Parses widgetId from `json` itself and returns true if it was a reserved id
-// (swallowed here), false if it was a graph id.
-bool applyLiveOrOutputParam(SynthEngine &engine, const char *json)
-{
-    cJSON *root = cJSON_Parse(json);
-    if (root == nullptr) return false;
-    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
-    cJSON *widgetId = cJSON_GetObjectItemCaseSensitive(root, "widgetId");
-    const bool isParamUpdate = cJSON_IsString(type) && strcmp(type->valuestring, "paramUpdate") == 0;
-    const bool isPanic = cJSON_IsString(type) && strcmp(type->valuestring, "panic") == 0;
-    const bool isReserved = isParamUpdate && cJSON_IsString(widgetId) &&
-                            (strcmp(widgetId->valuestring, "@out:usb") == 0 ||
-                             strcmp(widgetId->valuestring, "@out:es8311") == 0 ||
-                             strcmp(widgetId->valuestring, "@out:wm8960") == 0);
-    cJSON_Delete(root);
-
-    if (isPanic)
+    if (cJSON_IsString(type) && strcmp(type->valuestring, "panic") == 0)
     {
         engine.requestPanic();
-        return true;
     }
-    if (!isReserved) return false;
-    return engine.applyOutputParam(json);
+    else if (cJSON_IsString(type) && strcmp(type->valuestring, "paramUpdate") == 0 &&
+             cJSON_IsString(widgetId) && cJSON_IsObject(params))
+    {
+        if (!engine.applyOutputParam(widgetId->valuestring, params))
+        {
+            graph.applyLiveParams(widgetId->valuestring, params);
+        }
+    }
+    cJSON_Delete(root);
 }
 
 void destroyPresetDoc(PresetDoc *doc)
@@ -443,6 +433,42 @@ PresetDoc *readPresetFile(const char *path, uint32_t reloadGeneration)
 }
 } // namespace
 
+inline SynthEngine::TimingSnapshot SynthEngine::consumeTimingSnapshot()
+{
+    TimingSnapshot snapshot;
+    uint32_t counts[kTimingHistogramBinCount];
+    for (size_t i = 0; i < kTimingHistogramBinCount; ++i)
+    {
+        counts[i] = timingHistogram_[i].exchange(0, std::memory_order_relaxed);
+        snapshot.sampleCount += counts[i];
+    }
+    snapshot.peakUs = renderPeakUs_.exchange(0, std::memory_order_relaxed);
+    if (snapshot.sampleCount == 0)
+    {
+        return snapshot;
+    }
+
+    const auto percentileUs = [&](uint32_t percentile) {
+        const uint32_t target = (snapshot.sampleCount * percentile + 99) / 100;
+        uint32_t cumulative = 0;
+        for (size_t i = 0; i < kTimingHistogramBinCount; ++i)
+        {
+            cumulative += counts[i];
+            if (cumulative >= target)
+            {
+                return i + 1 == kTimingHistogramBinCount
+                           ? snapshot.peakUs
+                           : static_cast<uint32_t>((i + 1) * kTimingHistogramBinWidthUs);
+            }
+        }
+        return snapshot.peakUs;
+    };
+    snapshot.p50Us = percentileUs(50);
+    snapshot.p95Us = percentileUs(95);
+    snapshot.p99Us = percentileUs(99);
+    return snapshot;
+}
+
 inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_handle_t secondaryI2sTxHandle,
                                 QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue,
                                 const char *initialPresetPath)
@@ -460,6 +486,7 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
 
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
     builtGraphQueue_ = xQueueCreate(1, sizeof(BuiltGraphMsg));
+    retiredGraphQueue_ = xQueueCreate(2, sizeof(Graph *));
 
     // Pinned to core 1: this is the only task allowed on that core, so it
     // never contends with Ethernet/USB/httpd/etc for CPU time.
@@ -483,28 +510,14 @@ inline bool SynthEngine::onMidiEvent(const UsbMidiEvent &event)
     return false;
 }
 
-inline bool SynthEngine::applyOutputParam(const char *json)
+inline bool SynthEngine::applyOutputParam(const char *widgetId, cJSON *params)
 {
-    cJSON *root = cJSON_Parse(json);
-    if (root == nullptr) return false;
-
-    cJSON *widgetId = cJSON_GetObjectItemCaseSensitive(root, "widgetId");
-    if (!cJSON_IsString(widgetId))
-    {
-        cJSON_Delete(root);
-        return false;
-    }
     size_t idx;
-    if (strcmp(widgetId->valuestring, "@out:usb") == 0) idx = 0;
-    else if (strcmp(widgetId->valuestring, "@out:es8311") == 0) idx = 1;
-    else if (strcmp(widgetId->valuestring, "@out:wm8960") == 0) idx = 2;
-    else
-    {
-        cJSON_Delete(root);
-        return false;
-    }
+    if (strcmp(widgetId, "@out:usb") == 0) idx = 0;
+    else if (strcmp(widgetId, "@out:es8311") == 0) idx = 1;
+    else if (strcmp(widgetId, "@out:wm8960") == 0) idx = 2;
+    else return false;
 
-    cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
     if (cJSON_IsObject(params))
     {
         cJSON *gain = cJSON_GetObjectItemCaseSensitive(params, "gain");
@@ -521,11 +534,10 @@ inline bool SynthEngine::applyOutputParam(const char *json)
             sink_[idx].muted = cJSON_IsTrue(mute);
         }
     }
-    cJSON_Delete(root);
     return true;
 }
 
-inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling, bool allowPreFree)
+inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling, bool allowPreFree, bool forcePreFree)
 {
     const uint32_t reloadGeneration = memorydiag::beginReload();
     PresetDoc *doc = readPresetFile(path, reloadGeneration);
@@ -546,9 +558,10 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
     // task itself (this task here), so the read is the same task, no
     // cross-thread risk.
     const uint16_t requestedVoicesPeek = GraphBuilder::peekRequestedVoices(*doc);
-    if (allowPreFree && requestedVoicesPeek > currentVoiceCount_.load(std::memory_order_relaxed))
+    if (allowPreFree &&
+        (forcePreFree || requestedVoicesPeek > currentVoiceCount_.load(std::memory_order_relaxed)))
     {
-        ESP_LOGI(kSynthEngineTag, "Voice count rising to %u - freeing old graph first (brief audio dropout)",
+        ESP_LOGI(kSynthEngineTag, "Preparing %u-voice rebuild - freeing old graph first (brief audio dropout)",
                  static_cast<unsigned>(requestedVoicesPeek));
         preFreeRequested_.store(true, std::memory_order_relaxed);
         // Bounded wait (not forever): the fade-out itself only takes
@@ -606,6 +619,13 @@ inline void SynthEngine::loaderTaskLoop()
 {
     for (;;)
     {
+        Graph *retiredGraph = nullptr;
+        while (retiredGraphQueue_ != nullptr && xQueueReceive(retiredGraphQueue_, &retiredGraph, 0) == pdTRUE)
+        {
+            retiredGraph->destroy();
+            Graph::release(retiredGraph);
+        }
+
         PresetChangedMsg msg;
         // Bounded wait (not portMAX_DELAY) so this loop also notices a
         // cpuReloadRequested_ overload-watchdog request (see taskLoop)
@@ -614,8 +634,14 @@ inline void SynthEngine::loaderTaskLoop()
         // reacting to a multi-second-sustained condition, and this task has
         // nothing else to do while idle anyway.
         const bool gotMsg = xQueueReceive(presetChangedQueue_, &msg, pdMS_TO_TICKS(200)) == pdTRUE;
+        while (retiredGraphQueue_ != nullptr && xQueueReceive(retiredGraphQueue_, &retiredGraph, 0) == pdTRUE)
+        {
+            retiredGraph->destroy();
+            Graph::release(retiredGraph);
+        }
         const bool panicReload = panicReloadRequested_.exchange(false, std::memory_order_relaxed);
-        if (!gotMsg && !panicReload)
+        const bool cpuReload = cpuReloadRequested_.exchange(false, std::memory_order_acquire);
+        if (!gotMsg && !panicReload && !cpuReload)
         {
             continue;
         }
@@ -632,7 +658,11 @@ inline void SynthEngine::loaderTaskLoop()
             // never about this new content, and GraphBuilder's own
             // internal-RAM-fit retry re-protects memory regardless.
         }
-        Graph *newGraph = buildFromFile(path, voiceCeiling);
+        else if (cpuReload && !panicReload)
+        {
+            voiceCeiling = cpuReloadCeiling_.load(std::memory_order_relaxed);
+        }
+        Graph *newGraph = buildFromFile(path, voiceCeiling, true, !gotMsg);
         if (newGraph == nullptr)
         {
             // buildFromFile() already wrote the warning log; the old graph
@@ -743,13 +773,7 @@ inline void SynthEngine::taskLoop()
             const int64_t liveParamStartUs = esp_timer_get_time();
             while (liveParamQueue_ != nullptr && xQueueReceive(liveParamQueue_, &paramMsg, 0) == pdTRUE)
             {
-                // Reserved @out:* ids control the hardware outputs (USB/ES8311/
-                // WM8960) - intercept them before so they never land in the
-                // DSP graph.
-                if (!applyLiveOrOutputParam(*this, paramMsg.json))
-                {
-                    applyLiveParamMessage(*liveGraph_, paramMsg.json);
-                }
+                applyLiveParamMessage(*this, *liveGraph_, paramMsg.json);
                 ++liveParamCount;
             }
             liveParamUs = esp_timer_get_time() - liveParamStartUs;
@@ -836,10 +860,16 @@ inline void SynthEngine::taskLoop()
         else if (outputFadeState_ == OutputFadeState::FadingOut && outputFadeMul_ <= 0.0f)
         {
             const int64_t swapStartUs = esp_timer_get_time();
-            liveGraph_->destroy();
-            Graph::release(liveGraph_);
+            Graph *retiredGraph = liveGraph_;
             liveGraph_ = pendingGraph_;
             pendingGraph_ = nullptr;
+            if (xQueueSend(retiredGraphQueue_, &retiredGraph, 0) != pdTRUE)
+            {
+                // Queue depth two is sufficient because the loader serializes
+                // builds. Keep a leak impossible if that invariant changes.
+                retiredGraph->destroy();
+                Graph::release(retiredGraph);
+            }
             snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", pendingPresetPath_);
             presetReloadUs = esp_timer_get_time() - swapStartUs;
             outputFadeState_ = OutputFadeState::FadingIn;
@@ -872,49 +902,10 @@ inline void SynthEngine::taskLoop()
             submitOut_(usbChunk, sizeof(usbChunk) / sizeof(usbChunk[0]));
         }
 
-        // Processing time up to here (queues + render + conversion) is the
-        // actual CPU load - the following esp_codec_dev_write() call only
-        // blocks until the codec has DMA space again, and therefore does NOT
-        // count as processing time.
-        const int64_t processEndUs = esp_timer_get_time();
-        const uint32_t processUs = static_cast<uint32_t>(processEndUs - iterStartUs);
-        uint32_t peak = renderPeakUs_.load(std::memory_order_relaxed);
-        if (processUs > peak) renderPeakUs_.store(processUs, std::memory_order_relaxed);
-        if (static_cast<float>(processUs) > kSynthEngineBlockBudgetUs)
-        {
-            renderOverrunCount_.fetch_add(1, std::memory_order_relaxed);
-            // Breaks down the cause per affected block to the console, instead
-            // of only incrementing the bare counter (renderOverrunCount(),
-            // reported via WS 1x/s to the browser header) - the four most
-            // common causes of a sudden overrun burst are a preset reload
-            // (JSON parse + GraphBuilder::build, can easily take tens of ms),
-            // a burst of waiting MIDI events (e.g. a large chord or a
-            // sustain-pedal release of many held notes), many live-param
-            // updates processed at once (e.g. fast knob dragging in the
-            // browser) or simply a too-heavy graph (renderUs itself
-            // near/over the budget). "usbSubmit"/rest covers PCM conversion +
-            // any USB tap.
-            const int64_t usbSubmitUs = processEndUs - renderStartUs - renderUs;
-            ESP_LOGW(kSynthEngineTag,
-                     "Audio-Overrun: %lu us > %lu us Budget (preset=%lld us, midi=%lu Ev/%lld us, "
-                     "liveParams=%lu/%lld us, render=%lld us, usbSubmit=%lld us)",
-                     static_cast<unsigned long>(processUs), static_cast<unsigned long>(kSynthEngineBlockBudgetUs),
-                     static_cast<long long>(presetReloadUs), static_cast<unsigned long>(midiEventCount),
-                     static_cast<long long>(midiUs), static_cast<unsigned long>(liveParamCount),
-                     static_cast<long long>(liveParamUs), static_cast<long long>(renderUs),
-                     static_cast<long long>(usbSubmitUs));
-        }
-        const float instLoadPercent = 100.0f * static_cast<float>(processEndUs - iterStartUs) / kSynthEngineBlockBudgetUs;
-        const float prevLoad = audioCoreLoadPercent_.load(std::memory_order_relaxed);
-        const float smoothedLoad = prevLoad + kSynthEngineLoadEmaAlpha * (instLoadPercent - prevLoad);
-        audioCoreLoadPercent_.store(smoothedLoad, std::memory_order_relaxed);
+        const int64_t preWriteProcessEndUs = esp_timer_get_time();
+        const uint32_t preWriteProcessUs = static_cast<uint32_t>(preWriteProcessEndUs - iterStartUs);
+        const int64_t postRenderUs = preWriteProcessEndUs - renderStartUs - renderUs;
 
-        // Overload watchdog: this graph's current voice count is genuinely
-        // too heavy for real-time, not just briefly busy - ask the loader
-        // task for a rebuild at one fewer voice (see GraphBuilder::build's
-        // voiceCeiling and loaderTaskLoop's cpuReloadRequested_ handling).
-        // Never fires below 2 voices (nothing left to reasonably give up)
-        // or while a previously requested reduction hasn't swapped in yet.
         // esp_codec_dev_write() blocks until the codec driver has DMA space
         // again - under healthy operation this is the actual clocking wait
         // (keeps the block rhythm, see comment above) and therefore
@@ -927,13 +918,21 @@ inline void SynthEngine::taskLoop()
         // interrupt storm/a long ISR elsewhere (candidate: Ethernet link
         // change) - can very well let the codec run dry. Separate log branch
         // below, independent of the processUs overrun above.
+        int64_t esConvertUs = 0;
         int64_t esWriteUs = 0;
         if (codecHandle_ != nullptr)
         {
+            const int64_t esConvertStartUs = esp_timer_get_time();
             const SinkParams &esSyn = sink_[1];
+            static int16_t s_lastEsL = 0;
+            static int64_t s_lastEsClickLogUs = 0;
+            int32_t esMaxStep = 0;
+            int16_t esPrev = s_lastEsL;
             if (esSyn.muted || esSyn.gain <= 0.0f)
             {
                 memset(esChunk, 0, sizeof(esChunk));
+                esMaxStep = esPrev < 0 ? -static_cast<int32_t>(esPrev) : static_cast<int32_t>(esPrev);
+                esPrev = 0;
             }
             else
             {
@@ -945,37 +944,38 @@ inline void SynthEngine::taskLoop()
                     if (r > 1.0f) r = 1.0f; else if (r < -1.0f) r = -1.0f;
                     esChunk[i * 2 + 0] = static_cast<int16_t>(l * 32767.0f);
                     esChunk[i * 2 + 1] = static_cast<int16_t>(r * 32767.0f);
+                    const int32_t step = static_cast<int32_t>(esChunk[i * 2]) - static_cast<int32_t>(esPrev);
+                    const int32_t absStep = step < 0 ? -step : step;
+                    if (absStep > esMaxStep) esMaxStep = absStep;
+                    esPrev = esChunk[i * 2];
                 }
             }
-            {
-                static int16_t s_lastEsL = 0;
-                static int64_t s_lastEsClickLogUs = 0;
-                int16_t maxStep = 0;
-                int16_t prev = s_lastEsL;
-                for (size_t i = 0; i < synth::kBlockSize; ++i) {
-                    const int32_t step = static_cast<int32_t>(esChunk[i * 2]) - static_cast<int32_t>(prev);
-                    const int16_t absStep = static_cast<int16_t>(step < 0 ? -step : step);
-                    if (absStep > maxStep) maxStep = absStep;
-                    prev = esChunk[i * 2];
-                }
-                s_lastEsL = prev;
-                const int64_t nowUs = esp_timer_get_time();
-                if (maxStep > 20000 && nowUs - s_lastEsClickLogUs > 100000) {
-                    s_lastEsClickLogUs = nowUs;
-                    ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity ES8311: maxStep=%d", maxStep);
-                }
+            s_lastEsL = esPrev;
+            const int64_t esNowUs = esp_timer_get_time();
+            if (esMaxStep > 20000 && esNowUs - s_lastEsClickLogUs > 100000) {
+                s_lastEsClickLogUs = esNowUs;
+                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity ES8311: maxStep=%ld", static_cast<long>(esMaxStep));
             }
+            esConvertUs = esp_timer_get_time() - esConvertStartUs;
             const int64_t esWriteStartUs = esp_timer_get_time();
             esp_codec_dev_write(codecHandle_, esChunk, sizeof(esChunk));
             esWriteUs = esp_timer_get_time() - esWriteStartUs;
         }
+        int64_t wmConvertUs = 0;
         int64_t wmWriteUs = 0;
         if (secondaryI2sTxHandle_ != nullptr)
         {
+            const int64_t wmConvertStartUs = esp_timer_get_time();
             const SinkParams &wmSyn = sink_[2];
+            static int16_t s_lastWmL = 0;
+            static int64_t s_lastWmClickLogUs = 0;
+            int32_t wmMaxStep = 0;
+            int16_t wmPrev = s_lastWmL;
             if (wmSyn.muted || wmSyn.gain <= 0.0f)
             {
                 memset(wmChunk, 0, sizeof(wmChunk));
+                wmMaxStep = wmPrev < 0 ? -static_cast<int32_t>(wmPrev) : static_cast<int32_t>(wmPrev);
+                wmPrev = 0;
             }
             else
             {
@@ -987,30 +987,79 @@ inline void SynthEngine::taskLoop()
                     if (r > 1.0f) r = 1.0f; else if (r < -1.0f) r = -1.0f;
                     wmChunk[i * 2 + 0] = static_cast<int16_t>(l * 32767.0f);
                     wmChunk[i * 2 + 1] = static_cast<int16_t>(r * 32767.0f);
+                    const int32_t step = static_cast<int32_t>(wmChunk[i * 2]) - static_cast<int32_t>(wmPrev);
+                    const int32_t absStep = step < 0 ? -step : step;
+                    if (absStep > wmMaxStep) wmMaxStep = absStep;
+                    wmPrev = wmChunk[i * 2];
                 }
             }
-            {
-                static int16_t s_lastWmL = 0;
-                static int64_t s_lastWmClickLogUs = 0;
-                int16_t maxStep = 0;
-                int16_t prev = s_lastWmL;
-                for (size_t i = 0; i < synth::kBlockSize; ++i) {
-                    const int32_t step = static_cast<int32_t>(wmChunk[i * 2]) - static_cast<int32_t>(prev);
-                    const int16_t absStep = static_cast<int16_t>(step < 0 ? -step : step);
-                    if (absStep > maxStep) maxStep = absStep;
-                    prev = wmChunk[i * 2];
-                }
-                s_lastWmL = prev;
-                const int64_t nowUs = esp_timer_get_time();
-                if (maxStep > 20000 && nowUs - s_lastWmClickLogUs > 100000) {
-                    s_lastWmClickLogUs = nowUs;
-                    ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity WM8960: maxStep=%d", maxStep);
-                }
+            s_lastWmL = wmPrev;
+            const int64_t wmNowUs = esp_timer_get_time();
+            if (wmMaxStep > 20000 && wmNowUs - s_lastWmClickLogUs > 100000) {
+                s_lastWmClickLogUs = wmNowUs;
+                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity WM8960: maxStep=%ld", static_cast<long>(wmMaxStep));
             }
+            wmConvertUs = esp_timer_get_time() - wmConvertStartUs;
             const int64_t wmWriteStartUs = esp_timer_get_time();
             size_t wmBytesWritten = 0;
             i2s_channel_write(secondaryI2sTxHandle_, wmChunk, sizeof(wmChunk), &wmBytesWritten, portMAX_DELAY);
             wmWriteUs = esp_timer_get_time() - wmWriteStartUs;
+        }
+
+        // CPU load excludes only the blocking DMA waits. Both codec conversion
+        // paths and their signal-discontinuity scans are real Core-1 work and
+        // therefore belong in the render budget and overload watchdog.
+        const uint32_t processUs = static_cast<uint32_t>(
+            static_cast<int64_t>(preWriteProcessUs) + esConvertUs + wmConvertUs);
+        uint32_t peak = renderPeakUs_.load(std::memory_order_relaxed);
+        if (processUs > peak) renderPeakUs_.store(processUs, std::memory_order_relaxed);
+        size_t timingBin = processUs / kTimingHistogramBinWidthUs;
+        if (timingBin >= kTimingHistogramBinCount) timingBin = kTimingHistogramBinCount - 1;
+        timingHistogram_[timingBin].fetch_add(1, std::memory_order_relaxed);
+        const int64_t timingNowUs = esp_timer_get_time();
+        if (static_cast<float>(processUs) > kSynthEngineBlockBudgetUs)
+        {
+            renderOverrunCount_.fetch_add(1, std::memory_order_relaxed);
+            static int64_t s_lastOverrunLogUs = 0;
+            if (timingNowUs - s_lastOverrunLogUs > 100000)
+            {
+                s_lastOverrunLogUs = timingNowUs;
+                ESP_LOGW(kSynthEngineTag,
+                         "Audio-Overrun: %lu us > %lu us Budget (preset=%lld us, midi=%lu Ev/%lld us, "
+                         "liveParams=%lu/%lld us, render=%lld us, postRender=%lld us, esConvert=%lld us, "
+                         "wmConvert=%lld us)",
+                         static_cast<unsigned long>(processUs), static_cast<unsigned long>(kSynthEngineBlockBudgetUs),
+                         static_cast<long long>(presetReloadUs), static_cast<unsigned long>(midiEventCount),
+                         static_cast<long long>(midiUs), static_cast<unsigned long>(liveParamCount),
+                         static_cast<long long>(liveParamUs), static_cast<long long>(renderUs),
+                         static_cast<long long>(postRenderUs), static_cast<long long>(esConvertUs),
+                         static_cast<long long>(wmConvertUs));
+            }
+        }
+        const float instLoadPercent = 100.0f * static_cast<float>(processUs) / kSynthEngineBlockBudgetUs;
+        const float prevLoad = audioCoreLoadPercent_.load(std::memory_order_relaxed);
+        const float smoothedLoad = prevLoad + kSynthEngineLoadEmaAlpha * (instLoadPercent - prevLoad);
+        audioCoreLoadPercent_.store(smoothedLoad, std::memory_order_relaxed);
+
+        const uint16_t currentVoices = currentVoiceCount_.load(std::memory_order_relaxed);
+        if (smoothedLoad >= kSynthEngineOverloadPercentThreshold && currentVoices > 1 &&
+            !cpuReloadPending_.load(std::memory_order_relaxed))
+        {
+            if (overloadStartUs_ == 0)
+            {
+                overloadStartUs_ = timingNowUs;
+            }
+            else if (timingNowUs - overloadStartUs_ >= kSynthEngineOverloadSustainedUs)
+            {
+                cpuReloadCeiling_.store(static_cast<uint16_t>(currentVoices - 1), std::memory_order_relaxed);
+                cpuReloadPending_.store(true, std::memory_order_relaxed);
+                cpuReloadRequested_.store(true, std::memory_order_release);
+                overloadStartUs_ = 0;
+            }
+        }
+        else
+        {
+            overloadStartUs_ = 0;
         }
 
         // >2x budget for the ENTIRE iteration (processing + both blocking
@@ -1031,9 +1080,9 @@ inline void SynthEngine::taskLoop()
         static int64_t s_lastStallLogUs = 0;
         if (!(static_cast<float>(processUs) > kSynthEngineBlockBudgetUs) &&
             static_cast<float>(totalIterUs) > 2.0f * kSynthEngineBlockBudgetUs &&
-            processEndUs - s_lastStallLogUs > 100000)
+            timingNowUs - s_lastStallLogUs > 100000)
         {
-            s_lastStallLogUs = processEndUs;
+            s_lastStallLogUs = timingNowUs;
             ESP_LOGW(kSynthEngineTag,
                      "Codec-Write-Stall: Iteration gesamt %lld us > %.0f us (2x Budget) trotz process=%lu us - "
                      "esWrite=%lld us, wmWrite=%lld us (haengt vermutlich mit einem System-weiten Stall waehrend "

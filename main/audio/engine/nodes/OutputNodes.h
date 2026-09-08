@@ -33,6 +33,21 @@ inline void render(NodeInstance &inst, size_t frames)
                            ? inst.controlValue[3] >= cv::kGateThresholdVolts
                            : s.muted;
     const float targetMute = muted ? 0.0f : targetGain;
+    // Already faded to silence (gain==0 and/or muted) AND staying there -
+    // skip reading the upstream signal and running the limiter/multiply per
+    // sample, using this node's own already-tracked muteSmoothed as the
+    // convergence check (same pattern as Oscillator/SoundFontPlayer's
+    // gain==0 fast path). Gated on THIS block's target being silent too, not
+    // just the previous one, so a gain/mute change made this very block
+    // still fades out through the normal per-sample path below exactly as
+    // before - no click.
+    constexpr float kSilentGain = 1e-4f;
+    if (targetMute <= 0.0f && s.muteSmoothed <= kSilentGain)
+    {
+        memset(inst.outL, 0, frames * sizeof(float));
+        memset(inst.outR, 0, frames * sizeof(float));
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         float l = portSample(inst, 0, i) * s.leftLevel;

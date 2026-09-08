@@ -53,6 +53,7 @@ enum class NodeType : uint8_t
     MidiSplit,
     Clock,
     ReverbLight,
+    Hammond,
     Unknown,
 };
 
@@ -187,6 +188,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::SoundFontPlayer;
     if (strcmp(typeStr, "clock") == 0)
         return NodeType::Clock;
+    if (strcmp(typeStr, "hammond") == 0)
+        return NodeType::Hammond;
     return NodeType::Unknown;
 }
 

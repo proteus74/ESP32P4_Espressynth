@@ -185,6 +185,29 @@ Unlike the ES8311 path (wrapped in `esp_codec_dev`), the WM8960 codec (`main/fea
 
 The WM8960's control interface is I2C **write-only** (no register readback), so every `get_*()` here returns the last value this API successfully *commanded*, not something read back from the chip -- each is seeded with the same default `init()` applies, so a `get_*()` right after a clean boot already reflects reality.
 
+#### Tuning audio output latency
+
+Total output latency (the time between a sample/note being produced and it reaching the speaker) is the sum of two independent stages, each configurable in `idf.py menuconfig` under **Application Features → Audio Subsystem**:
+
+**1. I2S DMA buffer** -- `AUDIO_I2S_DMA_DESC_NUM` × `AUDIO_I2S_DMA_FRAME_NUM`, shared by both onboard codecs (ES8311/WM8960; the USB UAC2 sound card buffers separately). The I2S peripheral streams audio out of RAM via DMA in a ring of `AUDIO_I2S_DMA_DESC_NUM` fixed-size chunks ("descriptors"), each holding `AUDIO_I2S_DMA_FRAME_NUM` frames (1 frame = 1 sample per channel, both channels at once -- 4 bytes at this project's fixed 16-bit stereo).
+
+```
+total_frames = AUDIO_I2S_DMA_DESC_NUM * AUDIO_I2S_DMA_FRAME_NUM
+latency_ms   = total_frames / 44100 * 1000
+```
+
+Default 6 × 240 = 1440 frames ≈ **32.6 ms**. A bigger ring buys more headroom against a writer stall (e.g. the `tone` CLI command briefly starving the audio writer of CPU) before it audibly clicks/pops; a smaller ring trades that headroom for lower latency. `AUDIO_I2S_DMA_FRAME_NUM`'s upper range (960) stays under the I2S driver's hard 4095-byte per-descriptor ceiling (1023 frames at 4 bytes/frame).
+
+**2. Synth engine render block** -- `AUDIO_SYNTH_BLOCK_SIZE` (`synth::kBlockSize` in `SynthConfig.h`, only relevant with the node-graph synth engine enabled). The synth's render task works in fixed-size blocks, not sample-by-sample: each loop iteration walks the whole node graph once to produce this many samples, then writes the block onward (to the codec mix and/or USB speaker mix).
+
+```
+block_time_ms = AUDIO_SYNTH_BLOCK_SIZE / 44100 * 1000
+```
+
+Default 128 samples ≈ **2.9 ms**. This is also the render task's real-time CPU budget per block (see `audioCoreLoadPercent()` / the CLI `top` audio-core load -- ≥100% means a block took longer to render than it takes to play, i.e. underrun risk): a MIDI note-on can only take effect at the start of the *next* block, so it waits on average half a block, up to a full block worst case, before it's heard. Smaller blocks lower that latency but raise overhead (node dispatch, control-rate smoothing, envelope/LFO updates all repeat more often per second of audio); larger blocks are the opposite.
+
+**Total** is roughly the sum of both stages -- e.g. defaults give ~32.6 ms (I2S) + ~2.9 ms (synth) ≈ 35.5 ms from a rendered sample to sound.
+
 This makes the firmware suitable for audio prototypes such as:
 
 - sound cards

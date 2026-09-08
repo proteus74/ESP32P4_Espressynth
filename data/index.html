@@ -458,6 +458,29 @@
   </div>
 </div>
 
+<div id="hammondSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Hammond Settings</h3>
+    <label class="modal-field" title="Only affects genuine audio-rate Pitch, Tune, and Amplitude cables. Higher values lower CPU use but make fast modulation more stepped.">
+      <span>Pitch/Tune/Amplitude Update Rate</span>
+      <select id="hammondModulationStrideSelect">
+        <option value="1">Every sample (1x, most CPU)</option>
+        <option value="2">Every 2nd sample</option>
+        <option value="4" selected>Every 4th sample (default)</option>
+        <option value="8">Every 8th sample</option>
+        <option value="16">Every 16th sample (least CPU)</option>
+      </select>
+    </label>
+    <p class="modal-section-title">Drawbar Harmonic Ratios</p>
+    <div class="modal-field-group" id="hammondRatioFields"></div>
+    <div class="modal-actions">
+      <button id="hammondSettingsReset" class="btn-secondary">Default</button>
+      <button id="hammondSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="hammondSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="wavePlayerSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Wave Player Settings</h3>
@@ -639,6 +662,14 @@
     <div class="modal-actions">
       <button id="connectionColorCancel" class="btn-secondary">Cancel</button>
     </div>
+  </div>
+</div>
+
+<div id="connectionLostOverlay" class="modal-overlay connection-lost-overlay hidden">
+  <div class="modal connection-lost-modal">
+    <div class="connection-lost-spinner"></div>
+    <h3>Connection lost</h3>
+    <p>Trying to reconnect to the device&hellip;</p>
   </div>
 </div>
 

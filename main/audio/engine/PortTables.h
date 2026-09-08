@@ -70,6 +70,29 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "gain"))
             return 4;
         return -1;
+    case NodeType::Hammond:
+        // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
+        // the nine drawbar sines replace the waveform selector). The nine
+        // drawbar registers deliberately DO have real audio-rate ports here
+        // (unlike Mixer's "gain1".."gain8", which are plain scalars) - each
+        // is independently CV-controllable, exactly like Oscillator's own
+        // "gain". This is the node the 8->16 kMaxAudioInPorts widening
+        // exists for (see SynthConfig.h).
+        if (is(portName, "amplitude"))
+            return 0;
+        if (is(portName, "pitchCv"))
+            return 1;
+        if (is(portName, "tune"))
+            return 2;
+        if (is(portName, "gain"))
+            return 3;
+        if (strncmp(portName, "drawbar", 7) == 0)
+        {
+            const char *n = portName + 7;
+            if (n[0] >= '1' && n[0] <= '9' && n[1] == '\0')
+                return 4 + (n[0] - '1');
+        }
+        return -1;
     case NodeType::Lfo:
         if (is(portName, "sync"))
             return 0;
@@ -312,6 +335,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     {
     case NodeType::Oscillator:
         return is(portName, "value") ? 0 : -1;
+    case NodeType::Hammond:
+        return is(portName, "value") ? 0 : -1; // mono, like Oscillator - only outL is ever written
     case NodeType::Lfo:
         // "value" here - unlike Knob below - is ALWAYS a real audio port: an
         // LFO is by nature a continuous signal, not an occasionally changed
@@ -424,6 +449,8 @@ inline int audioInPortCount(NodeType type)
     {
     case NodeType::Oscillator:
         return 5; // "amplitude" (CV) + "pitchCv" + "tune" + "waveform" (CV) + "gain" (CV)
+    case NodeType::Hammond:
+        return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
         return 4; // "sync" + "oneShot" + "global" + "zeroPoint" (CV)
     case NodeType::Detune:
@@ -579,6 +606,13 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return false; // input stays real audio, output is control-rate
     case NodeType::Oscillator:
         return portIdx == 1 || portIdx == 2 || portIdx == 3; // "pitchCv"+"tune"+"waveform" - "amplitude" (index 0) stays real audio-rate
+    case NodeType::Hammond:
+        // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
+        // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars
+        // (4-12) stay genuinely audio-rate - the drawbars are the whole
+        // point of the port-limit widening (SynthConfig.h); a block-rate
+        // read here would defeat it.
+        return portIdx == 1 || portIdx == 2;
     case NodeType::Detune:
         return portIdx == 0; // "cv" - same reasoning as Oscillator's pitchCv
     case NodeType::Gain:

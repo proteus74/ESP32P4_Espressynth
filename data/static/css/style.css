@@ -667,6 +667,10 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 220px;
 }
 
+.widget-instance[data-widget-type="hammond"] {
+  min-width: 240px;
+}
+
 .widget-instance.selected {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -2117,6 +2121,45 @@ input[type="range"].port-slider + .port-value {
 
 .wifi-network-row:hover {
   background: #313948;
+}
+
+/* Connection-lost overlay: above every other modal (z-index) since nothing
+   else on the page is usable without a live WebSocket anyway; no Cancel/Close
+   button by design - only connectWs()'s "open" handler (main.js) hides it. */
+.connection-lost-overlay {
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.connection-lost-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  padding: 2.5rem 3rem;
+}
+
+.connection-lost-modal h3 {
+  margin: 0;
+}
+
+.connection-lost-modal p {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.connection-lost-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 4px solid var(--card-border);
+  border-top-color: var(--accent);
+  animation: connection-lost-spin 0.8s linear infinite;
+}
+
+@keyframes connection-lost-spin {
+  to { transform: rotate(360deg); }
 }
 
 .ble-connect-modal { min-width: min(620px, 92vw); }

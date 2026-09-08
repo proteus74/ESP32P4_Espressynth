@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "../CvConventions.h"
+#include "../DspPrimitives.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -41,7 +42,8 @@ inline void render(NodeInstance &inst, size_t frames)
         return;
     }
 
-    const float ratio = powf(2.0f, (portSample(inst, 1, 0) - static_cast<float>(s.rootNoteMidi)) / 12.0f);
+    const float ratio = dsp::pow2Lookup(
+        (portSample(inst, 1, 0) - static_cast<float>(s.rootNoteMidi)) / 12.0f);
     const bool ampConnected = controlPortConnected(inst, 0) ||
                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
     const uint32_t lastFrame = s.frameCount - 1;

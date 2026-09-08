@@ -176,16 +176,20 @@ inline void broadcast_status_tick() {
     const memorydiag::HeapSnapshot memory = memorydiag::snapshot();
     memorydiag::State memory_state;
     memorydiag::read(memory_state);
+    const SynthEngine::TimingSnapshot timing = engine().consumeTimingSnapshot();
 
-    char json[512];
+    char json[640];
     snprintf(json, sizeof(json),
              "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,\"peakUs\":%lu,\"budgetUs\":%lu,"
+             "\"p50Us\":%lu,\"p95Us\":%lu,\"p99Us\":%lu,\"timingSamples\":%lu,"
              "\"overruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
              "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
              "\"sysLargestKb\":%lu,\"sysMinKb\":%lu,\"psLargestKb\":%lu,\"psMinKb\":%lu,"
              "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u}",
              static_cast<double>(core0_load), static_cast<double>(engine().audioCoreLoadPercent()),
-             static_cast<unsigned long>(engine().renderPeakUs()), static_cast<unsigned long>(kBlockBudgetUs),
+             static_cast<unsigned long>(timing.peakUs), static_cast<unsigned long>(kBlockBudgetUs),
+             static_cast<unsigned long>(timing.p50Us), static_cast<unsigned long>(timing.p95Us),
+             static_cast<unsigned long>(timing.p99Us), static_cast<unsigned long>(timing.sampleCount),
              static_cast<unsigned long>(engine().renderOverrunCount()), static_cast<unsigned long>(engine().midiDropCount()),
              engine().activeSoundFontVoices(), ps_free_kb, ps_total_kb, sys_free_kb, sys_total_kb,
              static_cast<unsigned long>(memory.internalLargest / 1024), static_cast<unsigned long>(memory.internalMinimum / 1024),

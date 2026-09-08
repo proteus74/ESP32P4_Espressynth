@@ -171,8 +171,8 @@ void on_mouse_event(const Feature::Mouse::Event& event) {
 
 #if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
 void on_midi_event(const Feature::MIDI::Event& event) {
-    ESP_LOGI(TAG, "MIDI in: status=0x%02x data=%u,%u channel=%u",
-             event.status, event.data1, event.data2, event.channel + 1);
+    // ESP_LOGI(TAG, "MIDI in: status=0x%02x data=%u,%u channel=%u",
+    //          event.status, event.data1, event.data2, event.channel + 1);
 #if defined(CONFIG_APP_ENABLE_SYNTH)
     Feature::Synth::dispatch_midi(event.status, event.data1, event.data2);
 #if defined(CONFIG_APP_ENABLE_WEBSERVER)
@@ -212,8 +212,8 @@ void on_ble_hid_report(const Feature::BLE::HID::Event& event) {
 
 #if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
 void on_ble_midi_event(const Feature::BLE::MIDI::Event& event) {
-    ESP_LOGI(TAG, "BLE-MIDI in: conn=%u status=0x%02x data=%u,%u channel=%u",
-             event.conn_handle, event.status, event.data1, event.data2, event.channel + 1);
+    // ESP_LOGI(TAG, "BLE-MIDI in: conn=%u status=0x%02x data=%u,%u channel=%u",
+    //          event.conn_handle, event.status, event.data1, event.data2, event.channel + 1);
 #if defined(CONFIG_APP_ENABLE_SYNTH)
     Feature::Synth::dispatch_midi(event.status, event.data1, event.data2);
 #if defined(CONFIG_APP_ENABLE_WEBSERVER)
@@ -235,11 +235,11 @@ void on_device_cdc_event(const Feature::USBDevice::CDC::Event& event) {
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_MIDI)
 void on_device_midi_event(const Feature::USBDevice::MIDI::Event& event) {
     if (event.channel == 0xff) {
-        ESP_LOGI(TAG, "USB Device MIDI in: cable=%u cin=0x%x bytes=%u status=0x%02x data=%u,%u",
-                 event.cable, event.cin, event.length, event.status, event.data1, event.data2);
+        // ESP_LOGI(TAG, "USB Device MIDI in: cable=%u cin=0x%x bytes=%u status=0x%02x data=%u,%u",
+        //          event.cable, event.cin, event.length, event.status, event.data1, event.data2);
     } else {
-        ESP_LOGI(TAG, "USB Device MIDI in: cable=%u cin=0x%x bytes=%u status=0x%02x data=%u,%u channel=%u",
-                 event.cable, event.cin, event.length, event.status, event.data1, event.data2, event.channel + 1);
+        // ESP_LOGI(TAG, "USB Device MIDI in: cable=%u cin=0x%x bytes=%u status=0x%02x data=%u,%u channel=%u",
+        //          event.cable, event.cin, event.length, event.status, event.data1, event.data2, event.channel + 1);
     }
     const uint8_t message[3] = {event.status, event.data1, event.data2};
     const esp_err_t result = Feature::USBDevice::MIDI::send(message, event.length);

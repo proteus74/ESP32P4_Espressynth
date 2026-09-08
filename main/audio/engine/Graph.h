@@ -29,6 +29,7 @@
 #include "nodes/ChorusNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/FilterNode.h"
+#include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/ValueMapperNode.h"
@@ -189,7 +190,7 @@ public:
     float widgetProfileEmaAlpha = 0.0f;
     uint32_t widgetLoadGeneration = 0;
 
-    Edge edges[synth::kMaxConnections];
+    Edge edges[synth::kMaxRuntimeEdges];
     uint16_t edgeCount = 0;
 
     ControlRoute controlRoutes[synth::kMaxConnections];
@@ -396,6 +397,15 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
             {
                 target.osc.amplitude = velGain;
             }
+            else if (target.type == NodeType::Hammond)
+            {
+                // Same dedicated-field delivery as Oscillator above, and the
+                // same consequence: a Hammond only sounds while something
+                // actually feeds its "amplitude" port, and the level is NOT
+                // cleared on note-off - shaping the note off is the job of a
+                // downstream ADSR/Gain, exactly as with WaveGen.
+                target.hammond->amplitude = velGain;
+            }
             else if (target.type == NodeType::Adsr)
             {
                 target.adsr->velocity = velGain;
@@ -523,7 +533,7 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
             {
                 continue;
             }
-            const bool connected = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << p)) != 0;
+            const bool connected = (inst.audioConnectedPortMask & synth::portBit(p)) != 0;
             if (connected)
             {
                 // Accumulator base for this block's edge-summing pass below.
@@ -531,29 +541,30 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
                 continue;
             }
             // No audio-rate edge, but a ControlRoute (MidiIn frequency/gate/
-            // velocity, or a Knob/Button) targets this port. Oscillator's
-            // "amplitude" (0) and "tune" (2) are excluded: both already reach
-            // their own dedicated fields directly whenever the route carries a
-            // paramName (Knob/Button - see ParamDispatch's "tune" case
-            // writing s.tuneVolts), with zero further action needed. Filling
-            // inPorts here too would be a second, redundant delivery path -
-            // and NodeRender.h's Oscillator case knows this: it only reads
-            // portSample() for "tune" when audioConnectedPortMask is set (a
-            // genuine DSP edge, e.g. an LFO wired directly), never merely
-            // because controlConnectedPortMask is set, precisely so a Knob's
-            // value isn't shadowed by a stale unconnected-default read from
-            // here. "pitchCv" (1) has no such dedicated field (MidiPitchCv
-            // routes only ever write controlValue, see
-            // deliverNoteControlRoutes) - safe, and required, to fill
-            // normally, otherwise MidiIn->pitchCv never reaches the
-            // oscillator's inPorts buffer at all.
-            const bool oscillatorDedicatedField = inst.type == NodeType::Oscillator && (p == 0 || p == 2);
-            if (!oscillatorDedicatedField &&
-                (inst.controlConnectedPortMask & static_cast<uint8_t>(1u << p)) != 0)
+            // velocity, or a Knob/Button) targets this port. Oscillator's and
+            // Hammond's "amplitude" (0) and "tune" (2) are excluded: both
+            // already reach their own dedicated fields directly whenever the
+            // route carries a paramName (Knob/Button - see ParamDispatch's
+            // "tune" case writing s.tuneVolts), with zero further action
+            // needed. Filling inPorts here too would be a second, redundant
+            // delivery path - and NodeRender.h's Oscillator/Hammond cases
+            // know this: they only read portSample() for "tune" when
+            // audioConnectedPortMask is set (a genuine DSP edge, e.g. an LFO
+            // wired directly), never merely because controlConnectedPortMask
+            // is set, precisely so a Knob's value isn't shadowed by a stale
+            // unconnected-default read from here. "pitchCv" (1) has no such
+            // dedicated field (MidiPitchCv routes only ever write
+            // controlValue, see deliverNoteControlRoutes) - safe, and
+            // required, to fill normally, otherwise MidiIn->pitchCv never
+            // reaches the inPorts buffer at all.
+            const bool dedicatedPortField =
+                (inst.type == NodeType::Oscillator || inst.type == NodeType::Hammond) && (p == 0 || p == 2);
+            if (!dedicatedPortField &&
+                (inst.controlConnectedPortMask & synth::portBit(p)) != 0)
             {
                 if (p == inst.midiPitchRampPort && inst.midiPitchSamplesRemaining > 0)
                 {
-                    inst.controlRampPortMask |= static_cast<uint8_t>(1u << p);
+                    inst.controlRampPortMask |= synth::portBit(p);
                     size_t sample = 0;
                     for (; sample < frames && inst.midiPitchSamplesRemaining > 0; ++sample)
                     {
@@ -1596,6 +1607,9 @@ inline void Graph::destroy()
             break;
         case NodeType::ReverbLight:
             nodes::reverb::destroyReverbLight(inst);
+            break;
+        case NodeType::Hammond:
+            nodes::hammond::destroy(inst);
             break;
         case NodeType::SoundFontPlayer:
             soundfont::close(inst.soundFontPlayer.synth);

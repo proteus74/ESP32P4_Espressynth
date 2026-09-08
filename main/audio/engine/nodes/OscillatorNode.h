@@ -87,6 +87,24 @@ inline void render(NodeInstance &inst, size_t frames)
     // pattern/reason as GainState::amountSmooth.
     const bool gainFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
     const float gainTarget = cv::vcaGain(s.gainCv, false);
+    // Gain knob itself parked at 0 (not a live envelope/LFO feeding it) AND
+    // the smoother has already ramped down to inaudible - the oscillator's
+    // output is silence either way, so skip the actual waveform synthesis
+    // (phaseGen.process(), the real per-sample cost here) instead of
+    // computing samples nobody will hear. Checked once per block, not per
+    // sample, and gated on the SMOOTHED value (not just gainCv) so a knob
+    // turned down THIS block still fades out through the normal path below
+    // exactly as before - this fast path only engages once already silent,
+    // so it never introduces a click. Phase freezes while skipped, same as
+    // Graph::renderBlock already does project-wide for an idle ADSR voice -
+    // nothing else in this engine reads another oscillator's raw phase, so
+    // that's inaudible here too.
+    constexpr float kSilentGain = 1e-4f;
+    if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
+    {
+        memset(inst.outL, 0, frames * sizeof(float));
+        return;
+    }
     const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
     if (pitchAudioFed || pitchControlRamping || tuneAudioFed)
     {

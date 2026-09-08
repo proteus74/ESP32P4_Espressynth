@@ -63,16 +63,22 @@ struct ReverbLightState;
 using nodes::reverb::ReverbState;
 using nodes::reverb::ReverbLightState;
 
+namespace nodes::hammond
+{
+struct HammondState;
+}
+using nodes::hammond::HammondState;
+
 // One instance of one widget (a voiced widget has the preset's configured
 // voice count, a global widget has exactly 1). Flat struct (not a union of
 // state types) - costs a bit more memory than the minimum, but keeps
 // allocation and lifetime trivial (plain `new`/`delete`, real constructors
 // run, default member initializers apply) with no placement-new/manual-
 // lifetime subtleties for most of the ~25 per-type payloads below. The
-// twelve largest ones (chorus/delay/reverb/reverbLight/espEffect, plus
-// adsr/filter/espEq/knob/button/upDownButton/valueMapper) are the deliberate
-// exception - heap-allocated only for a matching instance, see their comment
-// below - because leaving them as flat value members like the others made
+// thirteen largest ones (chorus/delay/reverb/reverbLight/espEffect/hammond,
+// plus adsr/filter/espEq/knob/button/upDownButton/valueMapper) are the
+// deliberate exception - heap-allocated only for a matching instance, see
+// their comment below - because leaving them as flat value members like the others made
 // every instance of every type pay their combined size regardless of whether
 // it ever used them. The last four (knob/button/upDownButton/valueMapper)
 // are dominated by their kValueListMax-sized valueList[] array (64 B each) -
@@ -86,14 +92,14 @@ struct NodeInstance
     uint8_t voiceIndex = 0;
     uint8_t audioInPortCount = 0;
 
-    uint8_t controlConnectedPortMask = 0;
+    synth::PortMask controlConnectedPortMask = 0;
 
     // Which audio-input ports (bit i = inPorts[i]) actually have an incoming
     // preset edge - set once in GraphBuilder::build(). Lets Graph::renderBlock
     // tell "no signal yet this block" (connected, clears to 0 as accumulator
     // base) apart from "no cable here at all" (unconnected, clears to that
     // type's audioInDefault() instead - see PortTables).
-    uint8_t audioConnectedPortMask = 0;
+    synth::PortMask audioConnectedPortMask = 0;
 
     // Voice 0 of this same widget (self-pointer when this instance IS voice
     // 0) - set once in GraphBuilder::build(), stable for the Graph's whole
@@ -124,7 +130,7 @@ struct NodeInstance
     uint32_t midiPitchSamplesRemaining = 0;
     int8_t midiPitchRampPort = -1;
     bool midiPitchInitialized = false;
-    uint8_t controlRampPortMask = 0;
+    synth::PortMask controlRampPortMask = 0;
 
     OscillatorState osc;
     LfoState lfo;
@@ -160,6 +166,9 @@ struct NodeInstance
     // logic together) in nodes/ValueMapperNode.h, not NodeState.h - pointer
     // member only needs the forward declaration below.
     ValueMapperState *valueMapper = nullptr;
+    // HammondState is defined (state + render/build/destroy/setParam logic
+    // together) in nodes/HammondNode.h, not NodeState.h.
+    HammondState *hammond = nullptr;
     AudioOutState audioOut;
     MeterState meter;
     MidiInState midiIn;
@@ -205,7 +214,7 @@ inline float clampf(float v, float lo, float hi)
 
 inline bool controlPortConnected(const NodeInstance &inst, int portIdx)
 {
-    return (inst.controlConnectedPortMask & static_cast<uint8_t>(1u << portIdx)) != 0;
+    return (inst.controlConnectedPortMask & synth::portBit(portIdx)) != 0;
 }
 } // namespace noderender
 

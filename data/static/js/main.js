@@ -670,6 +670,33 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "value", label: "Value" }],
   },
+  hammond: {
+    label: "Hammond",
+    icon: "🎹",
+    // No "waveform" and no "gate": the nine drawbars replace the waveform
+    // selector, and the tonewheels are free-running - there is nothing for
+    // a gate edge to retrigger (see the C++ nodes/HammondNode.h comment).
+    // Note on/off is expressed exactly like WaveGen's: MIDI velocity ->
+    // Amplitude for level, a downstream ADSR/Gain for the actual key
+    // shaping. The nine "drawbarN" rows ARE real audio-rate ports here
+    // (unlike Mixer's "gainN") - renderHammondPorts() below draws them.
+    inputs: [
+      { id: "pitchCv", label: "Pitch (CV)" },
+      { id: "tune", label: "Tune (CV)" },
+      { id: "amplitude", label: "Amplitude (CV)" },
+      { id: "gain", label: "Gain (CV)" },
+      { id: "drawbar1", label: "16′" },
+      { id: "drawbar2", label: "5⅓′" },
+      { id: "drawbar3", label: "8′" },
+      { id: "drawbar4", label: "4′" },
+      { id: "drawbar5", label: "2⅔′" },
+      { id: "drawbar6", label: "2′" },
+      { id: "drawbar7", label: "1⅗′" },
+      { id: "drawbar8", label: "1⅓′" },
+      { id: "drawbar9", label: "1′" },
+    ],
+    outputs: [{ id: "value", label: "Value" }],
+  },
   "wave-player": {
     label: "Wave Player",
     icon: "🎵",
@@ -947,7 +974,7 @@ const WIDGET_TYPES = {
 
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
-  { label: "Generator", types: ["oscillator", "wave-player", "soundfont-player"] },
+  { label: "Generator", types: ["oscillator", "hammond", "wave-player", "soundfont-player"] },
   { label: "Modulator", types: ["lfo", "adsr", "detune", "clock"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "audio-to-value"] },
@@ -967,6 +994,13 @@ const AUDIO_PORTS = {
   
   
   oscillator: { in: ["amplitude", "gain", "pitchCv", "tune"], out: ["value"] },
+  // All 13 are real audio-rate ports here (unlike Mixer's control-only
+  // "gainN") - each of the 9 drawbar levels is independently CV-connectable.
+  hammond: {
+    in: ["amplitude", "pitchCv", "tune", "gain",
+         "drawbar1", "drawbar2", "drawbar3", "drawbar4", "drawbar5", "drawbar6", "drawbar7", "drawbar8", "drawbar9"],
+    out: ["value"],
+  },
   switch: { in: ["in1", "in2"], out: ["value"] },
   
   
@@ -1138,7 +1172,7 @@ const LFO_TYPE_BUTTONS = WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise");
 
 const LFO_ZERO_MODE_BUTTONS = [
   { id: "auto", label: "Auto" },
-  { id: "fixed", label: "Fest" },
+  { id: "fixed", label: "Fixed" },
 ];
 
 
@@ -1146,7 +1180,7 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "wave-player", "soundfont-player", "detune", "adsr", "const",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "const",
 ];
 const FX_PAGE_TYPES = [
   "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
@@ -1724,6 +1758,45 @@ function createWidget(type, label, x, y, forcedId) {
     body.appendChild(waveButtons);
     body.appendChild(freqLabel);
     el.appendChild(body);
+  }
+
+  if (type === "hammond") {
+    const center = CV_MAX_VOLTS / 2;
+    const hammondState = {
+      pitchCv: center,
+      tuneVolts: center,
+      freq: hzFromPitchCv(center),
+      amplitude: 1,
+      gain: CV_MAX_VOLTS,
+      drawbars: [...HAMMOND_DEFAULT_DRAWBARS],
+      ratios: [...HAMMOND_DEFAULT_RATIOS],
+      modulationStride: 4,
+    };
+    hammondStates.set(id, hammondState);
+    audioEngine.createNode(id, "hammond", {
+      frequency: hammondState.freq,
+      amplitude: 0,
+      gain: hammondState.gain,
+      tuneVolts: hammondState.tuneVolts,
+      drawbars: [...hammondState.drawbars],
+      ratios: [...hammondState.ratios],
+      modulationStride: hammondState.modulationStride,
+    });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body oscillator-body";
+    const freqLabel = document.createElement("div");
+    freqLabel.className = "osc-freq-label";
+    freqLabel.dataset.role = "hammond-freq-label";
+    freqLabel.textContent = `${formatNumber(hammondState.freq)} Hz`;
+    body.appendChild(freqLabel);
+    el.appendChild(body);
+
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openHammondSettings(id);
+    });
   }
 
   if (type === "wave-player") {
@@ -2332,6 +2405,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderDividePorts(id, ports);
   } else if (type === "mixer") {
     renderMixerPorts(id, ports);
+  } else if (type === "hammond") {
+    renderHammondPorts(id, ports);
   } else if (type === "midi-split") {
     renderMidiSplitPorts(id, ports);
   } else {
@@ -2952,6 +3027,7 @@ function removeWidget(id, force = false) {
   stopLfoTimer(id);
   lfoStates.delete(id);
   oscillatorStates.delete(id);
+  hammondStates.delete(id);
   wavePlayerStates.delete(id);
   soundFontPlayerStates.delete(id);
   detuneStates.delete(id);
@@ -5169,7 +5245,13 @@ function refreshAllDualModeWidgets() {
     updateOscillatorGainVisual(id);
     updateOscillatorTuneVisual(id);
   });
-  
+  hammondStates.forEach((_, id) => {
+    if (!connections.some((c) => c.to.widgetId === id && c.to.portId === "amplitude")) {
+      audioEngine.setParam(id, "amplitude", 0, 0);
+    }
+    updateHammondVisual(id);
+  });
+
   
   
   gainStates.forEach((_, id) => updateGainVisual(id));
@@ -6192,7 +6274,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 
 
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
-  "oscillator", "wave-player", "soundfont-player", "gain", "filter",
+  "oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
   "mixer", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch",
 ]);
@@ -6386,6 +6468,11 @@ document.getElementById("clockSettingsSave").addEventListener("click", () => {
 
 
 const oscillatorStates = new Map();
+
+const hammondStates = new Map();
+const HAMMOND_DEFAULT_DRAWBARS = [10, 10, 10, 0, 0, 0, 0, 0, 0]; // volts, 888 000 000
+const HAMMOND_DEFAULT_RATIOS = [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];   // classic Hammond footages
+const HAMMOND_FOOTAGES = ["16′", "5⅓′", "8′", "4′", "2⅔′", "2′", "1⅗′", "1⅓′", "1′"];
 
 function updateOscillatorFreqLabel(widgetId) {
   const state = oscillatorStates.get(widgetId);
@@ -7294,6 +7381,261 @@ function updateMixerGainVisual(widgetId, index) {
   const valueSpan = el.querySelector(`[data-role="mixer-gain-${index}-value"]`);
   if (valueSpan) valueSpan.textContent = formatNumber(state.gains[index - 1]);
 }
+
+// Hammond drawbar sliders sit on the 0-10V CV domain (like every other port
+// in this engine, including Oscillator's own "gain"), but the value label
+// shows the friendlier 0-8 physical-register reading - same "volts -> mapped"
+// shape as formatGainCvValue() elsewhere in this file.
+// NOTE: HAMMOND_DRAWBAR_STEP_V (= CV_MAX_VOLTS / 8) is declared further down,
+// right after CV_MAX_VOLTS itself - CV_MAX_VOLTS isn't initialized yet at
+// this point in the module's top-to-bottom evaluation, and referencing it
+// here directly would throw a TDZ ReferenceError that aborts the whole
+// script's initialization (this is a plain top-level const, not inside a
+// function body - unlike every other CV_MAX_VOLTS use in this file, which
+// is safely inside a function only called after the module finishes loading).
+
+function formatHammondDrawbarValue(volts) {
+  const reg = Math.round(clamp(volts, 0, CV_MAX_VOLTS) / HAMMOND_DRAWBAR_STEP_V);
+  return `${formatNumber(volts)}V → ${reg}`;
+}
+
+// Dedicated renderer (not the generic def.inputs.forEach loop) so the 4
+// shared CV rows and the 9 drawbar rows all live in one readable place -
+// mirrors renderMixerPorts' shape just above, but with a FIXED row count
+// (no settings-modal input-count field needed, unlike Mixer).
+function renderHammondPorts(widgetId, portsEl) {
+  const state = hammondStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  WIDGET_TYPES.hammond.inputs
+    .filter((port) => !port.id.startsWith("drawbar"))
+    .forEach((port) => {
+      const row = createPortRow(widgetId, port, "in", "hammond");
+      if (port.id === "tune" || port.id === "gain") {
+        const value = port.id === "tune" ? state.tuneVolts : state.gain;
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(value);
+        slider.dataset.role = `hammond-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(widgetId, port.id, parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `hammond-${port.id}-value`;
+        valueSpan.textContent = formatNumber(value);
+        row.appendChild(valueSpan);
+
+        if (port.id === "tune") {
+          // Same double-click-to-recenter affordance as Oscillator's Tune row.
+          const resetTune = () => {
+            if (connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "tune")) return;
+            deliverToWidget(widgetId, "tune", CV_MAX_VOLTS / 2);
+          };
+          const tuneLabel = row.querySelector(".port-label");
+          if (tuneLabel) {
+            tuneLabel.addEventListener("dblclick", (e) => {
+              e.stopPropagation();
+              resetTune();
+            });
+          }
+          valueSpan.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            resetTune();
+          });
+        }
+      }
+      portsEl.appendChild(row);
+    });
+
+  for (let k = 1; k <= 9; k += 1) {
+    const portId = `drawbar${k}`;
+    const row = createPortRow(widgetId, { id: portId, label: HAMMOND_FOOTAGES[k - 1] }, "in", "hammond");
+    row.classList.add("hammond-drawbar-row");
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(CV_MAX_VOLTS);
+    slider.step = String(HAMMOND_DRAWBAR_STEP_V);
+    slider.value = String(state.drawbars[k - 1]);
+    slider.dataset.role = `hammond-drawbar-${k}-slider`;
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => {
+      deliverToWidget(widgetId, portId, parseFloat(slider.value));
+    });
+    row.appendChild(slider);
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "port-value";
+    valueSpan.dataset.role = `hammond-drawbar-${k}-value`;
+    valueSpan.textContent = formatHammondDrawbarValue(state.drawbars[k - 1]);
+    row.appendChild(valueSpan);
+
+    portsEl.appendChild(row);
+  }
+
+  portsEl.appendChild(createPortRow(widgetId, { id: "value", label: "Value" }, "out", "hammond"));
+  layoutPortsGrid(portsEl);
+}
+
+function recomputeHammondFreq(widgetId, voiceIndex) {
+  const state = hammondStates.get(widgetId);
+  if (!state) return;
+  const center = CV_MAX_VOLTS / 2;
+  const hz = hzFromPitchCv(state.pitchCv + (state.tuneVolts - center));
+  state.freq = hz;
+  if (voiceIndex !== undefined) {
+    audioEngine.setVoiceParam(widgetId, voiceIndex, "frequency", hz, 0);
+    audioEngine.setVoiceParam(widgetId, voiceIndex, "tuneVolts", state.tuneVolts, 0);
+  } else {
+    audioEngine.setParam(widgetId, "frequency", hz, 0);
+    audioEngine.setParam(widgetId, "tuneVolts", state.tuneVolts, 0);
+  }
+  const el = document.getElementById(widgetId);
+  const label = el ? el.querySelector('[data-role="hammond-freq-label"]') : null;
+  if (label) label.textContent = `${formatNumber(hz)} Hz`;
+}
+
+function updateHammondDrawbarVisual(widgetId, index) {
+  const state = hammondStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const portId = `drawbar${index}`;
+  // Same predicate as updateOscillatorGainVisual: only a live audio-rate
+  // cable disables the slider, a control-rate/no connection leaves it live.
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === portId &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  const slider = el.querySelector(`[data-role="hammond-drawbar-${index}-slider"]`);
+  if (slider) {
+    slider.value = String(state.drawbars[index - 1]);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = el.querySelector(`[data-role="hammond-drawbar-${index}-value"]`);
+  if (valueSpan) valueSpan.textContent = formatHammondDrawbarValue(state.drawbars[index - 1]);
+}
+
+function updateHammondScalarVisual(widgetId, portId, value) {
+  const el = document.getElementById(widgetId);
+  if (!el) return;
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === portId &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  const slider = el.querySelector(`[data-role="hammond-${portId}-slider"]`);
+  if (slider) {
+    slider.value = String(value);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = el.querySelector(`[data-role="hammond-${portId}-value"]`);
+  if (valueSpan) valueSpan.textContent = formatNumber(value);
+}
+
+// One resync for every control on the node - called after applyParams/
+// preset load and from refreshAllDualModeWidgets on every connect/disconnect
+// (the row COUNT is fixed here, unlike Mixer, so this never needs a
+// full re-render, just value/disabled updates).
+function updateHammondVisual(widgetId) {
+  const state = hammondStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  updateHammondScalarVisual(widgetId, "tune", state.tuneVolts);
+  updateHammondScalarVisual(widgetId, "gain", state.gain);
+  for (let k = 1; k <= 9; k += 1) updateHammondDrawbarVisual(widgetId, k);
+  const label = el.querySelector('[data-role="hammond-freq-label"]');
+  if (label) label.textContent = `${formatNumber(state.freq)} Hz`;
+}
+
+// Settings dialog: per-drawbar harmonic ratio (independent of its CV level
+// above) + a "Default" button restoring the classic Hammond footages.
+const hammondSettingsOverlay = document.getElementById("hammondSettingsOverlay");
+const hammondRatioFieldsEl = document.getElementById("hammondRatioFields");
+const hammondModulationStrideSelect = document.getElementById("hammondModulationStrideSelect");
+let pendingHammondId = null;
+
+function openHammondSettings(widgetId) {
+  const state = hammondStates.get(widgetId);
+  if (!state) return;
+  pendingHammondId = widgetId;
+  hammondModulationStrideSelect.value = String(state.modulationStride ?? 4);
+  hammondRatioFieldsEl.innerHTML = "";
+  HAMMOND_FOOTAGES.forEach((label, k) => {
+    const field = document.createElement("label");
+    field.className = "modal-field";
+    const span = document.createElement("span");
+    span.textContent = label;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "0.01";
+    input.min = "0.01";
+    input.max = "32";
+    input.id = `hammondRatioInput${k + 1}`;
+    input.value = String(state.ratios[k]);
+    field.appendChild(span);
+    field.appendChild(input);
+    hammondRatioFieldsEl.appendChild(field);
+  });
+  hammondSettingsOverlay.classList.remove("hidden");
+}
+
+function closeHammondSettings() {
+  hammondSettingsOverlay.classList.add("hidden");
+  pendingHammondId = null;
+}
+
+hammondSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === hammondSettingsOverlay) closeHammondSettings();
+});
+
+document.getElementById("hammondSettingsCancel").addEventListener("click", closeHammondSettings);
+
+// Resets the FORM fields only - applying/persisting still requires Save,
+// same as every other field in this dialog (Cancel can still back out of
+// the reset itself).
+document.getElementById("hammondSettingsReset").addEventListener("click", () => {
+  if (!confirm("Reset all drawbar ratios to the default Hammond registration?")) return;
+  HAMMOND_DEFAULT_RATIOS.forEach((v, k) => {
+    const input = document.getElementById(`hammondRatioInput${k + 1}`);
+    if (input) input.value = String(v);
+  });
+});
+
+document.getElementById("hammondSettingsSave").addEventListener("click", () => {
+  if (!pendingHammondId) return;
+  const state = hammondStates.get(pendingHammondId);
+  if (state) {
+    const modulationStride = parseInt(hammondModulationStrideSelect.value, 10);
+    state.modulationStride = [1, 2, 4, 8, 16].includes(modulationStride) ? modulationStride : 4;
+    audioEngine.setParam(pendingHammondId, "modulationStride", state.modulationStride);
+    sendLiveParamUpdateThrottled(pendingHammondId, { modulationStride: state.modulationStride });
+    for (let k = 0; k < 9; k += 1) {
+      const input = document.getElementById(`hammondRatioInput${k + 1}`);
+      const num = input ? parseFloat(input.value) : NaN;
+      state.ratios[k] = Number.isNaN(num) ? HAMMOND_DEFAULT_RATIOS[k] : clamp(num, 0.01, 32);
+      audioEngine.setParam(pendingHammondId, `ratio${k + 1}`, state.ratios[k]);
+      sendLiveParamUpdateThrottled(pendingHammondId, { [`ratio${k + 1}`]: state.ratios[k] });
+    }
+    savePresetNow();
+  }
+  closeHammondSettings();
+});
 
 const mixerSettingsOverlay = document.getElementById("mixerSettingsOverlay");
 const mixerCountInput = document.getElementById("mixerCountInput");
@@ -8698,6 +9040,73 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     setLedActive(dot, Number(value) > GATE_THRESHOLD_VOLTS);
   }
 
+  if (el.dataset.widgetType === "hammond" && portId === "pitchCv") {
+    const num = Number(value);
+    if (!Number.isNaN(num)) {
+      const state = hammondStates.get(widgetId);
+      if (state) {
+        state.pitchCv = num;
+        recomputeHammondFreq(widgetId, voiceIndex);
+      }
+    }
+  }
+
+  if (el.dataset.widgetType === "hammond" && portId === "tune") {
+    const num = Number(value);
+    if (!Number.isNaN(num)) {
+      const state = hammondStates.get(widgetId);
+      if (state) {
+        state.tuneVolts = clamp(num, 0, CV_MAX_VOLTS);
+        recomputeHammondFreq(widgetId, voiceIndex);
+        updateHammondVisual(widgetId);
+        if (voiceIndex === undefined) {
+          sendLiveParamUpdateThrottled(widgetId, { tune: state.tuneVolts });
+        }
+      }
+    }
+  }
+
+  if (el.dataset.widgetType === "hammond" && portId === "gain") {
+    const state = hammondStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.gain = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "gain", state.gain);
+      updateHammondVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { gain: state.gain });
+    }
+  }
+
+  if (el.dataset.widgetType === "hammond" && portId === "amplitude") {
+    const num = Number(value);
+    const safe = Number.isNaN(num) ? 1 : num;
+    if (voiceIndex !== undefined) {
+      audioEngine.setVoiceParam(widgetId, voiceIndex, "amplitude", safe);
+    } else {
+      const state = hammondStates.get(widgetId);
+      if (state) {
+        state.amplitude = safe;
+        audioEngine.setParam(widgetId, "amplitude", state.amplitude);
+        sendLiveParamUpdateThrottled(widgetId, { amplitude: state.amplitude });
+      }
+    }
+  }
+
+  // The nine drawbar registers - real audio-rate CV ports here (unlike
+  // Mixer's control-only "gainN"): a slider drag AND a live cable both land
+  // here, exactly like Oscillator's own "gain" case above.
+  if (el.dataset.widgetType === "hammond" && /^drawbar[1-9]$/.test(portId)) {
+    const state = hammondStates.get(widgetId);
+    if (state) {
+      const k = Number(portId.slice(7));
+      const num = Number(value);
+      state.drawbars[k - 1] = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, portId, state.drawbars[k - 1]);
+      updateHammondDrawbarVisual(widgetId, k);
+      sendLiveParamUpdateThrottled(widgetId, { [portId]: state.drawbars[k - 1] });
+    }
+  }
+
   if (el.dataset.widgetType === "wave-player" && portId === "note") {
     const num = Number(value);
     if (!Number.isNaN(num)) {
@@ -8937,6 +9346,7 @@ function noteToFrequency(note) {
 
 
 const CV_MAX_VOLTS = 10;
+const HAMMOND_DRAWBAR_STEP_V = CV_MAX_VOLTS / 8; // 1.25V per detent, 9 positions 0-8
 const GATE_ON_VOLTS = 10;
 const GATE_OFF_VOLTS = 0;
 const GATE_THRESHOLD_VOLTS = 5; 
@@ -9628,6 +10038,46 @@ const WIDGET_ENGINES = {
       updateOscillatorTuneVisual(id);
       updateOscillatorGainVisual(id);
       updateOscillatorWaveButtons(id);
+    },
+  },
+  hammond: {
+    getParams: (id) => {
+      const state = hammondStates.get(id);
+      if (!state) return {};
+      return {
+        amplitude: state.amplitude,
+        tune: state.tuneVolts,
+        gain: state.gain,
+        drawbars: [...state.drawbars],
+        ratios: [...state.ratios],
+        modulationStride: state.modulationStride,
+      };
+    },
+    applyParams: (id, params) => {
+      const state = hammondStates.get(id);
+      if (!state || !params) return;
+      const center = CV_MAX_VOLTS / 2;
+      state.amplitude = params.amplitude ?? 1;
+      state.tuneVolts = params.tune ?? center;
+      state.gain = params.gain ?? CV_MAX_VOLTS;
+      state.pitchCv = center;
+      state.drawbars =
+        Array.isArray(params.drawbars) && params.drawbars.length === 9
+          ? params.drawbars.map((v) => clamp(Number(v) || 0, 0, CV_MAX_VOLTS))
+          : [...HAMMOND_DEFAULT_DRAWBARS];
+      state.ratios =
+        Array.isArray(params.ratios) && params.ratios.length === 9
+          ? params.ratios.map((v) => clamp(Number(v) || 0.01, 0.01, 32))
+          : [...HAMMOND_DEFAULT_RATIOS];
+      const modulationStride = Math.round(params.modulationStride ?? 4);
+      state.modulationStride = [1, 2, 4, 8, 16].includes(modulationStride) ? modulationStride : 4;
+      audioEngine.setParam(id, "amplitude", 0, 0);
+      audioEngine.setParam(id, "gain", state.gain);
+      audioEngine.setParam(id, "modulationStride", state.modulationStride);
+      state.drawbars.forEach((v, i) => audioEngine.setParam(id, `drawbar${i + 1}`, v));
+      state.ratios.forEach((v, i) => audioEngine.setParam(id, `ratio${i + 1}`, v));
+      recomputeHammondFreq(id, undefined);
+      updateHammondVisual(id);
     },
   },
   "wave-player": {
@@ -10386,7 +10836,7 @@ loadPresetOnStartup();
 
 
 
-const RECONNECT_DELAY = 2000;
+const RECONNECT_DELAY = 1000;
 
 
 
@@ -10502,6 +10952,63 @@ function updateMemStatsDisplay(psFreeKb, psTotalKb, sysFreeKb, sysTotalKb) {
 
 let currentSocket = null;
 let reconnectTimer = null;
+let wsHasBeenDisconnected = false;
+const connectionLostOverlay = document.getElementById("connectionLostOverlay");
+
+// A graceful server-side close (WS close/RST/FIN) fires "close" right away and
+// the reconnect logic below already handles that. But if the device just
+// vanishes (power loss, Wi-Fi AP drop, hard crash) with no packet ever sent,
+// plain TCP gives the browser nothing to notice that with for a long time (no
+// FIN/RST arrives). Watch for that instead by tracking the last time ANY
+// message arrived on this socket - broadcast_status_tick() (main.cpp) pushes
+// a "cpuLoad" message every second whenever the synth engine + web server are
+// enabled (this project's normal config), so silence past a couple of
+// broadcasts means the peer is actually gone. Gated on having seen at least
+// one message this connection so a build without that periodic broadcast
+// just never triggers this path (falls back to relying on "close"/"error"
+// alone, same as before).
+//
+// Once declared stale, do NOT wait for that dead socket's own "close" event
+// before reacting: calling socket.close() still starts a normal WS closing
+// handshake, and since the peer never acks it, the browser only gives up
+// after its own OS-level TCP retransmission timeout (commonly ~20s) - same
+// dead end we're trying to route around. Instead, mark it lost and start a
+// fresh connection attempt immediately; the old socket is abandoned (its
+// eventual native "close"/"error", whenever that fires, becomes a no-op via
+// the currentSocket check below since a newer socket has already taken over).
+const WS_STALE_TIMEOUT_MS = 2500;
+const WS_WATCHDOG_INTERVAL_MS = 500;
+let lastWsMessageAt = 0;
+let wsWatchdogTimer = null;
+
+// Shared by the "close" handler and the watchdog below: flips the UI to
+// "lost" exactly once per socket and hands the socket off. Returns false if
+// this socket has already been superseded (e.g. the watchdog already
+// declared it dead and moved on), so the caller can skip scheduling a
+// redundant reconnect.
+function markWsLost(socket) {
+  if (currentSocket !== socket) return false;
+  clearInterval(wsWatchdogTimer);
+  wsHasBeenDisconnected = true;
+  connectionLostOverlay?.classList.remove("hidden");
+  currentSocket = null;
+  return true;
+}
+
+function startWsWatchdog(socket) {
+  clearInterval(wsWatchdogTimer);
+  wsWatchdogTimer = setInterval(() => {
+    if (currentSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+    if (lastWsMessageAt === 0) return;
+    if (Date.now() - lastWsMessageAt > WS_STALE_TIMEOUT_MS) {
+      if (markWsLost(socket)) {
+        clearTimeout(reconnectTimer);
+        connectWs();
+      }
+      socket.close(); // best-effort cleanup only, nothing waits on it anymore
+    }
+  }, WS_WATCHDOG_INTERVAL_MS);
+}
 
 
 
@@ -10547,6 +11054,7 @@ function connectWs() {
   currentSocket = socket;
 
   socket.addEventListener("message", (event) => {
+    lastWsMessageAt = Date.now();
     let data;
     try {
       data = JSON.parse(event.data);
@@ -10583,8 +11091,22 @@ function connectWs() {
     }
   });
 
-  socket.addEventListener("close", () => {
+  socket.addEventListener("open", () => {
     if (currentSocket !== socket) return;
+    lastWsMessageAt = 0;
+    startWsWatchdog(socket);
+    // Only a genuine reconnect (we've been through at least one "close" before)
+    // warrants a reload - the very first connectWs() call on page load also
+    // fires "open" and must NOT reload, or the page would reload forever.
+    if (wsHasBeenDisconnected) {
+      location.reload();
+      return;
+    }
+    connectionLostOverlay?.classList.add("hidden");
+  });
+
+  socket.addEventListener("close", () => {
+    if (!markWsLost(socket)) return;
     reconnectTimer = setTimeout(connectWs, RECONNECT_DELAY);
   });
 

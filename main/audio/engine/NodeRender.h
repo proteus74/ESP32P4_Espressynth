@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 
 #include "CvConventions.h"
 #include "EspAdditionalEffects.h"
@@ -20,6 +21,7 @@
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/GainNode.h"
+#include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
 #include "nodes/LinkNodes.h"
@@ -44,6 +46,9 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
     {
     case NodeType::Oscillator:
         nodes::oscillator::render(inst, frames);
+        break;
+    case NodeType::Hammond:
+        nodes::hammond::render(inst, frames);
         break;
     case NodeType::Lfo:
         nodes::lfo::render(inst, frames);
@@ -156,13 +161,32 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
             s.enableModWheel = portSample(inst, 3, 0) >= 0.5f;
         if ((inst.controlConnectedPortMask | inst.audioConnectedPortMask) & (1u << 4))
             s.enablePitchWheel = portSample(inst, 4, 0) >= 0.5f;
-        soundfont::render(s, inst.outL, inst.outR, frames);
         // "gain" (Port-Index 5) - same pattern as Oscillator's "gain": when
         // wired the CV already arrives natively per sample, when unwired
         // the manual gainCv scalar is smoothed PER SAMPLE (see
         // SoundFontPlayerState/Oscillator case above for the reasoning).
         {
             const bool gainFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+            const float gainTarget = gainFed ? 0.0f : cv::vcaGain(s.gainCv, false);
+            // Same fast path/reasoning as Oscillator's gain==0 case: the knob
+            // itself (not a live envelope) is parked at 0 and the smoother has
+            // already ramped down to inaudible, so this block's tsf_render_float
+            // call - by far the most expensive part of this node, a full
+            // polyphonic SoundFont render - would just get multiplied down to
+            // ~0 anyway. Skip it and write silence directly instead. Gated on
+            // the already-converged smoothed value, not just gainCv, so a knob
+            // turned down THIS block still fades out through the normal path
+            // below exactly as before - no click. Active notes' envelopes
+            // inside tsf freeze while skipped, same tradeoff Graph::renderBlock
+            // already accepts project-wide for an idle-ADSR voice.
+            constexpr float kSilentGain = 1e-4f;
+            if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
+            {
+                memset(inst.outL, 0, frames * sizeof(float));
+                memset(inst.outR, 0, frames * sizeof(float));
+                break;
+            }
+            soundfont::render(s, inst.outL, inst.outR, frames);
             if (gainFed)
             {
                 for (size_t i = 0; i < frames; ++i)
@@ -174,7 +198,6 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
             }
             else
             {
-                const float gainTarget = cv::vcaGain(s.gainCv, false);
                 for (size_t i = 0; i < frames; ++i)
                 {
                     const float gainMul = s.gainSmooth.process(gainTarget);

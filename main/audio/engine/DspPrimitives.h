@@ -235,6 +235,11 @@ public:
         return z_;
     }
 
+    // Peeks the last output without advancing state - lets a caller check
+    // whether a ramp toward 0 has already converged (e.g. to skip further
+    // work once genuinely silent) without perturbing it.
+    float current() const { return z_; }
+
     void reset() { z_ = 0.0f; }
 
 private:

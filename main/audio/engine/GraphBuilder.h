@@ -27,6 +27,7 @@
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/GainNode.h"
+#include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
 #include "nodes/MidiInNode.h"
@@ -279,8 +280,9 @@ inline void classifyIdleRendered(const PresetDoc &doc, const bool *voiced, bool 
 inline void addEdge(Graph &g, uint16_t fromInstance, uint8_t fromPort, uint16_t toInstance, uint8_t toPort, float scale,
              bool monitorTap = false)
 {
-    if (g.edgeCount >= synth::kMaxConnections)
+    if (g.edgeCount >= synth::kMaxRuntimeEdges)
     {
+        ESP_LOGE(kGraphBuilderTag, "Runtime edge capacity exceeded");
         return;
     }
     Edge &e = g.edges[g.edgeCount++];
@@ -426,6 +428,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     {
     case NodeType::Oscillator:
         nodes::oscillator::build(inst, p);
+        break;
+    case NodeType::Hammond:
+        nodes::hammond::build(inst, p);
         break;
     case NodeType::Lfo:
         nodes::lfo::build(inst, p);
@@ -715,6 +720,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.reverbLight = allocateNodeState<ReverbLightState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.reverbLight == nullptr);
                 break;
+            case NodeType::Hammond:
+                inst.hammond = allocateNodeState<HammondState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.hammond == nullptr);
+                break;
             case NodeType::EspAlc:
             case NodeType::EspChannelConvert:
             case NodeType::EspMixer:
@@ -775,7 +784,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         }
         if (w.type == NodeType::MidiIn)
         {
-            g->voiceAllocators[i].configure(doc.widgets[i].params.voices, doc.widgets[i].params.overflowMode);
+            g->voiceAllocators[i].configure(voiceCount, doc.widgets[i].params.overflowMode);
         }
     }
 
@@ -838,7 +847,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             for (uint16_t v = 0; v < targetSlot.instanceCount; ++v)
             {
                 g->instances[targetSlot.instanceBase + v].audioConnectedPortMask |=
-                    static_cast<uint8_t>(1u << toPort);
+                    synth::portBit(toPort);
             }
             continue;
         }
@@ -885,7 +894,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     for (uint16_t v = 0; v < target.instanceCount; ++v)
                     {
                         g->instances[target.instanceBase + v].controlConnectedPortMask |=
-                            static_cast<uint8_t>(1u << toPort);
+                            synth::portBit(toPort);
                     }
                 }
             }
@@ -918,7 +927,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     for (uint16_t v = 0; v < target.instanceCount; ++v)
                     {
                         g->instances[target.instanceBase + v].controlConnectedPortMask |=
-                            static_cast<uint8_t>(1u << toPort);
+                            synth::portBit(toPort);
                     }
                 }
             }
@@ -947,7 +956,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 for (uint16_t v = 0; v < target.instanceCount; ++v)
                 {
                     g->instances[target.instanceBase + v].controlConnectedPortMask |=
-                        static_cast<uint8_t>(1u << toPort);
+                        synth::portBit(toPort);
                 }
             }
             continue;
@@ -969,7 +978,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 for (uint16_t v = 0; v < target.instanceCount; ++v)
                 {
                     g->instances[target.instanceBase + v].controlConnectedPortMask |=
-                        static_cast<uint8_t>(1u << toPort);
+                        synth::portBit(toPort);
                 }
             }
             continue;
@@ -993,7 +1002,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 for (uint16_t v = 0; v < target.instanceCount; ++v)
                 {
                     g->instances[target.instanceBase + v].controlConnectedPortMask |=
-                        static_cast<uint8_t>(1u << toPort);
+                        synth::portBit(toPort);
                 }
             }
             continue;
@@ -1066,7 +1075,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         for (int p = 0; p < inst.audioInPortCount; ++p)
         {
             const bool audioConnected =
-                (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << p)) != 0;
+                (inst.audioConnectedPortMask & synth::portBit(p)) != 0;
             bool midiPitchCvRoute = false;
             for (uint16_t r = 0; r < g->controlRouteCount; ++r)
             {
@@ -1203,9 +1212,27 @@ inline Graph *GraphBuilder::build(const PresetDoc &doc, uint16_t *outRequestedVo
         voiceCeiling = SYNTH_VOICE_COUNT;
     }
 
-    const uint16_t cap = requestedVoices < voiceCeiling ? requestedVoices : voiceCeiling;
-    bool fitInternal = false;
-    Graph *g = buildWithVoiceCap(doc, cap, fitInternal);
+    uint16_t effectiveVoices = requestedVoices < voiceCeiling ? requestedVoices : voiceCeiling;
+    Graph *g = nullptr;
+    while (effectiveVoices >= 1)
+    {
+        bool fitInternal = false;
+        g = buildWithVoiceCap(doc, effectiveVoices, fitInternal);
+        const bool buildSucceeded = doc.widgetCount == 0 || g->widgetCount != 0;
+        if (buildSucceeded && fitInternal)
+        {
+            break;
+        }
+
+        g->destroy();
+        Graph::release(g);
+        g = nullptr;
+        if (effectiveVoices == 1)
+        {
+            break;
+        }
+        --effectiveVoices;
+    }
 
     if (outRequestedVoices != nullptr)
     {
@@ -1213,7 +1240,7 @@ inline Graph *GraphBuilder::build(const PresetDoc &doc, uint16_t *outRequestedVo
     }
     if (outEffectiveVoices != nullptr)
     {
-        *outEffectiveVoices = cap;
+        *outEffectiveVoices = g != nullptr ? effectiveVoices : 0;
     }
     return g;
 }

@@ -3,24 +3,53 @@
 #include <cstddef>
 #include <cstdint>
 
-// Fixed at compile time, never changed at runtime - see project plan.
-#define SYNTH_VOICE_COUNT 16
+#include "sdkconfig.h"
+
+// Compile-time graph expansion ceiling. GraphBuilder may select fewer voices
+// at runtime when the preset requests less or internal RAM cannot fit them.
+#define SYNTH_VOICE_COUNT CONFIG_AUDIO_SYNTH_MAX_VOICES
 
 namespace synth
 {
 constexpr uint32_t kSampleRate = 44100;
-constexpr size_t kBlockSize = 128;
+// Kconfig-configurable (Application Features > Audio Subsystem >
+// AUDIO_SYNTH_BLOCK_SIZE) - see that option's help for the latency/overhead
+// tradeoff.
+constexpr size_t kBlockSize = CONFIG_AUDIO_SYNTH_BLOCK_SIZE;
 constexpr size_t kMaxWidgets = 64;
 constexpr size_t kMaxConnections = 256;
-constexpr size_t kMaxAudioInPorts = 8; // widest is mixer/multiplier/adder in1..in8
+constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + 2;
+// Widest node is Hammond: amplitude/pitchCv/tune/gain + drawbar1..9 = 13
+// (mixer/multiplier/adder's in1..in8 was the previous widest at 8).
+// Deliberately 16, not 13: this then exactly equals the bit width of
+// PortMask below, so NodeInstance's per-port bitmasks can never silently
+// truncate a legal port index - the failure mode that made this constant
+// dangerous to raise in the first place (see the static_assert below).
+constexpr size_t kMaxAudioInPorts = 16;
 constexpr size_t kValueListMax = 16;   // Knob/Button "value list" mode entry cap
 constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 
-// Entries per full sine cycle in the shared sine LUT (see DspPrimitives'
-// dsp::initSineLut/sineLookup) - large enough that linear interpolation
-// between neighboring entries keeps quantization error inaudible.
-constexpr size_t kSineLutSize = 16384;
+// Bit-per-audio-input-port mask type for NodeInstance's
+// controlConnectedPortMask/audioConnectedPortMask/controlRampPortMask.
+// Named rather than a bare uint16_t at each use site so a future widening
+// past kMaxAudioInPorts is one edit here, caught by the static_assert.
+using PortMask = uint16_t;
+static_assert(kMaxAudioInPorts <= sizeof(PortMask) * 8,
+              "PortMask needs at least one bit per audio-input port");
+
+// The one correct way to build a port bit. A hardcoded
+// static_cast<uint8_t>(1u << p) silently produces 0 for p >= 8 - this is
+// what a runtime/variable port index must always go through instead.
+inline constexpr PortMask portBit(int portIdx)
+{
+    return static_cast<PortMask>(1u << portIdx);
+}
+
+// Entries per full sine cycle in the shared sine LUT. Linear interpolation
+// keeps maximum error below 3e-7 while using 48 KiB less internal RAM than
+// the former 16384-entry table.
+constexpr size_t kSineLutSize = 4096;
 
 // Entries spanning v=0..1 in the shared VCA exponential-curve LUT (see
 // DspPrimitives' dsp::initVcaExpLut/vcaExpLookup) - the curve (10^v-1)/9 is

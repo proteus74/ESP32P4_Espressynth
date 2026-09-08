@@ -1186,6 +1186,134 @@ export class AudioEngine {
           tuneCvActive: false,
         };
       }
+      case "hammond": {
+        // Nine drawbar oscillators sharing the SAME pitch-CV chain as
+        // "oscillator" above (copied verbatim: pitchSum/pitchRestConst/
+        // pitchRestGate/tuneSum/tuneRestConst/tuneRestGate/pitchPreScale/
+        // pitchFinalShift/pitchShaperInput/pitchWaveShaper), except
+        // pitchWaveShaper's Hz-carrying output fans out through nine
+        // per-drawbar ratio-scaling gains instead of connecting to one
+        // oscillator directly - see nodes/HammondNode.h for why each
+        // drawbar needs its own ratio (independent per-drawbar phase, no
+        // shared sub-octave accumulator, arbitrary user-editable ratios).
+        const RATIOS =
+          Array.isArray(params.ratios) && params.ratios.length === 9
+            ? params.ratios
+            : [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];
+        const NORM = 1 / 9; // mirrors kDrawbarNorm - nine unit sines -> <=1.0 at full registration
+
+        const ampGain = ctx.createGain();
+        ampGain.gain.value = 0;
+        const ampCv = this._createCvGainChain(ctx, "linear");
+        ampCv.waveShaper.connect(ampGain.gain);
+
+        const outGain = ctx.createGain();
+        outGain.gain.value = (params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS;
+        const gainCv = this._createCvGainChain(ctx, "linear");
+        gainCv.waveShaper.connect(outGain.gain);
+
+        const norm = ctx.createGain();
+        norm.gain.value = NORM;
+        norm.connect(ampGain);
+        ampGain.connect(outGain);
+
+        // Pitch chain - identical to the "oscillator" case above.
+        const pitchSum = ctx.createGain();
+        pitchSum.gain.value = 1;
+        const pitchRestConst = ctx.createConstantSource();
+        pitchRestConst.offset.value = CV_MAX_VOLTS / 2;
+        pitchRestConst.start();
+        const pitchRestGate = ctx.createGain();
+        pitchRestGate.gain.value = 0;
+        pitchRestConst.connect(pitchRestGate);
+        pitchRestGate.connect(pitchSum);
+
+        const tuneSum = ctx.createGain();
+        tuneSum.gain.value = 1;
+        const tuneRestConst = ctx.createConstantSource();
+        tuneRestConst.offset.value = params.tuneVolts ?? CV_MAX_VOLTS / 2;
+        tuneRestConst.start();
+        const tuneRestGate = ctx.createGain();
+        tuneRestGate.gain.value = 0;
+        tuneRestConst.connect(tuneRestGate);
+        tuneRestGate.connect(tuneSum);
+
+        const pitchPreScale = ctx.createGain();
+        pitchPreScale.gain.value = 0.1;
+        pitchSum.connect(pitchPreScale);
+        tuneSum.connect(pitchPreScale);
+        const pitchFinalShift = ctx.createConstantSource();
+        pitchFinalShift.offset.value = -1;
+        pitchFinalShift.start();
+        const pitchShaperInput = ctx.createGain();
+        pitchShaperInput.gain.value = 1;
+        pitchPreScale.connect(pitchShaperInput);
+        pitchFinalShift.connect(pitchShaperInput);
+        const pitchWaveShaper = ctx.createWaveShaper();
+        pitchWaveShaper.curve = buildPitchCvCurve();
+        pitchShaperInput.connect(pitchWaveShaper);
+        // NOTE: does not connect to a single osc.frequency here - fans out
+        // through nine per-drawbar ratio gains below instead.
+
+        const oscs = [];
+        const footageScale = [];
+        const drawbarGains = [];
+        const drawbarCv = [];
+        const drawbars = [];
+        for (let k = 0; k < 9; k += 1) {
+          const wheel = ctx.createOscillator();
+          wheel.type = "sine";
+          wheel.frequency.value = 0; // driven by _setParamOnEntry's "frequency" case below, or the CV chain once connected
+
+          const fs = ctx.createGain();
+          fs.gain.value = RATIOS[k];
+          pitchWaveShaper.connect(fs);
+          fs.connect(wheel.frequency);
+
+          const g = ctx.createGain();
+          const v = (params.drawbars && params.drawbars[k]) ?? (k < 3 ? CV_MAX_VOLTS : 0);
+          g.gain.value = v / CV_MAX_VOLTS; // linear vcaGain, matches cv::vcaGain(v, false)
+          const cvChain = this._createCvGainChain(ctx, "linear");
+          cvChain.waveShaper.connect(g.gain);
+
+          wheel.connect(g);
+          g.connect(norm);
+          wheel.start();
+
+          oscs.push(wheel);
+          footageScale.push(fs);
+          drawbarGains.push(g);
+          drawbarCv.push(cvChain);
+          drawbars.push(v);
+        }
+
+        return {
+          type,
+          oscs,
+          footageScale,
+          drawbarGains,
+          drawbarCv,
+          drawbars,
+          drawbarCvActive: new Array(9).fill(false),
+          ratios: [...RATIOS],
+          norm,
+          ampGain,
+          ampCv,
+          outGain,
+          gainCv,
+          gain: params.gain ?? CV_MAX_VOLTS,
+          gainCvActive: false,
+          pitchSum,
+          pitchRestConst,
+          pitchRestGate,
+          tuneSum,
+          tuneRestConst,
+          tuneRestGate,
+          pitchWaveShaper,
+          pitchCvActive: false,
+          tuneCvActive: false,
+        };
+      }
       case "lfo": {
         
         
@@ -2332,6 +2460,18 @@ export class AudioEngine {
         entry.gainCv.shiftConst.stop();
         entry.gainCv.shiftConst.disconnect();
       }
+      if (entry.oscs) entry.oscs.forEach((o) => { o.stop(); o.disconnect(); });
+      if (entry.footageScale) entry.footageScale.forEach((g) => g.disconnect());
+      if (entry.drawbarGains) entry.drawbarGains.forEach((g) => g.disconnect());
+      if (entry.drawbarCv) {
+        entry.drawbarCv.forEach((cv) => {
+          cv.waveShaper.disconnect();
+          cv.sumNode.disconnect();
+          cv.prescale.disconnect();
+          cv.shiftConst.stop();
+          cv.shiftConst.disconnect();
+        });
+      }
       
       
       
@@ -2562,6 +2702,42 @@ export class AudioEngine {
           if (value > GATE_THRESHOLD_VOLTS) this.retriggerOscillatorEntry(entry);
         }
         break;
+      case "hammond": {
+        const db = /^drawbar([1-9])$/.exec(paramName);
+        const rt = /^ratio([1-9])$/.exec(paramName);
+        if (db) {
+          const k = Number(db[1]) - 1;
+          entry.drawbars[k] = value;
+          // Only touch the AudioParam while no cable owns it - exactly the
+          // oscillator gain case's `if (!entry.gainCvActive)` guard above.
+          if (!entry.drawbarCvActive[k]) {
+            applyRampValue(entry.drawbarGains[k].gain, (Number(value) || 0) / CV_MAX_VOLTS);
+          }
+        } else if (rt) {
+          // Settings-dialog field, not a live-modulation target - a direct
+          // value set (no ramp) is correct here.
+          const k = Number(rt[1]) - 1;
+          entry.ratios[k] = value;
+          entry.footageScale[k].gain.value = value;
+        } else if (paramName === "frequency") {
+          // Only when no live pitch/tune cable owns the shared pitch chain -
+          // same guard as the oscillator case above, applied to all nine
+          // oscillators (each scaled by its own ratio).
+          if (!entry.pitchCvActive && !entry.tuneCvActive) {
+            entry.oscs.forEach((o, k) => applyRampValue(o.frequency, value * entry.ratios[k]));
+          }
+        } else if (paramName === "tuneVolts") {
+          applyRampValue(entry.tuneRestConst.offset, value);
+        } else if (paramName === "amplitude") {
+          applyRamp(entry.ampGain.gain);
+        } else if (paramName === "gain") {
+          entry.gain = value;
+          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, (Number(value) || 0) / CV_MAX_VOLTS);
+        }
+        // No "gate" case on purpose: free-running tonewheels are never
+        // retriggered (see nodes/HammondNode.h - no phase reset on note-on).
+        break;
+      }
       case "audio-out":
     case "usb-out":
     case "es8311-out":
@@ -3001,6 +3177,7 @@ export class AudioEngine {
   _resolveOutputFromEntry(entry, port) {
     if (!entry) return null;
     if (entry.type === "oscillator" && port === "value") return entry.outGain;
+    if (entry.type === "hammond" && port === "value") return entry.outGain;
     if (entry.type === "lfo" && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
     
@@ -3081,6 +3258,14 @@ export class AudioEngine {
       
       if (port === "pitchCv") return entry.pitchSum;
       if (port === "tune") return entry.tuneSum;
+    }
+    if (entry.type === "hammond") {
+      if (port === "amplitude") return entry.ampCv.prescale;
+      if (port === "gain") return entry.gainCv.prescale;
+      if (port === "pitchCv") return entry.pitchSum;
+      if (port === "tune") return entry.tuneSum;
+      const m = /^drawbar([1-9])$/.exec(port);
+      if (m) return entry.drawbarCv[Number(m[1]) - 1].prescale;
     }
     if (entry.type === "frequency-divider" || entry.type === "abs" || entry.type === "value-mapper") {
       
@@ -3167,31 +3352,19 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && toPort === "amplitude") {
-      
-      
-      
-      
-      
-      
-      
-      
-      
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           toEntry.ampGain.gain.value = 0;
           from.connect(toEntry.ampCv.prescale);
         } catch (err) {
-          
+
         }
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && toPort === "gain") {
-      
-      
-      
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -3199,7 +3372,21 @@ export class AudioEngine {
           toEntry.gainCvActive = true;
           toEntry.outGain.gain.value = 0;
         } catch (err) {
-          
+
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "hammond" && /^drawbar[1-9]$/.test(toPort)) {
+      const k = Number(toPort.slice(7)) - 1;
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.connect(toEntry.drawbarCv[k].prescale);
+          toEntry.drawbarCvActive[k] = true;
+          toEntry.drawbarGains[k].gain.value = 0;
+        } catch (err) {
+
         }
       }
       return;
@@ -3224,11 +3411,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && (toPort === "pitchCv" || toPort === "tune")) {
-      
-      
-      
-      
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;
@@ -3238,9 +3421,15 @@ export class AudioEngine {
           from.connect(sum);
           if (toPort === "pitchCv") toEntry.pitchCvActive = true;
           else toEntry.tuneCvActive = true;
-          toEntry.osc.frequency.value = 0;
+          // Hammond has nine oscillators (entry.oscs), the single-osc entry
+          // just entry.osc - zero whichever this entry actually has, so the
+          // CV chain (fanned through footageScale for Hammond) becomes the
+          // sole pitch source instead of adding on top of a stale direct-set
+          // value (see the pitchRestGate comment in _buildNode).
+          if (toEntry.oscs) toEntry.oscs.forEach((o) => { o.frequency.value = 0; });
+          else toEntry.osc.frequency.value = 0;
         } catch (err) {
-          
+
         }
       }
       return;
@@ -3301,28 +3490,41 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && toPort === "amplitude") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.disconnect(toEntry.ampCv.prescale);
-          toEntry.ampGain.gain.value = 1; 
+          toEntry.ampGain.gain.value = 1;
         } catch (err) {
-          
+
         }
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.disconnect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = false;
-          
           toEntry.outGain.gain.value = (toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS;
         } catch (err) {
-          
+
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "hammond" && /^drawbar[1-9]$/.test(toPort)) {
+      const k = Number(toPort.slice(7)) - 1;
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.disconnect(toEntry.drawbarCv[k].prescale);
+          toEntry.drawbarCvActive[k] = false;
+          toEntry.drawbarGains[k].gain.value = (toEntry.drawbars[k] ?? 0) / CV_MAX_VOLTS;
+        } catch (err) {
+
         }
       }
       return;
@@ -3341,7 +3543,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "oscillator" && (toPort === "pitchCv" || toPort === "tune")) {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;

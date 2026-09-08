@@ -208,6 +208,9 @@ struct MixerState
 // ReverbState/ReverbLightState are defined (state + render/build/destroy/
 // setParam logic together) in nodes/ReverbNode.h.
 
+// HammondState is defined (state + render/build/destroy/setParam logic
+// together) in nodes/HammondNode.h.
+
 struct AudioOutState
 {
     SoftLimiter limiter;

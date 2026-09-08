@@ -563,16 +563,20 @@ inline esp_err_t init() {
     // cause outright rather than just narrowing the timing window.
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_MASTER);
     chan_cfg.auto_clear_after_cb = true;
-    // Default is 6 desc * 240 frames = 1440 frames (~32.6ms @ 44.1kHz) of DMA buffer -- audible
-    // clicks/pops during playback (e.g. the "tone" CLI command, cmd_audio.hpp) trace back to
-    // that: any writer stall longer than ~33ms (a CLI/REPL task on MAIN_CORE briefly losing the
-    // CPU to something else) underruns it, and auto_clear_after_cb fills the gap with silence
-    // instead of repeating stale audio -- audible either way as a discontinuity. More than
-    // doubling the buffer (~87ms via 8*480) buys much more slack against that without giving up
-    // the underrun-clears-to-silence safety net, at the cost of latency -- TEST: back to
-    // default 6*240 to measure/hear the tradeoff. Revert to 8/480 if clicks reappear.
-    chan_cfg.dma_desc_num = 6;
-    chan_cfg.dma_frame_num = 240;
+    // Shared with es8311_manager.hpp via the "Audio Subsystem" Kconfig menu
+    // (AUDIO_I2S_DMA_DESC_NUM / AUDIO_I2S_DMA_FRAME_NUM) so both onboard I2S
+    // codecs tune the same tradeoff together: default 6*240 = 1440 frames
+    // (~32.6ms @ 44.1kHz) of DMA buffer -- audible clicks/pops during
+    // playback (e.g. the "tone" CLI command, cmd_audio.hpp) trace back to
+    // that: any writer stall longer than the buffer (a CLI/REPL task on
+    // MAIN_CORE briefly losing the CPU to something else) underruns it, and
+    // auto_clear_after_cb fills the gap with silence instead of repeating
+    // stale audio -- audible either way as a discontinuity. More than
+    // doubling the buffer (~87ms via 8*480) buys much more slack against
+    // that without giving up the underrun-clears-to-silence safety net, at
+    // the cost of latency -- tune via menuconfig.
+    chan_cfg.dma_desc_num = CONFIG_AUDIO_I2S_DMA_DESC_NUM;
+    chan_cfg.dma_frame_num = CONFIG_AUDIO_I2S_DMA_FRAME_NUM;
     // tx+rx created together (not as two separate i2s_new_channel calls): with a shared BCLK/WS
     // pair, requesting I2S_ROLE_MASTER for both used to make the driver auto-downgrade rx to
     // slave for us at i2s_channel_init_std_mode() time (i2s_channel_try_to_constitute_duplex(),

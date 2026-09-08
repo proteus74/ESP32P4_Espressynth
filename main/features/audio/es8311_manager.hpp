@@ -63,13 +63,15 @@ inline esp_err_t init() {
     // --- I2S data interface (BCLK/LRCK/DOUT/DIN, optional MCLK) ---
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_port, I2S_ROLE_MASTER);
     chan_cfg.auto_clear_after_cb = true;
-    // See the identical comment in wm8960_manager.hpp: default DMA buffer (6*240 frames,
-    // ~32.6ms) is thin enough that a brief writer stall (e.g. the "tone" CLI command,
-    // cmd_audio.hpp, running on the CLI task) audibly clicks. More headroom avoids that
-    // (~87ms via 8*480) but adds latency -- TEST: back to default 6*240 to measure/hear
-    // the tradeoff. Revert to 8/480 if clicks reappear.
-    chan_cfg.dma_desc_num = 6;
-    chan_cfg.dma_frame_num = 240;
+    // Shared with wm8960_manager.hpp via the "Audio Subsystem" Kconfig menu
+    // (AUDIO_I2S_DMA_DESC_NUM / AUDIO_I2S_DMA_FRAME_NUM) so both onboard I2S
+    // codecs tune the same underrun-headroom-vs-latency tradeoff together: a
+    // brief writer stall (e.g. the "tone" CLI command, cmd_audio.hpp, running
+    // on the CLI task) audibly clicks once it outlasts the buffer. Default
+    // 6*240 frames is ~32.6ms; raise via menuconfig (e.g. 8*480, ~87ms) for
+    // more headroom, or lower for less latency.
+    chan_cfg.dma_desc_num = CONFIG_AUDIO_I2S_DMA_DESC_NUM;
+    chan_cfg.dma_frame_num = CONFIG_AUDIO_I2S_DMA_FRAME_NUM;
     i2s_chan_handle_t tx_handle = nullptr;
     i2s_chan_handle_t rx_handle = nullptr;
     // See the detailed comment in wm8960_manager.hpp: tx+rx are created together deliberately.
