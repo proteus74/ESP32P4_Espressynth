@@ -944,6 +944,12 @@ const WIDGET_TYPES = {
     inputs: [{ id: "in", label: "In" }],
     outputs: [],
   },
+  "vu-meter-horizontal": {
+    label: "VU-Meter Horizontal",
+    icon: "📶",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [],
+  },
   oscilloscope: {
     label: "Oscilloscope",
     icon: "🖥️",
@@ -981,7 +987,7 @@ const WIDGET_CATEGORIES = [
   { label: "Filter", types: ["filter", "esp-eq"] },
   { label: "Effects", types: ["chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out"] },
-  { label: "Misc", types: ["debug", "voltmeter", "vu-meter", "oscilloscope", "spectrum"] },
+  { label: "Misc", types: ["debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
 ];
 
 
@@ -1069,6 +1075,7 @@ const AUDIO_PORTS = {
   "es8311-out": { in: ["left", "right"] },
   "wm8960-out": { in: ["left", "right"] },
   "vu-meter": { in: ["in"] },
+  "vu-meter-horizontal": { in: ["in"] },
   oscilloscope: { in: ["in1", "in2"] },
   spectrum: { in: ["in"] },
 };
@@ -1199,7 +1206,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "debug", "voltmeter", "lfo", "audio-to-value", "vu-meter", "oscilloscope", "spectrum", "gain", "filter", "mixer", "esp-eq"];
+const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "debug", "voltmeter", "lfo", "audio-to-value", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "mixer", "esp-eq"];
 
 
 
@@ -2135,17 +2142,79 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "vu-meter") {
     audioEngine.createNode(id, "vu-meter", {});
+    audioMonitorStates.set(id, createAudioMonitorState());
 
     const body = document.createElement("div");
-    body.className = "widget-instance-body vu-meter-body";
+    body.className = "widget-instance-body vu-meter-body vu-meter-analog-body";
 
+    const gauge = document.createElement("div");
+    gauge.className = "vu-analog-gauge";
+    for (let tick = 0; tick <= 10; tick += 1) {
+      const mark = document.createElement("span");
+      mark.className = `vu-analog-tick vu-zone-${tick >= 9 ? "red" : tick >= 7 ? "amber" : "green"}`;
+      mark.style.setProperty("--vu-angle", `${-52 + tick * 10.4}deg`);
+      gauge.appendChild(mark);
+    }
+    [0, 0.5, 1].forEach((fraction) => {
+      const angle = -52 + fraction * 104;
+      const radians = angle * Math.PI / 180;
+      const scaleLabel = document.createElement("span");
+      scaleLabel.className = "vu-analog-label";
+      scaleLabel.dataset.rangeFraction = String(fraction);
+      scaleLabel.style.left = `${70 + Math.sin(radians) * 45}px`;
+      scaleLabel.style.top = `${66 - Math.cos(radians) * 41}px`;
+      gauge.appendChild(scaleLabel);
+    });
+    const unit = document.createElement("span");
+    unit.className = "vu-analog-unit";
+    unit.textContent = "V RMS";
+    gauge.appendChild(unit);
+    const needle = document.createElement("span");
+    needle.className = "vu-analog-needle";
+    needle.dataset.role = "vu-needle";
+    gauge.appendChild(needle);
+    const pivot = document.createElement("span");
+    pivot.className = "vu-analog-pivot";
+    gauge.appendChild(pivot);
+    const readout = document.createElement("span");
+    readout.className = "voltmeter-readout vu-meter-readout";
+    readout.dataset.role = "vu-readout";
+    readout.textContent = "0.00 V";
+    body.appendChild(gauge);
+    body.appendChild(readout);
+    el.appendChild(body);
+  }
+
+  if (type === "vu-meter-horizontal") {
+    audioEngine.createNode(id, "vu-meter", {});
+    audioMonitorStates.set(id, createAudioMonitorState());
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body vu-meter-body vu-meter-horizontal-body";
+    const scale = document.createElement("div");
+    scale.className = "vu-horizontal-scale";
+    [0, 0.25, 0.5, 0.75, 1].forEach((fraction) => {
+      const scaleLabel = document.createElement("span");
+      scaleLabel.dataset.rangeFraction = String(fraction);
+      scale.appendChild(scaleLabel);
+    });
     const track = document.createElement("div");
     track.className = "vu-meter-track";
     const fill = document.createElement("div");
     fill.className = "vu-meter-fill";
     fill.dataset.role = "vu-fill";
+    const peak = document.createElement("span");
+    peak.className = "vu-meter-peak";
+    peak.dataset.role = "vu-peak";
     track.appendChild(fill);
+    track.appendChild(peak);
+    const horizontalReadout = document.createElement("span");
+    horizontalReadout.className = "voltmeter-readout vu-meter-readout";
+    horizontalReadout.dataset.role = "vu-readout";
+    horizontalReadout.textContent = "0.00 V";
+    body.appendChild(scale);
     body.appendChild(track);
+    body.appendChild(horizontalReadout);
     el.appendChild(body);
   }
 
@@ -2167,6 +2236,7 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "spectrum") {
     audioEngine.createNode(id, "spectrum", {});
+    audioMonitorStates.set(id, createAudioMonitorState());
 
     const body = document.createElement("div");
     body.className = "widget-instance-body spectrum-body";
@@ -2185,6 +2255,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     body.appendChild(canvas);
     body.appendChild(axisCanvas);
+    body.appendChild(createMonitorRangeControl(id));
     el.appendChild(body);
   }
 
@@ -2493,6 +2564,10 @@ function createWidget(type, label, x, y, forcedId) {
       }
       if (type === "voltmeter" && port.id === "in") {
         const readout = el.querySelector('[data-role="voltmeter-readout"]');
+        if (readout) row.appendChild(readout);
+      }
+      if ((type === "vu-meter" || type === "vu-meter-horizontal") && port.id === "in") {
+        const readout = el.querySelector('[data-role="vu-readout"]');
         if (readout) row.appendChild(readout);
       }
       if (type === "midi-in" && port.id === "voices") {
@@ -3058,6 +3133,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   canvasContent.appendChild(el);
+  if (audioMonitorStates.has(id)) updateAudioMonitorRangeVisual(id);
   
   
   
@@ -3103,6 +3179,7 @@ function removeWidget(id, force = false) {
   adsrStates.delete(id);
   constStates.delete(id);
   voltmeterStates.delete(id);
+  audioMonitorStates.delete(id);
   chorusStates.delete(id);
   effectCvStates.delete(id);
   audioEngine.removeNode(id);
@@ -3323,6 +3400,56 @@ let midiLearnTargetId = null;
 const constStates = new Map();
 
 const voltmeterStates = new Map();
+const audioMonitorStates = new Map();
+
+function createAudioMonitorState() {
+  return { rangeVolts: AUDIO_PEAK_VOLTS, peakVolts: 0, holdUntil: 0, lastFrameMs: performance.now() };
+}
+
+function createMonitorRangeControl(widgetId) {
+  const control = document.createElement("div");
+  control.className = "monitor-range-control";
+  control.setAttribute("role", "group");
+  control.setAttribute("aria-label", "Voltage range");
+  [AUDIO_PEAK_VOLTS, CV_MAX_VOLTS].forEach((rangeVolts) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.rangeVolts = String(rangeVolts);
+    button.textContent = `${rangeVolts} V`;
+    button.title = `Display range 0-${rangeVolts} V`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setAudioMonitorRange(widgetId, rangeVolts);
+    });
+    control.appendChild(button);
+  });
+  return control;
+}
+
+function setAudioMonitorRange(widgetId, rangeVolts, persist = true) {
+  const state = audioMonitorStates.get(widgetId);
+  if (!state) return;
+  state.rangeVolts = Number(rangeVolts) === CV_MAX_VOLTS ? CV_MAX_VOLTS : AUDIO_PEAK_VOLTS;
+  state.peakVolts = Math.min(state.peakVolts, state.rangeVolts);
+  updateAudioMonitorRangeVisual(widgetId);
+  if (persist) {
+    markDirty();
+    savePresetNow();
+  }
+}
+
+function updateAudioMonitorRangeVisual(widgetId) {
+  const state = audioMonitorStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  el.querySelectorAll("[data-range-volts]").forEach((button) => {
+    button.classList.toggle("active", Number(button.dataset.rangeVolts) === state.rangeVolts);
+  });
+  el.querySelectorAll("[data-range-fraction]").forEach((label) => {
+    const volts = state.rangeVolts * Number(label.dataset.rangeFraction);
+    label.textContent = String(Number(volts.toFixed(2)));
+  });
+}
 
 function updateConstInput(widgetId) {
   const state = constStates.get(widgetId);
@@ -6274,11 +6401,32 @@ function updateLfoVisual(widgetId) {
 
 
 function tickAudioMonitors() {
-  document.querySelectorAll('.widget-instance[data-widget-type="vu-meter"]').forEach((el) => {
+  const now = performance.now();
+  document.querySelectorAll('.widget-instance[data-widget-type="vu-meter"], .widget-instance[data-widget-type="vu-meter-horizontal"]').forEach((el) => {
+    const state = audioMonitorStates.get(el.id);
+    if (!state) return;
+    const levelVolts = clamp(audioEngine.getLevel(el.id), 0, state.rangeVolts);
+    const normalized = levelVolts / state.rangeVolts;
+    const readout = el.querySelector('[data-role="vu-readout"]');
+    if (readout) readout.textContent = `${levelVolts.toFixed(2)} V`;
+    const needle = el.querySelector('[data-role="vu-needle"]');
+    if (needle) needle.style.transform = `rotate(${-52 + normalized * 104}deg)`;
     const fill = el.querySelector('[data-role="vu-fill"]');
-    if (!fill) return;
-    const level = audioEngine.getLevel(el.id);
-    fill.style.width = `${clamp(level * 140, 0, 100)}%`;
+    if (fill) fill.style.transform = `scaleX(${normalized})`;
+
+    const elapsedMs = Math.min(now - state.lastFrameMs, 100);
+    if (levelVolts >= state.peakVolts) {
+      state.peakVolts = levelVolts;
+      state.holdUntil = now + 1500;
+    } else if (now > state.holdUntil) {
+      state.peakVolts = Math.max(levelVolts, state.peakVolts - state.rangeVolts * elapsedMs / 1200);
+    }
+    state.lastFrameMs = now;
+    const peak = el.querySelector('[data-role="vu-peak"]');
+    if (peak) {
+      peak.style.left = `${clamp(state.peakVolts / state.rangeVolts, 0, 1) * 100}%`;
+      peak.classList.toggle("visible", state.peakVolts > 0.001);
+    }
   });
   document.querySelectorAll('.widget-instance[data-widget-type="audio-out"], .widget-instance[data-widget-type="usb-out"], .widget-instance[data-widget-type="es8311-out"], .widget-instance[data-widget-type="wm8960-out"]').forEach((el) => {
     ["left", "right"].forEach((channel) => {
@@ -6299,13 +6447,14 @@ function tickAudioMonitors() {
     drawOscilloscope(canvas, waveform1, waveform2, cvMode);
   });
   document.querySelectorAll('.widget-instance[data-widget-type="spectrum"]').forEach((el) => {
+    const state = audioMonitorStates.get(el.id);
     const canvas = el.querySelector('[data-role="spectrum-canvas"]');
-    if (canvas) {
+    if (canvas && state) {
       const spectrum = audioEngine.getSpectrum(el.id);
-      if (spectrum) drawSpectrum(canvas, spectrum);
+      if (spectrum) drawSpectrum(canvas, spectrum, state.rangeVolts);
     }
     const axisCanvas = el.querySelector('[data-role="spectrum-axis-canvas"]');
-    if (axisCanvas) drawSpectrumAxis(axisCanvas, audioEngine.ctx ? audioEngine.ctx.sampleRate : 0);
+    if (axisCanvas) drawSpectrumAxis(axisCanvas, audioEngine.ctx ? audioEngine.ctx.sampleRate : 0, 27);
   });
   document.querySelectorAll('.widget-instance[data-widget-type="esp-eq"]').forEach((el) => {
     const canvas = el.querySelector('[data-role="esp-eq-canvas"]');
@@ -6445,16 +6594,34 @@ function drawOscilloscope(canvas, waveform1, waveform2, cvMode) {
 
 
 
-function drawSpectrum(canvas, spectrum) {
+function drawSpectrum(canvas, spectrum, rangeVolts = null) {
   const ctx2d = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
   ctx2d.clearRect(0, 0, w, h);
+  const plotLeft = rangeVolts ? 27 : 0;
+  const plotWidth = w - plotLeft;
+  if (rangeVolts) {
+    ctx2d.font = "9px sans-serif";
+    ctx2d.textAlign = "right";
+    ctx2d.textBaseline = "middle";
+    [0, 0.5, 1].forEach((fraction) => {
+      const y = h - 3 - fraction * (h - 8);
+      ctx2d.strokeStyle = "rgba(148, 163, 184, 0.18)";
+      ctx2d.beginPath();
+      ctx2d.moveTo(plotLeft, y);
+      ctx2d.lineTo(w, y);
+      ctx2d.stroke();
+      ctx2d.fillStyle = "#94a3b8";
+      ctx2d.fillText(`${rangeVolts * fraction}V`, plotLeft - 3, y);
+    });
+  }
   ctx2d.fillStyle = "#4ade80";
-  const barWidth = w / spectrum.length;
+  const barWidth = plotWidth / spectrum.length;
   for (let i = 0; i < spectrum.length; i += 1) {
-    const barHeight = (spectrum[i] / 255) * h;
-    ctx2d.fillRect(i * barWidth, h - barHeight, Math.ceil(barWidth), barHeight);
+    const normalized = rangeVolts ? clamp(spectrum[i] / rangeVolts, 0, 1) : spectrum[i] / 255;
+    const barHeight = normalized * (h - (rangeVolts ? 5 : 0));
+    ctx2d.fillRect(plotLeft + i * barWidth, h - barHeight, Math.ceil(barWidth), barHeight);
   }
 }
 
@@ -6465,7 +6632,7 @@ function drawSpectrum(canvas, spectrum) {
 
 const SPECTRUM_AXIS_TICKS_HZ = [0, 2000, 5000, 10000, 15000, 20000];
 
-function drawSpectrumAxis(canvas, sampleRate) {
+function drawSpectrumAxis(canvas, sampleRate, leftPadding = 0) {
   const ctx2d = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
@@ -6476,7 +6643,7 @@ function drawSpectrumAxis(canvas, sampleRate) {
   ctx2d.font = "9px sans-serif";
   ctx2d.textBaseline = "top";
   SPECTRUM_AXIS_TICKS_HZ.filter((hz) => hz <= nyquist).forEach((hz) => {
-    const x = (hz / nyquist) * w;
+    const x = leftPadding + (hz / nyquist) * (w - leftPadding);
     ctx2d.textAlign = x < 12 ? "left" : x > w - 12 ? "right" : "center";
     ctx2d.fillText(hz === 0 ? "0" : `${hz / 1000}k`, x, 2);
   });
@@ -8541,9 +8708,52 @@ function portPosition(portEl) {
   );
 }
 
+const CABLE_SAG_KEY = "espressynth.cableSag";
+const ORTHOGONAL_CABLES_KEY = "espressynth.orthogonalCables";
+let cableSagEnabled = localStorage.getItem(CABLE_SAG_KEY) === "1";
+let orthogonalCablesEnabled = localStorage.getItem(ORTHOGONAL_CABLES_KEY) === "1";
+
+function orthogonalPath(p1, p2) {
+  const midX = (p1.x + p2.x) / 2;
+  const horizontalDirection = Math.sign(p2.x - p1.x) || 1;
+  const verticalDirection = Math.sign(p2.y - p1.y);
+  const radius = Math.min(16, Math.abs(p2.x - p1.x) / 4, Math.abs(p2.y - p1.y) / 2);
+  if (radius < 1) return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
+  return `M ${p1.x} ${p1.y} L ${midX - horizontalDirection * radius} ${p1.y} Q ${midX} ${p1.y}, ${midX} ${p1.y + verticalDirection * radius} L ${midX} ${p2.y - verticalDirection * radius} Q ${midX} ${p2.y}, ${midX + horizontalDirection * radius} ${p2.y} L ${p2.x} ${p2.y}`;
+}
+
 function bezierPath(p1, p2) {
+  if (orthogonalCablesEnabled) return orthogonalPath(p1, p2);
   const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 40);
+  if (cableSagEnabled) {
+    const sagY = Math.max(p1.y, p2.y) + Math.min(120, 28 + Math.abs(p2.x - p1.x) * 0.08);
+    return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${sagY}, ${p2.x - dx} ${sagY}, ${p2.x} ${p2.y}`;
+  }
   return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
+}
+
+function setCableSagEnabled(enabled) {
+  cableSagEnabled = enabled;
+  if (enabled) orthogonalCablesEnabled = false;
+  localStorage.setItem(CABLE_SAG_KEY, enabled ? "1" : "0");
+  localStorage.setItem(ORTHOGONAL_CABLES_KEY, orthogonalCablesEnabled ? "1" : "0");
+  const checkbox = document.getElementById("menuCableSag");
+  if (checkbox) checkbox.checked = enabled;
+  const orthogonalCheckbox = document.getElementById("menuOrthogonalCables");
+  if (orthogonalCheckbox) orthogonalCheckbox.checked = orthogonalCablesEnabled;
+  drawConnections();
+}
+
+function setOrthogonalCablesEnabled(enabled) {
+  orthogonalCablesEnabled = enabled;
+  if (enabled) cableSagEnabled = false;
+  localStorage.setItem(ORTHOGONAL_CABLES_KEY, enabled ? "1" : "0");
+  localStorage.setItem(CABLE_SAG_KEY, cableSagEnabled ? "1" : "0");
+  const checkbox = document.getElementById("menuOrthogonalCables");
+  if (checkbox) checkbox.checked = enabled;
+  const sagCheckbox = document.getElementById("menuCableSag");
+  if (sagCheckbox) sagCheckbox.checked = cableSagEnabled;
+  drawConnections();
 }
 
 let selectedConnectionId = null;
@@ -9851,6 +10061,10 @@ const WIDGET_ENGINES = {
   debug: {
     getParams: () => ({}),
     applyParams: () => {},
+  },
+  spectrum: {
+    getParams: (id) => ({ rangeVolts: audioMonitorStates.get(id)?.rangeVolts ?? AUDIO_PEAK_VOLTS }),
+    applyParams: (id, params) => setAudioMonitorRange(id, params?.rangeVolts, false),
   },
   "midi-in": {
     getParams: (id) => {
@@ -11369,6 +11583,16 @@ document.getElementById("menuToggleNodeCpu").addEventListener("click", (e) => {
   setNodeCpuVisible(!nodeCpuVisible);
 });
 setNodeCpuVisible(nodeCpuVisible); 
+
+const menuCableSag = document.getElementById("menuCableSag");
+menuCableSag.checked = cableSagEnabled;
+menuCableSag.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
+menuCableSag.addEventListener("change", () => setCableSagEnabled(menuCableSag.checked));
+
+const menuOrthogonalCables = document.getElementById("menuOrthogonalCables");
+menuOrthogonalCables.checked = orthogonalCablesEnabled;
+menuOrthogonalCables.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
+menuOrthogonalCables.addEventListener("change", () => setOrthogonalCablesEnabled(menuOrthogonalCables.checked));
 
 document.getElementById("logWindowClose").addEventListener("click", () => {
   setLogWindowVisible(false);

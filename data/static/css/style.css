@@ -209,6 +209,26 @@ button:hover {
   opacity: 1;
 }
 
+.dropdown-check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 1rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dropdown-check:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dropdown-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .audio-start-btn {
   background: none;
   border: 1px solid var(--card-border);
@@ -580,6 +600,15 @@ body.show-node-cpu .widget-cpu-badge {
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.canvas-content input,
+.canvas-content textarea,
+.canvas-content [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .lasso-box {
@@ -995,23 +1024,219 @@ body.show-node-cpu .widget-cpu-badge {
 /* VU-Meter-Widget */
 
 .vu-meter-body {
-  padding: 0.6rem 0.8rem;
+  min-width: 158px;
+  padding: 0.55rem 0.65rem 0.35rem;
+}
+
+.vu-meter-analog-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.vu-analog-gauge {
+  grid-column: 1 / -1;
+  position: relative;
+  width: 140px;
+  height: 76px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #8c8269;
+  border-radius: 6px 6px 18px 18px;
+  background:
+    linear-gradient(166deg, rgba(255, 255, 255, 0.82), transparent 38%),
+    linear-gradient(180deg, #f8f0d4, #d8cba8);
+  box-shadow:
+    inset 0 -8px 13px rgba(89, 67, 27, 0.18),
+    0 3px 7px rgba(0, 0, 0, 0.32);
+}
+
+.vu-analog-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(57, 48, 31, 0.22);
+  border-radius: 3px 3px 15px 15px;
+  pointer-events: none;
+}
+
+.vu-analog-tick {
+  position: absolute;
+  left: calc(50% - 1px);
+  bottom: 3px;
+  width: 2px;
+  height: 57px;
+  transform: rotate(var(--vu-angle));
+  transform-origin: 50% 100%;
+  background: linear-gradient(to bottom, #315f39 0 7px, transparent 7px);
+}
+
+.vu-analog-tick.vu-zone-amber {
+  background: linear-gradient(to bottom, #b26c08 0 8px, transparent 8px);
+}
+
+.vu-analog-tick.vu-zone-red {
+  background: linear-gradient(to bottom, #a62821 0 9px, transparent 9px);
+}
+
+.vu-analog-label {
+  position: absolute;
+  width: 24px;
+  margin: -4px 0 0 -12px;
+  color: #2f2a20;
+  font-family: "Arial Narrow", sans-serif;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.vu-analog-unit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  color: #675c45;
+  font-family: Georgia, serif;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.vu-analog-needle {
+  position: absolute;
+  left: calc(50% - 1px);
+  bottom: 4px;
+  width: 2px;
+  height: 54px;
+  border-radius: 2px 2px 0 0;
+  background: #be2d25;
+  box-shadow: 1px 0 1px rgba(0, 0, 0, 0.3);
+  transform: rotate(-52deg);
+  transform-origin: 50% 100%;
+  transition: transform 0.07s linear;
+  z-index: 2;
+}
+
+.vu-analog-pivot {
+  position: absolute;
+  left: calc(50% - 6px);
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #30302e;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #f0f0ed 0 10%, #777771 28%, #252525 68%);
+  z-index: 3;
+}
+
+.vu-meter-horizontal-body {
+  width: 220px;
+  padding-top: 0.45rem;
+}
+
+.vu-horizontal-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 1px 3px;
+  color: #aab3ba;
+  font-family: "Courier New", monospace;
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .vu-meter-track {
+  position: relative;
   width: 100%;
-  height: 12px;
-  background: var(--bg);
-  border: 1px solid var(--card-border);
-  border-radius: 0.3rem;
-  overflow: hidden;
+  height: 20px;
+  overflow: visible;
+  border: 1px solid #11181a;
+  border-radius: 3px;
+  background: #101719;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.85),
+    0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.vu-meter-track::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: repeating-linear-gradient(90deg, transparent 0 7px, #101719 7px 9px);
+  pointer-events: none;
 }
 
 .vu-meter-fill {
-  height: 100%;
-  width: 0%;
-  background: var(--ok);
-  transition: width 0.05s linear;
+  position: absolute;
+  inset: 2px;
+  background: linear-gradient(90deg, #26c36a 0 68%, #efbf28 68% 86%, #ef493f 86% 100%);
+  box-shadow: 0 0 8px rgba(38, 195, 106, 0.35);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.05s linear;
+}
+
+.vu-meter-peak {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 0;
+  width: 3px;
+  margin-left: -2px;
+  border-radius: 1px;
+  background: #fff5bd;
+  box-shadow: 0 0 6px rgba(255, 235, 128, 0.95);
+  transition: left 0.05s linear;
+  z-index: 2;
+  opacity: 0;
+}
+
+.vu-meter-peak.visible {
+  opacity: 1;
+}
+
+.vu-meter-readout {
+  min-width: 68px;
+}
+
+.widget-instance[data-widget-type="vu-meter"] .widget-ports,
+.widget-instance[data-widget-type="vu-meter-horizontal"] .widget-ports {
+  padding: 0.15rem 0 0.35rem;
+}
+
+.widget-instance[data-widget-type="vu-meter"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="vu-meter-horizontal"] .port-row-in > .port-label {
+  flex: 0 0 auto;
+}
+
+.monitor-range-control {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #46545a;
+  border-radius: 3px;
+}
+
+.monitor-range-control button {
+  min-width: 34px;
+  padding: 0.12rem 0.25rem;
+  border: 0;
+  border-right: 1px solid #46545a;
+  border-radius: 0;
+  background: #182226;
+  color: #9da9ad;
+  font-size: 0.58rem;
+  line-height: 1.15;
+}
+
+.monitor-range-control button:last-child {
+  border-right: 0;
+}
+
+.monitor-range-control button.active {
+  background: #d7e0dc;
+  color: #17201d;
+  font-weight: 700;
 }
 
 /* Voltmeter-Widget */
@@ -1191,6 +1416,10 @@ body.show-node-cpu .widget-cpu-badge {
 /* Spectrum-Analyzer-Widget */
 
 .spectrum-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
   padding: 0.5rem 0.6rem;
 }
 
@@ -1537,6 +1766,12 @@ body.show-node-cpu .widget-cpu-badge {
 .port-row-out {
   justify-content: flex-end;
   text-align: right;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.port-row-out .port-dot {
+  pointer-events: auto;
 }
 
 .port-dot {

@@ -30,6 +30,7 @@ const CV_MAX_VOLTS = 10;
 // domain) - mirrors cv::kAudioPeakVolts in CvConventions.h 1:1.
 const AUDIO_PEAK_VOLTS = 5;
 const GATE_THRESHOLD_VOLTS = 5;
+const ANALYSER_BLACKMAN_COHERENT_GAIN = 0.42;
 
 
 
@@ -201,6 +202,14 @@ const LFO_WAVE_PHASE_CORRECTION_CYCLES = { triangle: 0.75 };
 function lfoStartOffsetSeconds(waveType, phaseDeg, rate) {
   const correction = LFO_WAVE_PHASE_CORRECTION_CYCLES[waveType] || 0;
   return (phaseDeg / 360 + correction) / rate;
+}
+
+function lfoWaveValueAtPhase(waveType, phaseDeg) {
+  const phase = ((phaseDeg / 360) % 1 + 1) % 1;
+  if (waveType === "square") return phase < 0.5 ? 1 : -1;
+  if (waveType === "triangle") return 4 * Math.abs(phase - Math.floor(phase + 0.5)) - 1;
+  if (waveType === "sawtooth") return 2 * phase - 1;
+  return Math.sin(phase * Math.PI * 2);
 }
 
 export class AudioEngine {
@@ -1338,13 +1347,16 @@ export class AudioEngine {
         const rate = params.rate ?? 2;
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
+        const oneShot = params.oneShot === true;
         const lfoOsc = ctx.createOscillator();
         lfoOsc.type = waveType;
         lfoOsc.frequency.value = rate;
         const lfoGain = ctx.createGain();
-        lfoGain.gain.value = halfSwing;
+        lfoGain.gain.value = oneShot ? 0 : halfSwing;
         const centerOffset = ctx.createConstantSource();
-        centerOffset.offset.value = center;
+        centerOffset.offset.value = oneShot
+          ? center + lfoWaveValueAtPhase(waveType, phase) * halfSwing
+          : center;
         centerOffset.start();
         
         
@@ -1392,6 +1404,9 @@ export class AudioEngine {
           lfoZeroPointFixed: params.zeroPointFixed === true,
           lfoZeroPoint: params.zeroPoint ?? 5,
           lfoBipolar: bipolar,
+          lfoOneShot: oneShot,
+          lfoOneShotRunning: false,
+          lfoOneShotTimer: null,
         };
       }
       case "const":
@@ -2097,7 +2112,9 @@ export class AudioEngine {
         return { type, nodeL, nodeR };
       }
       case "vu-meter": {
-        const { analyser, buffer } = this._createAnalyser(ctx, 256);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        const buffer = new Float32Array(analyser.fftSize);
         return { type, analyser, buffer };
       }
       case "oscilloscope": {
@@ -2131,8 +2148,12 @@ export class AudioEngine {
         
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
-        const buffer = new Uint8Array(analyser.frequencyBinCount);
-        return { type, analyser, buffer };
+        analyser.minDecibels = -100;
+        analyser.maxDecibels = 20;
+        analyser.smoothingTimeConstant = 0.75;
+        const dbBuffer = new Float32Array(analyser.frequencyBinCount);
+        const voltageBuffer = new Float32Array(analyser.frequencyBinCount);
+        return { type, analyser, dbBuffer, voltageBuffer };
       }
       case "audio-to-value": {
         const { analyser, buffer } = this._createAnalyser(ctx, 32);
@@ -2276,10 +2297,12 @@ export class AudioEngine {
     }
     if (!analyser) return 0;
 
-    analyser.getByteTimeDomainData(buffer);
+    const floatSamples = buffer instanceof Float32Array;
+    if (floatSamples) analyser.getFloatTimeDomainData(buffer);
+    else analyser.getByteTimeDomainData(buffer);
     let sumSquares = 0;
     for (let i = 0; i < buffer.length; i += 1) {
-      const v = (buffer[i] - 128) / 128;
+      const v = floatSamples ? buffer[i] : (buffer[i] - 128) / 128;
       sumSquares += v * v;
     }
     return Math.sqrt(sumSquares / buffer.length);
@@ -2331,8 +2354,14 @@ export class AudioEngine {
     if (!wrapper) return null;
     const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
     if (!entry || entry.type !== "spectrum") return null;
-    entry.analyser.getByteFrequencyData(entry.buffer);
-    return entry.buffer;
+    entry.analyser.getFloatFrequencyData(entry.dbBuffer);
+    for (let i = 0; i < entry.dbBuffer.length; i += 1) {
+      const db = entry.dbBuffer[i];
+      entry.voltageBuffer[i] = Number.isFinite(db)
+        ? (2 / ANALYSER_BLACKMAN_COHERENT_GAIN) * 10 ** (db / 20)
+        : 0;
+    }
+    return entry.voltageBuffer;
   }
 
   
@@ -2415,6 +2444,7 @@ export class AudioEngine {
         entry.lfoOsc.stop();
         entry.lfoOsc.disconnect();
       }
+      if (entry.lfoOneShotTimer) clearTimeout(entry.lfoOneShotTimer);
       if (entry.lfoGain) entry.lfoGain.disconnect();
       if (entry.centerOffset) {
         entry.centerOffset.stop();
@@ -2591,6 +2621,30 @@ export class AudioEngine {
     return wrapper.voiced ? wrapper.instances.length : 1;
   }
 
+  _setLfoRunning(entry, running) {
+    if (!entry || !this.ctx) return;
+    const halfSwing = entry.lfoAmplitude / 2;
+    const center = entry.lfoBipolar ? 0 : (entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing);
+    const heldValue = center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing;
+    const now = this.ctx.currentTime;
+    entry.lfoGain.gain.cancelScheduledValues(now);
+    entry.centerOffset.offset.cancelScheduledValues(now);
+    entry.lfoGain.gain.setValueAtTime(running ? halfSwing : 0, now);
+    entry.centerOffset.offset.setValueAtTime(running ? center : heldValue, now);
+    entry.lfoOneShotRunning = running;
+  }
+
+  _scheduleLfoOneShotStop(entry) {
+    if (entry.lfoOneShotTimer) clearTimeout(entry.lfoOneShotTimer);
+    this._setLfoRunning(entry, true);
+    const rate = Math.max(0, Number(entry.lfoOsc.frequency.value) || 0);
+    if (rate <= 0) return;
+    entry.lfoOneShotTimer = setTimeout(() => {
+      entry.lfoOneShotTimer = null;
+      this._setLfoRunning(entry, false);
+    }, 1000 / rate);
+  }
+
   
   
   
@@ -2625,6 +2679,8 @@ export class AudioEngine {
         
       }
       entry.lfoOsc = newOsc;
+      if (entry.lfoOneShot) this._scheduleLfoOneShotStop(entry);
+      else this._setLfoRunning(entry, true);
     };
     if (wrapper.voiced) {
       if (voiceIndex !== undefined && wrapper.instances[voiceIndex]) {
@@ -2960,14 +3016,29 @@ export class AudioEngine {
           entry.lfoZeroPoint = value;
         } else if (paramName === "bipolar") {
           entry.lfoBipolar = value === true || value === 1;
+        } else if (paramName === "oneShot") {
+          const enabled = value === true || value === 1;
+          if (enabled !== entry.lfoOneShot) {
+            entry.lfoOneShot = enabled;
+            if (entry.lfoOneShotTimer) {
+              clearTimeout(entry.lfoOneShotTimer);
+              entry.lfoOneShotTimer = null;
+            }
+            this._setLfoRunning(entry, !enabled);
+          }
         } else if (paramName === "waveType") {
           entry.lfoOsc.type = value;
         }
-        if (paramName === "amplitude" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "bipolar") {
+        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "bipolar" || paramName === "waveType") {
           const halfSwing = entry.lfoAmplitude / 2;
           const center = entry.lfoBipolar ? 0 : (entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing);
-          applyRampValue(entry.lfoGain.gain, halfSwing);
-          applyRampValue(entry.centerOffset.offset, center);
+          if (entry.lfoOneShot && !entry.lfoOneShotRunning) {
+            applyRampValue(entry.lfoGain.gain, 0);
+            applyRampValue(entry.centerOffset.offset, center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing);
+          } else {
+            applyRampValue(entry.lfoGain.gain, halfSwing);
+            applyRampValue(entry.centerOffset.offset, center);
+          }
         }
         break;
       }

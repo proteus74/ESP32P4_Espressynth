@@ -162,7 +162,7 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Es8311Out;
     if (strcmp(typeStr, "wm8960-out") == 0)
         return NodeType::Wm8960Out;
-    if (strcmp(typeStr, "vu-meter") == 0)
+    if (strcmp(typeStr, "vu-meter") == 0 || strcmp(typeStr, "vu-meter-horizontal") == 0)
         return NodeType::VuMeter;
     if (strcmp(typeStr, "oscilloscope") == 0)
         return NodeType::Oscilloscope;
