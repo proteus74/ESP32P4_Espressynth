@@ -7,6 +7,8 @@
 
 #include "esp_heap_caps.h"
 
+#include "CvConventions.h"
+
 namespace espae
 {
 
@@ -65,6 +67,14 @@ inline bool allocateScratch(S32PlanarScratch &scratch, uint8_t channelCount, siz
     return true;
 }
 
+// Engine audio follows the CV module's ±kAudioPeakVolts (5V) convention, not
+// ±1 - normalize into the ±1 range this ESP_AUDIO_EFFECTS boundary expects
+// before clipping/scaling, and scale back out symmetrically in s32ToFloat().
+// Same conversion OutputNodes.h already applies at the final hardware stage
+// (see CvConventions.h's file-level comment). Previously missing here (plan
+// section 6, finding 3): a genuine full-scale audio signal (±5V) hit the
+// clip branch below at just 1/5 of its actual level, and the returned signal
+// came back 5x too quiet for every downstream node expecting ±5V.
 inline void floatToS32(const float *input, int32_t *output, size_t frames)
 {
     if (input == nullptr || output == nullptr)
@@ -74,7 +84,7 @@ inline void floatToS32(const float *input, int32_t *output, size_t frames)
     constexpr float kScale = 2147483647.0f;
     for (size_t i = 0; i < frames; ++i)
     {
-        float sample = input[i];
+        float sample = input[i] * cv::kInvAudioPeakVolts;
         if (sample >= 1.0f)
         {
             output[i] = INT32_MAX;
@@ -96,7 +106,7 @@ inline void s32ToFloat(const int32_t *input, float *output, size_t frames)
     {
         return;
     }
-    constexpr float kScale = 1.0f / 2147483648.0f;
+    constexpr float kScale = cv::kAudioPeakVolts / 2147483648.0f;
     for (size_t i = 0; i < frames; ++i)
     {
         output[i] = static_cast<float>(input[i]) * kScale;

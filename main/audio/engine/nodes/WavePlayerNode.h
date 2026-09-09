@@ -50,15 +50,9 @@ inline void render(NodeInstance &inst, size_t frames)
     // 20ms linear release fade - see WavePlayerState::fadeGain.
     const float fadeStep = 1.0f / (0.02f * kSampleRate);
 
-    for (size_t i = 0; i < frames; ++i)
+    size_t i = 0;
+    for (; i < frames; ++i)
     {
-        if (!s.playing)
-        {
-            inst.outL[i] = 0.0f;
-            inst.outR[i] = 0.0f;
-            continue;
-        }
-
         if (gateNow)
         {
             s.fadeGain = 1.0f;
@@ -66,9 +60,17 @@ inline void render(NodeInstance &inst, size_t frames)
         else if (s.fadeGain > 0.0f)
         {
             s.fadeGain -= fadeStep;
-            if (s.fadeGain < 0.0f)
+            if (s.fadeGain <= 0.0f)
             {
                 s.fadeGain = 0.0f;
+                // Release fully faded out - stop reading sample data instead
+                // of continuing until the file's natural end (plan: "Nach
+                // Gate-off und vollständig abgeklungenem 20-ms-Fade
+                // playing=false setzen; derzeit laufen Sample-Lesezugriffe
+                // bis Dateiende weiter"). This sample's amp below still
+                // computes to exactly 0 from the just-updated fadeGain, so
+                // playback ends silently, not abruptly.
+                s.playing = false;
             }
         }
 
@@ -95,6 +97,23 @@ inline void render(NodeInstance &inst, size_t frames)
         if (s.position >= static_cast<float>(lastFrame))
         {
             s.playing = false; // one-shot: stop at end, no loop, no retrigger until next gate edge
+        }
+
+        if (!s.playing)
+        {
+            // Whether playback just hit the file's natural end or the
+            // release fade just fully decayed above - the remainder of this
+            // block is silence. Zero it contiguously instead of falling
+            // through the per-sample branch (sample reads, interpolation,
+            // amp multiply) for every remaining frame (plan: "Restblock beim
+            // Ende zusammenhängend nullen").
+            ++i;
+            if (i < frames)
+            {
+                memset(inst.outL + i, 0, (frames - i) * sizeof(float));
+                memset(inst.outR + i, 0, (frames - i) * sizeof(float));
+            }
+            return;
         }
     }
 }

@@ -26,6 +26,14 @@ struct ValueMapperState
     float minVal = 0.0f, maxVal = 0.0f;
     float valueList[synth::kValueListMax] = {};
     uint8_t valueListCount = 0;
+    // Cached 1/(point2In - point1In) - refreshed only when the mapping
+    // points themselves change (refreshDerived() below, called from
+    // build()/setParam()), not once per sample. mappedValue() runs in the
+    // audio-rate sample loop whenever "in" is DSP-connected (see render()),
+    // so the division this replaces used to run per sample (plan section 5:
+    // "im Samplepfad steht aktuell eine Division durch denselben Bereich").
+    // 0.0f when point2In == point1In (degenerate mapping, same as before).
+    float invRange = 0.0f;
 
     float mappedValue(float input) const
     {
@@ -34,7 +42,7 @@ struct ValueMapperState
             int idx = 0;
             if (point2In != point1In)
             {
-                float frac = (input - point1In) / (point2In - point1In);
+                float frac = (input - point1In) * invRange;
                 if (frac < 0.0f)
                     frac = 0.0f;
                 if (frac > 1.0f)
@@ -48,7 +56,7 @@ struct ValueMapperState
 
         float value = point2In == point1In
                           ? point1Out
-                          : point1Out + (input - point1In) * (point2Out - point1Out) / (point2In - point1In);
+                          : point1Out + (input - point1In) * (point2Out - point1Out) * invRange;
         if (hasMin && value < minVal)
             value = minVal;
         if (hasMax && value > maxVal)
@@ -57,11 +65,20 @@ struct ValueMapperState
     }
 };
 
+inline void refreshDerived(ValueMapperState &s)
+{
+    s.invRange = s.point2In != s.point1In ? 1.0f / (s.point2In - s.point1In) : 0.0f;
+}
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = *inst.valueMapper;
-    if (inst.audioConnectedPortMask == 0)
+    // controlRampPortMask must gate this fast path too - see
+    // ArithmeticNodes.h's renderMultiplier() comment / plan section 6,
+    // finding 1: a MIDI-glide input on "in" is per-sample-varying without
+    // ever setting audioConnectedPortMask.
+    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
     {
         const float result = s.mappedValue(portSample(inst, 0, 0));
         for (size_t i = 0; i < frames; ++i)
@@ -96,6 +113,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     {
         inst.valueMapper->valueList[i] = p.valueList[i];
     }
+    refreshDerived(*inst.valueMapper);
 }
 
 inline void destroy(NodeInstance &inst)
@@ -115,6 +133,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (name != nullptr && strcmp(name, "point1In") == 0)
     {
         inst.valueMapper->point1In = value;
+        refreshDerived(*inst.valueMapper);
         return true;
     }
     if (name != nullptr && strcmp(name, "point1Out") == 0)
@@ -125,6 +144,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (name != nullptr && strcmp(name, "point2In") == 0)
     {
         inst.valueMapper->point2In = value;
+        refreshDerived(*inst.valueMapper);
         return true;
     }
     if (name != nullptr && strcmp(name, "point2Out") == 0)

@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "../CvConventions.h"
+#include "../EngineStats.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -99,6 +100,23 @@ inline void render(NodeInstance &inst, size_t frames)
     float constantPitchCv = kCenterVolts;
     const bool pitchAudioConstant = pitchAudioFed && audioPortConstantForBlock(inst, 1, frames, constantPitchCv);
     const bool pitchNeedsAudioRate = (pitchAudioFed && !pitchAudioConstant) || pitchControlRamping;
+    // Tune (port 2) gets the identical constant-for-block check as pitch
+    // above - a Tune cable fed from a Frequency Divider or a held-note
+    // source is just as likely to carry one repeated CV value for the whole
+    // block. Closes the gap the plan calls out explicitly (documentation/
+    // native-synth-optimization-plan-2026-09-09.md, section 2): pitch had
+    // this fast path already, tune didn't.
+    float constantTuneVolts = s.tuneVolts;
+    const bool tuneAudioConstant = tuneAudioFed && audioPortConstantForBlock(inst, 2, frames, constantTuneVolts);
+    const bool tuneNeedsAudioRate = tuneAudioFed && !tuneAudioConstant;
+    const bool needsAudioRate = pitchNeedsAudioRate || tuneNeedsAudioRate;
+    if (pitchNeedsAudioRate) ++enginestats::current.oscPitchAudioRate;
+    else ++enginestats::current.oscPitchConstant;
+    if (tuneAudioFed)
+    {
+        if (tuneNeedsAudioRate) ++enginestats::current.oscTuneAudioRate;
+        else ++enginestats::current.oscTuneConstant;
+    }
     // "waveform" (port 3) is control-only too (see isControlOnlyInput) -
     // stays read once per block: an audio-rate switch between discrete
     // waveforms has no meaningful "signal shape" (unlike cutoff/pitch), it
@@ -129,38 +147,72 @@ inline void render(NodeInstance &inst, size_t frames)
     if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
     {
         memset(inst.outL, 0, frames * sizeof(float));
+        ++enginestats::current.oscSilentSkipped;
         return;
     }
+
+    // Gain-smoothing convergence stop (plan section 3, "P1: WaveGen-
+    // Schleife vereinfachen", item 5): once the unwired gain smoother has
+    // settled within epsilon of its target, snap it there and skip the
+    // per-sample OnePoleLowpass::process() call for the rest of this block.
+    // The next real gain change still starts its ramp from the (now exact)
+    // target instead of a stale near-target remainder.
+    constexpr float kGainConvergeEps = 1e-4f;
+    const bool gainConverged = !gainFed && fabsf(s.gainSmooth.current() - gainTarget) <= kGainConvergeEps;
+    if (gainConverged)
+    {
+        s.gainSmooth.snapTo(gainTarget);
+        ++enginestats::current.oscGainConverged;
+    }
+
+    // Amplitude/gain port pointers resolved once per block instead of
+    // portSample()'s per-sample inPorts[]-null-check + fallback (plan item
+    // 4). gainBuf is only ever dereferenced under gainFed, which - like
+    // every other audio-connected port in this engine - guarantees
+    // GraphBuilder allocated its buffer (edges only ever write into a
+    // non-null inPorts[] slot, see Graph::renderBlock's edge-summing pass).
+    const float *ampBuf = inst.inPorts[0];
+    const float ampScalar = inst.controlValue[0];
+    const float *gainBuf = gainFed ? inst.inPorts[4] : nullptr;
+
     const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
-    if (pitchNeedsAudioRate || tuneAudioFed)
+    if (needsAudioRate)
     {
         for (size_t i = 0; i < frames; ++i)
         {
             const float pitchCv =
                 pitchNeedsAudioRate ? portSample(inst, 1, i) : (pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts));
-            const float tuneVolts = tuneAudioFed ? portSample(inst, 2, i) : s.tuneVolts;
+            const float tuneVolts =
+                tuneNeedsAudioRate ? portSample(inst, 2, i) : (tuneAudioFed ? constantTuneVolts : s.tuneVolts);
             const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * s.detuneMul;
-            const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
+            // A genuine DSP edge on "amplitude" (e.g. an ADSR/LFO output) is
+            // 0-10V CV like every other CV-carrying port (see
+            // CvConventions.h) - vcaGain() turns it back into the 0..1
+            // multiplier this additive amp expects. Unconnected (or
+            // ControlRoute-only, e.g. MIDI velocity via the dedicated
+            // s.amplitude field above) reads 0V here -> vcaGain(0)=0, i.e.
+            // no change from before.
+            const float amp = baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
             const float gainMul =
-                gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
+                gainFed ? cv::vcaGain(gainBuf[i], false) : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
             const float sample = s.phaseGen.process(wave, hz, kSampleRate);
             inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
         }
         return;
     }
     const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts);
-    const float hz = cv::hzFromPitchCv(pitchCv + (s.tuneVolts - kCenterVolts)) * s.detuneMul;
+    const float tuneVoltsConst = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
+    const float hz = cv::hzFromPitchCv(pitchCv + (tuneVoltsConst - kCenterVolts)) * s.detuneMul;
+    // Phase increment precomputed once for the whole block (plan item 2):
+    // advance() would otherwise redo this same `hz * invSampleRate` multiply
+    // on every sample even though hz is constant for the entire block here.
+    const float phaseIncrement = hz / kSampleRate;
     for (size_t i = 0; i < frames; ++i)
     {
-        // A genuine DSP edge on "amplitude" (e.g. an ADSR/LFO output) is
-        // 0-10V CV like every other CV-carrying port (see CvConventions.h)
-        // - vcaGain() turns it back into the 0..1 multiplier this additive
-        // amp expects. Unconnected (or ControlRoute-only, e.g. MIDI
-        // velocity via the dedicated s.amplitude field above) reads 0V
-        // here -> vcaGain(0)=0, i.e. no change from before.
-        const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
-        const float gainMul = gainFed ? cv::vcaGain(portSample(inst, 4, i), false) : s.gainSmooth.process(gainTarget);
-        const float sample = s.phaseGen.process(wave, hz, kSampleRate);
+        const float amp = baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+        const float gainMul =
+            gainFed ? cv::vcaGain(gainBuf[i], false) : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
+        const float sample = s.phaseGen.processWithIncrement(wave, phaseIncrement);
         inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
 }

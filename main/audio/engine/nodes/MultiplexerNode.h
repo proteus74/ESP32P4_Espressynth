@@ -84,24 +84,51 @@ inline void render(NodeInstance &inst, size_t frames)
             s.fadeTo = requestedTarget;
         }
     }
-    for (size_t i = 0; i < frames; ++i)
+    size_t i = 0;
+    if (s.fadeSamples != 0)
     {
-        if (s.fadeSamples == 0)
+        // Reciprocal of the fade length cached once per block instead of a
+        // division every sample (plan section 5, Multiplexer row: "während
+        // Fade Kehrwert der Fade-Länge cachen statt pro Sample dividieren").
+        // Valid for the whole fade - fadeSamples itself only ever changes
+        // when a fade starts or completes, never mid-fade.
+        const float invFadeSamples = 1.0f / static_cast<float>(s.fadeSamples);
+        for (; i < frames; ++i)
         {
-            inst.outL[i] = portSample(inst, s.activeIndex, i);
-            continue;
+            const float t = static_cast<float>(s.fadePosition + 1) * invFadeSamples;
+            const float from = portSample(inst, s.fadeFrom, i);
+            const float to = portSample(inst, s.fadeTo, i);
+            inst.outL[i] = from + (to - from) * t;
+            ++s.fadePosition;
+            if (s.fadePosition >= s.fadeSamples)
+            {
+                s.activeIndex = s.fadeTo;
+                s.fadeSamples = 0;
+                s.fadePosition = 0;
+                ++i;
+                break;
+            }
         }
-
-        const float t = static_cast<float>(s.fadePosition + 1) / static_cast<float>(s.fadeSamples);
-        const float from = portSample(inst, s.fadeFrom, i);
-        const float to = portSample(inst, s.fadeTo, i);
-        inst.outL[i] = from + (to - from) * t;
-        ++s.fadePosition;
-        if (s.fadePosition >= s.fadeSamples)
+    }
+    // No fade active - either none was ever pending, or one just completed
+    // mid-block above. The rest of this block is a straight passthrough of
+    // the active input: copy its buffer directly instead of the per-sample
+    // portSample() branch/call (plan: "Ohne Fade Pufferansicht"/"nach Fade
+    // Rest des Blocks direkt kopieren").
+    if (i < frames)
+    {
+        const float *src = inst.inPorts[s.activeIndex];
+        if (src != nullptr)
         {
-            s.activeIndex = s.fadeTo;
-            s.fadeSamples = 0;
-            s.fadePosition = 0;
+            memcpy(inst.outL + i, src + i, (frames - i) * sizeof(float));
+        }
+        else
+        {
+            const float scalar = inst.controlValue[s.activeIndex];
+            for (; i < frames; ++i)
+            {
+                inst.outL[i] = scalar;
+            }
         }
     }
 }

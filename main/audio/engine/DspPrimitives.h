@@ -273,6 +273,15 @@ public:
     // work once genuinely silent) without perturbing it.
     float current() const { return z_; }
 
+    // Forces the smoothed state directly to `target`, bypassing the ramp.
+    // For a caller that already established (via current()) that the ramp
+    // has converged within its own tolerance of `target` this is a no-op in
+    // effect, just removing the last epsilon of residual error - so the next
+    // real change starts the ramp from the exact target instead of a stale
+    // near-target remainder (see OscillatorNode.h's gain-smoothing fast
+    // path).
+    void snapTo(float target) { z_ = target; }
+
     void reset() { z_ = 0.0f; }
 
 private:
@@ -444,6 +453,37 @@ public:
         default:
             sample = 0.0f;
             break;
+        }
+        return sample;
+    }
+
+    // Same as process(), but for a block where the caller has already
+    // resolved pitch/tune to one constant Hz for the whole block (see
+    // OscillatorNode.h's audioPortConstantForBlock fast path) and hoisted
+    // `hz / sampleRate` to a single division outside the sample loop
+    // (documentation/native-synth-optimization-plan-2026-09-09.md, P1 item
+    // 2: "phaseIncrement = hz / sampleRate einmal vorberechnen"). Advances by
+    // that precomputed increment directly - one add instead of advance()'s
+    // multiply-then-add per sample.
+    float processWithIncrement(WaveType wave, float phaseIncrement, float phaseOffset = 0.0f)
+    {
+        if (wave == WaveType::Noise)
+        {
+            return nextNoise();
+        }
+        if (wave == WaveType::PinkNoise)
+        {
+            return nextPinkNoise();
+        }
+        const float sample = currentSample(wave, phaseOffset);
+        phase_ += phaseIncrement;
+        if (phase_ >= 1.0f)
+        {
+            phase_ -= floorf(phase_);
+        }
+        else if (phase_ < 0.0f)
+        {
+            phase_ -= floorf(phase_);
         }
         return sample;
     }

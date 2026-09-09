@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 
 #include "CvConventions.h"
+#include "EngineStats.h"
 #include "EspEqEffect.h"
 #include "EspAdditionalEffects.h"
 #include "NodeInstance.h"
@@ -189,10 +190,31 @@ public:
     // EMA-smoothed per-widget CPU load. Profiling rotates over one widget per
     // block so timer reads do not scale with graph size. Generation advances
     // after a complete sweep and lets SynthEngine publish only fresh snapshots.
+    // widgetLoadPercent covers only that widget's own render() calls (node
+    // DSP); widgetEdgeLoadPercent separately covers summing its outgoing
+    // edges into downstream instances - previously entirely unmeasured (see
+    // documentation/native-synth-optimization-plan-2026-09-09.md section 7:
+    // "Eingangspuffer vorbereiten und ausgehende Verbindungen summieren
+    // liegen außerhalb"). Same rotation, same O(1)-per-block cost - just two
+    // timer-read pairs for the profiled widget instead of one.
     float widgetLoadPercent[synth::kMaxWidgets] = {};
+    float widgetEdgeLoadPercent[synth::kMaxWidgets] = {};
     uint16_t widgetProfileCursor = 0;
     float widgetProfileEmaAlpha = 0.0f;
     uint32_t widgetLoadGeneration = 0;
+
+    // P0 baseline diagnostics (plan section 7): the block-level phases the
+    // per-widget profiler above still can't see because they run outside any
+    // single widget's render/edge span - voice-activity classification plus
+    // input-buffer clear/fill, the renderOrder sweep as a whole (node DSP +
+    // edge-summing across every widget), and the final per-sink output copy.
+    // Timed unconditionally every block (not rotated): each is already O(1)
+    // extra esp_timer_get_time() calls regardless of graph size, same cost
+    // class as SynthEngine::taskLoop's own existing midi/liveParam/render
+    // phase timers.
+    float phaseActivityPercent = 0.0f;
+    float phaseRenderPercent = 0.0f;
+    float phaseOutputPercent = 0.0f;
 
     Edge edges[synth::kMaxRuntimeEdges];
     uint16_t edgeCount = 0;
@@ -499,6 +521,9 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
         widgetProfileEmaAlpha = 1.0f - retention;
     }
 
+    enginestats::beginBlock();
+    const int64_t phaseActivityStartUs = esp_timer_get_time();
+
     // Voice skipping: a voice v counts as active as long as any connected
     // ADSR of that voice has not truly reached 0 yet. An unconnected ADSR
     // must not silence the rest of the signal path. If there is no connected
@@ -623,6 +648,13 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
         }
     }
 
+    {
+        const float activityPercent =
+            100.0f * static_cast<float>(esp_timer_get_time() - phaseActivityStartUs) / kGraphBlockBudgetUs;
+        phaseActivityPercent += kGraphWidgetLoadEmaAlpha * (activityPercent - phaseActivityPercent);
+    }
+    const int64_t phaseRenderStartUs = esp_timer_get_time();
+
     for (uint16_t r = 0; r < renderOrderCount; ++r)
     {
         const WidgetSlot &w = widgets[renderOrder[r]];
@@ -656,10 +688,20 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
         for (uint16_t v = 0; v < w.instanceCount; ++v)
         {
             NodeInstance &inst = instances[w.instanceBase + v];
+            ++enginestats::current.instancesTotal;
+            // Idle here means "this voice slot's own activity check would
+            // have skipped it" - forced on anyway by renderWhenIdle/global
+            // widgets or the LFO-primary-stays-live exception below (see
+            // ForceLfoPrimaryActive above). Matches plan section 7's request
+            // for "trotz Ruhe gerenderte" instances as a distinct count from
+            // ordinary active-voice rendering.
+            const bool voiceIdle = w.voiced && !voiceStillSounding[v];
             if (!w.voiced || w.renderWhenIdle || voiceStillSounding[v] || (forceLfoPrimaryActive && v == 0))
             {
                 processNodeBlock(inst, frames);
                 inst.wasRenderedLastBlock = true;
+                ++enginestats::current.instancesRendered;
+                if (voiceIdle) ++enginestats::current.instancesRenderedWhileIdle;
             }
             else if (inst.wasRenderedLastBlock)
             {
@@ -684,6 +726,7 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
         // Propagate this widget's freshly-rendered outputs along its
         // outgoing edges. Safe because renderOrder is topological: every
         // edge target is processed later in this same loop.
+        const int64_t widgetEdgeStartUs = profileWidget ? esp_timer_get_time() : 0;
         const uint16_t edgeEnd = w.outgoingEdgeStart + w.outgoingEdgeCount;
         for (uint16_t e = w.outgoingEdgeStart; e < edgeEnd; ++e)
         {
@@ -722,6 +765,19 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
                 }
             }
         }
+        if (profileWidget)
+        {
+            const float edgePercent =
+                100.0f * static_cast<float>(esp_timer_get_time() - widgetEdgeStartUs) / kGraphBlockBudgetUs;
+            float &smoothedEdge = widgetEdgeLoadPercent[renderOrder[r]];
+            smoothedEdge += widgetProfileEmaAlpha * (edgePercent - smoothedEdge);
+        }
+    }
+
+    {
+        const float renderPercent =
+            100.0f * static_cast<float>(esp_timer_get_time() - phaseRenderStartUs) / kGraphBlockBudgetUs;
+        phaseRenderPercent += kGraphWidgetLoadEmaAlpha * (renderPercent - phaseRenderPercent);
     }
 
     if (renderOrderCount > 0 && ++widgetProfileCursor >= renderOrderCount)
@@ -730,6 +786,7 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
         ++widgetLoadGeneration;
     }
 
+    const int64_t phaseOutputStartUs = esp_timer_get_time();
     auto fillOutput = [&](int16_t widgetIdx, float *outL, float *outR) {
         if (widgetIdx >= 0)
         {
@@ -746,6 +803,11 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
     fillOutput(usbOutWidget, out.usbL, out.usbR);
     fillOutput(es8311OutWidget, out.esL, out.esR);
     fillOutput(wm8960OutWidget, out.wmL, out.wmR);
+    {
+        const float outputPercent =
+            100.0f * static_cast<float>(esp_timer_get_time() - phaseOutputStartUs) / kGraphBlockBudgetUs;
+        phaseOutputPercent += kGraphWidgetLoadEmaAlpha * (outputPercent - phaseOutputPercent);
+    }
 }
 
 inline void Graph::handleMidiEvent(const UsbMidiEvent &event)

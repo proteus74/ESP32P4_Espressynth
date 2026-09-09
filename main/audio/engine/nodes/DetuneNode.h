@@ -21,12 +21,18 @@ inline void render(NodeInstance &inst, size_t frames)
     // below - plain volt arithmetic, no trig/pow involved, so per-sample
     // evaluation is effectively free. Unconnected (or ControlRoute-fed,
     // e.g. Knob by paramName - always block-constant) still only needs one
-    // read per block.
+    // read per block. A ControlRoute-fed MIDI pitch mid-glide is the
+    // exception: it's genuinely per-sample-varying too (Graph::renderBlock's
+    // midiPitchRampPort case), just without ever setting
+    // audioConnectedPortMask - so cvRamping must gate the fast path exactly
+    // like cvAudioFed does, or the glide gets reduced to its block's first
+    // sample here (plan section 6, finding 1: "Glide durch CV-Rechennodes").
     auto &s = inst.detune;
     const bool cvAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
+    const bool cvRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 0)) != 0;
     const float amount = s.amountSmooth.process(s.amountTarget);
     const float deltaVolts = amount * s.maxVolts;
-    if (cvAudioFed)
+    if (cvAudioFed || cvRamping)
     {
         for (size_t i = 0; i < frames; ++i)
         {

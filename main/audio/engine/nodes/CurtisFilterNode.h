@@ -181,8 +181,16 @@ inline void render(NodeInstance &inst, size_t frames)
         float stage4 = stage2;
         if (poles == 4)
         {
-            processStage(s, 2, stage2);
-            stage4 = processStage(s, 3, s.stage[2]);
+            // Fixed (plan section 6, finding 2): stage 3's actual output now
+            // feeds stage 4, matching the intended 4-pole TPT ladder cascade
+            // (each stage's output is the next stage's input). Previously
+            // stage 3's return value was discarded and stage 4 was fed
+            // s.stage[2] instead - that integrator's post-update internal
+            // state, not its output (see processStage()'s v/output/state
+            // relationship above) - a different, larger-magnitude signal.
+            // Audibly changes LP24's frequency response/resonance character.
+            const float stage3 = processStage(s, 2, stage2);
+            stage4 = processStage(s, 3, stage3);
         }
         const float output = outputForMode(s.mode, input, stage1, stage2, stage4);
         // tanhLookup is intrinsically bounded to +/-1, so asymmetricClip is

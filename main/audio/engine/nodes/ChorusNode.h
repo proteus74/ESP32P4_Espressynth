@@ -19,38 +19,57 @@ namespace nodes::chorus
 
 struct ChorusState
 {
-    DelayLine delayL;
-    DelayLine delayR;
+    // Single ring buffer: both channels were always fed the identical mono
+    // input sample (see render() below), so a second full duplicate buffer
+    // was pure waste - one write stream, two independently interpolated read
+    // taps reproduce the exact same signal (plan section 3, P1 row: "ein
+    // gemeinsamer Ring mit zwei interpolierten Lesetaps erhält das Verfahren
+    // und spart einen Schreibstrom sowie etwa 17.6 KiB pro Instanz").
+    DelayLine delay;
     float lfoPhase = 0.0f;
     float rateHz = 1.5f;
     float offsetSec = 0.02f;
     float depthSec = 0.003f;
+    // Cached derived values (see refreshDerived() below) - recomputed only
+    // when rate/offset/depth actually change (build()/setParam()), not once
+    // per sample: lfoStep = rateHz/sampleRate, offset/depthSamples =
+    // offset/depthSec*sampleRate (plan: "LFO-Schritt, Offset/Depth in
+    // Samples vorberechnen").
+    float lfoStep = 0.0f;
+    float offsetSamples = 0.0f;
+    float depthSamples = 0.0f;
 };
+
+inline void refreshDerived(ChorusState &s)
+{
+    constexpr float kSampleRate = static_cast<float>(synth::kSampleRate);
+    s.lfoStep = s.rateHz / kSampleRate;
+    s.offsetSamples = s.offsetSec * kSampleRate;
+    s.depthSamples = s.depthSec * kSampleRate;
+}
 
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
-    const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = *inst.chorus;
     for (size_t i = 0; i < frames; ++i)
     {
         const float x = portSample(inst, 0, i);
-        s.lfoPhase += s.rateHz / kSampleRate;
+        s.lfoPhase += s.lfoStep;
         if (s.lfoPhase >= 1.0f)
         {
             s.lfoPhase -= floorf(s.lfoPhase);
         }
         const float lfo = dsp::sineLookup(s.lfoPhase);
-        float dtL = (s.offsetSec + s.depthSec * lfo) * kSampleRate;
-        float dtR = (s.offsetSec - s.depthSec * lfo) * kSampleRate;
+        float dtL = s.offsetSamples + s.depthSamples * lfo;
+        float dtR = s.offsetSamples - s.depthSamples * lfo;
         if (dtL < 0.0f)
             dtL = 0.0f;
         if (dtR < 0.0f)
             dtR = 0.0f;
-        s.delayL.write(x);
-        s.delayR.write(x);
-        inst.outL[i] = s.delayL.readInterpolated(dtL);
-        inst.outR[i] = s.delayR.readInterpolated(dtR);
+        s.delay.write(x);
+        inst.outL[i] = s.delay.readInterpolated(dtL);
+        inst.outR[i] = s.delay.readInterpolated(dtR);
     }
 }
 
@@ -59,18 +78,17 @@ inline void build(NodeInstance &inst, const WidgetParams &p, bool psram)
     inst.chorus->rateHz = p.rate;
     inst.chorus->offsetSec = p.offset;
     inst.chorus->depthSec = p.depth;
+    refreshDerived(*inst.chorus);
     // 100ms buffer covers offset (max 0.04s) + depth (max 0.015s) with
     // headroom - see CHORUS_SLIDER_CONFIG in data/static/js/main.js.
-    inst.chorus->delayL.init(0.1f, static_cast<float>(synth::kSampleRate), psram);
-    inst.chorus->delayR.init(0.1f, static_cast<float>(synth::kSampleRate), psram);
+    inst.chorus->delay.init(0.1f, static_cast<float>(synth::kSampleRate), psram);
 }
 
 inline void destroy(NodeInstance &inst)
 {
     if (inst.chorus != nullptr)
     {
-        inst.chorus->delayL.freeBuffer();
-        inst.chorus->delayR.freeBuffer();
+        inst.chorus->delay.freeBuffer();
         heap_caps_free(inst.chorus);
         inst.chorus = nullptr;
     }
@@ -85,16 +103,19 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (strcmp(name, "rate") == 0)
     {
         inst.chorus->rateHz = value;
+        refreshDerived(*inst.chorus);
         return true;
     }
     if (strcmp(name, "depth") == 0)
     {
         inst.chorus->depthSec = value;
+        refreshDerived(*inst.chorus);
         return true;
     }
     if (strcmp(name, "offset") == 0)
     {
         inst.chorus->offsetSec = value;
+        refreshDerived(*inst.chorus);
         return true;
     }
     return false;

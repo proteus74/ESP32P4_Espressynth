@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 
 #include "DspPrimitives.h"
+#include "EngineStats.h"
 #include "Graph.h"
 #include "GraphBuilder.h"
 #include "LiveParamMsg.h"
@@ -91,6 +92,63 @@ public:
         snprintf(idOut, idOutSize, "%s", widgetLoadIds_[i]);
         *percentOut = widgetLoadPercent_[i].load(std::memory_order_relaxed);
         return true;
+    }
+
+    // Edge-summing counterpart to widgetLoadAt() above - same widget index
+    // space (0..widgetLoadCount()-1), just the outgoing-edge-summing share of
+    // that widget's cost instead of its own render() calls (see
+    // Graph::widgetEdgeLoadPercent).
+    float widgetEdgeLoadPercentAt(uint16_t i) const
+    {
+        return i < widgetLoadCount_.load(std::memory_order_relaxed)
+                   ? widgetEdgeLoadPercent_[i].load(std::memory_order_relaxed)
+                   : 0.0f;
+    }
+
+    // P0 baseline diagnostics (documentation/native-synth-optimization-plan-
+    // 2026-09-09.md, sections 7/8): the block-level phase breakdown inside
+    // Graph::renderBlock (percent of block budget, EMA-smoothed) that the
+    // per-widget profiler above can't see, plus the fast-path/instance
+    // counters from the most recently completed block. Also logged natively
+    // (no browser/JS involved, see taskLoop()) every couple seconds at
+    // ESP_LOGI, matching the plan's "native C++ benchmark mode" request.
+    struct PhaseSnapshot
+    {
+        float activityPercent = 0.0f; // voice-activity calc + input buffer clear/fill
+        float renderPercent = 0.0f;   // whole renderOrder sweep: node DSP + edge-summing, every widget
+        float outputPercent = 0.0f;   // final per-sink output copy
+    };
+    PhaseSnapshot phaseSnapshot() const
+    {
+        return {phaseActivityPercent_.load(std::memory_order_relaxed),
+                phaseRenderPercent_.load(std::memory_order_relaxed),
+                phaseOutputPercent_.load(std::memory_order_relaxed)};
+    }
+    struct BlockStatsSnapshot
+    {
+        uint32_t oscPitchConstant = 0;
+        uint32_t oscPitchAudioRate = 0;
+        uint32_t oscTuneConstant = 0;
+        uint32_t oscTuneAudioRate = 0;
+        uint32_t oscSilentSkipped = 0;
+        uint32_t oscGainConverged = 0;
+        uint32_t instancesTotal = 0;
+        uint32_t instancesRendered = 0;
+        uint32_t instancesRenderedWhileIdle = 0;
+    };
+    BlockStatsSnapshot blockStatsSnapshot() const
+    {
+        BlockStatsSnapshot s;
+        s.oscPitchConstant = oscPitchConstant_.load(std::memory_order_relaxed);
+        s.oscPitchAudioRate = oscPitchAudioRate_.load(std::memory_order_relaxed);
+        s.oscTuneConstant = oscTuneConstant_.load(std::memory_order_relaxed);
+        s.oscTuneAudioRate = oscTuneAudioRate_.load(std::memory_order_relaxed);
+        s.oscSilentSkipped = oscSilentSkipped_.load(std::memory_order_relaxed);
+        s.oscGainConverged = oscGainConverged_.load(std::memory_order_relaxed);
+        s.instancesTotal = instancesTotal_.load(std::memory_order_relaxed);
+        s.instancesRendered = instancesRendered_.load(std::memory_order_relaxed);
+        s.instancesRenderedWhileIdle = instancesRenderedWhileIdle_.load(std::memory_order_relaxed);
+        return s;
     }
 
     struct TimingSnapshot
@@ -411,9 +469,26 @@ private:
     // while the percent values are real atomics (change every block).
     char widgetLoadIds_[synth::kMaxWidgets][24] = {};
     std::atomic<float> widgetLoadPercent_[synth::kMaxWidgets] = {};
+    std::atomic<float> widgetEdgeLoadPercent_[synth::kMaxWidgets] = {};
     std::atomic<uint16_t> widgetLoadCount_{0};
     const Graph *widgetLoadGraph_ = nullptr;
     uint32_t widgetLoadGeneration_ = 0;
+
+    // P0 baseline diagnostics snapshots (see phaseSnapshot()/
+    // blockStatsSnapshot() above) - published once per block from the render
+    // task alongside the widget-load sweep, read by any task.
+    std::atomic<float> phaseActivityPercent_{0.0f};
+    std::atomic<float> phaseRenderPercent_{0.0f};
+    std::atomic<float> phaseOutputPercent_{0.0f};
+    std::atomic<uint32_t> oscPitchConstant_{0};
+    std::atomic<uint32_t> oscPitchAudioRate_{0};
+    std::atomic<uint32_t> oscTuneConstant_{0};
+    std::atomic<uint32_t> oscTuneAudioRate_{0};
+    std::atomic<uint32_t> oscSilentSkipped_{0};
+    std::atomic<uint32_t> oscGainConverged_{0};
+    std::atomic<uint32_t> instancesTotal_{0};
+    std::atomic<uint32_t> instancesRendered_{0};
+    std::atomic<uint32_t> instancesRenderedWhileIdle_{0};
 
     std::atomic<uint32_t> renderPeakUs_{0};
     static constexpr uint32_t kTimingHistogramBinWidthUs = 64;
@@ -969,10 +1044,57 @@ inline void SynthEngine::taskLoop()
             {
                 memcpy(widgetLoadIds_[i], liveGraph_->widgets[i].id, sizeof(widgetLoadIds_[i]));
                 widgetLoadPercent_[i].store(liveGraph_->widgetLoadPercent[i], std::memory_order_relaxed);
+                widgetEdgeLoadPercent_[i].store(liveGraph_->widgetEdgeLoadPercent[i], std::memory_order_relaxed);
             }
             widgetLoadCount_.store(widgetLoadN, std::memory_order_relaxed);
             widgetLoadGraph_ = liveGraph_;
             widgetLoadGeneration_ = liveGraph_->widgetLoadGeneration;
+        }
+
+        // P0 baseline diagnostics: published every block (a handful of plain
+        // stores, same cost class as the phase timing itself) - see
+        // phaseSnapshot()/blockStatsSnapshot() above. enginestats::lastBlock
+        // reflects the block Graph::renderBlock() just finished (its
+        // beginBlock() call runs at the very start of that renderBlock, see
+        // Graph.h), so this is always one block behind, same staleness as
+        // every other render-task-owned diagnostic here.
+        phaseActivityPercent_.store(liveGraph_->phaseActivityPercent, std::memory_order_relaxed);
+        phaseRenderPercent_.store(liveGraph_->phaseRenderPercent, std::memory_order_relaxed);
+        phaseOutputPercent_.store(liveGraph_->phaseOutputPercent, std::memory_order_relaxed);
+        const enginestats::BlockCounters &blockStats = enginestats::lastBlock;
+        oscPitchConstant_.store(blockStats.oscPitchConstant, std::memory_order_relaxed);
+        oscPitchAudioRate_.store(blockStats.oscPitchAudioRate, std::memory_order_relaxed);
+        oscTuneConstant_.store(blockStats.oscTuneConstant, std::memory_order_relaxed);
+        oscTuneAudioRate_.store(blockStats.oscTuneAudioRate, std::memory_order_relaxed);
+        oscSilentSkipped_.store(blockStats.oscSilentSkipped, std::memory_order_relaxed);
+        oscGainConverged_.store(blockStats.oscGainConverged, std::memory_order_relaxed);
+        instancesTotal_.store(blockStats.instancesTotal, std::memory_order_relaxed);
+        instancesRendered_.store(blockStats.instancesRendered, std::memory_order_relaxed);
+        instancesRenderedWhileIdle_.store(blockStats.instancesRenderedWhileIdle, std::memory_order_relaxed);
+
+        // Native, browser-independent baseline log (plan section 8: "kein
+        // Browser und keine JS-Engine als Referenz") - rate-limited to avoid
+        // spamming the console every block.
+        static int64_t lastDiagLogUs = 0;
+        if (iterStartUs - lastDiagLogUs >= 2000000)
+        {
+            lastDiagLogUs = iterStartUs;
+            ESP_LOGI(kSynthEngineTag,
+                     "P0 baseline: phases activity=%.2f%% render=%.2f%% output=%.2f%% | osc pitch "
+                     "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu silentSkip=%lu gainConverged=%lu | "
+                     "instances total/rendered/idleForced=%lu/%lu/%lu",
+                     static_cast<double>(liveGraph_->phaseActivityPercent),
+                     static_cast<double>(liveGraph_->phaseRenderPercent),
+                     static_cast<double>(liveGraph_->phaseOutputPercent),
+                     static_cast<unsigned long>(blockStats.oscPitchConstant),
+                     static_cast<unsigned long>(blockStats.oscPitchAudioRate),
+                     static_cast<unsigned long>(blockStats.oscTuneConstant),
+                     static_cast<unsigned long>(blockStats.oscTuneAudioRate),
+                     static_cast<unsigned long>(blockStats.oscSilentSkipped),
+                     static_cast<unsigned long>(blockStats.oscGainConverged),
+                     static_cast<unsigned long>(blockStats.instancesTotal),
+                     static_cast<unsigned long>(blockStats.instancesRendered),
+                     static_cast<unsigned long>(blockStats.instancesRenderedWhileIdle));
         }
 
         // Host audio (USB speaker-OUT) arrives as its own streaming ring;
