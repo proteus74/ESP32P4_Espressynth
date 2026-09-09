@@ -73,6 +73,50 @@ inline bool request_current_preset() {
     return xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS;
 }
 
+/**
+ * @brief Native, browser-independent P0 baseline log (plan section 8: "kein
+ * Browser und keine JS-Engine als Referenz") - reads the render task's
+ * published atomics (SynthEngine::phaseSnapshot()/blockStatsSnapshot()) and
+ * prints them via ESP_LOGI from THIS caller's task, not the render task.
+ * Deliberately not called from SynthEngine::taskLoop() itself: a real
+ * hardware run showed the ESP_LOGI call (UART write, ~2ms) blocking long
+ * enough there to single-handedly blow the ~2.9ms block budget and trigger
+ * an Audio-Overrun on the very block it logged from. Call this instead from
+ * a non-real-time task on roughly a multi-second cadence (see main.cpp).
+ */
+inline void log_p0_baseline_tick() {
+    constexpr const char *kTag = "synth_p0";
+    const SynthEngine::PhaseSnapshot phases = engine().phaseSnapshot();
+    const SynthEngine::BlockStatsSnapshot stats = engine().blockStatsSnapshot();
+    ESP_LOGI(kTag,
+             "P0 baseline: phases activity=%.2f%% render=%.2f%% output=%.2f%% | osc pitch "
+             "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu silentSkip=%lu gainConverged=%lu | "
+             "instances total/rendered/idleForced=%lu/%lu/%lu",
+             static_cast<double>(phases.activityPercent), static_cast<double>(phases.renderPercent),
+             static_cast<double>(phases.outputPercent), static_cast<unsigned long>(stats.oscPitchConstant),
+             static_cast<unsigned long>(stats.oscPitchAudioRate), static_cast<unsigned long>(stats.oscTuneConstant),
+             static_cast<unsigned long>(stats.oscTuneAudioRate), static_cast<unsigned long>(stats.oscSilentSkipped),
+             static_cast<unsigned long>(stats.oscGainConverged), static_cast<unsigned long>(stats.instancesTotal),
+             static_cast<unsigned long>(stats.instancesRendered),
+             static_cast<unsigned long>(stats.instancesRenderedWhileIdle));
+
+    // Per-widget breakdown (same data the browser's node-CPU display uses,
+    // see synth_web_api.hpp's broadcast_status_tick "nodeCpu" - printed here
+    // too so the phases line above is actually attributable to a widget
+    // without needing the browser open, see plan section 8). dspPercent is
+    // that widget's own render() calls; edgePercent is summing its outgoing
+    // edges into downstream instances (see Graph::widgetEdgeLoadPercent).
+    const uint16_t widgetCount = engine().widgetLoadCount();
+    for (uint16_t i = 0; i < widgetCount; ++i) {
+        char widgetId[24];
+        float dspPercent = 0.0f;
+        if (!engine().widgetLoadAt(i, widgetId, sizeof(widgetId), &dspPercent)) continue;
+        const float edgePercent = engine().widgetEdgeLoadPercentAt(i);
+        ESP_LOGI(kTag, "  widget %-20s dsp=%.2f%% edge=%.2f%%", widgetId, static_cast<double>(dspPercent),
+                 static_cast<double>(edgePercent));
+    }
+}
+
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
 namespace {
 // Host (USB speaker, i.e. whatever the PC plays) -> onboard-codec mix-in ring, drained by

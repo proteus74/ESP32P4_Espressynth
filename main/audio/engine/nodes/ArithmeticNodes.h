@@ -19,22 +19,25 @@ namespace nodes::arithmetic
 inline void renderMultiplier(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
-    // When no input is audio-rate wired, portSample() returns the same
-    // value for every i (ControlRoute fill or default - see
-    // Graph::renderBlock) - compute once instead of rebuilding the same
-    // product up to 128x (same pattern as Lfo's block-rate fast path).
-    // controlRampPortMask must gate this too: an active MIDI-glide ramp
-    // (Graph::renderBlock's midiPitchRampPort case) fills inPorts[] with a
-    // genuinely per-sample-varying value WITHOUT ever setting
-    // audioConnectedPortMask - reading only sample 0 would reduce that glide
-    // to a single step for the whole block (plan section 6, finding 1:
-    // "Glide durch CV-Rechennodes").
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    // allPortsConstantForBlock() covers every case where every port resolves
+    // to one repeated value this block - not audio-connected at all (a
+    // ControlRoute fill or a type default, see Graph::renderBlock), a
+    // genuine DSP edge that happens to be unchanging (e.g. a held note), and
+    // an active MIDI-glide ramp is correctly recognized as NOT constant (it
+    // scans the real buffer content rather than trusting
+    // audioConnectedPortMask, see its comment in NodeInstance.h - this is
+    // also what fixes plan section 6 finding 1, "Glide durch CV-
+    // Rechennodes", for this node). Computing the product once, in the same
+    // port order the loop below uses, is bit-identical to what every sample
+    // would have produced (plan section 3, P2: "Frequency Divider, Detune,
+    // Adder, Multiplier, Divide und Abs propagieren diese Information").
+    float values[synth::kMaxAudioInPorts] = {};
+    if (allPortsConstantForBlock(inst, inst.audioInPortCount, frames, values))
     {
-        float product = portSample(inst, 0, 0);
+        float product = values[0];
         for (int p = 1; p < inst.audioInPortCount; ++p)
         {
-            product *= portSample(inst, p, 0);
+            product *= values[p];
         }
         for (size_t i = 0; i < frames; ++i)
         {
@@ -56,15 +59,14 @@ inline void renderMultiplier(NodeInstance &inst, size_t frames)
 inline void renderAdder(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
-    // See renderMultiplier()'s comment above - controlRampPortMask must gate
-    // this fast path too, or an active MIDI-glide input gets reduced to its
-    // block's first sample.
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    // See renderMultiplier()'s comment above.
+    float values[synth::kMaxAudioInPorts] = {};
+    if (allPortsConstantForBlock(inst, inst.audioInPortCount, frames, values))
     {
         float sum = 0.0f;
         for (int p = 0; p < inst.audioInPortCount; ++p)
         {
-            sum += portSample(inst, p, 0);
+            sum += values[p];
         }
         for (size_t i = 0; i < frames; ++i)
         {
@@ -87,10 +89,10 @@ inline void renderDivide(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     // See renderMultiplier()'s comment above.
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    float numerator = 0.0f;
+    float denominator = 0.0f;
+    if (audioPortConstantForBlock(inst, 0, frames, numerator) && audioPortConstantForBlock(inst, 1, frames, denominator))
     {
-        const float numerator = portSample(inst, 0, 0);
-        const float denominator = portSample(inst, 1, 0);
         const float result = denominator == 0.0f ? 0.0f : numerator / denominator;
         for (size_t i = 0; i < frames; ++i)
         {
@@ -100,9 +102,9 @@ inline void renderDivide(NodeInstance &inst, size_t frames)
     }
     for (size_t i = 0; i < frames; ++i)
     {
-        const float numerator = portSample(inst, 0, i);
-        const float denominator = portSample(inst, 1, i);
-        inst.outL[i] = denominator == 0.0f ? 0.0f : numerator / denominator;
+        const float n = portSample(inst, 0, i);
+        const float d = portSample(inst, 1, i);
+        inst.outL[i] = d == 0.0f ? 0.0f : n / d;
     }
 }
 
@@ -158,10 +160,18 @@ inline void renderFrequencyDivider(NodeInstance &inst, size_t frames)
     // See renderMultiplier()'s comment above - a glide on the pitch input
     // (port 0) would otherwise be reduced to its block's first sample here,
     // exactly the case the plan's Frequency Divider diagnosis (section 2)
-    // singles out.
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    // singles out. dividerConnected's own branch (raw knob value vs. cached
+    // pitchOffsetVolts) is preserved exactly, just evaluated once instead of
+    // per sample when both ports turn out block-constant.
+    float cvValue = 0.0f;
+    float dividerValue = 0.0f;
+    const bool cvConstant = audioPortConstantForBlock(inst, 0, frames, cvValue);
+    const bool dividerConstant = audioPortConstantForBlock(inst, 1, frames, dividerValue);
+    if (cvConstant && dividerConstant)
     {
-        const float result = applyFrequencyDividerOffset(portSample(inst, 0, 0), inst.frequencyDivider.pitchOffsetVolts);
+        const float offset =
+            dividerConnected ? frequencyDividerPitchOffset(dividerValue) : inst.frequencyDivider.pitchOffsetVolts;
+        const float result = applyFrequencyDividerOffset(cvValue, offset);
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = result;
@@ -180,9 +190,10 @@ inline void renderAbs(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     // See renderMultiplier()'s comment above.
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    float value = 0.0f;
+    if (audioPortConstantForBlock(inst, 0, frames, value))
     {
-        const float result = fabsf(portSample(inst, 0, 0));
+        const float result = fabsf(value);
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = result;

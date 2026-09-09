@@ -4,11 +4,17 @@
 
 // P0 baseline diagnostics: fast-path and instance-activity counters for the
 // native optimization plan (documentation/native-synth-optimization-plan-
-// 2026-09-09.md, section 8's "native C++ benchmark mode" request). Read only
-// by the render task's own periodic diagnostic log (see SynthEngine::
-// taskLoop) - single-writer, single-reader-of-the-stable-snapshot, so plain
-// (non-atomic) counters are enough, same "one shared inline instance, no
-// .cpp needed" pattern as DspPrimitives' LUTs (see dsp::sineLutTable).
+// 2026-09-09.md, section 8's "native C++ benchmark mode" request). Written
+// only by the render task (SynthEngine::taskLoop, right after
+// Graph::renderBlock), which then copies lastBlock into its own published
+// atomics (see SynthEngine::blockStatsSnapshot()) for any other task to read
+// - so this struct itself stays single-writer/single-reader (the render task
+// reads its own lastBlock immediately after writing it), plain (non-atomic)
+// counters are enough, same "one shared inline instance, no .cpp needed"
+// pattern as DspPrimitives' LUTs (see dsp::sineLutTable). The actual
+// ESP_LOGI print of that published snapshot happens elsewhere entirely (see
+// Feature::Synth::log_p0_baseline_tick(), synth_manager.hpp) - deliberately
+// NOT on this render task, see that function's comment for why.
 namespace enginestats
 {
 struct BlockCounters
@@ -22,6 +28,11 @@ struct BlockCounters
     uint32_t oscPitchAudioRate = 0;
     uint32_t oscTuneConstant = 0;
     uint32_t oscTuneAudioRate = 0;
+    // "amplitude" (port 0) - typically an ADSR envelope. Constant whenever
+    // that envelope is sitting on its sustain plateau (or unconnected) -
+    // see OscillatorNode.h's render() (plan section 3, P2 extension).
+    uint32_t oscAmpConstant = 0;
+    uint32_t oscAmpAudioRate = 0;
     // Oscillator instances skipped entirely because gain is already at 0 and
     // converged (see OscillatorNode.h's kSilentGain fast path).
     uint32_t oscSilentSkipped = 0;

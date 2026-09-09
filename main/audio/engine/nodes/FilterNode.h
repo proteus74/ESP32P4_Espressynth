@@ -63,6 +63,18 @@ struct FilterState
     // default 4. No effect on coeffsDirty's block-rate path (there it is
     // only recomputed on actual change anyway, no per-sample reference).
     uint8_t coeffStride = 4;
+    // Last cutoff/resonance CV actually used to compute the current biquad
+    // coefficients under a genuine audio-rate edge (see render() below) -
+    // lets a stride tick skip setLowpass/Highpass/Bandpass entirely when the
+    // CV hasn't actually changed since the last update (e.g. an ADSR
+    // sitting on its sustain plateau, or a paused/idle modulation source),
+    // instead of unconditionally recomputing on every stride-th sample (plan
+    // section 3/5: "Unveränderte CV-Werte trotz Audio-Kabel erkennen; nur
+    // geänderte Cutoff-/Q-Abbildung berechnen"). Distinct from
+    // cutoffCv/resonanceCv above, which are the manual/unwired scalars.
+    float lastAudioCutoffCv = 0.0f;
+    float lastAudioResonanceCv = 0.0f;
+    bool audioCoeffsInitialized = false;
     // Global/per-voice switch, same pattern as GainState::global: false
     // (default) = each voice applies its own cutoff/resonance modulation
     // to its own "in" signal (current behavior). true = when
@@ -149,19 +161,26 @@ inline void render(NodeInstance &inst, size_t frames)
                 nextCoeffSample += coeffStride;
                 const float cutoffCv = cutoffAudioFed ? src.inPorts[1][i] : s.cutoffCv;
                 const float resonanceCv = resonanceAudioFed ? src.inPorts[2][i] : s.resonanceCv;
-                const float q = filterResonanceQ(s, resonanceCv);
-                const float cutoff = filterCutoffHz(s, cutoffCv);
-                switch (s.kind)
+                if (!s.audioCoeffsInitialized || cutoffCv != s.lastAudioCutoffCv ||
+                    resonanceCv != s.lastAudioResonanceCv)
                 {
-                case FilterKind::LowPass:
-                    s.biquad.setLowpass(cutoff, q, kSampleRate);
-                    break;
-                case FilterKind::HighPass:
-                    s.biquad.setHighpass(cutoff, q, kSampleRate);
-                    break;
-                case FilterKind::BandPass:
-                    s.biquad.setBandpass(cutoff, q, kSampleRate);
-                    break;
+                    const float q = filterResonanceQ(s, resonanceCv);
+                    const float cutoff = filterCutoffHz(s, cutoffCv);
+                    switch (s.kind)
+                    {
+                    case FilterKind::LowPass:
+                        s.biquad.setLowpass(cutoff, q, kSampleRate);
+                        break;
+                    case FilterKind::HighPass:
+                        s.biquad.setHighpass(cutoff, q, kSampleRate);
+                        break;
+                    case FilterKind::BandPass:
+                        s.biquad.setBandpass(cutoff, q, kSampleRate);
+                        break;
+                    }
+                    s.lastAudioCutoffCv = cutoffCv;
+                    s.lastAudioResonanceCv = resonanceCv;
+                    s.audioCoeffsInitialized = true;
                 }
             }
             inst.outL[i] = s.biquad.process(portSample(inst, 0, i));

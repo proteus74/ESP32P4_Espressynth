@@ -247,6 +247,62 @@ inline bool controlPortConnected(const NodeInstance &inst, int portIdx)
 {
     return (inst.controlConnectedPortMask & synth::portBit(portIdx)) != 0;
 }
+
+// True if `port` resolves to one repeated value for this whole block,
+// regardless of why: no buffer at all (unconnected, or ControlRoute-filled
+// - see Graph::renderBlock - trivially constant, O(1), no scan needed), a
+// genuine DSP edge that happens to carry an unchanging value (e.g. a held
+// note through a Frequency Divider), or - just as correctly, since this
+// scans the actual buffer content rather than trusting a connectivity flag
+// - a currently active MIDI-glide ramp (Graph::renderBlock's
+// midiPitchRampPort fill is a real, genuinely varying per-sample sequence,
+// not distinguished by audioConnectedPortMask at all - see documentation/
+// native-synth-optimization-plan-2026-09-09.md section 6, finding 1).
+// `value` receives the constant value whenever this returns true. Shared
+// by every node type that wants a block-constant fast path (originally
+// Oscillator's pitch/tune - see OscillatorNode.h - now general since P2
+// asks several more node types to do the same, see allPortsConstantForBlock
+// below).
+inline bool audioPortConstantForBlock(const NodeInstance &inst, int port, size_t frames, float &value)
+{
+    const float *samples = inst.inPorts[port];
+    if (samples == nullptr || frames == 0)
+    {
+        value = inst.controlValue[port];
+        return true;
+    }
+
+    value = samples[0];
+    for (size_t i = 1; i < frames; ++i)
+    {
+        if (samples[i] != value)
+            return false;
+    }
+    return true;
+}
+
+// Convenience for a node whose every audio input port (0..portCount-1)
+// must be block-constant before it can skip its per-sample loop (plan
+// section 3, P2: "Frequency Divider, Detune, Adder, Multiplier, Divide und
+// Abs propagieren diese Information"). Fills values[0..portCount) as it
+// goes (only the entries up to the first non-constant port are meaningful
+// when this returns false) and stops scanning as soon as one port turns
+// out non-constant, in the SAME port order the caller's own per-sample
+// loop already used - so falling back to values[p] for every p is bit-
+// identical to what that loop would have computed for any one sample once
+// every port genuinely is constant (no summation/order change, just fewer
+// repeats of the same computation).
+inline bool allPortsConstantForBlock(const NodeInstance &inst, int portCount, size_t frames, float *values)
+{
+    for (int p = 0; p < portCount; ++p)
+    {
+        if (!audioPortConstantForBlock(inst, p, frames, values[p]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 } // namespace noderender
 
 // processNodeBlock() (the switch-dispatch DSP render for one block) lives in

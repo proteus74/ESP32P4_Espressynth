@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "esp_attr.h"
+
 #include "../CvConventions.h"
 #include "../EngineStats.h"
 #include "../NodeInstance.h"
@@ -41,30 +43,56 @@ inline WaveType waveTypeFromCv(float volts)
     }
 }
 
-// Audio cables normally require audio-rate pitch. Some nodes, such as a
-// FrequencyDivider fed by a held MIDI note, still produce one identical CV
-// value for the entire block. Detect that case once here so the oscillator can
-// use its normal one-Hz-calculation-per-block path.
-inline bool audioPortConstantForBlock(const NodeInstance &inst, int port, size_t frames, float &value)
-{
-    const float *samples = inst.inPorts[port];
-    if (samples == nullptr || frames == 0)
-    {
-        value = inst.controlValue[port];
-        return true;
-    }
+// audioPortConstantForBlock() now lives in NodeInstance.h's noderender
+// namespace (shared by every node type that wants this fast path, not just
+// Oscillator - see its comment there and allPortsConstantForBlock() next to
+// it, used below and by ArithmeticNodes.h/DetuneNode.h/ValueMapperNode.h).
 
-    value = samples[0];
-    for (size_t i = 1; i < frames; ++i)
+// Everything the fast (non-audio-rate-pitch) per-sample loop below needs,
+// bundled so the templated loop function itself stays a short parameter
+// list. Plain pointers/values, no ownership - lifetime is just the one
+// render() call that builds this on its stack.
+struct FastLoopCtx
+{
+    NodeInstance *inst;
+    PhaseOsc *phaseGen;
+    OnePoleLowpass *gainSmooth;
+    const float *ampBuf;
+    const float *gainBuf;
+    float ampScalar;
+    float baseAmp;
+    float ampConstantValue;
+    float gainTarget;
+    float phaseIncrement;
+    bool gainFed;
+    bool gainConverged;
+    bool ampConstantForBlock;
+};
+
+// The actual per-sample loop, one shared definition specialized per
+// waveform at compile time (PhaseOsc::processWithIncrementT<W>() - see its
+// comment in DspPrimitives.h) instead of six hand-written copies. Dispatch
+// to the right instantiation happens once per block via the switch in
+// render() below, not once per sample.
+template <WaveType W>
+IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
+{
+    for (size_t i = 0; i < frames; ++i)
     {
-        if (samples[i] != value)
-            return false;
+        const float amp = c.ampConstantForBlock ? c.ampConstantValue
+                                                 : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+        const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
+                                         : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
-    return true;
 }
 } // namespace
 
-inline void render(NodeInstance &inst, size_t frames)
+// IRAM_ATTR: confirmed hottest single node render() on real hardware (see
+// documentation/native-synth-optimization-plan-2026-09-09.md section 1c) -
+// see DspPrimitives.h's sineLookup() comment for the full reasoning.
+IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
@@ -176,6 +204,22 @@ inline void render(NodeInstance &inst, size_t frames)
     const float *gainBuf = gainFed ? inst.inPorts[4] : nullptr;
 
     const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
+    // "amplitude" (port 0) block-constant detection, same technique as
+    // pitch/tune above (plan section 3, P2: extend the constant-for-block
+    // fast path to more ports). It's read via vcaGain() every sample
+    // regardless of the pitch/tune fast path, since it's an independent
+    // modulation source (typically an ADSR envelope) - but an ADSR sitting
+    // on its sustain plateau (or simply unconnected) produces exactly the
+    // same repeated value all block, so this skips the redundant per-sample
+    // vcaGain() call once that's detected.
+    float constantAmpCv = ampScalar;
+    const bool ampConstantForBlock = audioPortConstantForBlock(inst, 0, frames, constantAmpCv);
+    const float ampConstantValue = baseAmp + cv::vcaGain(constantAmpCv, false);
+    if (ampBuf != nullptr)
+    {
+        if (ampConstantForBlock) ++enginestats::current.oscAmpConstant;
+        else ++enginestats::current.oscAmpAudioRate;
+    }
     if (needsAudioRate)
     {
         for (size_t i = 0; i < frames; ++i)
@@ -192,7 +236,8 @@ inline void render(NodeInstance &inst, size_t frames)
             // ControlRoute-only, e.g. MIDI velocity via the dedicated
             // s.amplitude field above) reads 0V here -> vcaGain(0)=0, i.e.
             // no change from before.
-            const float amp = baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+            const float amp = ampConstantForBlock ? ampConstantValue
+                                                   : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
             const float gainMul =
                 gainFed ? cv::vcaGain(gainBuf[i], false) : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
             const float sample = s.phaseGen.process(wave, hz, kSampleRate);
@@ -207,13 +252,33 @@ inline void render(NodeInstance &inst, size_t frames)
     // advance() would otherwise redo this same `hz * invSampleRate` multiply
     // on every sample even though hz is constant for the entire block here.
     const float phaseIncrement = hz / kSampleRate;
-    for (size_t i = 0; i < frames; ++i)
+    // Waveform dispatch happens exactly once here, for the whole block -
+    // not once per sample the way PhaseOsc::process()'s internal `switch`
+    // would (plan section 3, P1 item 3). See renderFastLoop()/FastLoopCtx
+    // above.
+    FastLoopCtx ctx{&inst,        &s.phaseGen, &s.gainSmooth,      ampBuf,       gainBuf,
+                     ampScalar,    baseAmp,     ampConstantValue,  gainTarget,   phaseIncrement,
+                     gainFed,      gainConverged, ampConstantForBlock};
+    switch (wave)
     {
-        const float amp = baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
-        const float gainMul =
-            gainFed ? cv::vcaGain(gainBuf[i], false) : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
-        const float sample = s.phaseGen.processWithIncrement(wave, phaseIncrement);
-        inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+    case WaveType::Sine:
+        renderFastLoop<WaveType::Sine>(ctx, frames);
+        break;
+    case WaveType::Square:
+        renderFastLoop<WaveType::Square>(ctx, frames);
+        break;
+    case WaveType::Triangle:
+        renderFastLoop<WaveType::Triangle>(ctx, frames);
+        break;
+    case WaveType::Sawtooth:
+        renderFastLoop<WaveType::Sawtooth>(ctx, frames);
+        break;
+    case WaveType::Noise:
+        renderFastLoop<WaveType::Noise>(ctx, frames);
+        break;
+    case WaveType::PinkNoise:
+        renderFastLoop<WaveType::PinkNoise>(ctx, frames);
+        break;
     }
 }
 

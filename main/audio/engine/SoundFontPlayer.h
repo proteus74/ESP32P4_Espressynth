@@ -275,7 +275,14 @@ inline tsf *load(const LoadConfig &config, int &presetIndex)
         tsf_close(synth);
         return nullptr;
     }
-    tsf_set_output(synth, TSF_STEREO_INTERLEAVED, synth::kSampleRate, 0.0f);
+    // TSF_STEREO_UNWEAVED (not interleaved): tsf_render_float() then writes
+    // L and R as two contiguous halves of the buffer instead of alternating
+    // L/R samples - renderPlanar() below hands that straight to the caller,
+    // which de-interleaves nothing and applies gain in the same single pass
+    // it copies into inst.outL/outR (plan section 5: "Interleaved-zu-
+    // Planar-Kopie und nachfolgenden Gain-Durchlauf zusammenlegen" /
+    // "native getrennte Ausgabe prüfen" - tsf already offers exactly that).
+    tsf_set_output(synth, TSF_STEREO_UNWEAVED, synth::kSampleRate, 0.0f);
     if (!tsf_set_max_voices(synth, config.maxVoices))
     {
         ESP_LOGE(kSoundFontTag, "Voices could not be pre-allocated: %d", config.maxVoices);
@@ -297,7 +304,7 @@ inline tsf *copy(tsf *source, int maxVoices)
     if (source == nullptr) return nullptr;
     tsf *result = tsf_copy(source);
     if (result == nullptr) return nullptr;
-    tsf_set_output(result, TSF_STEREO_INTERLEAVED, synth::kSampleRate, 0.0f);
+    tsf_set_output(result, TSF_STEREO_UNWEAVED, synth::kSampleRate, 0.0f); // see load()'s comment above
     if (!tsf_set_max_voices(result, maxVoices))
     {
         tsf_close(result);
@@ -419,26 +426,29 @@ inline int activeVoiceCount(const SoundFontPlayerState &state)
     return state.synth != nullptr ? tsf_active_voice_count(state.synth) : 0;
 }
 
-inline void render(SoundFontPlayerState &state, float *left, float *right, size_t frames)
+// Renders `frames` samples into the shared planar scratch buffer (TSF_
+// STEREO_UNWEAVED, set up in load()/copy() above: the first `frames` floats
+// are the left channel, the next `frames` are right - no interleaving) and
+// returns a pointer to it, or nullptr if the synth isn't ready/frames is out
+// of range. The caller (NodeRender.h's SoundFontPlayer case) copies both
+// channels into inst.outL/outR and applies gain in that same pass, instead
+// of this function de-interleaving into outL/outR first and a second pass
+// multiplying gain in afterward (plan section 5: "Interleaved-zu-Planar-
+// Kopie und nachfolgenden Gain-Durchlauf zusammenlegen").
+inline const float *renderPlanar(SoundFontPlayerState &state, size_t frames)
 {
-    if (state.synth == nullptr || frames > synth::kBlockSize)
-    {
-        memset(left, 0, frames * sizeof(float));
-        memset(right, 0, frames * sizeof(float));
-        return;
-    }
     // Render task is single-threaded/core-pinned, so one shared block scratch
     // avoids adding 1 KiB to every NodeInstance in the engine's flat state.
     // Local static in an inline function - one shared instance across every
     // translation unit that includes this header (same ODR guarantee that
     // already applied when this lived in the single SoundFontPlayer.cpp TU).
-    static float interleaved[synth::kBlockSize * 2];
-    tsf_render_float(state.synth, interleaved, static_cast<int>(frames), 0);
-    for (size_t i = 0; i < frames; ++i)
+    static float scratch[synth::kBlockSize * 2];
+    if (state.synth == nullptr || frames > synth::kBlockSize)
     {
-        left[i] = interleaved[i * 2];
-        right[i] = interleaved[i * 2 + 1];
+        return nullptr;
     }
+    tsf_render_float(state.synth, scratch, static_cast<int>(frames), 0);
+    return scratch;
 }
 
 inline void parsePreset(cJSON *p, WidgetParams &out)

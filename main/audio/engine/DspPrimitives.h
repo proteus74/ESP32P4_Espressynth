@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 
 #include "NodeTypes.h"
@@ -38,7 +39,17 @@ inline void initSineLut()
     }
 }
 
-inline float sineLookup(float phase)
+// IRAM_ATTR: confirmed hot on real ESP32-P4 hardware (see documentation/
+// native-synth-optimization-plan-2026-09-09.md section 1c) - a 16-voice/
+// 1-oscillator preset with every WaveGen already in its cheap constant-pitch
+// fast path still spent ~21-22% of the whole block budget in this widget's
+// render() alone, and disassembly showed it (and every node render()) living
+// in .flash.text with no IRAM placement anywhere in the audio engine.
+// Executing from IRAM instead of the flash cache removes exposure to cache
+// pressure from other flash-resident code (e.g. the display's own PSRAM-
+// backed framebuffer traffic, already suspected in Graph.h's allocate()
+// comment) for exactly the functions called every single audio sample.
+IRAM_ATTR inline float sineLookup(float phase)
 {
     if (phase < 0.0f || phase >= 1.0f)
     {
@@ -71,7 +82,7 @@ inline void initVcaExpLut()
     }
 }
 
-inline float vcaExpLookup(float v)
+IRAM_ATTR inline float vcaExpLookup(float v)
 {
     if (v < 0.0f)
     {
@@ -110,7 +121,7 @@ inline void initPow2Lut()
     }
 }
 
-inline float pow2Lookup(float exponent)
+IRAM_ATTR inline float pow2Lookup(float exponent)
 {
     float intPart = 0.0f;
     float frac = modff(exponent, &intPart);
@@ -147,7 +158,7 @@ inline void initTanhLut()
     }
 }
 
-inline float tanhLookup(float value)
+IRAM_ATTR inline float tanhLookup(float value)
 {
     const bool negative = value < 0.0f;
     const float magnitude = negative ? -value : value;
@@ -396,7 +407,7 @@ public:
     // different offset every call (see NodeInstance.cpp's Lfo case, where
     // this is how the "phase" param takes effect immediately, including
     // right after a sync edge, without any special-casing in resetPhase()).
-    float process(WaveType wave, float freqHz, float sampleRate, float phaseOffset = 0.0f)
+    IRAM_ATTR float process(WaveType wave, float freqHz, float sampleRate, float phaseOffset = 0.0f)
     {
         if (wave == WaveType::Noise)
         {
@@ -411,7 +422,7 @@ public:
         return sample;
     }
 
-    float currentSample(WaveType wave, float phaseOffset = 0.0f) const
+    IRAM_ATTR float currentSample(WaveType wave, float phaseOffset = 0.0f) const
     {
         float p = phase_ + phaseOffset;
         // floorf() measures ~16 cycles (almost like a division, see the FpuBench
@@ -465,7 +476,7 @@ public:
     // 2: "phaseIncrement = hz / sampleRate einmal vorberechnen"). Advances by
     // that precomputed increment directly - one add instead of advance()'s
     // multiply-then-add per sample.
-    float processWithIncrement(WaveType wave, float phaseIncrement, float phaseOffset = 0.0f)
+    IRAM_ATTR float processWithIncrement(WaveType wave, float phaseIncrement, float phaseOffset = 0.0f)
     {
         if (wave == WaveType::Noise)
         {
@@ -488,12 +499,72 @@ public:
         return sample;
     }
 
+    // Compile-time-specialized twin of processWithIncrement() above, for
+    // Oscillator's fast per-block-constant-pitch path only (never called
+    // with a nonzero phaseOffset - that's an Lfo-only concept, see
+    // currentSample()'s comment - so this drops the parameter entirely).
+    // `wave` is already selected once per block by the caller (see
+    // OscillatorNode.h's render()); W being a template parameter means the
+    // `switch (wave)` inside currentSample() collapses to a single
+    // `if constexpr` branch here, decided once at the call site (one
+    // instantiation per waveform) rather than re-evaluated as a live branch
+    // on every sample (plan section 3, P1 item 3: "Keine Wellenformauswahl
+    // innerhalb der Sample-Schleife"). One shared definition, not six
+    // hand-duplicated copies - the compiler generates the six
+    // specializations from this single template.
+    template <WaveType W>
+    IRAM_ATTR float processWithIncrementT(float phaseIncrement)
+    {
+        if constexpr (W == WaveType::Noise)
+        {
+            return nextNoise();
+        }
+        else if constexpr (W == WaveType::PinkNoise)
+        {
+            return nextPinkNoise();
+        }
+        else
+        {
+            float p = phase_;
+            if (p < 0.0f || p >= 1.0f)
+                p -= floorf(p);
+            float sample;
+            if constexpr (W == WaveType::Sine)
+            {
+                sample = dsp::sineLookup(p);
+            }
+            else if constexpr (W == WaveType::Square)
+            {
+                sample = p < 0.5f ? 1.0f : -1.0f;
+            }
+            else if constexpr (W == WaveType::Triangle)
+            {
+                const float nearest = p < 0.5f ? 0.0f : 1.0f;
+                sample = 4.0f * fabsf(p - nearest) - 1.0f;
+            }
+            else // Sawtooth
+            {
+                sample = 2.0f * p - 1.0f;
+            }
+            phase_ += phaseIncrement;
+            if (phase_ >= 1.0f)
+            {
+                phase_ -= floorf(phase_);
+            }
+            else if (phase_ < 0.0f)
+            {
+                phase_ -= floorf(phase_);
+            }
+            return sample;
+        }
+    }
+
     // sampleRate is in practice ALWAYS the same value (kSampleRate, fixed
     // 48000 - see all callers in NodeInstance.cpp) - cache the reciprocal
     // instead of dividing anew each time. The comparison is always false
     // after the first call (well-predictable branch), the public signature
     // stays unchanged.
-    void advance(float freqHz, float sampleRate, size_t samples = 1)
+    IRAM_ATTR void advance(float freqHz, float sampleRate, size_t samples = 1)
     {
         if (sampleRate != lastSampleRate_)
         {

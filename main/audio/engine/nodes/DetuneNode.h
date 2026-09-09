@@ -17,38 +17,35 @@ namespace nodes::detune
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
-    // cv: a genuine DSP edge (audioConnectedPortMask) is read per sample
-    // below - plain volt arithmetic, no trig/pow involved, so per-sample
-    // evaluation is effectively free. Unconnected (or ControlRoute-fed,
-    // e.g. Knob by paramName - always block-constant) still only needs one
-    // read per block. A ControlRoute-fed MIDI pitch mid-glide is the
-    // exception: it's genuinely per-sample-varying too (Graph::renderBlock's
-    // midiPitchRampPort case), just without ever setting
-    // audioConnectedPortMask - so cvRamping must gate the fast path exactly
-    // like cvAudioFed does, or the glide gets reduced to its block's first
-    // sample here (plan section 6, finding 1: "Glide durch CV-Rechennodes").
+    // cv: audioPortConstantForBlock() (NodeInstance.h) covers every case
+    // where it resolves to one repeated value this block - unconnected,
+    // ControlRoute-fed, or a genuinely audio-connected edge that just
+    // happens to be unchanging - and correctly recognizes a ControlRoute-fed
+    // MIDI-glide mid-ramp as NOT constant (it scans the real buffer content,
+    // see that function's comment; this is also what fixes plan section 6
+    // finding 1, "Glide durch CV-Rechennodes", for this node). Plain volt
+    // arithmetic below, no trig/pow involved, so per-sample evaluation in
+    // the genuinely-varying case is effectively free either way.
     auto &s = inst.detune;
-    const bool cvAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
-    const bool cvRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 0)) != 0;
     const float amount = s.amountSmooth.process(s.amountTarget);
     const float deltaVolts = amount * s.maxVolts;
-    if (cvAudioFed || cvRamping)
+    float cvValue = 0.0f;
+    if (audioPortConstantForBlock(inst, 0, frames, cvValue))
     {
+        const float f1 = cvValue + deltaVolts;
+        const float f2 = cvValue - deltaVolts;
         for (size_t i = 0; i < frames; ++i)
         {
-            const float cvIn = portSample(inst, 0, i);
-            inst.outL[i] = cvIn + deltaVolts;
-            inst.outR[i] = cvIn - deltaVolts;
+            inst.outL[i] = f1;
+            inst.outR[i] = f2;
         }
         return;
     }
-    const float cvIn = portSample(inst, 0, 0);
-    const float f1 = cvIn + deltaVolts;
-    const float f2 = cvIn - deltaVolts;
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = f1;
-        inst.outR[i] = f2;
+        const float cvIn = portSample(inst, 0, i);
+        inst.outL[i] = cvIn + deltaVolts;
+        inst.outR[i] = cvIn - deltaVolts;
     }
 }
 

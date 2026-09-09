@@ -74,13 +74,14 @@ inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = *inst.valueMapper;
-    // controlRampPortMask must gate this fast path too - see
-    // ArithmeticNodes.h's renderMultiplier() comment / plan section 6,
-    // finding 1: a MIDI-glide input on "in" is per-sample-varying without
-    // ever setting audioConnectedPortMask.
-    if (inst.audioConnectedPortMask == 0 && inst.controlRampPortMask == 0)
+    // audioPortConstantForBlock() (NodeInstance.h) covers every case where
+    // "in" resolves to one repeated value this block, including correctly
+    // recognizing a MIDI-glide ramp as NOT constant (see its comment / plan
+    // section 6, finding 1).
+    float inValue = 0.0f;
+    if (audioPortConstantForBlock(inst, 0, frames, inValue))
     {
-        const float result = s.mappedValue(portSample(inst, 0, 0));
+        const float result = s.mappedValue(inValue);
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = result;

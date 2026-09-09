@@ -8,6 +8,7 @@
 #include <new>
 
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -509,7 +510,12 @@ inline void releaseVoiceGate(Graph &graph, uint16_t midiInWidget, uint8_t voiceI
 }
 } // namespace
 
-inline void Graph::renderBlock(Outputs &out, size_t frames)
+// IRAM_ATTR: the whole per-block hot path (voice-activity classification,
+// input-buffer prep, every node's render() + edge-summing, output copy) -
+// see documentation/native-synth-optimization-plan-2026-09-09.md section 1c
+// / DspPrimitives.h's sineLookup() comment for why IRAM placement is worth
+// it here.
+IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
 {
     if (widgetProfileEmaAlpha == 0.0f && renderOrderCount > 0)
     {

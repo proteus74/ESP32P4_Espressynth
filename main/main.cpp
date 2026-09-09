@@ -9,7 +9,7 @@ extern "C" void app_main(void) {
     App::start_background_tasks();
 
 #if (defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)) || \
-    (defined(CONFIG_APP_ENABLE_SYNTH) && defined(CONFIG_APP_ENABLE_WEBSERVER))
+    defined(CONFIG_APP_ENABLE_SYNTH)
     uint32_t seconds = 0;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -21,6 +21,14 @@ extern "C" void app_main(void) {
 #endif
 #if defined(CONFIG_APP_ENABLE_SYNTH) && defined(CONFIG_APP_ENABLE_WEBSERVER)
         Feature::Synth::broadcast_status_tick();
+#endif
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+        // Native P0 baseline diagnostic (documentation/native-synth-
+        // optimization-plan-2026-09-09.md) - off the render task on
+        // purpose, see log_p0_baseline_tick()'s comment (synth_manager.hpp).
+        if (seconds % 2 == 0) {
+            Feature::Synth::log_p0_baseline_tick();
+        }
 #endif
     }
 #endif

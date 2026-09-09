@@ -1071,31 +1071,16 @@ inline void SynthEngine::taskLoop()
         instancesTotal_.store(blockStats.instancesTotal, std::memory_order_relaxed);
         instancesRendered_.store(blockStats.instancesRendered, std::memory_order_relaxed);
         instancesRenderedWhileIdle_.store(blockStats.instancesRenderedWhileIdle, std::memory_order_relaxed);
-
-        // Native, browser-independent baseline log (plan section 8: "kein
-        // Browser und keine JS-Engine als Referenz") - rate-limited to avoid
-        // spamming the console every block.
-        static int64_t lastDiagLogUs = 0;
-        if (iterStartUs - lastDiagLogUs >= 2000000)
-        {
-            lastDiagLogUs = iterStartUs;
-            ESP_LOGI(kSynthEngineTag,
-                     "P0 baseline: phases activity=%.2f%% render=%.2f%% output=%.2f%% | osc pitch "
-                     "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu silentSkip=%lu gainConverged=%lu | "
-                     "instances total/rendered/idleForced=%lu/%lu/%lu",
-                     static_cast<double>(liveGraph_->phaseActivityPercent),
-                     static_cast<double>(liveGraph_->phaseRenderPercent),
-                     static_cast<double>(liveGraph_->phaseOutputPercent),
-                     static_cast<unsigned long>(blockStats.oscPitchConstant),
-                     static_cast<unsigned long>(blockStats.oscPitchAudioRate),
-                     static_cast<unsigned long>(blockStats.oscTuneConstant),
-                     static_cast<unsigned long>(blockStats.oscTuneAudioRate),
-                     static_cast<unsigned long>(blockStats.oscSilentSkipped),
-                     static_cast<unsigned long>(blockStats.oscGainConverged),
-                     static_cast<unsigned long>(blockStats.instancesTotal),
-                     static_cast<unsigned long>(blockStats.instancesRendered),
-                     static_cast<unsigned long>(blockStats.instancesRenderedWhileIdle));
-        }
+        // The actual ESP_LOGI print deliberately does NOT happen here: a
+        // real hardware run showed this render task's own periodic log call
+        // blocking long enough (~2ms, UART write) to single-handedly cause
+        // "Audio-Overrun" on the very block it logged from - the exact
+        // failure mode plan section 7 already warned about for a different
+        // diagnostic ("Logging außerhalb des Audiotasks ausführen"), which
+        // this diagnostic itself violated at first. Fixed by moving the
+        // actual logging to Feature::Synth::log_p0_baseline_tick()
+        // (synth_manager.hpp), polled from app_main's own task (main.cpp) -
+        // this render task only ever publishes plain atomic stores above.
 
         // Host audio (USB speaker-OUT) arrives as its own streaming ring;
         // mix it into the ES8311 master block here (host plays on its own

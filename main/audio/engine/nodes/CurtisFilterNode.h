@@ -42,6 +42,16 @@ struct CurtisFilterState
     float g = 0.1f;
     float feedback = 0.0f;
     bool coeffsDirty = true;
+    // Last cutoff/resonance CV actually used to compute g/feedback under a
+    // genuine audio-rate edge (see render() below) - lets a stride tick skip
+    // updateCoefficients() entirely when the CV hasn't actually changed
+    // since the last update, instead of unconditionally recomputing on every
+    // stride-th sample (plan section 3/5, same as FilterNode.h's biquad
+    // path: "Unveränderte CV-Werte trotz Audio-Kabel erkennen"). Distinct
+    // from cutoffCv/resonanceCv above, which are the manual/unwired scalars.
+    float lastAudioCutoffCv = 0.0f;
+    float lastAudioResonanceCv = 0.0f;
+    bool audioCoeffsInitialized = false;
 
     void refreshLog2Ratios()
     {
@@ -169,7 +179,13 @@ inline void render(NodeInstance &inst, size_t frames)
             {
                 const float cutoff = cutoffAudioFed ? source.inPorts[1][i] : s.cutoffCv;
                 const float resonance = resonanceAudioFed ? source.inPorts[2][i] : s.resonanceCv;
-                updateCoefficients(s, cutoff, resonance);
+                if (!s.audioCoeffsInitialized || cutoff != s.lastAudioCutoffCv || resonance != s.lastAudioResonanceCv)
+                {
+                    updateCoefficients(s, cutoff, resonance);
+                    s.lastAudioCutoffCv = cutoff;
+                    s.lastAudioResonanceCv = resonance;
+                    s.audioCoeffsInitialized = true;
+                }
             }
         }
 

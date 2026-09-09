@@ -52,14 +52,21 @@ constexpr size_t kSineLutSize = 4096;
 // Entries spanning v=0..1 in the shared VCA exponential-curve LUT (see
 // DspPrimitives' dsp::initVcaExpLut/vcaExpLookup) - the curve (10^v-1)/9 is
 // smooth and monotonic (unlike a full sine cycle), so far fewer entries than
-// kSineLutSize already keep interpolation error well below audible.
-constexpr size_t kVcaExpLutSize = 1024;
+// kSineLutSize already keep interpolation error well below audible. 257
+// entries (256 intervals) keep the theoretical absolute interpolation error
+// around 1.12e-5 relative to maximum gain 1 - see documentation/
+// native-synth-optimization-plan-2026-09-09.md section 4's numeric
+// derivation (plan P3: first worthwhile LUT shrink, 6136 bytes total saved
+// across both LUTs below). Not yet A/B-verified on hardware.
+constexpr size_t kVcaExpLutSize = 257;
 
 // Entries spanning the fractional exponent f=0..1 of 2^f in the shared
 // power-of-two LUT (see DspPrimitives' dsp::initPow2Lut/pow2Lookup) - smooth
 // and monotonic like the VCA curve above, so the same entry count suffices;
-// the integer part of the exponent is applied separately via ldexpf.
-constexpr size_t kPow2LutSize = 1024;
+// the integer part of the exponent is applied separately via ldexpf. 257
+// entries keep the theoretical max interpolation pitch error around
+// 0.00159 Cent (plan section 4) - inaudible by a wide margin.
+constexpr size_t kPow2LutSize = 257;
 
 // Positive half (0..4) of tanh(x), used by nonlinear audio nodes such as
 // the Curtis filter. Beyond 4, tanh is already within 0.07% of saturation.

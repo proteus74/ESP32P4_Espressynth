@@ -29,29 +29,38 @@ inline int gainIndex(const char *name)
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    auto copyChannel = [&](int port, float *output)
+    // Returns true when the channel is unconditionally silent for this
+    // whole block (no incoming edge and no nonzero default) - lets the
+    // caller skip the per-sample gain multiply below entirely for an unused
+    // bus, since 0 * anything is still 0 (plan section 3, P2: "Nur
+    // verwendete Link-Busse anlegen und transportieren" - the render-side
+    // half; the builder still creates all eight bus edges regardless of
+    // use, see that section, but an unused bus no longer pays for a
+    // pointless gain pass here).
+    auto copyChannel = [&](int port, float *output) -> bool
     {
         if (inst.inPorts[port] != nullptr)
         {
             memcpy(output, inst.inPorts[port], frames * sizeof(float));
-            return;
+            return false;
         }
         const float value = inst.controlValue[port];
         if (value == 0.0f)
         {
             memset(output, 0, frames * sizeof(float));
-            return;
+            return true;
         }
         for (size_t i = 0; i < frames; ++i)
         {
             output[i] = value;
         }
+        return false;
     };
     for (int bus = 0; bus < static_cast<int>(synth::kLinkBusCount); ++bus)
     {
         float *output = outputPortBuffer(inst, static_cast<uint8_t>(bus));
-        copyChannel(bus, output);
-        if (inst.type != NodeType::AudioInputLink)
+        const bool silent = copyChannel(bus, output);
+        if (inst.type != NodeType::AudioInputLink || silent)
         {
             continue;
         }

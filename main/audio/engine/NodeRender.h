@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstring>
 
+#include "esp_attr.h"
+
 #include "CvConventions.h"
 #include "EspAdditionalEffects.h"
 #include "EspEqEffect.h"
@@ -41,7 +43,11 @@
 // nodes/*.h's full definition, but every nodes/*.h needs NodeInstance fully
 // defined first - putting the dispatcher here (downstream of both) avoids
 // that include cycle.
-inline void processNodeBlock(NodeInstance &inst, size_t frames)
+// IRAM_ATTR: this dispatcher runs once per rendered instance per block for
+// every node type in the engine - see documentation/native-synth-
+// optimization-plan-2026-09-09.md section 1c / DspPrimitives.h's
+// sineLookup() comment for why IRAM placement is worth it here.
+IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
 {
     switch (inst.type)
     {
@@ -190,14 +196,22 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
                 memset(inst.outR, 0, frames * sizeof(float));
                 break;
             }
-            soundfont::render(s, inst.outL, inst.outR, frames);
+            const float *planar = soundfont::renderPlanar(s, frames);
+            if (planar == nullptr)
+            {
+                memset(inst.outL, 0, frames * sizeof(float));
+                memset(inst.outR, 0, frames * sizeof(float));
+                break;
+            }
+            const float *planarL = planar;
+            const float *planarR = planar + frames;
             if (gainFed)
             {
                 for (size_t i = 0; i < frames; ++i)
                 {
                     const float gainMul = cv::vcaGain(portSample(inst, 5, i), false) * cv::kAudioPeakVolts;
-                    inst.outL[i] *= gainMul;
-                    inst.outR[i] *= gainMul;
+                    inst.outL[i] = planarL[i] * gainMul;
+                    inst.outR[i] = planarR[i] * gainMul;
                 }
             }
             else
@@ -205,8 +219,8 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
                 for (size_t i = 0; i < frames; ++i)
                 {
                     const float gainMul = s.gainSmooth.process(gainTarget) * cv::kAudioPeakVolts;
-                    inst.outL[i] *= gainMul;
-                    inst.outR[i] *= gainMul;
+                    inst.outL[i] = planarL[i] * gainMul;
+                    inst.outR[i] = planarR[i] * gainMul;
                 }
             }
         }
