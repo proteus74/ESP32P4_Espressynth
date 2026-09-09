@@ -1360,6 +1360,89 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         delete[] targetEdgeIndex;
     }
 
+    // Subgraph pruning (plan section 3, P2: "Nur vom Ausgang oder einem
+    // aktiven Monitor benötigte Teilgraphen rendern"): a widget no edge-path
+    // leads from to any of the three hardware sinks or an active monitor tap
+    // produces output nobody ever reads - Graph::renderBlock (see
+    // WidgetSlot::needed) skips it, and its own outgoing edges, entirely.
+    // Computed as reverse reachability from the sinks/monitor-tap sources
+    // over widget-level edges - a per-WIDGET decision (all of a voiced
+    // widget's per-voice instances share one bit), matching the granularity
+    // Graph::renderBlock's own renderOrder loop already renders at. Safe
+    // across feedback cycles: the fixed-point worklist below just marks
+    // every widget in a cycle needed together once any one of them is
+    // reached, same as any other reverse-reachability walk. Does NOT
+    // interact with the Multiplexer/Switch "don't freeze an unselected
+    // branch" concern (plan section 3) - an unselected input still has a
+    // real edge into the (needed) Multiplexer widget in this STATIC
+    // topology, so it stays needed regardless of which branch is currently
+    // selected at runtime; this pass only ever prunes a widget with zero
+    // path to any output, not a "currently inactive" one. A preset reload
+    // always rebuilds the whole Graph from scratch (see SynthEngine's
+    // live-reload path), so this can never go stale at runtime.
+    {
+        bool *needed = new bool[g->widgetCount]();
+        if (g->usbOutWidget >= 0) needed[g->usbOutWidget] = true;
+        if (g->es8311OutWidget >= 0) needed[g->es8311OutWidget] = true;
+        if (g->wm8960OutWidget >= 0) needed[g->wm8960OutWidget] = true;
+        for (uint16_t e = 0; e < g->edgeCount; ++e)
+        {
+            if (g->edges[e].monitorTap)
+            {
+                // Both ends: the source (so the monitored voice's signal
+                // actually gets computed) and the destination (a VuMeter/
+                // Oscilloscope-type widget - its own render() is a native
+                // no-op today, see NodeRender.h, but the plan explicitly
+                // asks to keep a "monitor"-reachable subgraph regardless,
+                // and this project's web/display consumption of that
+                // destination's buffer was outside this investigation's
+                // scope - safer to keep it than to silently freeze a live
+                // meter/scope display this pass can't see the far side of).
+                needed[g->instances[g->edges[e].fromInstance].widgetIndex] = true;
+                needed[g->instances[g->edges[e].toInstance].widgetIndex] = true;
+            }
+        }
+        // widgetCount is small (<= kMaxWidgets = 64), so a plain
+        // O(widgetCount * edgeCount) fixed-point worklist over the existing
+        // edge list is cheap at build time and avoids needing a separate
+        // reverse-adjacency structure just for this one-time pass.
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (uint16_t e = 0; e < g->edgeCount; ++e)
+            {
+                const Edge &edge = g->edges[e];
+                const uint16_t dstWidget = g->instances[edge.toInstance].widgetIndex;
+                if (!needed[dstWidget])
+                {
+                    continue;
+                }
+                const uint16_t srcWidget = g->instances[edge.fromInstance].widgetIndex;
+                if (!needed[srcWidget])
+                {
+                    needed[srcWidget] = true;
+                    changed = true;
+                }
+            }
+        }
+        uint32_t prunedWidgetCount = 0;
+        for (uint16_t w = 0; w < g->widgetCount; ++w)
+        {
+            g->widgets[w].needed = needed[w];
+            if (!needed[w])
+            {
+                ++prunedWidgetCount;
+            }
+        }
+        delete[] needed;
+        if (prunedWidgetCount > 0)
+        {
+            ESP_LOGI(kGraphBuilderTag, "%u of %u widgets pruned (no path to any output/monitor)",
+                     static_cast<unsigned>(prunedWidgetCount), static_cast<unsigned>(g->widgetCount));
+        }
+    }
+
     const size_t internalFreeAfter = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t internalLargestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     memorydiag::setGraphStats(g->instanceCount, sizeof(NodeInstance), blockBufferCount,

@@ -44,6 +44,15 @@ struct WidgetSlot
     NodeType type = NodeType::Unknown;
     bool voiced = false;
     bool renderWhenIdle = false;
+    // True (default, safe fallback) unless GraphBuilder::build()'s
+    // reachability post-pass proves no edge-path leads from this widget to
+    // any hardware sink or an active monitor tap - see that pass's comment
+    // (plan section 3, P2: "Nur vom Ausgang oder einem aktiven Monitor
+    // benötigte Teilgraphen rendern"). Graph::renderBlock skips a widget
+    // entirely (render + its own outgoing edges) when this is false; safe
+    // by construction, since a widget only ends up false when NONE of its
+    // outgoing edges lead anywhere needed either.
+    bool needed = true;
     uint16_t instanceBase = 0;
     uint16_t instanceCount = 0; // 1 or the preset's configured voice count
     uint16_t outgoingEdgeStart = 0;
@@ -683,6 +692,23 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             {
                 float &smoothed = widgetLoadPercent[renderOrder[r]];
                 smoothed += widgetProfileEmaAlpha * (0.0f - smoothed);
+            }
+            continue;
+        }
+        if (!w.needed)
+        {
+            // No edge-path from this widget reaches a hardware sink or an
+            // active monitor tap (see WidgetSlot::needed / GraphBuilder.h's
+            // reachability post-pass) - skip render AND this widget's own
+            // outgoing edges, safe by construction: a widget only ends up
+            // not-needed when none of ITS edges lead anywhere needed either,
+            // so nothing downstream is missing data because of this.
+            if (profileWidget)
+            {
+                float &smoothed = widgetLoadPercent[renderOrder[r]];
+                smoothed += widgetProfileEmaAlpha * (0.0f - smoothed);
+                float &smoothedEdge = widgetEdgeLoadPercent[renderOrder[r]];
+                smoothedEdge += widgetProfileEmaAlpha * (0.0f - smoothedEdge);
             }
             continue;
         }
