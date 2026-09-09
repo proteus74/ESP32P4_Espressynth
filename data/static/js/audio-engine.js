@@ -1690,16 +1690,16 @@ export class AudioEngine {
         return { type, sum, inputGains };
       }
       case "multiplexer": {
-        // N (fixed 8, like Mixer above - unused ones just stay silent)
+        // N (fixed 16, like Mixer above - unused ones just stay silent)
         // hard-gated input gains summed into one output - only the gain
         // matching the currently active index is ever 1, the rest 0 (same
-        // hard-switch idea as "switch" above, generalized from 2 to 8 ways).
+        // hard-switch idea as "switch" above, generalized from 2 to 16 ways).
         // See _setParam's "multiplexer"/"select" case for how the gate moves.
         const output = ctx.createGain();
         output.gain.value = 1;
         const inputGains = new Map();
-        const selected = Math.max(0, Math.min(7, Math.round(params.select ?? 0)));
-        for (let i = 1; i <= 8; i += 1) {
+        const selected = Math.max(0, Math.min(15, Math.round(params.select ?? 0)));
+        for (let i = 1; i <= 16; i += 1) {
           const g = ctx.createGain();
           g.gain.value = i - 1 === selected ? 1 : 0;
           g.connect(output);
@@ -2999,9 +2999,9 @@ export class AudioEngine {
         break;
       case "multiplexer":
         if (paramName === "select") {
-          const selected = Math.max(0, Math.min(7, Math.round(value)));
+          const selected = Math.max(0, Math.min(15, Math.round(value)));
           entry.selected = selected;
-          for (let i = 1; i <= 8; i += 1) {
+          for (let i = 1; i <= 16; i += 1) {
             const g = entry.inputGains.get(`in${i}`);
             if (g) applyRampValue(g.gain, i - 1 === selected ? 1 : 0);
           }

@@ -19,22 +19,18 @@ constexpr size_t kBlockSize = CONFIG_AUDIO_SYNTH_BLOCK_SIZE;
 constexpr size_t kMaxWidgets = 64;
 constexpr size_t kMaxConnections = 256;
 constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + 2;
-// Widest node is Hammond: amplitude/pitchCv/tune/gain + drawbar1..9 = 13
-// (mixer/multiplier/adder's in1..in8 was the previous widest at 8).
-// Deliberately 16, not 13: this then exactly equals the bit width of
-// PortMask below, so NodeInstance's per-port bitmasks can never silently
-// truncate a legal port index - the failure mode that made this constant
-// dangerous to raise in the first place (see the static_assert below).
-constexpr size_t kMaxAudioInPorts = 16;
+// Multiplexer has 16 audio inputs plus one control input (select) = 17 slots.
+// Keep one bit per slot in NodeInstance's connection masks.
+constexpr size_t kMaxAudioInPorts = 17;
 constexpr size_t kValueListMax = 16;   // Knob/Button "value list" mode entry cap
 constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 
 // Bit-per-audio-input-port mask type for NodeInstance's
 // controlConnectedPortMask/audioConnectedPortMask/controlRampPortMask.
-// Named rather than a bare uint16_t at each use site so a future widening
+// Named rather than a bare uint32_t at each use site so a future widening
 // past kMaxAudioInPorts is one edit here, caught by the static_assert.
-using PortMask = uint16_t;
+using PortMask = uint32_t;
 static_assert(kMaxAudioInPorts <= sizeof(PortMask) * 8,
               "PortMask needs at least one bit per audio-input port");
 

@@ -22,20 +22,26 @@ namespace ports
 
 namespace detail
 {
-// Matches "in1".."in8" (1-based in the name, 0-based return), else -1.
-inline int indexedInPort(const char *portName)
+// Matches "in1".."inN" (1-based in the name, 0-based return), else -1.
+inline int indexedInPort(const char *portName, int maxInputs = 8)
 {
     if (portName == nullptr || strncmp(portName, "in", 2) != 0)
     {
         return -1;
     }
     const char *numPart = portName + 2;
-    if (numPart[0] < '1' || numPart[0] > '9' || numPart[1] != '\0')
+    if (numPart[0] < '1' || numPart[0] > '9')
     {
         return -1;
     }
-    const int n = numPart[0] - '0';
-    return (n >= 1 && n <= 8) ? (n - 1) : -1;
+    int n = numPart[0] - '0';
+    if (numPart[1] != '\0')
+    {
+        if (numPart[1] < '0' || numPart[1] > '9' || numPart[2] != '\0')
+            return -1;
+        n = n * 10 + (numPart[1] - '0');
+    }
+    return (n >= 1 && n <= maxInputs) ? (n - 1) : -1;
 }
 
 inline bool is(const char *a, const char *b)
@@ -177,14 +183,14 @@ inline int audioInIndex(NodeType type, const char *portName)
         return indexedInPort(portName);
     case NodeType::Multiplexer:
         // "select" (control-only, see isControlOnlyInput) picks which of
-        // "in1".."in8" reaches "value" - see nodes/MultiplexerNode.h.
+        // "in1".."in16" reaches "value" - see nodes/MultiplexerNode.h.
         if (is(portName, "select"))
-            return 8;
-        return indexedInPort(portName);
+            return 16;
+        return indexedInPort(portName, 16);
     case NodeType::Divide:
     {
         // Fixed 2 inputs (in1/in2) - unlike Mixer/Multiplier/Adder's
-        // configurable 2-8, so bound indexedInPort's 8-way range down to 2.
+        // configurable 2-8, so bound indexedInPort's range down to 2.
         const int idx = indexedInPort(portName);
         return (idx >= 0 && idx < 2) ? idx : -1;
     }
@@ -483,7 +489,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Adder:
         return 8;
     case NodeType::Multiplexer:
-        return 9; // "in1".."in8" + "select" (CV)
+        return 17; // "in1".."in16" + "select" (CV)
     case NodeType::Divide:
         return 2;
     case NodeType::FrequencyDivider:
@@ -632,7 +638,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Clock:
         return portIdx == 0; // "tempo"
     case NodeType::Multiplexer:
-        return portIdx == 8; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
+        return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel" - all four
     case NodeType::Lfo:

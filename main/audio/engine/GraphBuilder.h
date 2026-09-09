@@ -146,7 +146,7 @@ inline bool requiresInputBlockBuffers(NodeType type)
 
 // Parses "zone<1-4><suffix>" (e.g. "zone2Gate") into a 0-based zone index
 // and ControlRoute::Kind - midi-split's dynamic-zone-count counterpart to
-// PortTables.h's indexedInPort() ("in1".."in8"), kept locally scoped since
+// PortTables.h's indexedInPort() ("in1".."in16" for Multiplexer), kept locally scoped since
 // midi-split's virtual ports only ever get resolved right here.
 inline bool parseZonePort(const char *portName, int &zoneIdx, ControlRoute::Kind &kind)
 {

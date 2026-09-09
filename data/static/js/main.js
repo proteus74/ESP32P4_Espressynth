@@ -597,7 +597,7 @@ const WIDGET_TYPES = {
   multiplexer: {
     label: "Multiplexer",
     icon: "🎯",
-    // Static/default shape (2 inputs) - live input count (2-8) is handled by
+    // Static/default shape (2 inputs) - live input count (2-16) is handled by
     // renderMultiplexerPorts() below, same pattern as Mixer.
     inputs: [
       { id: "select", label: "Select (CV)" },
@@ -1019,7 +1019,7 @@ const AUDIO_PORTS = {
   switch: { in: ["in1", "in2"], out: ["value"] },
   // "select" (CV) is deliberately absent here - control-rate, same reasoning
   // as C++ PortTables' isControlOnlyInput (see nodes/MultiplexerNode.h).
-  multiplexer: { in: ["in1", "in2", "in3", "in4", "in5", "in6", "in7", "in8"], out: ["value"] },
+  multiplexer: { in: ["in1", "in2", "in3", "in4", "in5", "in6", "in7", "in8", "in9", "in10", "in11", "in12", "in13", "in14", "in15", "in16"], out: ["value"] },
   
   
   
@@ -1562,6 +1562,8 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  let multiplexerSwitchBody = null;
+
   if (type === "multiplexer") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button") || e.target.closest("input")) return;
@@ -2052,31 +2054,42 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, "multiplexer", { select: 0 });
 
     const body = document.createElement("div");
-    body.className = "widget-instance-body multiplexer-body";
+    body.className = "widget-instance-body switch-body multiplexer-switch-body";
 
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.className = "multiplexer-select-slider";
-    slider.min = "0";
-    slider.max = "1";
-    slider.step = "1";
-    slider.value = "0";
-    slider.dataset.role = "multiplexer-select-slider";
-    slider.addEventListener("mousedown", (e) => e.stopPropagation());
-    slider.addEventListener("click", (e) => e.stopPropagation());
-    slider.addEventListener("input", () => {
-      deliverToWidget(id, "select", parseInt(slider.value, 10));
+    const selector = document.createElement("div");
+    selector.className = "switch multiplexer-switch";
+    selector.setAttribute("role", "img");
+    selector.setAttribute("aria-label", "Aktiver Multiplexer-Eingang");
+    const track = document.createElement("span");
+    track.className = "switch-track";
+    const thumb = document.createElement("span");
+    thumb.className = "multiplexer-switch-thumb";
+    thumb.dataset.role = "multiplexer-switch-thumb";
+    selector.append(track, thumb);
+    let dragging = false;
+    selector.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || multiplexerHasCvConnection(id)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      selector.setPointerCapture?.(e.pointerId);
+      setMultiplexerManualIndex(id, e.clientY);
     });
-    body.appendChild(slider);
-
-    const label = document.createElement("span");
-    label.className = "multiplexer-select-label";
-    label.dataset.role = "multiplexer-select-label";
-    label.textContent = "In 1";
-    body.appendChild(label);
-
-    el.appendChild(body);
-    updateMultiplexerVisual(id);
+    selector.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      setMultiplexerManualIndex(id, e.clientY);
+    });
+    const stopDragging = (e) => {
+      dragging = false;
+      if (e.pointerId !== undefined && selector.hasPointerCapture?.(e.pointerId)) {
+        selector.releasePointerCapture(e.pointerId);
+      }
+    };
+    selector.addEventListener("pointerup", stopDragging);
+    selector.addEventListener("pointercancel", stopDragging);
+    body.appendChild(selector);
+    multiplexerSwitchBody = body;
   }
 
   if (type === "adsr") {
@@ -2555,6 +2568,8 @@ function createWidget(type, label, x, y, forcedId) {
     updateUpDownButtonVisual(id);
   }
 
+  let switchBody = null;
+
   if (type === "switch") {
     switchStates.set(id, { cc: null, channel: null, selectIn2: false, in1: 0, in2: 0 });
     audioEngine.createNode(id, "switch", { selectIn2: false });
@@ -2586,9 +2601,8 @@ function createWidget(type, label, x, y, forcedId) {
     body.appendChild(toggleLabel);
     body.appendChild(toggleText);
     body.appendChild(ccLabel);
-    el.appendChild(body);
+    switchBody = body;
 
-    updateSwitchVisual(id);
   }
 
   if (type === "const") {
@@ -3214,7 +3228,30 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "knob") {
+  if (type === "switch") {
+    const switchContent = document.createElement("div");
+    switchContent.className = "switch-content";
+    switchContent.appendChild(ports);
+    switchContent.appendChild(switchBody);
+    const switchCcLabel = switchBody.querySelector('[data-role="switch-cc-label"]');
+    if (switchCcLabel) switchContent.appendChild(switchCcLabel);
+    el.appendChild(switchContent);
+  } else if (type === "multiplexer") {
+    const multiplexerContent = document.createElement("div");
+    multiplexerContent.className = "switch-content multiplexer-content";
+    multiplexerContent.appendChild(ports);
+    multiplexerContent.appendChild(multiplexerSwitchBody);
+    const routing = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    routing.classList.add("multiplexer-routing");
+    routing.setAttribute("aria-hidden", "true");
+    routing.setAttribute("fill", "none");
+    const routingPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    routingPath.dataset.role = "multiplexer-routing-path";
+    routingPath.setAttribute("fill", "none");
+    routing.appendChild(routingPath);
+    multiplexerContent.appendChild(routing);
+    el.appendChild(multiplexerContent);
+  } else if (type === "knob") {
     ports.classList.add("knob-output-ports");
     const knobBody = el.querySelector(".knob-body");
     if (knobBody) knobBody.appendChild(ports);
@@ -3247,6 +3284,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   canvasContent.appendChild(el);
+  if (type === "switch") updateSwitchVisual(id);
   if (type === "button") updateButtonVisual(id);
   if (type === "up-down-button") updateUpDownButtonVisual(id);
   if (audioMonitorStates.has(id)) updateAudioMonitorRangeVisual(id);
@@ -3254,6 +3292,10 @@ function createWidget(type, label, x, y, forcedId) {
   
   
   layoutPortsGrid(ports);
+  if (type === "multiplexer") {
+    updateMultiplexerVisual(id);
+    requestAnimationFrame(() => updateMultiplexerRouting(id));
+  }
   if (type === "midi-in") updateMidiInControls(id);
   savePresetNow(); 
   return el;
@@ -3474,6 +3516,23 @@ function layoutPortsGrid(portsEl) {
   
   
   const rowHeight = inRows[0].offsetHeight || 26;
+  const switchControl = portsEl.closest('[data-widget-type="switch"]')?.querySelector('.switch-body > .switch');
+  if (switchControl && inRows.length >= 2) {
+    const switchHeight = rowHeight * 2;
+    switchControl.style.height = `${switchHeight}px`;
+    switchControl.style.setProperty("--switch-offset", `${Math.max(0, (rowHeight - 12) / 2)}px`);
+    switchControl.style.setProperty("--switch-travel", `${rowHeight}px`);
+  }
+  const multiplexerBody = portsEl.closest('[data-widget-type="multiplexer"]')?.querySelector('.multiplexer-switch-body');
+  const multiplexerControl = multiplexerBody?.querySelector('.multiplexer-switch');
+  const multiplexerRows = inRows.filter((row) => row.classList.contains("mux-in-row"));
+  if (multiplexerBody && multiplexerControl && multiplexerRows.length > 0) {
+    const firstMultiplexerRow = inRows.indexOf(multiplexerRows[0]);
+    const paddingTop = parseFloat(getComputedStyle(portsEl).paddingTop) || 0;
+    multiplexerBody.style.top = `${paddingTop + firstMultiplexerRow * rowHeight}px`;
+    multiplexerControl.style.height = `${rowHeight * multiplexerRows.length}px`;
+    multiplexerControl.style.setProperty("--switch-offset", `${Math.max(0, (rowHeight - 12) / 2)}px`);
+  }
   const outputRowStart = isMidiIn ? 2 : 0;
   const outputTop = isSoundFontPlayer ? -(portsEl.previousElementSibling?.offsetHeight || 0) : outputRowStart * rowHeight;
   portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowStart + outRows.length)}px`;
@@ -4243,6 +4302,10 @@ function updateSwitchVisual(widgetId) {
   if (toggle) toggle.checked = state.selectIn2;
   const label = el.querySelector('[data-role="switch-select-label"]');
   if (label) label.textContent = state.selectIn2 ? "In 2" : "In 1";
+  ["in1", "in2"].forEach((portId) => {
+    const row = el.querySelector(`.port-row-in:has(.port-dot[data-port-id="${portId}"])`);
+    if (row) row.classList.toggle("switch-selected", (portId === "in2") === state.selectIn2);
+  });
   const ccLabel = el.querySelector('[data-role="switch-cc-label"]');
   if (ccLabel) {
     ccLabel.textContent =
@@ -7768,7 +7831,7 @@ function updateMixerGainVisual(widgetId, index) {
 
 const multiplexerStates = new Map();
 const MULTIPLEXER_MIN_INPUTS = 2;
-const MULTIPLEXER_MAX_INPUTS = 8;
+const MULTIPLEXER_MAX_INPUTS = 16;
 
 // Splits 0-10V into `inputCount` equal bands, in input order - mirrors
 // nodes/MultiplexerNode.h's selectFromCv() 1:1 (same "band split" idea as
@@ -7780,6 +7843,24 @@ function multiplexerSelectFromCv(volts, inputCount) {
   if (idx < 0) idx = 0;
   if (idx > inputCount - 1) idx = inputCount - 1;
   return idx;
+}
+
+function multiplexerHasCvConnection(widgetId) {
+  return connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
+}
+
+function setMultiplexerManualIndex(widgetId, clientY) {
+  const state = multiplexerStates.get(widgetId);
+  const selector = document.getElementById(widgetId)?.querySelector(".multiplexer-switch");
+  if (!state || !selector || multiplexerHasCvConnection(widgetId)) return;
+  const rect = selector.getBoundingClientRect();
+  if (rect.height <= 0) return;
+  const fraction = clamp((clientY - rect.top) / rect.height, 0, 0.999999);
+  const idx = clamp(Math.floor(fraction * state.inputCount), 0, state.inputCount - 1);
+  if (idx === state.manualSelect && idx === state.activeIndex) return;
+  state.manualSelect = idx;
+  sendLiveParamUpdateThrottled(widgetId, { select: idx });
+  multiplexerSetActiveIndex(widgetId, idx);
 }
 
 function renderMultiplexerPorts(widgetId, portsEl) {
@@ -7796,7 +7877,7 @@ function renderMultiplexerPorts(widgetId, portsEl) {
     if (i - 1 === state.activeIndex) row.classList.add("active");
     portsEl.appendChild(row);
   }
-  portsEl.appendChild(createPortRow(widgetId, { id: "value", label: "Value" }, "out", "multiplexer"));
+  portsEl.appendChild(createPortRow(widgetId, { id: "value", label: "" }, "out", "multiplexer"));
   layoutPortsGrid(portsEl);
 }
 
@@ -7809,10 +7890,8 @@ function publishMultiplexerValue(widgetId) {
   propagate(widgetId, "value", state.values[state.activeIndex]);
 }
 
-// Sets the live-active input index (from a connected "select" CV, or the
-// manual slider when unwired - see deliverToWidget's "select" handling
-// below), refreshes the highlighted port row + slider, and re-publishes the
-// output.
+// Sets live-active input index from connected "select" CV, refreshes the
+// highlighted port row + selector, and re-publishes output.
 function multiplexerSetActiveIndex(widgetId, idx) {
   const state = multiplexerStates.get(widgetId);
   if (!state) return;
@@ -7826,20 +7905,60 @@ function updateMultiplexerVisual(widgetId) {
   const state = multiplexerStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
-  const wired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
-
+  const selector = el.querySelector(".multiplexer-switch");
+  if (selector) selector.classList.toggle("cv-connected", multiplexerHasCvConnection(widgetId));
   el.querySelectorAll(".mux-in-row").forEach((row) => {
     row.classList.toggle("active", parseInt(row.dataset.muxIndex, 10) === state.activeIndex);
   });
 
-  const slider = el.querySelector('[data-role="multiplexer-select-slider"]');
-  if (slider) {
-    slider.max = String(Math.max(0, state.inputCount - 1));
-    slider.value = String(state.manualSelect);
-    slider.disabled = wired;
+  const thumb = el.querySelector('[data-role="multiplexer-switch-thumb"]');
+  const firstInputRow = el.querySelector(".mux-in-row");
+  if (thumb && firstInputRow) {
+    const rowHeight = firstInputRow.offsetHeight || 26;
+    thumb.style.transform = `translateY(${state.activeIndex * rowHeight}px)`;
   }
-  const label = el.querySelector('[data-role="multiplexer-select-label"]');
-  if (label) label.textContent = `In ${state.activeIndex + 1}`;
+  updateMultiplexerRouting(widgetId);
+}
+
+function updateMultiplexerRouting(widgetId) {
+  const el = document.getElementById(widgetId);
+  const content = el?.querySelector(".multiplexer-content");
+  const path = el?.querySelector('[data-role="multiplexer-routing-path"]');
+  const activeRow = el?.querySelector(".mux-in-row.active");
+  const thumb = el?.querySelector('[data-role="multiplexer-switch-thumb"]');
+  const outputDot = el?.querySelector('.port-row-out .port-dot');
+  if (!content || !path || !activeRow || !thumb || !outputDot) return;
+  if (content.clientWidth <= 0 || content.clientHeight <= 0) {
+    path.removeAttribute("d");
+    return;
+  }
+
+  const contentRect = content.getBoundingClientRect();
+  const scaleX = content.offsetWidth ? contentRect.width / content.offsetWidth : 1;
+  const scaleY = content.offsetHeight ? contentRect.height / content.offsetHeight : 1;
+  const localPoint = (rect, xFraction, yFraction) => ({
+    x: (rect.left + rect.width * xFraction - contentRect.left) / scaleX,
+    y: (rect.top + rect.height * yFraction - contentRect.top) / scaleY,
+  });
+  const start = localPoint(thumb.getBoundingClientRect(), 1, 0.5);
+  const output = localPoint(outputDot.getBoundingClientRect(), 0.5, 0.5);
+  const bendX = Math.max(start.x + 12, output.x - 24);
+  const direction = Math.sign(output.y - start.y) || 1;
+  const radius = Math.min(8, Math.abs(output.y - start.y) / 2, Math.max(0, (output.x - start.x) / 4));
+  const width = content.clientWidth || 1;
+  const height = content.clientHeight || 1;
+
+  const svg = path.closest("svg");
+  if (svg) {
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  }
+  path.setAttribute(
+    "d",
+    `M ${start.x} ${start.y} H ${bendX - radius} ` +
+      `Q ${bendX} ${start.y} ${bendX} ${start.y + direction * radius} ` +
+      `V ${output.y - direction * radius} ` +
+      `Q ${bendX} ${output.y} ${bendX + radius} ${output.y} H ${output.x}`
+  );
 }
 
 // Hammond drawbar sliders sit on the 0-10V CV domain (like every other port
@@ -9399,14 +9518,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  // "select" is both a real connectable CV port (0-10V, delivered here as
-  // volts via propagate() when wired - same "connected CV wins" convention
-  // as Oscillator's "tune"/Filter's cutoff) AND the widget's own vertical
-  // slider's live-param name (delivered here as a plain 0-based index when
-  // unwired) - mirrors nodes/MultiplexerNode.h's render()/setParam() split
-  // 1:1. Distinguishing the two by whether a cable actually targets "select"
-  // (not by value shape) is the only reliable signal, same as every other
-  // CV-substitutes-slider port in this file.
+  // "select" is real connectable CV port (0-10V), delivered as volts via
+  // propagate() when wired. CV voltage maps to one input band.
   if (el.dataset.widgetType === "multiplexer" && portId === "select") {
     const state = multiplexerStates.get(widgetId);
     if (state) {

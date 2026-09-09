@@ -8,9 +8,9 @@
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
 
-// N-of-M (2-8) CV-selectable audio passthrough. "select" (port index 8,
+// N-of-M (2-16) CV-selectable audio passthrough. "select" (port index 16,
 // control-only - see PortTables' isControlOnlyInput) picks which of
-// "in1".."in8" (indices 0-7) reaches "value": a genuine CV connection on
+// "in1".."in16" (indices 0-15) reaches "value": a genuine CV connection on
 // "select" substitutes the widget's own vertical-slider override
 // (MultiplexerState::manualSelect) outright, same "connected CV wins"
 // convention as Oscillator's "tune"/Filter's cutoff. MultiplexerState (value
@@ -20,7 +20,7 @@ namespace nodes::multiplexer
 
 namespace
 {
-constexpr int kSelectPort = 8;
+constexpr int kSelectPort = 16;
 
 // Splits 0-10V into `inputCount` equal bands, in input order - same idea as
 // OscillatorNode.h's waveTypeFromCv (5 fixed bands), generalized to a
@@ -85,7 +85,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
     const int inputCount = presetparser::getInt(p, "inputCount", 2);
-    out.inputCount = static_cast<uint8_t>(inputCount < 2 ? 2 : (inputCount > 8 ? 8 : inputCount));
+    out.inputCount = static_cast<uint8_t>(inputCount < 2 ? 2 : (inputCount > 16 ? 16 : inputCount));
     const int sel = presetparser::getInt(p, "select", 0);
     out.multiplexerSelect = static_cast<uint8_t>(sel < 0 ? 0 : sel);
 }
