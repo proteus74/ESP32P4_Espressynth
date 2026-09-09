@@ -90,12 +90,13 @@ inline void log_p0_baseline_tick() {
     const SynthEngine::BlockStatsSnapshot stats = engine().blockStatsSnapshot();
     ESP_LOGI(kTag,
              "P0 baseline: phases activity=%.2f%% render=%.2f%% output=%.2f%% | osc pitch "
-             "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu silentSkip=%lu gainConverged=%lu | "
-             "instances total/rendered/idleForced=%lu/%lu/%lu",
+             "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu amp const/audioRate=%lu/%lu "
+             "silentSkip=%lu gainConverged=%lu | instances total/rendered/idleForced=%lu/%lu/%lu",
              static_cast<double>(phases.activityPercent), static_cast<double>(phases.renderPercent),
              static_cast<double>(phases.outputPercent), static_cast<unsigned long>(stats.oscPitchConstant),
              static_cast<unsigned long>(stats.oscPitchAudioRate), static_cast<unsigned long>(stats.oscTuneConstant),
-             static_cast<unsigned long>(stats.oscTuneAudioRate), static_cast<unsigned long>(stats.oscSilentSkipped),
+             static_cast<unsigned long>(stats.oscTuneAudioRate), static_cast<unsigned long>(stats.oscAmpConstant),
+             static_cast<unsigned long>(stats.oscAmpAudioRate), static_cast<unsigned long>(stats.oscSilentSkipped),
              static_cast<unsigned long>(stats.oscGainConverged), static_cast<unsigned long>(stats.instancesTotal),
              static_cast<unsigned long>(stats.instancesRendered),
              static_cast<unsigned long>(stats.instancesRenderedWhileIdle));

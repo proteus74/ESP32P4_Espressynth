@@ -107,6 +107,24 @@ struct NodeInstance
     // type's audioInDefault() instead - see PortTables).
     synth::PortMask audioConnectedPortMask = 0;
 
+    // Which audio-input ports are a borrowed VIEW into another instance's
+    // output buffer rather than an owned accumulator (bit i = inPorts[i]) -
+    // set once in GraphBuilder::build()'s post-pass (plan section 3, P2:
+    // "Bei nur einer unskalierten Quelle und einem ausschließlich lesenden
+    // Ziel auf den Quellpuffer verweisen"), only for a port fed by exactly
+    // one unscaled, non-monitor-tap edge whose source is guaranteed (by the
+    // build's topological sort) to render before this instance every block.
+    // Graph::renderBlock must skip both the per-block accumulator clear and
+    // the edge-summing add/scale for a bit set here (the pointer already IS
+    // the source's fresh data, nothing to accumulate into); Graph::destroy()
+    // must skip freeing it (it doesn't own this memory - the source
+    // instance's own outL/outR/link bus allocation does). Always a subset of
+    // audioConnectedPortMask; never set for a port with more than one
+    // source, a scaled edge, a monitor tap, or an edge whose source/
+    // destination widget isn't part of the safely-topologically-sorted
+    // (non-cyclic) prefix of renderOrder.
+    synth::PortMask viewPortMask = 0;
+
     // Voice 0 of this same widget (self-pointer when this instance IS voice
     // 0) - set once in GraphBuilder::build(), stable for the Graph's whole
     // lifetime (the instances array is never reallocated after build). Lets

@@ -130,6 +130,8 @@ public:
         uint32_t oscPitchAudioRate = 0;
         uint32_t oscTuneConstant = 0;
         uint32_t oscTuneAudioRate = 0;
+        uint32_t oscAmpConstant = 0;
+        uint32_t oscAmpAudioRate = 0;
         uint32_t oscSilentSkipped = 0;
         uint32_t oscGainConverged = 0;
         uint32_t instancesTotal = 0;
@@ -143,6 +145,8 @@ public:
         s.oscPitchAudioRate = oscPitchAudioRate_.load(std::memory_order_relaxed);
         s.oscTuneConstant = oscTuneConstant_.load(std::memory_order_relaxed);
         s.oscTuneAudioRate = oscTuneAudioRate_.load(std::memory_order_relaxed);
+        s.oscAmpConstant = oscAmpConstant_.load(std::memory_order_relaxed);
+        s.oscAmpAudioRate = oscAmpAudioRate_.load(std::memory_order_relaxed);
         s.oscSilentSkipped = oscSilentSkipped_.load(std::memory_order_relaxed);
         s.oscGainConverged = oscGainConverged_.load(std::memory_order_relaxed);
         s.instancesTotal = instancesTotal_.load(std::memory_order_relaxed);
@@ -484,6 +488,8 @@ private:
     std::atomic<uint32_t> oscPitchAudioRate_{0};
     std::atomic<uint32_t> oscTuneConstant_{0};
     std::atomic<uint32_t> oscTuneAudioRate_{0};
+    std::atomic<uint32_t> oscAmpConstant_{0};
+    std::atomic<uint32_t> oscAmpAudioRate_{0};
     std::atomic<uint32_t> oscSilentSkipped_{0};
     std::atomic<uint32_t> oscGainConverged_{0};
     std::atomic<uint32_t> instancesTotal_{0};
@@ -1066,6 +1072,8 @@ inline void SynthEngine::taskLoop()
         oscPitchAudioRate_.store(blockStats.oscPitchAudioRate, std::memory_order_relaxed);
         oscTuneConstant_.store(blockStats.oscTuneConstant, std::memory_order_relaxed);
         oscTuneAudioRate_.store(blockStats.oscTuneAudioRate, std::memory_order_relaxed);
+        oscAmpConstant_.store(blockStats.oscAmpConstant, std::memory_order_relaxed);
+        oscAmpAudioRate_.store(blockStats.oscAmpAudioRate, std::memory_order_relaxed);
         oscSilentSkipped_.store(blockStats.oscSilentSkipped, std::memory_order_relaxed);
         oscGainConverged_.store(blockStats.oscGainConverged, std::memory_order_relaxed);
         instancesTotal_.store(blockStats.instancesTotal, std::memory_order_relaxed);

@@ -1246,6 +1246,11 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             }
         }
     }
+    // Marks where the properly topologically-sorted prefix of renderOrder
+    // ends - any widget appended below (the cyclic-fallback loop) has no
+    // guaranteed-safe order relative to its own dependencies. Used by the
+    // buffer-view pass further down.
+    const uint16_t topoCount = g->renderOrderCount;
     for (uint16_t i = 0; i < doc.widgetCount; ++i)
     {
         bool found = false;
@@ -1267,15 +1272,106 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     delete[] adjacency;
     delete[] inDegree;
 
+    // Counts ports actually turned into a view below - logged alongside the
+    // existing build diagnostics so this can be checked against real
+    // presets, not just inferred from source (plan section 8's spirit,
+    // applied to the builder itself).
+    uint32_t viewPortCount = 0;
+    // Buffer-view optimization (plan section 3, P2: "Bei nur einer
+    // unskalierten Quelle und einem ausschließlich lesenden Ziel auf den
+    // Quellpuffer verweisen"): a destination port fed by exactly one
+    // unscaled, non-monitor-tap edge whose source is guaranteed to render
+    // before it every block (both widgets inside the safe, non-cyclic
+    // topoCount prefix above, source strictly before destination) can read
+    // the source's own output buffer directly - no separate accumulator,
+    // no per-block memset, no per-sample add for that edge. Deliberately a
+    // separate, additive pass AFTER the normal allocation/topological-sort
+    // above (not woven into it), so this can never perturb that already-
+    // correct sequence - worst case it frees a just-allocated buffer and
+    // re-points the pointer, a one-time build-time cost, never a per-block
+    // one. See NodeInstance.h's viewPortMask and Graph::renderBlock/
+    // Graph::destroy() for the read/clear/free-side handling.
+    {
+        uint16_t widgetRenderPos[synth::kMaxWidgets];
+        for (uint16_t r = 0; r < g->renderOrderCount; ++r)
+        {
+            widgetRenderPos[g->renderOrder[r]] = r;
+        }
+        // Per-(instance,port) incoming-edge count + the one edge index when
+        // exactly one - only a count of exactly one is alias-eligible; a
+        // multi-source port keeps its real accumulator. Heap-allocated
+        // scratch, freed at the end of this block - instanceCount can be up
+        // to kMaxInstances, too large to be a comfortable stack array here.
+        const size_t slotCount = static_cast<size_t>(g->instanceCount) * synth::kMaxAudioInPorts;
+        uint8_t *targetEdgeCount = new uint8_t[slotCount]();
+        uint16_t *targetEdgeIndex = new uint16_t[slotCount];
+        for (uint16_t e = 0; e < g->edgeCount; ++e)
+        {
+            const Edge &edge = g->edges[e];
+            const size_t key = static_cast<size_t>(edge.toInstance) * synth::kMaxAudioInPorts + edge.toPort;
+            if (targetEdgeCount[key] < 255)
+            {
+                ++targetEdgeCount[key];
+            }
+            targetEdgeIndex[key] = e;
+        }
+        for (uint16_t i = 0; i < g->instanceCount; ++i)
+        {
+            NodeInstance &dst = g->instances[i];
+            for (int p = 0; p < dst.audioInPortCount; ++p)
+            {
+                if ((dst.audioConnectedPortMask & synth::portBit(p)) == 0)
+                {
+                    continue;
+                }
+                const size_t key = static_cast<size_t>(i) * synth::kMaxAudioInPorts + p;
+                if (targetEdgeCount[key] != 1)
+                {
+                    continue; // multi-source accumulator - keep the owned buffer
+                }
+                const Edge &edge = g->edges[targetEdgeIndex[key]];
+                if (edge.scale != 1.0f || edge.monitorTap)
+                {
+                    continue;
+                }
+                NodeInstance &src = g->instances[edge.fromInstance];
+                const uint16_t srcPos = widgetRenderPos[src.widgetIndex];
+                const uint16_t dstPos = widgetRenderPos[dst.widgetIndex];
+                if (srcPos >= topoCount || dstPos >= topoCount || srcPos >= dstPos)
+                {
+                    continue; // cyclic-fallback widget on either end, or not strictly source-before-destination
+                }
+                float *srcBuf = outputPortBuffer(src, edge.fromPort);
+                if (srcBuf == nullptr)
+                {
+                    continue;
+                }
+                if (dst.inPorts[p] != nullptr)
+                {
+                    heap_caps_free(dst.inPorts[p]);
+                    --blockBufferCount; // keep the memorydiag/log report below accurate
+                }
+                dst.inPorts[p] = srcBuf;
+                dst.viewPortMask |= synth::portBit(p);
+                ++viewPortCount;
+            }
+        }
+        delete[] targetEdgeCount;
+        delete[] targetEdgeIndex;
+    }
+
     const size_t internalFreeAfter = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t internalLargestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     memorydiag::setGraphStats(g->instanceCount, sizeof(NodeInstance), blockBufferCount,
                               blockBufferCount * synth::kBlockSize * sizeof(float), instancesInternal);
-    ESP_LOGI(kGraphBuilderTag, "%u instances, NodeInstance %u B (%s), output-PSRAM fallbacks %u, internal heap free %u -> %u B, largest block %u -> %u B",
+    ESP_LOGI(kGraphBuilderTag,
+             "%u instances, NodeInstance %u B (%s), output-PSRAM fallbacks %u, internal heap free %u -> %u B, "
+             "largest block %u -> %u B, buffer views %u",
              static_cast<unsigned>(g->instanceCount), static_cast<unsigned>(sizeof(NodeInstance)),
              instancesInternal ? "internal" : "PSRAM", static_cast<unsigned>(outputPsramFallbacks),
              static_cast<unsigned>(internalFreeBefore), static_cast<unsigned>(internalFreeAfter),
-             static_cast<unsigned>(internalLargestBefore), static_cast<unsigned>(internalLargestAfter));
+             static_cast<unsigned>(internalLargestBefore), static_cast<unsigned>(internalLargestAfter),
+             static_cast<unsigned>(viewPortCount));
 
     fitInternal = instancesInternal && outputPsramFallbacks == 0;
     return g;

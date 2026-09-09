@@ -584,6 +584,18 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             const bool connected = (inst.audioConnectedPortMask & synth::portBit(p)) != 0;
             if (connected)
             {
+                if ((inst.viewPortMask & synth::portBit(p)) != 0)
+                {
+                    // Borrowed view (see NodeInstance.h/GraphBuilder.h's
+                    // post-pass) - this pointer IS the source instance's own
+                    // output buffer, not an accumulator of ours. Clearing it
+                    // here would just stomp the source's last block output
+                    // before it even gets a chance to render this block's
+                    // fresh value into the same memory. Nothing to do: the
+                    // source's own render() (later in this same block, see
+                    // renderOrder) is what fills it.
+                    continue;
+                }
                 // Accumulator base for this block's edge-summing pass below.
                 memset(inst.inPorts[p], 0, frames * sizeof(float));
                 continue;
@@ -748,6 +760,14 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             if ((srcWidget.voiced && !srcWidget.renderWhenIdle && !voiceStillSounding[src.voiceIndex]) ||
                 (dstWidget.voiced && !dstWidget.renderWhenIdle && !voiceStillSounding[dst.voiceIndex]))
             {
+                continue;
+            }
+            if ((dst.viewPortMask & synth::portBit(edge.toPort)) != 0)
+            {
+                // dst.inPorts[edge.toPort] already IS srcBuf (see
+                // NodeInstance.h/GraphBuilder.h's post-pass) - nothing to
+                // accumulate, `dstBuf[i] += srcBuf[i]` here would double the
+                // value since both names refer to the same memory.
                 continue;
             }
             const float *srcBuf = outputPortBuffer(src, edge.fromPort);
@@ -1694,15 +1714,23 @@ inline void Graph::destroy()
     for (uint16_t i = 0; i < instanceCount; ++i)
     {
         NodeInstance &inst = instances[i];
-        for (auto &port : inst.inPorts)
+        for (int p = 0; p < static_cast<int>(synth::kMaxAudioInPorts); ++p)
         {
+            float *&port = inst.inPorts[p];
             if (port != nullptr)
             {
-                // Allocated via heap_caps_calloc (see GraphBuilder.h's
-                // allocateBlockBuffer, used uniformly for every type now,
-                // internal RAM or PSRAM depending on node type) - matching
-                // heap_caps_free, not delete[].
-                heap_caps_free(port);
+                // A view port (see NodeInstance.h's viewPortMask) doesn't
+                // own this memory - it's another instance's own outL/outR/
+                // link-bus buffer, freed when THAT instance's own slot is
+                // processed by this same loop. Only free an actually-owned
+                // buffer here. Allocated via heap_caps_calloc (see
+                // GraphBuilder.h's allocateBlockBuffer, used uniformly for
+                // every type now, internal RAM or PSRAM depending on node
+                // type) - matching heap_caps_free, not delete[].
+                if ((inst.viewPortMask & synth::portBit(p)) == 0)
+                {
+                    heap_caps_free(port);
+                }
                 port = nullptr;
             }
         }
