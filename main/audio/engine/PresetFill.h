@@ -28,6 +28,7 @@
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
+#include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
@@ -105,6 +106,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Mixer:
         nodes::mixer::parsePreset(p, out);
+        break;
+    case NodeType::Multiplexer:
+        nodes::multiplexer::parsePreset(p, out);
         break;
     case NodeType::Multiplier:
     case NodeType::Adder:

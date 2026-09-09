@@ -81,6 +81,10 @@ struct WidgetParams
     uint8_t inputCount = 2;
     float mixerGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};
     float outputGain = 1.0f;
+    // multiplexer - reuses inputCount above. multiplexerSelect is the
+    // widget's own vertical-slider override (0-based, see
+    // MultiplexerState::manualSelect).
+    uint8_t multiplexerSelect = 0;
     // chorus
     float rate = 1.5f, offset = 0.02f, depth = 0.003f;
     // delay (always stereo, "echo" was only ever delay-with-feedback) -

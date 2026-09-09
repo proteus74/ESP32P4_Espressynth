@@ -231,12 +231,12 @@
 <div id="knobSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Knob Settings</h3>
-    <label class="modal-field">
+    <div class="modal-cc-learn-row">
+    <label class="modal-field modal-cc-field">
       <span>Learned CC Number</span>
       <input type="text" id="knobCcDisplay" readonly placeholder="– none yet –">
     </label>
-    <div class="modal-field">
-      <button id="knobLearnBtn" class="btn-secondary">Learn</button>
+    <button id="knobLearnBtn" class="btn-secondary">Learn</button>
     </div>
     <label class="modal-field">
       <span>Value list (comma-separated, e.g. "10,100") - takes priority over linear mapping once it has 2+ numbers</span>
@@ -282,24 +282,24 @@
 <div id="buttonSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Button Settings</h3>
-    <label class="modal-field">
+    <div class="modal-cc-learn-row">
+    <label class="modal-field modal-cc-field">
       <span>Learned CC Number</span>
       <input type="text" id="buttonCcDisplay" readonly placeholder="– none yet –">
     </label>
-    <div class="modal-field">
-      <button id="buttonLearnBtn" class="btn-secondary">Learn</button>
+    <button id="buttonLearnBtn" class="btn-secondary">Learn</button>
     </div>
     <label class="modal-field">
-      <span>Value list (comma-separated, e.g. "10,100") - takes priority once it has 2+ numbers, cycles one step per press</span>
-      <input type="text" id="buttonValueListInput" placeholder="10,100">
+      <span>Voltage list (0-10V, comma-separated, e.g. "0,10") - cycles one step per press</span>
+      <input type="text" id="buttonValueListInput" placeholder="0,10">
     </label>
     <div class="modal-field-row">
       <label class="modal-field">
-        <span>Value at MIDI 0</span>
+        <span>Voltage at MIDI 0</span>
         <input type="text" inputmode="decimal" id="buttonValue0Input" value="0">
       </label>
       <label class="modal-field">
-        <span>Value at MIDI 127</span>
+        <span>Voltage at MIDI 127</span>
         <input type="text" inputmode="decimal" id="buttonValue127Input" value="10">
       </label>
     </div>
@@ -313,35 +313,35 @@
 <div id="upDownButtonSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Up/Down Button Settings</h3>
-    <label class="modal-field">
+    <div class="modal-cc-learn-row">
+    <label class="modal-field modal-cc-field">
       <span>Learned CC Number (Up)</span>
       <input type="text" id="upDownButtonCcUpDisplay" readonly placeholder="– none yet –">
     </label>
-    <div class="modal-field">
-      <button id="upDownButtonLearnUpBtn" class="btn-secondary">Learn</button>
+    <button id="upDownButtonLearnUpBtn" class="btn-secondary">Learn</button>
     </div>
-    <label class="modal-field">
+    <div class="modal-cc-learn-row">
+    <label class="modal-field modal-cc-field">
       <span>Learned CC Number (Down)</span>
       <input type="text" id="upDownButtonCcDownDisplay" readonly placeholder="– none yet –">
     </label>
-    <div class="modal-field">
-      <button id="upDownButtonLearnDownBtn" class="btn-secondary">Learn</button>
+    <button id="upDownButtonLearnDownBtn" class="btn-secondary">Learn</button>
     </div>
     <label class="modal-field">
-      <span>Value list (comma-separated, e.g. "10,100") - takes priority once it has 2+ numbers, Up/Down step forward/back</span>
-      <input type="text" id="upDownButtonValueListInput" placeholder="10,100">
+      <span>Voltage list (0-10V, comma-separated, e.g. "0,10") - Up/Down step forward/back</span>
+      <input type="text" id="upDownButtonValueListInput" placeholder="0,10">
     </label>
     <div class="modal-field-row">
       <label class="modal-field">
-        <span>Min</span>
+        <span>Min (V)</span>
         <input type="text" inputmode="decimal" id="upDownButtonMinInput" value="0">
       </label>
       <label class="modal-field">
-        <span>Max</span>
+        <span>Max (V)</span>
         <input type="text" inputmode="decimal" id="upDownButtonMaxInput" value="10">
       </label>
       <label class="modal-field">
-        <span>Step</span>
+        <span>Step (V)</span>
         <input type="text" inputmode="decimal" id="upDownButtonStepInput" value="1">
       </label>
     </div>
@@ -467,6 +467,20 @@
     <div class="modal-actions">
       <button id="mixerSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="mixerSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="multiplexerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Multiplexer Settings</h3>
+    <label class="modal-field">
+      <span>Number of Inputs (2–8)</span>
+      <input type="number" id="multiplexerCountInput" min="2" max="8" value="2">
+    </label>
+    <div class="modal-actions">
+      <button id="multiplexerSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="multiplexerSettingsSave">Save</button>
     </div>
   </div>
 </div>

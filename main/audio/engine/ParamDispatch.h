@@ -25,6 +25,7 @@
 #include "nodes/LfoNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
+#include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
@@ -129,6 +130,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Mixer:
         return nodes::mixer::setParam(inst, name, value);
+
+    case NodeType::Multiplexer:
+        return nodes::multiplexer::setParam(inst, name, value);
 
     case NodeType::Chorus:
         return nodes::chorus::setParam(inst, name, value);

@@ -26,6 +26,7 @@
 #include "nodes/LfoNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MixerNode.h"
+#include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
@@ -85,6 +86,9 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Mixer:
         nodes::mixer::render(inst, frames);
+        break;
+    case NodeType::Multiplexer:
+        nodes::multiplexer::render(inst, frames);
         break;
     case NodeType::EspEq:
         processEspEq(*inst.espEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);

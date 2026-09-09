@@ -571,27 +571,36 @@ const WIDGET_TYPES = {
     label: "Knob",
     icon: "🎛️",
     inputs: [],
-    outputs: [
-      { id: "cc", label: "CC (0–127)" },
-      { id: "voltage", label: "Voltage (CV)" },
-    ],
+    outputs: [{ id: "voltage", label: "" }],
   },
   button: {
     label: "Button",
     icon: "🔘",
     inputs: [],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "" }],
   },
   "up-down-button": {
     label: "Up/Down Button",
     icon: "🔼",
     inputs: [],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "" }],
   },
   switch: {
     label: "Switch",
     icon: "🔀",
     inputs: [
+      { id: "in1", label: "In 1" },
+      { id: "in2", label: "In 2" },
+    ],
+    outputs: [{ id: "value", label: "Value" }],
+  },
+  multiplexer: {
+    label: "Multiplexer",
+    icon: "🎯",
+    // Static/default shape (2 inputs) - live input count (2-8) is handled by
+    // renderMultiplexerPorts() below, same pattern as Mixer.
+    inputs: [
+      { id: "select", label: "Select (CV)" },
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
@@ -982,7 +991,7 @@ const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["oscillator", "hammond", "wave-player", "soundfont-player"] },
   { label: "Modulator", types: ["lfo", "adsr", "detune", "clock"] },
-  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "const"] },
+  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "audio-to-value"] },
   { label: "Filter", types: ["filter", "esp-eq"] },
   { label: "Effects", types: ["chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
@@ -1008,6 +1017,9 @@ const AUDIO_PORTS = {
     out: ["value"],
   },
   switch: { in: ["in1", "in2"], out: ["value"] },
+  // "select" (CV) is deliberately absent here - control-rate, same reasoning
+  // as C++ PortTables' isControlOnlyInput (see nodes/MultiplexerNode.h).
+  multiplexer: { in: ["in1", "in2", "in3", "in4", "in5", "in6", "in7", "in8"], out: ["value"] },
   
   
   
@@ -1206,7 +1218,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "debug", "voltmeter", "lfo", "audio-to-value", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "mixer", "esp-eq"];
+const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "audio-to-value", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "mixer", "esp-eq"];
 
 
 
@@ -1322,6 +1334,16 @@ function parseValueList(str) {
   const values = parts.map((s) => parseFloatFlexible(s));
   if (values.some((v) => Number.isNaN(v))) return null;
   return values;
+}
+
+function parseVoltageValueList(str) {
+  const values = parseValueList(str);
+  return values ? values.map((value) => clamp(value, 0, CV_MAX_VOLTS)) : null;
+}
+
+function clampVoltage(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? clamp(number, 0, CV_MAX_VOLTS) : fallback;
 }
 
 function roundFloat(value, decimals = 4) {
@@ -1537,6 +1559,14 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openMixerSettings(id);
+    });
+  }
+
+  if (type === "multiplexer") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button") || e.target.closest("input")) return;
+      e.stopPropagation();
+      openMultiplexerSettings(id);
     });
   }
 
@@ -2012,6 +2042,43 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, "mixer", { inputCount: 2 });
   }
 
+  if (type === "multiplexer") {
+    multiplexerStates.set(id, {
+      inputCount: 2,
+      manualSelect: 0,
+      activeIndex: 0,
+      values: new Array(MULTIPLEXER_MAX_INPUTS).fill(0),
+    });
+    audioEngine.createNode(id, "multiplexer", { select: 0 });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body multiplexer-body";
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "multiplexer-select-slider";
+    slider.min = "0";
+    slider.max = "1";
+    slider.step = "1";
+    slider.value = "0";
+    slider.dataset.role = "multiplexer-select-slider";
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => {
+      deliverToWidget(id, "select", parseInt(slider.value, 10));
+    });
+    body.appendChild(slider);
+
+    const label = document.createElement("span");
+    label.className = "multiplexer-select-label";
+    label.dataset.role = "multiplexer-select-label";
+    label.textContent = "In 1";
+    body.appendChild(label);
+
+    el.appendChild(body);
+    updateMultiplexerVisual(id);
+  }
+
   if (type === "adsr") {
     const adsrDefaults = {
       attack: 0.4,
@@ -2340,10 +2407,31 @@ function createWidget(type, label, x, y, forcedId) {
     const dial = document.createElement("div");
     dial.className = "knob-dial";
 
+    const scale = document.createElement("div");
+    scale.className = "knob-scale";
+    const tickCount = 19;
+    const scaleCenter = 46;
+    const tickRadius = 41;
+    for (let tickIndex = 0; tickIndex < tickCount; tickIndex += 1) {
+      const angle = -135 + (270 * tickIndex) / (tickCount - 1);
+      const radians = angle * Math.PI / 180;
+      const tick = document.createElement("span");
+      tick.className = "knob-tick";
+      tick.style.left = `${scaleCenter + Math.sin(radians) * tickRadius}px`;
+      tick.style.top = `${scaleCenter - Math.cos(radians) * tickRadius}px`;
+      tick.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+      scale.appendChild(tick);
+    }
+    dial.appendChild(scale);
+
     const indicator = document.createElement("div");
     indicator.className = "knob-indicator";
     indicator.dataset.role = "knob-indicator";
     dial.appendChild(indicator);
+
+    const centerCap = document.createElement("div");
+    centerCap.className = "knob-center-cap";
+    dial.appendChild(centerCap);
 
     const readout = document.createElement("div");
     readout.className = "knob-readout";
@@ -2353,10 +2441,14 @@ function createWidget(type, label, x, y, forcedId) {
     ccLabel.className = "knob-cc-label";
     ccLabel.dataset.role = "knob-cc-label";
 
+    const valueRow = document.createElement("div");
+    valueRow.className = "knob-value-row";
+    valueRow.appendChild(readout);
+
     dial.addEventListener("mousedown", (e) => startKnobDrag(e, id));
 
     body.appendChild(dial);
-    body.appendChild(readout);
+    body.appendChild(valueRow);
     body.appendChild(ccLabel);
     el.appendChild(body);
 
@@ -2378,6 +2470,9 @@ function createWidget(type, label, x, y, forcedId) {
     const body = document.createElement("div");
     body.className = "widget-instance-body button-body";
 
+    const controlRow = document.createElement("div");
+    controlRow.className = "button-control-row";
+
     const pressButton = document.createElement("button");
     pressButton.className = "button-trigger";
     pressButton.type = "button";
@@ -2392,7 +2487,8 @@ function createWidget(type, label, x, y, forcedId) {
     ccLabel.className = "button-cc-label";
     ccLabel.dataset.role = "button-cc-label";
 
-    body.appendChild(pressButton);
+    controlRow.appendChild(pressButton);
+    body.appendChild(controlRow);
     body.appendChild(ccLabel);
     el.appendChild(body);
 
@@ -2536,6 +2632,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderDividePorts(id, ports);
   } else if (type === "mixer") {
     renderMixerPorts(id, ports);
+  } else if (type === "multiplexer") {
+    renderMultiplexerPorts(id, ports);
   } else if (type === "hammond") {
     renderHammondPorts(id, ports);
   } else if (type === "midi-split") {
@@ -3116,7 +3214,23 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  el.appendChild(ports);
+  if (type === "knob") {
+    ports.classList.add("knob-output-ports");
+    const knobBody = el.querySelector(".knob-body");
+    if (knobBody) knobBody.appendChild(ports);
+  } else if (type === "button") {
+    ports.classList.add("button-output-ports");
+    const buttonControlRow = el.querySelector(".button-control-row");
+    if (buttonControlRow) buttonControlRow.appendChild(ports);
+    else el.appendChild(ports);
+  } else if (type === "up-down-button") {
+    ports.classList.add("up-down-button-output-ports");
+    const pressRow = el.querySelector(".up-down-button-press-row");
+    if (pressRow) pressRow.appendChild(ports);
+    else el.appendChild(ports);
+  } else {
+    el.appendChild(ports);
+  }
 
   if (type === "esp-eq") {
     const scopeBody = document.createElement("div");
@@ -3133,6 +3247,8 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   canvasContent.appendChild(el);
+  if (type === "button") updateButtonVisual(id);
+  if (type === "up-down-button") updateUpDownButtonVisual(id);
   if (audioMonitorStates.has(id)) updateAudioMonitorRangeVisual(id);
   
   
@@ -3176,6 +3292,7 @@ function removeWidget(id, force = false) {
   filterStates.delete(id);
   espEffectStates.delete(id);
   mixerStates.delete(id);
+  multiplexerStates.delete(id);
   adsrStates.delete(id);
   constStates.delete(id);
   voltmeterStates.delete(id);
@@ -3232,6 +3349,7 @@ function loadInitTemplate() {
       id: `conn-${connectionCounter}`,
       from: { widgetId: oscEl.id, portId: "value" },
       to: { widgetId: outputLinkEl.id, portId },
+      color: getConnectionColorForOutput(oscEl.id, "value"),
     });
     audioEngine.connect(oscEl.id, "value", outputLinkEl.id, portId);
   });
@@ -3263,6 +3381,7 @@ function loadInitTemplate() {
         id: `conn-${connectionCounter}`,
         from: { widgetId: inputLinkEl.id, portId },
         to: { widgetId: outEl.id, portId: channel },
+        color: getConnectionColorForOutput(inputLinkEl.id, portId),
       });
       audioEngine.connect(inputLinkEl.id, portId, outEl.id, channel);
     });
@@ -3521,7 +3640,6 @@ function setKnobRaw(widgetId, raw) {
   const mapped = roundFloat(mapKnobValue(state));
   audioEngine.setParam(widgetId, "value", mapped);
   updateKnobVisual(widgetId);
-  propagate(widgetId, "cc", state.raw);
   propagate(widgetId, "voltage", mapped);
   sendLiveParamUpdateThrottled(widgetId, { raw: state.raw });
 }
@@ -3688,7 +3806,6 @@ document.getElementById("knobSettingsSave").addEventListener("click", () => {
 
     const mapped = roundFloat(mapKnobValue(state));
     audioEngine.setParam(pendingKnobId, "value", mapped);
-    propagate(pendingKnobId, "cc", state.raw);
     propagate(pendingKnobId, "voltage", mapped);
     updateKnobVisual(pendingKnobId);
     sendLiveParamUpdate(pendingKnobId, {
@@ -3711,12 +3828,12 @@ const buttonStates = new Map();
 let buttonMidiLearnTargetId = null;
 
 function buttonCurrentOutput(state) {
-  const list = parseValueList(state.listText);
+  const list = parseVoltageValueList(state.listText);
   if (list && list.length >= 2) {
     const idx = clamp(state.listIndex, 0, list.length - 1);
     return list[idx];
   }
-  return state.wasAbove ? state.value127 : state.value0;
+  return clampVoltage(state.wasAbove ? state.value127 : state.value0);
 }
 
 function publishButtonValue(widgetId) {
@@ -3735,7 +3852,7 @@ function publishButtonValue(widgetId) {
 function advanceButtonValue(widgetId) {
   const state = buttonStates.get(widgetId);
   if (!state) return;
-  const list = parseValueList(state.listText);
+  const list = parseVoltageValueList(state.listText);
   if (list && list.length >= 2) {
     state.listIndex = (state.listIndex + 1) % list.length;
   } else {
@@ -3750,7 +3867,13 @@ function updateButtonVisual(widgetId) {
   if (!state || !el) return;
 
   const readout = el.querySelector('[data-role="button-readout"]');
-  if (readout) readout.textContent = formatNumber(buttonCurrentOutput(state));
+  const list = parseVoltageValueList(state.listText);
+  const active = list && list.length >= 2 ? state.listIndex > 0 : state.wasAbove;
+  if (readout) {
+    readout.textContent = formatNumber(buttonCurrentOutput(state));
+    readout.classList.toggle("is-active", active);
+    readout.setAttribute("aria-pressed", String(active));
+  }
 
   const ccLabel = el.querySelector('[data-role="button-cc-label"]');
   if (ccLabel) {
@@ -3781,7 +3904,7 @@ function routeMidiToButtons(data) {
     if (state.cc !== data.control || state.channel !== data.channel) return;
 
     const above = data.value >= 64;
-    const list = parseValueList(state.listText);
+    const list = parseVoltageValueList(state.listText);
     if (list && list.length >= 2) {
       if (above && !state.wasAbove) {
         state.listIndex = (state.listIndex + 1) % list.length;
@@ -3806,7 +3929,7 @@ let pendingButtonId = null;
 
 
 function updateButtonFieldsDisabledState() {
-  const list = parseValueList(buttonValueListInput.value);
+  const list = parseVoltageValueList(buttonValueListInput.value);
   const listValid = !!(list && list.length >= 2);
   buttonFixedInputs.forEach((input) => {
     input.disabled = listValid;
@@ -3823,7 +3946,8 @@ function openButtonSettings(widgetId) {
     state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
   buttonValue0Input.value = state.value0;
   buttonValue127Input.value = state.value127;
-  buttonValueListInput.value = state.listText || "";
+  const buttonList = parseVoltageValueList(state.listText);
+  buttonValueListInput.value = buttonList ? buttonList.join(", ") : (state.listText || "");
   updateButtonFieldsDisabledState();
   buttonLearnBtn.textContent = "Learn";
   buttonMidiLearnTargetId = null;
@@ -3855,10 +3979,10 @@ document.getElementById("buttonSettingsSave").addEventListener("click", () => {
   if (state) {
     const v0 = parseFloatFlexible(buttonValue0Input.value);
     const v127 = parseFloatFlexible(buttonValue127Input.value);
-    state.value0 = Number.isNaN(v0) ? 0 : v0;
-    state.value127 = Number.isNaN(v127) ? CV_MAX_VOLTS : v127;
-    state.listText = buttonValueListInput.value;
-    const list = parseValueList(state.listText);
+    state.value0 = clampVoltage(Number.isNaN(v0) ? 0 : v0);
+    state.value127 = clampVoltage(Number.isNaN(v127) ? CV_MAX_VOLTS : v127, CV_MAX_VOLTS);
+    const list = parseVoltageValueList(buttonValueListInput.value);
+    state.listText = list ? list.join(", ") : buttonValueListInput.value;
     if (list && list.length >= 2) {
       state.listIndex = clamp(state.listIndex, 0, list.length - 1);
     }
@@ -3884,12 +4008,12 @@ let upDownMidiLearnTargetIdUp = null;
 let upDownMidiLearnTargetIdDown = null;
 
 function upDownButtonCurrentOutput(state) {
-  const list = parseValueList(state.listText);
+  const list = parseVoltageValueList(state.listText);
   if (list && list.length >= 2) {
     const idx = clamp(state.listIndex, 0, list.length - 1);
     return list[idx];
   }
-  return state.currentValue;
+  return clampVoltage(state.currentValue);
 }
 
 function publishUpDownButtonValue(widgetId) {
@@ -3908,7 +4032,7 @@ function publishUpDownButtonValue(widgetId) {
 function advanceUpDownButtonValue(widgetId, direction) {
   const state = upDownButtonStates.get(widgetId);
   if (!state) return;
-  const list = parseValueList(state.listText);
+  const list = parseVoltageValueList(state.listText);
   if (list && list.length >= 2) {
     if (direction === "up") {
       if (state.listIndex + 1 < list.length) state.listIndex += 1;
@@ -3941,6 +4065,7 @@ function updateUpDownButtonVisual(widgetId) {
         : `${state.ccDown}${state.channelDown === null ? "" : ` (Ch ${state.channelDown + 1})`}`;
     ccLabel.textContent = `▲ ${upTxt}  ▼ ${downTxt}`;
   }
+
 }
 
 function routeMidiToUpDownButtons(data) {
@@ -3984,7 +4109,7 @@ function routeMidiToUpDownButtons(data) {
     const matchedDown = state.ccDown !== null && state.ccDown === data.control && state.channelDown === data.channel;
     if (!matchedUp && !matchedDown) return;
 
-    const list = parseValueList(state.listText);
+    const list = parseVoltageValueList(state.listText);
     if (matchedUp) {
       if (list && list.length >= 2) {
         if (state.listIndex + 1 < list.length) state.listIndex += 1;
@@ -4027,7 +4152,8 @@ function openUpDownButtonSettings(widgetId) {
   upDownButtonMinInput.value = state.min;
   upDownButtonMaxInput.value = state.max;
   upDownButtonStepInput.value = state.step;
-  upDownButtonValueListInput.value = state.listText || "";
+  const upDownList = parseVoltageValueList(state.listText);
+  upDownButtonValueListInput.value = upDownList ? upDownList.join(", ") : (state.listText || "");
   upDownButtonLearnUpBtn.textContent = "Learn";
   upDownButtonLearnDownBtn.textContent = "Learn";
   upDownMidiLearnTargetIdUp = null;
@@ -4073,11 +4199,12 @@ document.getElementById("upDownButtonSettingsSave").addEventListener("click", ()
     const min = parseFloatFlexible(upDownButtonMinInput.value);
     const max = parseFloatFlexible(upDownButtonMaxInput.value);
     const step = parseFloatFlexible(upDownButtonStepInput.value);
-    state.min = Number.isNaN(min) ? 0 : min;
-    state.max = Number.isNaN(max) ? CV_MAX_VOLTS : max;
-    state.step = Number.isNaN(step) || step <= 0 ? 1 : step;
-    state.listText = upDownButtonValueListInput.value;
-    const list = parseValueList(state.listText);
+    state.min = clampVoltage(Number.isNaN(min) ? 0 : min);
+    state.max = clampVoltage(Number.isNaN(max) ? CV_MAX_VOLTS : max, CV_MAX_VOLTS);
+    if (state.max < state.min) [state.min, state.max] = [state.max, state.min];
+    state.step = Number.isNaN(step) || step <= 0 ? 1 : clampVoltage(step, 1);
+    const list = parseVoltageValueList(upDownButtonValueListInput.value);
+    state.listText = list ? list.join(", ") : upDownButtonValueListInput.value;
     if (list && list.length >= 2) {
       state.listIndex = clamp(state.listIndex, 0, list.length - 1);
     }
@@ -5447,6 +5574,7 @@ function refreshAllDualModeWidgets() {
   
   gainStates.forEach((_, id) => updateGainVisual(id));
   filterStates.forEach((_, id) => updateFilterVisual(id));
+  multiplexerStates.forEach((_, id) => updateMultiplexerVisual(id));
   
   
   
@@ -5466,7 +5594,6 @@ function refreshControlGraph() {
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
   knobStates.forEach((state, id) => {
-    push(id, "cc", state.raw);
     push(id, "voltage", roundFloat(mapKnobValue(state)));
   });
   buttonStates.forEach((state, id) => push(id, "value", buttonCurrentOutput(state)));
@@ -6515,7 +6642,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
-  "mixer", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch",
+  "mixer", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
 ]);
 
 function getScopeConnectedSourceType(widgetId, portId) {
@@ -7639,6 +7766,82 @@ function updateMixerGainVisual(widgetId, index) {
   if (valueSpan) valueSpan.textContent = formatNumber(state.gains[index - 1]);
 }
 
+const multiplexerStates = new Map();
+const MULTIPLEXER_MIN_INPUTS = 2;
+const MULTIPLEXER_MAX_INPUTS = 8;
+
+// Splits 0-10V into `inputCount` equal bands, in input order - mirrors
+// nodes/MultiplexerNode.h's selectFromCv() 1:1 (same "band split" idea as
+// Oscillator's waveTypeFromCv, generalized to a runtime band count). 10V
+// itself must still resolve to the last input, not fall off the end.
+function multiplexerSelectFromCv(volts, inputCount) {
+  if (inputCount <= 1) return 0;
+  let idx = Math.floor(volts / (CV_MAX_VOLTS / inputCount));
+  if (idx < 0) idx = 0;
+  if (idx > inputCount - 1) idx = inputCount - 1;
+  return idx;
+}
+
+function renderMultiplexerPorts(widgetId, portsEl) {
+  const state = multiplexerStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  portsEl.appendChild(createPortRow(widgetId, { id: "select", label: "Select (CV)" }, "in", "multiplexer"));
+
+  for (let i = 1; i <= state.inputCount; i += 1) {
+    const row = createPortRow(widgetId, { id: `in${i}`, label: `In ${i}` }, "in", "multiplexer");
+    row.classList.add("mux-in-row");
+    row.dataset.muxIndex = String(i - 1);
+    if (i - 1 === state.activeIndex) row.classList.add("active");
+    portsEl.appendChild(row);
+  }
+  portsEl.appendChild(createPortRow(widgetId, { id: "value", label: "Value" }, "out", "multiplexer"));
+  layoutPortsGrid(portsEl);
+}
+
+// Re-publishes the currently active input's live value as this widget's
+// "value" output - same control-rate passthrough idea as Switch's
+// publishSwitchValue(), generalized from a fixed in1/in2 pick to an N-way one.
+function publishMultiplexerValue(widgetId) {
+  const state = multiplexerStates.get(widgetId);
+  if (!state) return;
+  propagate(widgetId, "value", state.values[state.activeIndex]);
+}
+
+// Sets the live-active input index (from a connected "select" CV, or the
+// manual slider when unwired - see deliverToWidget's "select" handling
+// below), refreshes the highlighted port row + slider, and re-publishes the
+// output.
+function multiplexerSetActiveIndex(widgetId, idx) {
+  const state = multiplexerStates.get(widgetId);
+  if (!state) return;
+  state.activeIndex = idx;
+  audioEngine.setParam(widgetId, "select", idx);
+  updateMultiplexerVisual(widgetId);
+  publishMultiplexerValue(widgetId);
+}
+
+function updateMultiplexerVisual(widgetId) {
+  const state = multiplexerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const wired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
+
+  el.querySelectorAll(".mux-in-row").forEach((row) => {
+    row.classList.toggle("active", parseInt(row.dataset.muxIndex, 10) === state.activeIndex);
+  });
+
+  const slider = el.querySelector('[data-role="multiplexer-select-slider"]');
+  if (slider) {
+    slider.max = String(Math.max(0, state.inputCount - 1));
+    slider.value = String(state.manualSelect);
+    slider.disabled = wired;
+  }
+  const label = el.querySelector('[data-role="multiplexer-select-label"]');
+  if (label) label.textContent = `In ${state.activeIndex + 1}`;
+}
+
 // Hammond drawbar sliders sit on the 0-10V CV domain (like every other port
 // in this engine, including Oscillator's own "gain"), but the value label
 // shows the friendlier 0-8 physical-register reading - same "volts -> mapped"
@@ -7938,9 +8141,61 @@ document.getElementById("mixerSettingsSave").addEventListener("click", () => {
     if (portsEl) renderMixerPorts(pendingMixerId, portsEl);
 
     drawConnections();
-    savePresetNow(); 
+    savePresetNow();
   }
   closeMixerSettings();
+});
+
+const multiplexerSettingsOverlay = document.getElementById("multiplexerSettingsOverlay");
+const multiplexerCountInput = document.getElementById("multiplexerCountInput");
+let pendingMultiplexerId = null;
+
+function openMultiplexerSettings(widgetId) {
+  const state = multiplexerStates.get(widgetId);
+  if (!state) return;
+  pendingMultiplexerId = widgetId;
+  multiplexerCountInput.value = state.inputCount;
+  multiplexerSettingsOverlay.classList.remove("hidden");
+}
+
+function closeMultiplexerSettings() {
+  multiplexerSettingsOverlay.classList.add("hidden");
+  pendingMultiplexerId = null;
+}
+
+multiplexerSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === multiplexerSettingsOverlay) closeMultiplexerSettings();
+});
+
+document.getElementById("multiplexerSettingsCancel").addEventListener("click", closeMultiplexerSettings);
+
+document.getElementById("multiplexerSettingsSave").addEventListener("click", () => {
+  if (!pendingMultiplexerId) return;
+  const state = multiplexerStates.get(pendingMultiplexerId);
+  if (state) {
+    let count = parseInt(multiplexerCountInput.value, 10);
+    if (Number.isNaN(count)) count = MULTIPLEXER_MIN_INPUTS;
+    count = clamp(count, MULTIPLEXER_MIN_INPUTS, MULTIPLEXER_MAX_INPUTS);
+
+    if (count < state.inputCount) {
+      for (let i = count + 1; i <= state.inputCount; i += 1) {
+        removeConnectionsForPort(pendingMultiplexerId, `in${i}`, "in");
+      }
+    }
+    state.inputCount = count;
+    if (state.manualSelect > count - 1) state.manualSelect = count - 1;
+
+    const el = document.getElementById(pendingMultiplexerId);
+    const portsEl = el ? el.querySelector(".widget-ports") : null;
+    if (portsEl) renderMultiplexerPorts(pendingMultiplexerId, portsEl);
+
+    multiplexerSetActiveIndex(pendingMultiplexerId, connections.some((c) => c.to.widgetId === pendingMultiplexerId && c.to.portId === "select")
+      ? state.activeIndex
+      : state.manualSelect);
+    drawConnections();
+    savePresetNow();
+  }
+  closeMultiplexerSettings();
 });
 
 
@@ -8462,6 +8717,7 @@ function confirmPendingPaste(pos, minX, minY) {
       id: `conn-${connectionCounter}`,
       from: { widgetId: fromId, portId: c.from.portId },
       to: { widgetId: toId, portId: c.to.portId },
+      color: getConnectionColorForOutput(fromId, c.from.portId),
     });
     const fromKind = getPortKind(fromId, c.from.portId, "out");
     const toKind = getPortKind(toId, c.to.portId, "in");
@@ -8759,6 +9015,7 @@ function setOrthogonalCablesEnabled(enabled) {
 let selectedConnectionId = null;
 
 function drawConnections() {
+  ensureConnectionColors();
   connectionsLayer.innerHTML = "";
   connections.forEach((conn) => {
     const fromDot = findPortDot(conn.from.widgetId, conn.from.portId, "out");
@@ -8769,10 +9026,6 @@ function drawConnections() {
     path.setAttribute("class", "connection-path");
     path.dataset.connId = conn.id;
     if (conn.id === selectedConnectionId) path.classList.add("selected");
-    const isAudioRate =
-      getVisualPortKind(conn.from.widgetId, conn.from.portId, "out") === "audio" &&
-      getVisualPortKind(conn.to.widgetId, conn.to.portId, "in") === "audio";
-    if (isAudioRate) path.classList.add("audio-rate");
     path.setAttribute("d", bezierPath(portPosition(fromDot), portPosition(toDot)));
     if (conn.color) path.style.stroke = conn.color;
     path.style.pointerEvents = "stroke";
@@ -8829,6 +9082,38 @@ const CONNECTION_COLORS = [
   "#f472b6",
   "#e5e7eb",
 ];
+const AUTO_CONNECTION_COLORS = CONNECTION_COLORS.filter(
+  (color) => color !== "#38bdf8" && color !== "#fb923c"
+);
+
+let nextConnectionColorIndex = 0;
+
+function allocateConnectionColor() {
+  const color = AUTO_CONNECTION_COLORS[nextConnectionColorIndex % AUTO_CONNECTION_COLORS.length];
+  nextConnectionColorIndex += 1;
+  return color;
+}
+
+function getConnectionColorForOutput(fromWidgetId, fromPortId) {
+  const existing = connections.find(
+    (conn) => conn.from.widgetId === fromWidgetId && conn.from.portId === fromPortId && conn.color
+  );
+  return existing ? existing.color : allocateConnectionColor();
+}
+
+function ensureConnectionColors() {
+  connections.forEach((conn) => {
+    if (conn.color) return;
+    const sibling = connections.find(
+      (other) =>
+        other !== conn &&
+        other.from.widgetId === conn.from.widgetId &&
+        other.from.portId === conn.from.portId &&
+        other.color
+    );
+    conn.color = sibling ? sibling.color : allocateConnectionColor();
+  });
+}
 
 const connectionColorOverlay = document.getElementById("connectionColorOverlay");
 const colorSwatchGrid = document.getElementById("colorSwatchGrid");
@@ -8955,6 +9240,7 @@ function startConnectionDrag(e, fromDot) {
         id: `conn-${connectionCounter}`,
         from: { widgetId: fromWidgetId, portId: fromPortId },
         to: { widgetId: toWidgetId, portId: toPortId },
+        color: getConnectionColorForOutput(fromWidgetId, fromPortId),
       });
 
       const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
@@ -9109,6 +9395,43 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         audioEngine.setParam(widgetId, portId, safe);
         updateMixerGainVisual(widgetId, idx);
         sendLiveParamUpdateThrottled(widgetId, { [portId]: safe });
+      }
+    }
+  }
+
+  // "select" is both a real connectable CV port (0-10V, delivered here as
+  // volts via propagate() when wired - same "connected CV wins" convention
+  // as Oscillator's "tune"/Filter's cutoff) AND the widget's own vertical
+  // slider's live-param name (delivered here as a plain 0-based index when
+  // unwired) - mirrors nodes/MultiplexerNode.h's render()/setParam() split
+  // 1:1. Distinguishing the two by whether a cable actually targets "select"
+  // (not by value shape) is the only reliable signal, same as every other
+  // CV-substitutes-slider port in this file.
+  if (el.dataset.widgetType === "multiplexer" && portId === "select") {
+    const state = multiplexerStates.get(widgetId);
+    if (state) {
+      const wired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
+      const num = Number(value);
+      if (wired) {
+        const volts = Number.isNaN(num) ? 0 : clamp(num, 0, CV_MAX_VOLTS);
+        multiplexerSetActiveIndex(widgetId, multiplexerSelectFromCv(volts, state.inputCount));
+      } else {
+        const idx = clamp(Number.isNaN(num) ? 0 : Math.round(num), 0, Math.max(0, state.inputCount - 1));
+        state.manualSelect = idx;
+        sendLiveParamUpdateThrottled(widgetId, { select: idx });
+        multiplexerSetActiveIndex(widgetId, idx);
+      }
+    }
+  }
+
+  if (el.dataset.widgetType === "multiplexer" && /^in\d+$/.test(portId)) {
+    const state = multiplexerStates.get(widgetId);
+    if (state) {
+      const idx = parseInt(portId.slice(2), 10) - 1;
+      if (idx >= 0 && idx < state.inputCount) {
+        const num = Number(value);
+        state.values[idx] = Number.isNaN(num) ? 0 : num;
+        if (idx === state.activeIndex) publishMultiplexerValue(widgetId);
       }
     }
   }
@@ -10128,12 +10451,16 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = buttonStates.get(id);
       if (!state) return {};
-      return { ...state, valueList: parseValueList(state.listText) || [] };
+      return { ...state, value0: clampVoltage(state.value0), value127: clampVoltage(state.value127, CV_MAX_VOLTS), valueList: parseVoltageValueList(state.listText) || [] };
     },
     applyParams: (id, params) => {
       const state = buttonStates.get(id);
       if (state && params) {
         Object.assign(state, params);
+        state.value0 = clampVoltage(state.value0);
+        state.value127 = clampVoltage(state.value127, CV_MAX_VOLTS);
+        const list = parseVoltageValueList(state.listText);
+        if (list) state.listText = list.join(", ");
         audioEngine.setParam(id, "value", buttonCurrentOutput(state));
         updateButtonVisual(id);
       }
@@ -10143,12 +10470,18 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = upDownButtonStates.get(id);
       if (!state) return {};
-      return { ...state, valueList: parseValueList(state.listText) || [] };
+      return { ...state, min: clampVoltage(state.min), max: clampVoltage(state.max, CV_MAX_VOLTS), step: clampVoltage(state.step, 1), valueList: parseVoltageValueList(state.listText) || [] };
     },
     applyParams: (id, params) => {
       const state = upDownButtonStates.get(id);
       if (state && params) {
         Object.assign(state, params);
+        state.min = clampVoltage(state.min);
+        state.max = clampVoltage(state.max, CV_MAX_VOLTS);
+        if (state.max < state.min) [state.min, state.max] = [state.max, state.min];
+        state.step = clampVoltage(state.step, 1);
+        const list = parseVoltageValueList(state.listText);
+        if (list) state.listText = list.join(", ");
         audioEngine.setParam(id, "value", upDownButtonCurrentOutput(state));
         updateUpDownButtonVisual(id);
       }
@@ -10558,6 +10891,23 @@ const WIDGET_ENGINES = {
       const el = document.getElementById(id);
       const portsEl = el ? el.querySelector(".widget-ports") : null;
       if (portsEl) renderMixerPorts(id, portsEl);
+    },
+  },
+  multiplexer: {
+    getParams: (id) => {
+      const state = multiplexerStates.get(id);
+      return state ? { inputCount: state.inputCount, select: state.manualSelect } : {};
+    },
+    applyParams: (id, params) => {
+      const state = multiplexerStates.get(id);
+      if (!state || !params) return;
+      state.inputCount = clamp(params.inputCount || 2, MULTIPLEXER_MIN_INPUTS, MULTIPLEXER_MAX_INPUTS);
+      state.manualSelect = clamp(parseInt(params.select, 10) || 0, 0, state.inputCount - 1);
+      audioEngine.setParam(id, "select", state.manualSelect);
+      const el = document.getElementById(id);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderMultiplexerPorts(id, portsEl);
+      multiplexerSetActiveIndex(id, state.manualSelect);
     },
   },
   adsr: {
@@ -11017,7 +11367,10 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   connections = dedupeConnections([
     ...(Array.isArray(pageData.generator.connections) ? pageData.generator.connections : []),
     ...(Array.isArray(pageData.fx.connections) ? pageData.fx.connections : []),
-  ]);
+  ]).filter((c) => {
+    const source = document.getElementById(c.from.widgetId);
+    return !(source?.dataset.widgetType === "knob" && c.from.portId === "cc");
+  });
   connections.forEach((c) => {
     const num = parseInt(String(c.id).replace("conn-", ""), 10);
     if (!Number.isNaN(num)) connectionCounter = Math.max(connectionCounter, num);
@@ -11044,7 +11397,12 @@ async function applyPresetData(data, { fitToView = false } = {}) {
     connections = connections.filter((c) => !old.includes(c));
     if (source && !connections.some((c) => c.from.widgetId === source && c.from.portId === "midi" && c.to.widgetId === sfEl.id)) {
       connectionCounter += 1;
-      connections.push({ id: `conn-${connectionCounter}`, from: { widgetId: source, portId: "midi" }, to: { widgetId: sfEl.id, portId: "midi" } });
+      connections.push({
+        id: `conn-${connectionCounter}`,
+        from: { widgetId: source, portId: "midi" },
+        to: { widgetId: sfEl.id, portId: "midi" },
+        color: getConnectionColorForOutput(source, "midi"),
+      });
     }
     migratedSoundFontMidiConnections = true;
   });

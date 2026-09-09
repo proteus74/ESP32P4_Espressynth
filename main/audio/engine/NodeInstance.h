@@ -138,6 +138,7 @@ struct NodeInstance
     FrequencyDividerState frequencyDivider;
     GainState gain;
     MixerState mixer;
+    MultiplexerState multiplexer;
     // These twelve are heap-allocated (GraphBuilder::build) only for an
     // instance whose type actually needs them, and freed in Graph::destroy -
     // unlike every other state member above, which stays a plain value

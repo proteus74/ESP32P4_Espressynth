@@ -1689,6 +1689,24 @@ export class AudioEngine {
         }
         return { type, sum, inputGains };
       }
+      case "multiplexer": {
+        // N (fixed 8, like Mixer above - unused ones just stay silent)
+        // hard-gated input gains summed into one output - only the gain
+        // matching the currently active index is ever 1, the rest 0 (same
+        // hard-switch idea as "switch" above, generalized from 2 to 8 ways).
+        // See _setParam's "multiplexer"/"select" case for how the gate moves.
+        const output = ctx.createGain();
+        output.gain.value = 1;
+        const inputGains = new Map();
+        const selected = Math.max(0, Math.min(7, Math.round(params.select ?? 0)));
+        for (let i = 1; i <= 8; i += 1) {
+          const g = ctx.createGain();
+          g.gain.value = i - 1 === selected ? 1 : 0;
+          g.connect(output);
+          inputGains.set(`in${i}`, g);
+        }
+        return { type, output, inputGains, selected };
+      }
       case "multiplier": {
         
         
@@ -2979,6 +2997,16 @@ export class AudioEngine {
           if (g) applyRamp(g.gain);
         }
         break;
+      case "multiplexer":
+        if (paramName === "select") {
+          const selected = Math.max(0, Math.min(7, Math.round(value)));
+          entry.selected = selected;
+          for (let i = 1; i <= 8; i += 1) {
+            const g = entry.inputGains.get(`in${i}`);
+            if (g) applyRampValue(g.gain, i - 1 === selected ? 1 : 0);
+          }
+        }
+        break;
       case "adsr":
         if (paramName === "attack" || paramName === "decay" || paramName === "release") {
           entry[paramName] = Math.max(value, 0.001);
@@ -3280,6 +3308,7 @@ export class AudioEngine {
     if (entry.type === "filter" && port === "out") return entry.filterNode;
     if (entry.type.startsWith("esp-") && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
     if (entry.type === "mixer" && port === "out") return entry.sum;
+    if (entry.type === "multiplexer" && port === "value") return entry.output;
     if (entry.type === "multiplier" && port === "value") return entry.output;
     if (entry.type === "adder" && port === "value") return entry.sum;
     if (entry.type === "divide" && port === "value") return entry.output;
@@ -3329,6 +3358,7 @@ export class AudioEngine {
     if (entry.type === "esp-mixer") return entry.inputMap.get(port) || null;
     if (entry.type.startsWith("esp-") && (port === "inL" || port === "inR")) return port === "inL" ? entry.inputL : entry.inputR;
     if (entry.type === "mixer") return entry.inputGains.get(port) || null;
+    if (entry.type === "multiplexer") return entry.inputGains.get(port) || null;
     if (entry.type === "adder" && /^in\d+$/.test(port)) return entry.sum;
     if (entry.type === "switch") {
       if (port === "in1") return entry.gain1;

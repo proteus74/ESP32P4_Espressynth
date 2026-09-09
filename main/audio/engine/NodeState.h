@@ -205,6 +205,17 @@ struct MixerState
     float outputGain = 1.0f;
 };
 
+// CV-selectable N-of-M (2-8) audio passthrough, state+render/build/setParam
+// logic together in nodes/MultiplexerNode.h. manualSelect is the widget's own
+// vertical-slider override (0-based) - a genuine "select" CV connection
+// substitutes it outright, same "connected CV wins" convention as
+// Oscillator's "tune"/Filter's cutoff (see nodes/MultiplexerNode.h::render).
+struct MultiplexerState
+{
+    uint8_t inputCount = 2;
+    uint8_t manualSelect = 0;
+};
+
 // ChorusState is defined (state + render/build/destroy/setParam logic
 // together) in nodes/ChorusNode.h.
 

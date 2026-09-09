@@ -33,6 +33,7 @@
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
+#include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
@@ -464,6 +465,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::Mixer:
         nodes::mixer::build(inst, p);
+        break;
+    case NodeType::Multiplexer:
+        nodes::multiplexer::build(inst, p);
         break;
     case NodeType::Chorus:
         nodes::chorus::build(inst, p, psram);

@@ -175,6 +175,12 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Multiplier:
     case NodeType::Adder:
         return indexedInPort(portName);
+    case NodeType::Multiplexer:
+        // "select" (control-only, see isControlOnlyInput) picks which of
+        // "in1".."in8" reaches "value" - see nodes/MultiplexerNode.h.
+        if (is(portName, "select"))
+            return 8;
+        return indexedInPort(portName);
     case NodeType::Divide:
     {
         // Fixed 2 inputs (in1/in2) - unlike Mixer/Multiplier/Adder's
@@ -383,6 +389,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::Mixer:
         return is(portName, "out") ? 0 : -1;
+    case NodeType::Multiplexer:
+        return is(portName, "value") ? 0 : -1;
     case NodeType::Multiplier:
     case NodeType::Adder:
     case NodeType::Divide:
@@ -474,6 +482,8 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Multiplier:
     case NodeType::Adder:
         return 8;
+    case NodeType::Multiplexer:
+        return 9; // "in1".."in8" + "select" (CV)
     case NodeType::Divide:
         return 2;
     case NodeType::FrequencyDivider:
@@ -621,6 +631,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 1 || portIdx == 2 || portIdx == 3; // "cutoff"+"resonance"+"global"
     case NodeType::Clock:
         return portIdx == 0; // "tempo"
+    case NodeType::Multiplexer:
+        return portIdx == 8; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel" - all four
     case NodeType::Lfo:

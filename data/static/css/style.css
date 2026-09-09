@@ -656,7 +656,7 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="knob"] {
-  min-width: 90px;
+  min-width: 132px;
 }
 
 .widget-instance[data-widget-type="midi-in"] {
@@ -664,7 +664,7 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="button"] {
-  min-width: 120px;
+  min-width: 148px;
 }
 
 .widget-instance[data-widget-type="adsr"] {
@@ -756,43 +756,114 @@ body.show-node-cpu .widget-cpu-badge {
   flex-direction: column;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.5rem 0.4rem;
+  padding: 0.5rem 0.45rem 0.45rem;
+  position: relative;
 }
 
 .knob-dial {
-  width: 44px;
-  height: 44px;
+  width: 76px;
+  height: 76px;
   border-radius: 50%;
-  background: var(--bg);
-  border: 2px solid var(--card-border);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   position: relative;
   cursor: pointer;
+  overflow: visible;
+}
+
+.knob-dial::before {
+  display: none;
 }
 
 .knob-dial:hover {
-  border-color: var(--accent);
+  filter: brightness(1.04);
+}
+
+.knob-scale {
+  position: absolute;
+  inset: -8px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.knob-tick {
+  position: absolute;
+  width: 3px;
+  height: 9px;
+  border-radius: 0;
+  background: #e6e5e1;
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.45);
+  transform-origin: center;
 }
 
 .knob-indicator {
   position: absolute;
   left: 50%;
-  top: 3px;
-  width: 2px;
-  height: 17px;
-  background: var(--accent);
-  transform-origin: 50% 19px;
-  margin-left: -1px;
+  top: 14px;
+  width: 4px;
+  height: 24px;
+  border-radius: 2px;
+  background: #a59e00;
+  box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.38);
+  transform-origin: 50% 24px;
+  margin-left: -2px;
+  z-index: 3;
+}
+
+.knob-center-cap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 58px;
+  margin: -29px 0 0 -29px;
+  border: 3px solid #ece8df;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 27%, #fffefa 0 8%, #eeeae1 48%, #cbc6bb 100%);
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.95), inset 0 -4px 7px rgba(86, 79, 70, 0.22), 0 1px 3px rgba(0, 0, 0, 0.72);
+  z-index: 2;
 }
 
 .knob-readout {
-  font-family: monospace;
-  font-size: 0.85rem;
-  color: var(--text);
+  min-width: 82px;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(118, 132, 143, 0.45);
+  border-radius: 3px;
+  background: #111a1d;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.85);
+  color: #9ee8b8;
+  font-family: "Courier New", monospace;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: center;
+  text-shadow: 0 0 5px rgba(83, 224, 130, 0.4);
+}
+
+.knob-value-row {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.knob-body > .knob-output-ports {
+  position: absolute;
+  left: -0.45rem;
+  right: -0.2rem;
+  top: calc(0.5rem + 76px + 0.3rem);
+  padding: 0;
 }
 
 .knob-cc-label {
-  font-size: 0.72rem;
-  color: #94a3b8;
+  min-height: 0.85rem;
+  color: #aab3ba;
+  font-family: "Courier New", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
 }
 
 /* Button-Widget */
@@ -802,31 +873,67 @@ body.show-node-cpu .widget-cpu-badge {
   flex-direction: column;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.4rem;
+  padding: 0.45rem 0.5rem 0.4rem;
+}
+
+.button-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  width: 100%;
 }
 
 .button-trigger {
-  min-width: 64px;
-  height: 34px;
-  padding: 0 0.75rem;
-  border-radius: 0.3rem;
-  border: 2px solid var(--card-border);
-  background: var(--bg);
-  color: var(--accent);
+  min-width: 78px;
+  height: 36px;
+  padding: 0 0.65rem;
+  border-radius: 0.55rem;
+  border: 3px solid #11151b;
+  background: linear-gradient(180deg, #3b4655 0%, #202936 48%, #111820 100%);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.18), inset 0 -3px 5px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.55);
+  color: #72eaff;
   font-family: monospace;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: bold;
   cursor: pointer;
+  text-shadow: 0 0 5px rgba(63, 224, 255, 0.55);
+  transition: background 0.12s ease, box-shadow 0.12s ease, color 0.12s ease, transform 0.12s ease;
 }
 
 .button-trigger:hover {
-  border-color: var(--accent);
+  border-color: #263340;
+  filter: brightness(1.08);
 }
 
 .button-trigger:active {
-  transform: scale(0.92);
-  background: var(--accent);
-  color: var(--bg);
+  transform: translateY(1px);
+}
+
+.button-trigger.is-active {
+  border-color: #087d9d;
+  background: linear-gradient(180deg, #57edff 0%, #08bfe8 52%, #0083b1 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), inset 0 -4px 6px rgba(0, 82, 120, 0.48), 0 0 8px rgba(14, 204, 246, 0.45);
+  color: #06202d;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.42);
+}
+
+.button-trigger.is-active:hover {
+  filter: brightness(1.08);
+}
+
+.button-output-ports {
+  padding: 0;
+  min-height: 0;
+}
+
+.button-output-ports .port-row-out {
+  padding: 0;
+  gap: 0.3rem;
+}
+
+.button-output-ports .port-row-out > .port-dot {
+  transform: translateX(1.3rem);
 }
 
 .button-cc-label {
@@ -842,12 +949,44 @@ body.show-node-cpu .widget-cpu-badge {
   align-items: center;
   gap: 0.25rem;
   padding: 0.4rem;
+  position: relative;
 }
 
 .up-down-button-press-row {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+.up-down-button-body > .up-down-button-press-row > .up-down-button-output-ports {
+  position: absolute;
+  top: 23px;
+  right: -1px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.up-down-button-output-ports .port-row-out {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  gap: 0;
+}
+
+.up-down-button-output-ports .port-label {
+  display: none;
+}
+
+.up-down-button-output-ports .port-row-out > .port-dot {
+  position: absolute;
+  top: 0;
+  right: -7px;
+  margin: 0;
+  transform: none;
 }
 
 .up-down-button-up,
@@ -872,6 +1011,83 @@ body.show-node-cpu .widget-cpu-badge {
   align-items: center;
   gap: 0.3rem;
   padding: 0.5rem;
+}
+
+/* Multiplexer-Widget */
+
+.multiplexer-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 0.7rem;
+}
+
+/* input[type=range] has no cross-browser "orientation" attribute - rotating
+   a normal horizontal slider 90deg (own bounding box counter-rotated via a
+   fixed width/height swap) is the standard way to get a vertical slider that
+   still fires normal "input" events. */
+.multiplexer-select-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: none;
+  -webkit-appearance: slider-vertical;
+  width: 28px;
+  height: 96px;
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.multiplexer-select-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.multiplexer-select-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 24px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.multiplexer-select-slider::-moz-range-thumb {
+  width: 24px;
+  height: 14px;
+  border: none;
+  border-radius: 2px;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.multiplexer-select-slider::-moz-range-track {
+  width: 4px;
+  background: var(--bg);
+  border-radius: 2px;
+}
+
+.multiplexer-select-label {
+  font-size: 0.78rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+/* Highlights the port row of the currently active (selected) input - either
+   the manual slider's pick, or the input a connected "select" CV currently
+   resolves to (see updateMultiplexerVisual() in main.js). */
+.mux-in-row.active {
+  background: rgba(56, 189, 248, 0.14);
+  border-radius: 0.25rem;
+}
+
+.mux-in-row.active > .port-label {
+  color: var(--accent);
+  font-weight: bold;
 }
 
 /* Clock-Widget */
@@ -1772,6 +1988,11 @@ body.show-node-cpu .widget-cpu-badge {
 
 .port-row-out .port-dot {
   pointer-events: auto;
+  transform: translateX(0.2rem);
+}
+
+.knob-output-ports .port-dot {
+  transform: none;
 }
 
 .port-dot {
@@ -1810,12 +2031,6 @@ body.show-node-cpu .widget-cpu-badge {
   background: var(--accent);
 }
 
-/* Audio-Rate-Ports (echtes DSP-Signal) - Control-Rate-Ports (reine Werte)
-   bleiben beim Default-Rand in --accent (Blau), siehe .port-dot oben. */
-.port-dot.port-kind-audio {
-  border-color: #fb923c;
-}
-
 .port-dot.port-active {
   background: var(--ok);
   border-color: var(--ok);
@@ -1842,37 +2057,17 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .connection-path:hover {
-  stroke-width: 4;
   opacity: 0.85;
 }
 
 .connection-path.selected {
-  stroke-width: 5;
-  opacity: 1;
-}
-
-/* Audio-Rate-Verbindungen (echte Web-Audio-Graph-Verkabelung statt Control-Rate-
-   Werteweitergabe) - 1px dicker und in eigener Farbe, sofern keine eigene
-   Verbindungsfarbe gesetzt wurde (die hat weiterhin Vorrang, inline style). */
-.connection-path.audio-rate {
-  stroke-width: 4;
-  stroke: #fb923c;
-}
-
-.connection-path.audio-rate:hover {
-  stroke-width: 5;
-  opacity: 0.85;
-}
-
-.connection-path.audio-rate.selected {
-  stroke-width: 6;
   opacity: 1;
 }
 
 .connection-path-temp {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 3;
   stroke-dasharray: 5 4;
   pointer-events: none;
 }
@@ -2011,6 +2206,26 @@ body.show-node-cpu .widget-cpu-badge {
 .modal-field-row .modal-field {
   flex: 1;
   min-width: 0;
+}
+
+.modal-cc-learn-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.modal-cc-learn-row .modal-cc-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.modal-cc-learn-row > button {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 #fileExplorerOverlay .file-explorer-modal {

@@ -54,6 +54,7 @@ enum class NodeType : uint8_t
     Clock,
     ReverbLight,
     Hammond,
+    Multiplexer,
     Unknown,
 };
 
@@ -190,6 +191,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Clock;
     if (strcmp(typeStr, "hammond") == 0)
         return NodeType::Hammond;
+    if (strcmp(typeStr, "multiplexer") == 0)
+        return NodeType::Multiplexer;
     return NodeType::Unknown;
 }
 
