@@ -31,6 +31,7 @@ struct WidgetParams
     // global), only consulted when the port itself has no DSP-edge/
     // ControlRoute wired.
     float lfoRate = 2.0f;
+    float lfoMaxRate = 50.0f;
     float lfoAmplitude = 10.0f;
     float lfoPhaseDeg = 0.0f;
     bool lfoZeroPointFixed = false;
@@ -53,6 +54,7 @@ struct WidgetParams
     // filter - "cutoff"/"resonance" are raw 0-10V CV (see CvConventions.h),
     // mapped to Hz/Q via the min/max/log fields below at DSP time.
     FilterKind filterType = FilterKind::LowPass;
+    CurtisFilterMode curtisFilterMode = CurtisFilterMode::LowPass24;
     float cutoffCv = 5.0f, cutoffMinHz = 20.0f, cutoffMaxHz = 20000.0f;
     bool cutoffLog = true;
     float resonanceCv = 5.0f, resonanceMinQ = 0.1f, resonanceMaxQ = 20.0f;
@@ -85,6 +87,7 @@ struct WidgetParams
     // widget's own vertical-slider override (0-based, see
     // MultiplexerState::manualSelect).
     uint8_t multiplexerSelect = 0;
+    float multiplexerSoftFadeMs = 5.0f;
     // chorus
     float rate = 1.5f, offset = 0.02f, depth = 0.003f;
     // delay (always stereo, "echo" was only ever delay-with-feedback) -
@@ -107,6 +110,8 @@ struct WidgetParams
     // audio-out
     bool muted = false;
     float left = 1.0f, right = 1.0f, gain = 10.0f;
+    // Audio Outputs page-link: eight 0-10V per-bus level controls.
+    float linkGain[synth::kLinkBusCount] = {10, 10, 10, 10, 10, 10, 10, 10};
     // clock - "cvVolts" is raw CV (0-10V), scaled linearly between minBpm/
     // maxBpm (see ClockState); pulseMs is the pulse width in ms.
     float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
@@ -181,7 +186,11 @@ struct WidgetParams
 struct WidgetDesc
 {
     char id[24] = {};
+    char label[48] = {};
     NodeType type = NodeType::Unknown;
+    // Pages are normally presentation-only. FX MIDI-In is exception: it is
+    // deliberately mono, so its downstream graph is rendered once.
+    bool isFxPage = false;
     WidgetParams params;
 };
 

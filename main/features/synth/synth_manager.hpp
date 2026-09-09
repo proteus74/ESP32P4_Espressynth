@@ -55,6 +55,24 @@ inline QueueHandle_t live_param_queue() {
     return s_liveParamQueue;
 }
 
+/** @brief Requests a named preset reload from any non-render task (for example LVGL). */
+inline bool request_preset_name(const char *name) {
+    if (s_presetChangedQueue == nullptr || !presetpaths::isSafeName(name)) return false;
+    PresetChangedMsg msg{};
+    presetpaths::pathForName(name, msg.path, sizeof(msg.path));
+    presetpaths::writeLastMarker(name);
+    return xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS;
+}
+
+/** @brief Requests the unnamed current.json preset. */
+inline bool request_current_preset() {
+    if (s_presetChangedQueue == nullptr) return false;
+    PresetChangedMsg msg{};
+    snprintf(msg.path, sizeof(msg.path), "%s", presetpaths::unnamedPath());
+    presetpaths::writeLastMarker("");
+    return xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS;
+}
+
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
 namespace {
 // Host (USB speaker, i.e. whatever the PC plays) -> onboard-codec mix-in ring, drained by
@@ -202,8 +220,7 @@ inline esp_err_t init() {
     char initialPresetPath[300];
     char initialPresetName[presetpaths::kMaxNameLen];
     presetpaths::resolveActivePath(initialPresetPath, sizeof(initialPresetPath), initialPresetName,
-                                    sizeof(initialPresetName));
-
+                                   sizeof(initialPresetName));
     i2s_chan_handle_t secondaryI2sTxHandle = nullptr;
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     secondaryI2sTxHandle = Feature::Audio::WM8960::get_tx_handle();

@@ -45,6 +45,7 @@ struct LfoState
     PhaseOsc phaseGen;
     WaveType wave = WaveType::Sine;
     float rate = 2.0f;
+    float maxRateHz = 50.0f;
     // 0-10V (CV convention, see CvConventions.h) - the peak swing: in "auto"
     // zero-point mode the output ranges [0, amplitude] (center = amplitude/2,
     // e.g. amplitude=7 -> swings 0-7V, centered at 3.5V); in "fixed" mode the
@@ -103,6 +104,20 @@ struct DetuneState
 struct FrequencyDividerState
 {
     float divider = 2.0f;
+    // Frequency / N equals pitch CV - log2(N). Cached for the normal case
+    // where the divider knob is fixed, so renderFrequencyDivider never
+    // evaluates log2f() in its audio loop.
+    float pitchOffsetVolts = 1.0f;
+};
+
+// Audio-page links retain six extra output buffers for buses 3-8. Buses 1
+// and 2 use NodeInstance::outL/outR, so this state is allocated only for
+// actual link widgets instead of making every polyphonic node instance grow.
+struct LinkState
+{
+    float *busOut[synth::kLinkBusCount - 2] = {};
+    // Audio Outputs' per-bus level controls. Raw 0-10V CV; 10V is unity.
+    float gainCv[synth::kLinkBusCount] = {10, 10, 10, 10, 10, 10, 10, 10};
 };
 
 // One midi-split zone: an inclusive note range [fromNote, toNote] plus its
@@ -214,6 +229,12 @@ struct MultiplexerState
 {
     uint8_t inputCount = 2;
     uint8_t manualSelect = 0;
+    float softFadeMs = 5.0f;
+    uint8_t activeIndex = 0;
+    uint8_t fadeFrom = 0;
+    uint8_t fadeTo = 0;
+    uint32_t fadeSamples = 0;
+    uint32_t fadePosition = 0;
 };
 
 // ChorusState is defined (state + render/build/destroy/setParam logic

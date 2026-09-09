@@ -12,10 +12,10 @@ namespace nodes::constant
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    for (size_t i = 0; i < frames; ++i)
-    {
-        inst.outL[i] = inst.constant.value;
-    }
+    // Const is scalar-only. Its value reaches targets through ControlRoute;
+    // it no longer produces an audio-rate buffer.
+    (void)inst;
+    (void)frames;
 }
 
 inline void build(NodeInstance &inst, const WidgetParams &p)

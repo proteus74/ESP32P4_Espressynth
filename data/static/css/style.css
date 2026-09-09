@@ -6,6 +6,7 @@
   --accent: #38bdf8;
   --ok: #4ade80;
   --grid-size: 20px;
+  --widget-opacity: 1;
 }
 
 * {
@@ -227,6 +228,35 @@ button:hover {
 .dropdown-check input {
   margin: 0;
   accent-color: var(--accent);
+}
+
+.dropdown-range {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 1rem 0.7rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.dropdown-range-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dropdown-range output {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.dropdown-range input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .audio-start-btn {
@@ -491,7 +521,7 @@ button:hover {
 
 /* Pro-Node-CPU-Last-Debug-Badge (siehe main.js's updateNodeCpuDisplay) - im
    Widget-Titel, zwischen Label und Close-Button. Standardmaessig
-   ausgeblendet, nur sichtbar bei aktivem Debug-Toggle (Edit-Menue ->
+   ausgeblendet, nur sichtbar bei aktivem Debug-Toggle (View-Menue ->
    "Show Node CPU %", setzt body.show-node-cpu). Gleiche Farbschwellen-
    Logik wie .cpu-load-value oben, nur kompakter fuer die Titelleiste. */
 .widget-cpu-badge {
@@ -648,6 +678,7 @@ body.show-node-cpu .widget-cpu-badge {
 .widget-instance {
   position: absolute;
   background: var(--card);
+  opacity: var(--widget-opacity, 1);
   border: 1px solid var(--card-border);
   border-radius: 0.2rem;
   min-width: 170px;
@@ -667,6 +698,11 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 148px;
 }
 
+.widget-instance[data-widget-type="const"] {
+  width: 170px;
+  min-width: 170px;
+}
+
 .widget-instance[data-widget-type="adsr"] {
   min-width: 260px;
 }
@@ -676,7 +712,8 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 220px;
 }
 
-.widget-instance[data-widget-type="filter"] {
+.widget-instance[data-widget-type="filter"],
+.widget-instance[data-widget-type="curtis-filter"] {
   min-width: 220px;
 }
 
@@ -1167,6 +1204,15 @@ body.show-node-cpu .widget-cpu-badge {
   border-color: var(--accent);
 }
 
+/* Same jagged mark as white noise, deliberately pink for Pink Noise. */
+.osc-wave-btn.osc-wave-btn-pink-noise {
+  color: #f472b6;
+}
+
+.osc-wave-btn.osc-wave-btn-pink-noise.active {
+  color: #0f172a;
+}
+
 .osc-freq-label {
   font-family: monospace;
   font-size: 0.78rem;
@@ -1506,7 +1552,7 @@ body.show-node-cpu .widget-cpu-badge {
   box-shadow: 1px 0 1px rgba(0, 0, 0, 0.25);
   transform: rotate(0deg);
   transform-origin: 50% 100%;
-  transition: transform 0.06s linear;
+  transition: none;
   z-index: 2;
 }
 
@@ -1550,14 +1596,11 @@ body.show-node-cpu .widget-cpu-badge {
 
 /* Value-Mapper-Widget */
 
-.value-mapper-body {
-  padding: 0.4rem 0.6rem;
-}
-
-.value-mapper-readout {
+.value-mapper-port-value {
+  margin-left: 0.35rem;
   font-family: monospace;
   font-size: 0.85rem;
-  color: var(--text);
+  color: var(--accent);
 }
 
 /* Oszilloskop-Widget */
@@ -1657,7 +1700,9 @@ body.show-node-cpu .widget-cpu-badge {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.5rem 0.7rem;
+  min-height: 48px;
+  padding: 0.45rem 0.55rem;
+  position: relative;
 }
 
 .const-input {
@@ -1675,6 +1720,29 @@ body.show-node-cpu .widget-cpu-badge {
 .const-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.const-output-ports {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  pointer-events: none;
+}
+
+.const-output-ports .port-row-out {
+  position: absolute;
+  top: 50%;
+  right: -7px;
+  padding: 0;
+  transform: translateY(-50%);
+}
+
+.const-output-ports .port-label {
+  display: none;
+}
+
+.const-output-ports .port-dot {
+  margin: 0;
 }
 
 /* Filter-Widget (auch fuers Gain/VCA-Widget's Lin/Exp-Umschalter, .gain-body) */
@@ -1867,6 +1935,55 @@ body.show-node-cpu .widget-cpu-badge {
   height: 4px;
   background: var(--bg);
   border-radius: 2px;
+}
+
+/* Eight-channel master send: one compact row per bus.
+   Number | level slider | volts | output jack. */
+.widget-instance[data-widget-type="audio-input-link"] {
+  min-width: 240px;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .widget-ports {
+  padding: 0.2rem 0;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row {
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row-in {
+  padding-right: 1.35rem;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row-in > .port-label {
+  flex: 0 0 12px;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-slider {
+  flex: 1 1 auto;
+  min-width: 64px;
+  width: auto;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-value {
+  flex: 0 0 40px;
+  white-space: nowrap;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row-out {
+  width: 14px;
+  padding: 0;
+  right: -7px !important;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row-out .port-label {
+  display: none;
+}
+
+.widget-instance[data-widget-type="audio-input-link"] .port-row-out .port-dot {
+  margin: 0;
+  transform: none;
 }
 
 /* Kompakter Toggle-Switch (ersetzt rohe Checkboxen in Port-Reihen, z.B.
@@ -2107,6 +2224,13 @@ body.show-node-cpu .widget-cpu-badge {
 
 .knob-output-ports .port-dot {
   transform: none;
+}
+
+.multiplier-output-row .port-label,
+.adder-output-row .port-label,
+.divide-output-row .port-label,
+.abs-output-row .port-label {
+  display: none;
 }
 
 .port-dot {

@@ -135,6 +135,17 @@ inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
 inline void broadcast_status_tick() {
     if (Feature::Web::handle() == nullptr) return;
 
+    static uint32_t last_preset_change_sequence = 0;
+    const uint32_t preset_change_sequence = engine().presetChangeSequence();
+    if (preset_change_sequence != last_preset_change_sequence) {
+        last_preset_change_sequence = preset_change_sequence;
+        static char preset_name[presetpaths::kMaxNameLen] = {};
+        engine().readCurrentPresetName(preset_name, sizeof(preset_name));
+        static char json[160];
+        snprintf(json, sizeof(json), "{\"type\":\"presetChanged\",\"name\":\"%s\"}", preset_name);
+        broadcast_json(json);
+    }
+
     static uint32_t last_voices_cap_id = 0;
     const uint32_t voices_cap_id = engine().voicesCapEventId();
     if (voices_cap_id != last_voices_cap_id) {
@@ -657,8 +668,6 @@ esp_err_t preset_get_handler(httpd_req_t *req) {
     if (has_name_param && presetpaths::isSafeName(raw_name)) {
         presetpaths::pathForName(raw_name, resolved_path, sizeof(resolved_path));
         snprintf(resolved_name, sizeof(resolved_name), "%s", raw_name);
-        // Opening a named preset makes it the active one for subsequent unnamed saves/boot.
-        presetpaths::writeLastMarker(raw_name);
     } else {
         presetpaths::resolveActivePath(resolved_path, sizeof(resolved_path), resolved_name, sizeof(resolved_name));
     }
@@ -672,6 +681,38 @@ esp_err_t preset_get_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     return stream_file_chunked(req, file);
+}
+
+esp_err_t preset_select_handler(httpd_req_t *req) {
+    char raw_name[presetpaths::kMaxNameLen] = {};
+    const bool has_name_param = extract_preset_name_param(req, raw_name, sizeof(raw_name));
+    if (has_name_param && !presetpaths::isSafeName(raw_name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset name");
+        return ESP_FAIL;
+    }
+
+    char preset_path[kMaxPathLen] = {};
+    if (has_name_param) {
+        presetpaths::pathForName(raw_name, preset_path, sizeof(preset_path));
+    } else {
+        snprintf(preset_path, sizeof(preset_path), "%s", presetpaths::unnamedPath());
+    }
+    struct stat preset_stat = {};
+    if (stat(preset_path, &preset_stat) != 0 || S_ISDIR(preset_stat.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "preset not found");
+        return ESP_FAIL;
+    }
+
+    const bool queued = has_name_param ? Feature::Synth::request_preset_name(raw_name)
+                                       : Feature::Synth::request_current_preset();
+    if (!queued) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "preset reload unavailable");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"selected\":true}");
+    return ESP_OK;
 }
 
 esp_err_t preset_post_handler(httpd_req_t *req) {
@@ -728,15 +769,11 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     fclose(file);
     heap_caps_free(body);
 
-    presetpaths::writeLastMarker(has_name_param ? raw_name : "");
-
-    QueueHandle_t preset_queue = preset_changed_queue();
-    if (preset_queue != nullptr) {
-        PresetChangedMsg msg;
-        snprintf(msg.path, sizeof(msg.path), "%s", target_path);
-        // Length-1 overwrite queue: a burst of rapid saves just coalesces into "rebuild once
-        // more from the latest file" - exactly what's wanted here.
-        xQueueOverwrite(preset_queue, &msg);
+    const bool queued = has_name_param ? Feature::Synth::request_preset_name(raw_name)
+                                       : Feature::Synth::request_current_preset();
+    if (!queued) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "preset reload unavailable");
+        return ESP_FAIL;
     }
 
     httpd_resp_set_type(req, "application/json");
@@ -1094,6 +1131,12 @@ inline void register_web_routes() {
         .uri = "/api/preset", .method = HTTP_POST, .handler = &preset_post_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &preset_post_uri);
+
+    static const httpd_uri_t preset_select_uri = {
+        .uri = "/api/preset/select", .method = HTTP_POST, .handler = &preset_select_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_select_uri);
 
     static const httpd_uri_t presets_list_uri = {
         .uri = "/api/presets", .method = HTTP_GET, .handler = &presets_list_handler, .user_ctx = nullptr,

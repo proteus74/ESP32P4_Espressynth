@@ -130,6 +130,39 @@ inline float pow2Lookup(float exponent)
     return ldexpf(pow2Frac, static_cast<int>(intPart));
 }
 
+// tanh(x) lookup for audio-rate saturation. Only the positive half is
+// stored because tanh is odd. Linear interpolation keeps the curve smooth;
+// values outside +/-4 are saturated directly. This avoids the comparatively
+// expensive libm tanhf() implementation on every sample and voice.
+constexpr float kTanhLutMaxInput = 4.0f;
+constexpr float kTanhLutScale = static_cast<float>(synth::kTanhLutSize - 1) / kTanhLutMaxInput;
+inline float tanhLutTable[synth::kTanhLutSize] = {};
+
+inline void initTanhLut()
+{
+    for (size_t i = 0; i < synth::kTanhLutSize; ++i)
+    {
+        const float x = static_cast<float>(i) / kTanhLutScale;
+        tanhLutTable[i] = tanhf(x);
+    }
+}
+
+inline float tanhLookup(float value)
+{
+    const bool negative = value < 0.0f;
+    const float magnitude = negative ? -value : value;
+    if (magnitude >= kTanhLutMaxInput)
+        return negative ? -1.0f : 1.0f;
+
+    const float scaled = magnitude * kTanhLutScale;
+    size_t i0 = static_cast<size_t>(scaled);
+    if (i0 >= synth::kTanhLutSize - 1)
+        i0 = synth::kTanhLutSize - 2;
+    const float frac = scaled - static_cast<float>(i0);
+    const float result = tanhLutTable[i0] + (tanhLutTable[i0 + 1] - tanhLutTable[i0]) * frac;
+    return negative ? -result : result;
+}
+
 // Denormals (subnormal floats, |x| below ~1.18e-38) are IEEE-754-legal but
 // many FPUs - RISC-V's RVF included - fall back to a much slower microcoded
 // path for them. Any feedback loop that decays exponentially toward silence
@@ -343,7 +376,7 @@ private:
     float sampleRate_ = 44100.0f;
 };
 
-// Phase-accumulator oscillator (sine/square/triangle/sawtooth/noise).
+// Phase-accumulator oscillator (sine/square/triangle/sawtooth/white and pink noise).
 // Non-band-limited by design (accepted known limitation, see plan).
 class PhaseOsc
 {
@@ -359,6 +392,10 @@ public:
         if (wave == WaveType::Noise)
         {
             return nextNoise();
+        }
+        if (wave == WaveType::PinkNoise)
+        {
+            return nextPinkNoise();
         }
         const float sample = currentSample(wave, phaseOffset);
         advance(freqHz, sampleRate);
@@ -403,6 +440,7 @@ public:
             sample = 2.0f * p - 1.0f;
             break;
         case WaveType::Noise:
+        case WaveType::PinkNoise:
         default:
             sample = 0.0f;
             break;
@@ -450,8 +488,29 @@ private:
         return static_cast<float>(noiseState_) * kInvUint32Max * 2.0f - 1.0f;
     }
 
+    // Paul Kellet's economical three-pole pink-noise approximation. It
+    // retains the roughly -3 dB/octave spectrum without the seven filters
+    // of the full version. The final clamp keeps it in the oscillator's
+    // native +/-1 waveform range like white noise and the periodic shapes.
+    float nextPinkNoise()
+    {
+        const float white = nextNoise();
+        pinkB0_ = 0.99765f * pinkB0_ + white * 0.0990460f;
+        pinkB1_ = 0.96300f * pinkB1_ + white * 0.2965164f;
+        pinkB2_ = 0.57000f * pinkB2_ + white * 1.0526913f;
+        float pink = (pinkB0_ + pinkB1_ + pinkB2_ + white * 0.1848f) * 0.25f;
+        if (pink > 1.0f)
+            pink = 1.0f;
+        else if (pink < -1.0f)
+            pink = -1.0f;
+        return pink;
+    }
+
     float phase_ = 0.0f;
     uint32_t noiseState_ = 0x12345678u;
+    float pinkB0_ = 0.0f;
+    float pinkB1_ = 0.0f;
+    float pinkB2_ = 0.0f;
     float lastSampleRate_ = 0.0f;
     float invSampleRate_ = 0.0f;
 };

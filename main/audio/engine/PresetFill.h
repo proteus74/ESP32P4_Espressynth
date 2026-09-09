@@ -17,6 +17,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -25,6 +26,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/LinkNodes.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
@@ -77,6 +79,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::Filter:
         nodes::filter::parsePreset(p, out);
         break;
+    case NodeType::CurtisFilter:
+        nodes::curtisfilter::parsePreset(p, out);
+        break;
     case NodeType::EspEq:
         parsePresetEspEq(p, out);
         break;
@@ -126,6 +131,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::ReverbLight:
         nodes::reverb::parsePresetReverbLight(p, out);
         break;
+    case NodeType::AudioInputLink:
+        nodes::link::parsePreset(p, out);
+        break;
     case NodeType::AudioOut:
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
@@ -167,7 +175,7 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     }
 }
 
-void parseWidgetsArray(cJSON *widgetsArr, PresetDoc &doc)
+void parseWidgetsArray(cJSON *widgetsArr, PresetDoc &doc, bool isFxPage)
 {
     cJSON *w;
     cJSON_ArrayForEach(w, widgetsArr)
@@ -189,7 +197,10 @@ void parseWidgetsArray(cJSON *widgetsArr, PresetDoc &doc)
         }
         WidgetDesc &wd = doc.widgets[doc.widgetCount];
         snprintf(wd.id, sizeof(wd.id), "%s", id);
+        const char *label = presetFillGetString(w, "label", typeStr);
+        snprintf(wd.label, sizeof(wd.label), "%s", label);
         wd.type = type;
+        wd.isFxPage = isFxPage;
         cJSON *params = cJSON_GetObjectItemCaseSensitive(w, "params");
         fillParams(type, params, wd.params);
         ++doc.widgetCount;
@@ -256,8 +267,9 @@ inline bool parsePreset(const char *json, size_t len, PresetDoc &out)
             cJSON_GetObjectItemCaseSensitive(pages, "generator"),
             cJSON_GetObjectItemCaseSensitive(pages, "fx"),
         };
-        for (cJSON *page : pageNames)
+        for (size_t pageIndex = 0; pageIndex < 2; ++pageIndex)
         {
+            cJSON *page = pageNames[pageIndex];
             if (!cJSON_IsObject(page))
             {
                 continue;
@@ -265,7 +277,7 @@ inline bool parsePreset(const char *json, size_t len, PresetDoc &out)
             cJSON *widgetsArr = cJSON_GetObjectItemCaseSensitive(page, "widgets");
             if (cJSON_IsArray(widgetsArr))
             {
-                parseWidgetsArray(widgetsArr, out);
+                parseWidgetsArray(widgetsArr, out, pageIndex == 1);
             }
             cJSON *connsArr = cJSON_GetObjectItemCaseSensitive(page, "connections");
             if (cJSON_IsArray(connsArr))

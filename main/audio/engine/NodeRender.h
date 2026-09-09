@@ -12,10 +12,10 @@
 
 #include "nodes/AdsrNode.h"
 #include "nodes/ArithmeticNodes.h"
-#include "nodes/AudioToValueNode.h"
 #include "nodes/ButtonNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -81,6 +81,9 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Filter:
         nodes::filter::render(inst, frames);
         break;
+    case NodeType::CurtisFilter:
+        nodes::curtisfilter::render(inst, frames);
+        break;
     case NodeType::Gain:
         nodes::gain::render(inst, frames);
         break;
@@ -118,9 +121,6 @@ inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::ValueMapper:
         nodes::valuemapper::render(inst, frames);
-        break;
-    case NodeType::AudioToValue:
-        nodes::audiotovalue::render(inst, frames);
         break;
     case NodeType::Chorus:
         nodes::chorus::render(inst, frames);

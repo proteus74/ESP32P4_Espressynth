@@ -43,6 +43,12 @@ struct FilterState;
 }
 using nodes::filter::FilterState;
 
+namespace nodes::curtisfilter
+{
+struct CurtisFilterState;
+}
+using nodes::curtisfilter::CurtisFilterState;
+
 namespace nodes::chorus
 {
 struct ChorusState;
@@ -139,8 +145,9 @@ struct NodeInstance
     GainState gain;
     MixerState mixer;
     MultiplexerState multiplexer;
-    // These twelve are heap-allocated (GraphBuilder::build) only for an
-    // instance whose type actually needs them, and freed in Graph::destroy -
+    // Type-specific states below are heap-allocated (GraphBuilder::build)
+    // only for an instance whose type actually needs them, and freed in
+    // Graph::destroy -
     // unlike every other state member above, which stays a plain value
     // (trivial lifetime, no manual alloc/free). They are by far the largest
     // of the ~25 per-type payloads (ReverbState alone: 26 embedded DelayLine
@@ -150,8 +157,7 @@ struct NodeInstance
     // That padding was the dominant cost pushing NodeInstance's per-instance
     // size up high enough to force high-voice-count presets out of internal
     // RAM entirely. nullptr for every instance whose type isn't the matching
-    // one - dereference only after checking inst.type, exactly like the
-    // original five (chorus/delay/reverb/reverbLight/espEffect).
+    // one - dereference only after checking inst.type.
     ChorusState *chorus = nullptr;
     DelayState *delay = nullptr;
     ReverbState *reverb = nullptr;
@@ -159,10 +165,14 @@ struct NodeInstance
     EspEffectState *espEffect = nullptr;
     AdsrState *adsr = nullptr;
     FilterState *filter = nullptr;
+    CurtisFilterState *curtisFilter = nullptr;
     EspEqState *espEq = nullptr;
     KnobState *knob = nullptr;
     ButtonState *button = nullptr;
     UpDownButtonState *upDownButton = nullptr;
+    // Only audio page-link widgets need the six extra bus buffers. Keeping
+    // them behind this pointer avoids adding six pointers to every voice.
+    LinkState *link = nullptr;
     // ValueMapperState is defined (state + render/build/destroy/setParam
     // logic together) in nodes/ValueMapperNode.h, not NodeState.h - pointer
     // member only needs the forward declaration below.
@@ -197,6 +207,26 @@ struct NodeInstance
     // the buffers' initial state.
     bool wasRenderedLastBlock = true;
 };
+
+inline float *outputPortBuffer(NodeInstance &inst, uint8_t port)
+{
+    if (port == 0)
+        return inst.outL;
+    if (port == 1)
+        return inst.outR;
+    const uint8_t extra = port - 2;
+    return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
+}
+
+inline const float *outputPortBuffer(const NodeInstance &inst, uint8_t port)
+{
+    if (port == 0)
+        return inst.outL;
+    if (port == 1)
+        return inst.outR;
+    const uint8_t extra = port - 2;
+    return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
+}
 
 // Small render-time helpers shared by every node type's render() - kept
 // here (not duplicated per node header) since every nodes/*.h needs

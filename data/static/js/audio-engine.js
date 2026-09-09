@@ -6,6 +6,23 @@ function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
 }
 
+function isNoiseWave(waveType) {
+  return waveType === "noise" || waveType === "pink-noise";
+}
+
+function fillPinkNoise(data) {
+  let b0 = 0;
+  let b1 = 0;
+  let b2 = 0;
+  for (let i = 0; i < data.length; i += 1) {
+    const white = Math.random() * 2 - 1;
+    b0 = 0.99765 * b0 + white * 0.099046;
+    b1 = 0.963 * b1 + white * 0.2965164;
+    b2 = 0.57 * b2 + white * 1.0526913;
+    data[i] = clampRange((b0 + b1 + b2 + white * 0.1848) * 0.25, -1, 1);
+  }
+}
+
 
 
 
@@ -29,6 +46,7 @@ const CV_MAX_VOLTS = 10;
 // sample-player waveform values), as opposed to CV_MAX_VOLTS (the CV
 // domain) - mirrors cv::kAudioPeakVolts in CvConventions.h 1:1.
 const AUDIO_PEAK_VOLTS = 5;
+const LINK_BUS_COUNT = 8;
 const GATE_THRESHOLD_VOLTS = 5;
 const ANALYSER_BLACKMAN_COHERENT_GAIN = 0.42;
 
@@ -59,6 +77,12 @@ function cvToRange(volts, minVal, maxVal, curve) {
     return lo * (maxVal / lo) ** v;
   }
   return minVal + v * (maxVal - minVal);
+}
+
+function curtisFilterToBiquad(type) {
+  if (type === "bp12") return "bandpass";
+  if (type === "hp12") return "highpass";
+  return "lowpass";
 }
 
 
@@ -366,8 +390,9 @@ export class AudioEngine {
       if (entry.type === "audio-input-link") inputLink = entry;
     });
     if (outputLink && inputLink) {
-      outputLink.nodeL.connect(inputLink.nodeL);
-      outputLink.nodeR.connect(inputLink.nodeR);
+      for (let bus = 0; bus < LINK_BUS_COUNT; bus += 1) {
+        outputLink.nodes[bus].connect(inputLink.nodes[bus]);
+      }
       this._linkBridged = true;
     }
   }
@@ -390,7 +415,7 @@ export class AudioEngine {
     newOsc.type = entry.osc.type;
     newOsc.frequency.value = entry.osc.frequency.value;
     newOsc.detune.value = entry.osc.detune.value;
-    if (entry.waveType !== "noise") {
+    if (!isNoiseWave(entry.waveType)) {
       newOsc.connect(entry.ampGain);
     }
     newOsc.start(now);
@@ -1027,8 +1052,8 @@ export class AudioEngine {
   
   
   
-  _frequencyDividerReciprocalCurve() {
-    if (!this._frequencyDividerReciprocalCurveCache) {
+  _frequencyDividerCvOffsetCurve() {
+    if (!this._frequencyDividerCvOffsetCurveCache) {
       const N = 2049;
       const curve = new Float32Array(N);
       for (let i = 0; i < N; i += 1) {
@@ -1036,11 +1061,12 @@ export class AudioEngine {
         let divider = x * 128;
         if (divider < 1) divider = 1;
         if (divider > 128) divider = 128;
-        curve[i] = 1 / divider;
+        // 1 V/oct CV: dividing frequency by N means subtracting log2(N) V.
+        curve[i] = -Math.log2(divider);
       }
-      this._frequencyDividerReciprocalCurveCache = curve;
+      this._frequencyDividerCvOffsetCurveCache = curve;
     }
-    return this._frequencyDividerReciprocalCurveCache;
+    return this._frequencyDividerCvOffsetCurveCache;
   }
 
   
@@ -1067,7 +1093,7 @@ export class AudioEngine {
       case "oscillator": {
         const waveType = params.waveType || "sine";
         const osc = ctx.createOscillator();
-        osc.type = waveType === "noise" ? "sine" : waveType;
+        osc.type = isNoiseWave(waveType) ? "sine" : waveType;
         osc.frequency.value = params.frequency ?? 0;
 
         const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -1078,6 +1104,12 @@ export class AudioEngine {
         const noiseSource = ctx.createBufferSource();
         noiseSource.buffer = noiseBuffer;
         noiseSource.loop = true;
+
+        const pinkNoiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+        fillPinkNoise(pinkNoiseBuffer.getChannelData(0));
+        const pinkNoiseSource = ctx.createBufferSource();
+        pinkNoiseSource.buffer = pinkNoiseBuffer;
+        pinkNoiseSource.loop = true;
 
         const ampGain = ctx.createGain();
         ampGain.gain.value = 0;
@@ -1171,8 +1203,11 @@ export class AudioEngine {
 
         osc.start();
         noiseSource.start();
+        pinkNoiseSource.start();
         if (waveType === "noise") {
           noiseSource.connect(ampGain);
+        } else if (waveType === "pink-noise") {
+          pinkNoiseSource.connect(ampGain);
         } else {
           osc.connect(ampGain);
         }
@@ -1181,6 +1216,7 @@ export class AudioEngine {
           type,
           osc,
           noiseSource,
+          pinkNoiseSource,
           ampGain,
           ampCv,
           waveType,
@@ -1344,7 +1380,8 @@ export class AudioEngine {
         // Bipolar mode ignores zeroPointFixed/zeroPoint - center is always
         // 0V (mirrors LfoNode.h::render()'s "s.bipolar ? 0.0f : ...").
         const center = bipolar ? 0 : (params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing);
-        const rate = params.rate ?? 2;
+        const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, 50);
+        const rate = clampRange(Number(params.rate ?? 2) || 0, 0, maxRate);
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
         const oneShot = params.oneShot === true;
@@ -1400,6 +1437,7 @@ export class AudioEngine {
           output,
           _sharedWired: false,
           lfoAmplitude: amplitude,
+          lfoMaxRate: maxRate,
           lfoPhase: phase,
           lfoZeroPointFixed: params.zeroPointFixed === true,
           lfoZeroPoint: params.zeroPoint ?? 5,
@@ -1541,15 +1579,38 @@ export class AudioEngine {
         gainNode.gain.value = vcaAmountFromCv(entry.amount, entry.curve);
         return entry;
       }
-      case "filter": {
+      case "filter":
+      case "curtis-filter": {
         const filterNode = ctx.createBiquadFilter();
-        filterNode.type = params.filterType || "lowpass";
+        const isCurtis = type === "curtis-filter";
+        const filterNode2 = isCurtis ? ctx.createBiquadFilter() : null;
+        const filterOutput = isCurtis ? ctx.createGain() : filterNode;
+        const modeOut1 = isCurtis ? ctx.createGain() : null;
+        const modeOut2 = isCurtis ? ctx.createGain() : null;
+        const initialFilterType = isCurtis
+          ? (params.filterType || "lp24")
+          : (params.filterType || "lowpass");
+        filterNode.type = isCurtis ? curtisFilterToBiquad(initialFilterType) : initialFilterType;
+        if (isCurtis) {
+          filterNode2.type = "lowpass";
+          filterNode.connect(filterNode2);
+          modeOut1.gain.value = initialFilterType === "lp24" ? 0 : 1;
+          modeOut2.gain.value = initialFilterType === "lp24" ? 1 : 0;
+          filterNode.connect(modeOut1);
+          filterNode2.connect(modeOut2);
+          modeOut1.connect(filterOutput);
+          modeOut2.connect(filterOutput);
+        }
         
         
         
         const entry = {
           type,
           filterNode,
+          filterNode2,
+          filterOutput,
+          modeOut1,
+          modeOut2,
           cutoff: params.cutoff ?? 5,
           cutoffMinHz: params.cutoffMinHz ?? 20,
           cutoffMaxHz: params.cutoffMaxHz ?? 20000,
@@ -1563,6 +1624,10 @@ export class AudioEngine {
         };
         filterNode.frequency.value = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
         filterNode.Q.value = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
+        if (filterNode2) {
+          filterNode2.frequency.value = filterNode.frequency.value;
+          filterNode2.Q.value = filterNode.Q.value;
+        }
         
         
         
@@ -1595,6 +1660,12 @@ export class AudioEngine {
         entry.resonanceCv.waveShaper.connect(entry.resonanceOwnGate);
         entry.resonanceOwnGate.connect(filterNode.Q);
         entry.resonanceSharedGate.connect(filterNode.Q);
+        if (filterNode2) {
+          entry.cutoffOwnGate.connect(filterNode2.frequency);
+          entry.cutoffSharedGate.connect(filterNode2.frequency);
+          entry.resonanceOwnGate.connect(filterNode2.Q);
+          entry.resonanceSharedGate.connect(filterNode2.Q);
+        }
         entry._sharedWired = false;
         return entry;
       }
@@ -1705,7 +1776,13 @@ export class AudioEngine {
           g.connect(output);
           inputGains.set(`in${i}`, g);
         }
-        return { type, output, inputGains, selected };
+        return {
+          type,
+          output,
+          inputGains,
+          selected,
+          softFadeMs: Math.max(0, Math.min(100, Number(params.softFadeMs ?? 5))),
+        };
       }
       case "multiplier": {
         
@@ -1783,20 +1860,22 @@ export class AudioEngine {
         seedNum.offset.value = 0;
         seedNum.start();
         const seedDen = ctx.createConstantSource();
-        seedDen.offset.value = (params.divider ?? 2) / 128;
+        // Prescale converts the raw divider value to the curve's 0..1 input.
+        // Dividing the seed here as well made every divider effectively 1.
+        seedDen.offset.value = params.divider ?? 2;
         seedDen.start();
 
         const prescale = ctx.createGain();
         prescale.gain.value = 1 / 128;
         const reciprocal = ctx.createWaveShaper();
-        reciprocal.curve = this._frequencyDividerReciprocalCurve();
+        reciprocal.curve = this._frequencyDividerCvOffsetCurve();
+        seedDen.connect(prescale);
         prescale.connect(reciprocal);
-        seedDen.connect(reciprocal);
 
         const outGain = ctx.createGain();
-        outGain.gain.value = 0;
+        outGain.gain.value = 1;
         seedNum.connect(outGain);
-        reciprocal.connect(outGain.gain);
+        reciprocal.connect(outGain);
 
         return { type, seedNum, seedDen, prescale, reciprocal, outGain, output: outGain };
       }
@@ -2118,16 +2197,30 @@ export class AudioEngine {
       }
       case "audio-output-link":
       case "audio-input-link": {
-        
-        
-        
-        
-        
-        const nodeL = ctx.createGain();
-        const nodeR = ctx.createGain();
-        nodeL.gain.value = 1;
-        nodeR.gain.value = 1;
-        return { type, nodeL, nodeR };
+        const gainVolts = Array.from({ length: LINK_BUS_COUNT }, (_, i) =>
+          clampRange(Number(params.gains?.[i] ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS)
+        );
+        const nodes = Array.from({ length: LINK_BUS_COUNT }, () => {
+          const node = ctx.createGain();
+          node.gain.value = 1;
+          return node;
+        });
+        const linkGainPrescales = type === "audio-input-link"
+          ? Array.from({ length: LINK_BUS_COUNT }, (_, i) => {
+              const prescale = ctx.createGain();
+              prescale.gain.value = 1 / CV_MAX_VOLTS;
+              prescale.connect(nodes[i].gain);
+              nodes[i].gain.value = gainVolts[i] / CV_MAX_VOLTS;
+              return prescale;
+            })
+          : null;
+        return {
+          type,
+          nodes,
+          linkGainVolts: gainVolts,
+          linkGainPrescales,
+          linkGainConnectionCount: Array(LINK_BUS_COUNT).fill(0),
+        };
       }
       case "vu-meter": {
         const analyser = ctx.createAnalyser();
@@ -2172,10 +2265,6 @@ export class AudioEngine {
         const dbBuffer = new Float32Array(analyser.frequencyBinCount);
         const voltageBuffer = new Float32Array(analyser.frequencyBinCount);
         return { type, analyser, dbBuffer, voltageBuffer };
-      }
-      case "audio-to-value": {
-        const { analyser, buffer } = this._createAnalyser(ctx, 32);
-        return { type, analyser, buffer };
       }
       case "wave-player": {
         
@@ -2405,15 +2494,6 @@ export class AudioEngine {
     return entry.responseMag;
   }
 
-  getAudioValue(id) {
-    const wrapper = this.nodes.get(id);
-    if (!wrapper) return 0;
-    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
-    if (!entry || entry.type !== "audio-to-value") return 0;
-    entry.analyser.getByteTimeDomainData(entry.buffer);
-    return (entry.buffer[entry.buffer.length - 1] - 128) / 128;
-  }
-
   
   
   
@@ -2457,6 +2537,10 @@ export class AudioEngine {
         entry.noiseSource.stop();
         entry.noiseSource.disconnect();
       }
+      if (entry.pinkNoiseSource) {
+        entry.pinkNoiseSource.stop();
+        entry.pinkNoiseSource.disconnect();
+      }
       if (entry.ampGain) entry.ampGain.disconnect();
       if (entry.lfoOsc) {
         entry.lfoOsc.stop();
@@ -2476,6 +2560,10 @@ export class AudioEngine {
       if (entry.rightAnalyser) entry.rightAnalyser.disconnect();
       if (entry.gainNode) entry.gainNode.disconnect();
       if (entry.filterNode) entry.filterNode.disconnect();
+      if (entry.filterNode2) entry.filterNode2.disconnect();
+      if (entry.filterOutput && entry.filterOutput !== entry.filterNode) entry.filterOutput.disconnect();
+      if (entry.modeOut1) entry.modeOut1.disconnect();
+      if (entry.modeOut2) entry.modeOut2.disconnect();
       if (entry.inputMap) entry.inputMap.forEach((g) => g.disconnect());
       if (entry.sum) entry.sum.disconnect();
       if (entry.inputGains) entry.inputGains.forEach((g) => g.disconnect());
@@ -2594,10 +2682,10 @@ export class AudioEngine {
       if (entry.output) entry.output.disconnect();
       if (
         (entry.type === "audio-output-link" || entry.type === "audio-input-link") &&
-        entry.nodeL
+        entry.nodes
       ) {
-        entry.nodeL.disconnect();
-        entry.nodeR.disconnect();
+        entry.nodes.forEach((node) => node.disconnect());
+        if (entry.linkGainPrescales) entry.linkGainPrescales.forEach((node) => node.disconnect());
         this._linkBridged = false;
       }
       if (entry.analyser) entry.analyser.disconnect();
@@ -2740,12 +2828,21 @@ export class AudioEngine {
     
     
     
-    const applyRampValue = (audioParam, val) => {
-      if (glideSeconds <= 0) {
+    const applyRampValue = (audioParam, val, duration = glideSeconds) => {
+      if (duration <= 0) {
         audioParam.cancelScheduledValues(now);
         audioParam.setValueAtTime(val, now);
       } else {
-        audioParam.setTargetAtTime(val, now, glideSeconds);
+        audioParam.setTargetAtTime(val, now, duration);
+      }
+    };
+    const applyLinearRampValue = (audioParam, val, duration) => {
+      audioParam.cancelScheduledValues(now);
+      if (duration <= 0) {
+        audioParam.setValueAtTime(val, now);
+      } else {
+        audioParam.setValueAtTime(audioParam.value, now);
+        audioParam.linearRampToValueAtTime(val, now + duration);
       }
     };
     const applyRamp = (audioParam) => applyRampValue(audioParam, value);
@@ -2768,15 +2865,19 @@ export class AudioEngine {
           
           applyRampValue(entry.tuneRestConst.offset, value);
         } else if (paramName === "waveType") {
-          if (value === "noise") {
-            if (entry.waveType !== "noise") {
+          if (isNoiseWave(value)) {
+            if (!isNoiseWave(entry.waveType)) {
               entry.osc.disconnect(entry.ampGain);
-              entry.noiseSource.connect(entry.ampGain);
             }
+            if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
+            if (entry.waveType === "pink-noise") entry.pinkNoiseSource.disconnect(entry.ampGain);
+            if (value === "noise") entry.noiseSource.connect(entry.ampGain);
+            else entry.pinkNoiseSource.connect(entry.ampGain);
           } else {
             entry.osc.type = value;
-            if (entry.waveType === "noise") {
-              entry.noiseSource.disconnect(entry.ampGain);
+            if (isNoiseWave(entry.waveType)) {
+              if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
+              else entry.pinkNoiseSource.disconnect(entry.ampGain);
               entry.osc.connect(entry.ampGain);
             }
           }
@@ -2862,7 +2963,8 @@ export class AudioEngine {
         }
         break;
       }
-      case "filter": {
+      case "filter":
+      case "curtis-filter": {
         
         
         
@@ -2873,18 +2975,16 @@ export class AudioEngine {
         
         const recomputeCutoff = () => {
           if (!entry.cutoffCvActive) {
-            applyRampValue(
-              entry.filterNode.frequency,
-              cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve)
-            );
+            const frequency = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
+            applyRampValue(entry.filterNode.frequency, frequency);
+            if (entry.filterNode2) applyRampValue(entry.filterNode2.frequency, frequency);
           }
         };
         const recomputeResonance = () => {
           if (!entry.resonanceCvActive) {
-            applyRampValue(
-              entry.filterNode.Q,
-              cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve)
-            );
+            const q = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
+            applyRampValue(entry.filterNode.Q, q);
+            if (entry.filterNode2) applyRampValue(entry.filterNode2.Q, q);
           }
         };
         if (paramName === "cutoff") {
@@ -2918,7 +3018,13 @@ export class AudioEngine {
           entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
           recomputeResonance();
         } else if (paramName === "filterType") {
-          entry.filterNode.type = value;
+          if (entry.type === "curtis-filter") {
+            entry.filterNode.type = curtisFilterToBiquad(value);
+            entry.modeOut1.gain.value = value === "lp24" ? 0 : 1;
+            entry.modeOut2.gain.value = value === "lp24" ? 1 : 0;
+          } else {
+            entry.filterNode.type = value;
+          }
         }
         break;
       }
@@ -2950,7 +3056,10 @@ export class AudioEngine {
         
         
         
-        if (paramName === "divider") applyRampValue(entry.seedDen.offset, (Number(value) || 1) / 128);
+        if (paramName === "divider") {
+          const divider = clampRange(Number(value) || 1, 1, 128);
+          applyRampValue(entry.seedDen.offset, divider);
+        }
         break;
       case "value-mapper": {
         
@@ -3003,8 +3112,10 @@ export class AudioEngine {
           entry.selected = selected;
           for (let i = 1; i <= 16; i += 1) {
             const g = entry.inputGains.get(`in${i}`);
-            if (g) applyRampValue(g.gain, i - 1 === selected ? 1 : 0);
+            if (g) applyLinearRampValue(g.gain, i - 1 === selected ? 1 : 0, entry.softFadeMs / 1000);
           }
+        } else if (paramName === "softFadeMs") {
+          entry.softFadeMs = Math.max(0, Math.min(100, Number(value) || 0));
         }
         break;
       case "adsr":
@@ -3030,7 +3141,12 @@ export class AudioEngine {
         break;
       case "lfo": {
         if (paramName === "rate") {
-          applyRamp(entry.lfoOsc.frequency);
+          const rate = clampRange(Number(value) || 0, 0, entry.lfoMaxRate ?? 50);
+          applyRampValue(entry.lfoOsc.frequency, rate);
+        } else if (paramName === "maxRate") {
+          entry.lfoMaxRate = clampRange(Number(value) || 0, 0, 50);
+          const rate = clampRange(Number(entry.lfoOsc.frequency.value) || 0, 0, entry.lfoMaxRate);
+          applyRampValue(entry.lfoOsc.frequency, rate);
         } else if (paramName === "amplitude") {
           entry.lfoAmplitude = value;
         } else if (paramName === "phase") {
@@ -3082,6 +3198,17 @@ export class AudioEngine {
           applyRampValue(entry.gain2.gain, value ? 1 : 0);
         }
         break;
+      case "audio-input-link": {
+        const match = /^gain([1-8])$/.exec(paramName);
+        if (!match) break;
+        const channel = Number(match[1]) - 1;
+        const gainVolts = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+        entry.linkGainVolts[channel] = gainVolts;
+        if (entry.linkGainConnectionCount[channel] === 0) {
+          applyRampValue(entry.nodes[channel].gain, gainVolts / CV_MAX_VOLTS);
+        }
+        break;
+      }
       case "chorus":
         if (paramName === "rate") {
           applyRamp(entry.lfo.frequency);
@@ -3201,7 +3328,7 @@ export class AudioEngine {
       
       if (
         paramName === "global" &&
-        (wrapper.type === "lfo" || wrapper.type === "gain" || wrapper.type === "filter")
+        (wrapper.type === "lfo" || wrapper.type === "gain" || wrapper.type === "filter" || wrapper.type === "curtis-filter")
       ) {
         this._setGlobalMode(wrapper, value === true);
         return;
@@ -3254,7 +3381,7 @@ export class AudioEngine {
         } else if (!entry.cvActive) {
           entry.gainNode.gain.setTargetAtTime(vcaAmountFromCv(entry.amount, entry.curve), now, 0.005);
         }
-      } else if (wrapper.type === "filter") {
+      } else if (wrapper.type === "filter" || wrapper.type === "curtis-filter") {
         if (isGlobal && !entry._sharedWired) {
           primary.cutoffCv.waveShaper.connect(entry.cutoffSharedGate);
           primary.resonanceCv.waveShaper.connect(entry.resonanceSharedGate);
@@ -3305,14 +3432,16 @@ export class AudioEngine {
     
     if (entry.type === "const" && port === "audio") return entry.constant;
     if (entry.type === "gain" && port === "out") return entry.gainNode;
-    if (entry.type === "filter" && port === "out") return entry.filterNode;
+    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {
+      return entry.filterOutput || entry.filterNode;
+    }
     if (entry.type.startsWith("esp-") && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
     if (entry.type === "mixer" && port === "out") return entry.sum;
     if (entry.type === "multiplexer" && port === "value") return entry.output;
     if (entry.type === "multiplier" && port === "value") return entry.output;
     if (entry.type === "adder" && port === "value") return entry.sum;
     if (entry.type === "divide" && port === "value") return entry.output;
-    if (entry.type === "frequency-divider" && port === "hz") return entry.outGain;
+    if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.outGain;
     if (entry.type === "abs" && port === "value") return entry.waveShaper;
     if (entry.type === "value-mapper" && port === "out") return entry.chain.waveShaper;
     if (entry.type === "detune" && port === "f1") return entry.f1;
@@ -3325,8 +3454,10 @@ export class AudioEngine {
       if (port === "outR") return entry.outputR;
     }
     if (entry.type === "audio-input-link") {
-      if (port === "outL") return entry.nodeL;
-      if (port === "outR") return entry.nodeR;
+      const match = /^out([1-8])$/.exec(port);
+      if (match) return entry.nodes[Number(match[1]) - 1];
+      if (port === "outL") return entry.nodes[0]; // legacy preset compatibility
+      if (port === "outR") return entry.nodes[1];
     }
     if (entry.type === "wave-player" && port === "left") return entry.leftOut;
     if (entry.type === "wave-player" && port === "right") return entry.rightOut;
@@ -3348,13 +3479,13 @@ export class AudioEngine {
     
     
     if (entry.type === "gain" && port === "amount") return entry.prescale;
-    if (entry.type === "filter" && port === "in") return entry.filterNode;
+    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "in") return entry.filterNode;
     
     
     
     
-    if (entry.type === "filter" && port === "cutoff") return entry.cutoffCv.prescale;
-    if (entry.type === "filter" && port === "resonance") return entry.resonanceCv.prescale;
+    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "cutoff") return entry.cutoffCv.prescale;
+    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "resonance") return entry.resonanceCv.prescale;
     if (entry.type === "esp-mixer") return entry.inputMap.get(port) || null;
     if (entry.type.startsWith("esp-") && (port === "inL" || port === "inR")) return port === "inL" ? entry.inputL : entry.inputR;
     if (entry.type === "mixer") return entry.inputGains.get(port) || null;
@@ -3393,7 +3524,7 @@ export class AudioEngine {
       
       
       
-      if (entry.type === "frequency-divider" && port === "hz") return entry.outGain;
+      if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.outGain;
       if (entry.type === "frequency-divider" && port === "divider") return entry.prescale;
       if (entry.type === "abs" && port === "in") return entry.waveShaper;
       if (entry.type === "value-mapper" && port === "in") return entry.chain.prescale;
@@ -3409,8 +3540,14 @@ export class AudioEngine {
       if (port === "inR") return entry.inputNodeR;
     }
     if (entry.type === "audio-output-link") {
-      if (port === "inL") return entry.nodeL;
-      if (port === "inR") return entry.nodeR;
+      const match = /^in([1-8])$/.exec(port);
+      if (match) return entry.nodes[Number(match[1]) - 1];
+      if (port === "inL") return entry.nodes[0]; // legacy preset compatibility
+      if (port === "inR") return entry.nodes[1];
+    }
+    if (entry.type === "audio-input-link") {
+      const match = /^gain([1-8])$/.exec(port);
+      if (match) return entry.linkGainPrescales[Number(match[1]) - 1];
     }
     if (entry.type === "vu-meter" && port === "in") return entry.analyser;
     if (entry.type === "oscilloscope") {
@@ -3418,7 +3555,6 @@ export class AudioEngine {
       if (port === "in2") return entry.analyser2;
     }
     if (entry.type === "spectrum" && port === "in") return entry.analyser;
-    if (entry.type === "audio-to-value" && port === "audio") return entry.analyser;
     if (entry.type === "wave-player" && port === "amplitude") return entry.ampGain.gain;
     return null;
   }
@@ -3457,6 +3593,19 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "frequency-divider") {
       this._wireFrequencyDividerInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
+      return;
+    }
+    if (toEntry && toEntry.type === "audio-input-link" && /^gain[1-8]$/.test(toPort)) {
+      const channel = Number(toPort.slice(4)) - 1;
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.connect(toEntry.linkGainPrescales[channel]);
+          toEntry.linkGainConnectionCount[channel] += 1;
+          toEntry.nodes[channel].gain.value = 0;
+        } catch (err) {
+        }
+      }
       return;
     }
     if (toEntry && toEntry.type === "wave-player" && toPort === "amplitude") {
@@ -3556,7 +3705,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "filter" && (toPort === "cutoff" || toPort === "resonance")) {
+    if (toEntry && (toEntry.type === "filter" || toEntry.type === "curtis-filter") && (toPort === "cutoff" || toPort === "resonance")) {
       
       
       
@@ -3564,11 +3713,15 @@ export class AudioEngine {
       if (from) {
         const cv = toPort === "cutoff" ? toEntry.cutoffCv : toEntry.resonanceCv;
         const target = toPort === "cutoff" ? toEntry.filterNode.frequency : toEntry.filterNode.Q;
+        const target2 = toEntry.filterNode2
+          ? (toPort === "cutoff" ? toEntry.filterNode2.frequency : toEntry.filterNode2.Q)
+          : null;
         try {
           from.connect(cv.prescale);
           if (toPort === "cutoff") toEntry.cutoffCvActive = true;
           else toEntry.resonanceCvActive = true;
           target.value = 0;
+          if (target2) target2.value = 0;
         } catch (err) {
           
         }
@@ -3598,6 +3751,21 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "frequency-divider") {
       this._wireFrequencyDividerInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
+      return;
+    }
+    if (toEntry && toEntry.type === "audio-input-link" && /^gain[1-8]$/.test(toPort)) {
+      const channel = Number(toPort.slice(4)) - 1;
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.disconnect(toEntry.linkGainPrescales[channel]);
+          toEntry.linkGainConnectionCount[channel] = Math.max(0, toEntry.linkGainConnectionCount[channel] - 1);
+          if (toEntry.linkGainConnectionCount[channel] === 0) {
+            toEntry.nodes[channel].gain.value = toEntry.linkGainVolts[channel] / CV_MAX_VOLTS;
+          }
+        } catch (err) {
+        }
+      }
       return;
     }
     if (toEntry && toEntry.type === "wave-player" && toPort === "amplitude") {
@@ -3681,7 +3849,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "filter" && (toPort === "cutoff" || toPort === "resonance")) {
+    if (toEntry && (toEntry.type === "filter" || toEntry.type === "curtis-filter") && (toPort === "cutoff" || toPort === "resonance")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const cv = toPort === "cutoff" ? toEntry.cutoffCv : toEntry.resonanceCv;
@@ -3693,11 +3861,17 @@ export class AudioEngine {
             toEntry.filterNode.frequency.value = cvToRange(
               toEntry.cutoff, toEntry.cutoffMinHz, toEntry.cutoffMaxHz, toEntry.cutoffCurve
             );
+            if (toEntry.filterNode2) {
+              toEntry.filterNode2.frequency.value = toEntry.filterNode.frequency.value;
+            }
           } else {
             toEntry.resonanceCvActive = false;
             toEntry.filterNode.Q.value = cvToRange(
               toEntry.resonance, toEntry.resonanceMinQ, toEntry.resonanceMaxQ, toEntry.resonanceCurve
             );
+            if (toEntry.filterNode2) {
+              toEntry.filterNode2.Q.value = toEntry.filterNode.Q.value;
+            }
           }
         } catch (err) {
           
@@ -3874,7 +4048,7 @@ export class AudioEngine {
   _wireFrequencyDividerInput(entry, port, sourceNode, connecting) {
     if (!sourceNode) return;
     try {
-      if (port === "hz") {
+      if (port === "cv" || port === "hz") {
         if (connecting) {
           entry.seedNum.disconnect(entry.outGain);
           sourceNode.connect(entry.outGain);
@@ -3884,11 +4058,11 @@ export class AudioEngine {
         }
       } else if (port === "divider") {
         if (connecting) {
-          entry.seedDen.disconnect(entry.reciprocal);
+          entry.seedDen.disconnect(entry.prescale);
           sourceNode.connect(entry.prescale);
         } else {
           sourceNode.disconnect(entry.prescale);
-          entry.seedDen.connect(entry.reciprocal);
+          entry.seedDen.connect(entry.prescale);
         }
       }
     } catch (err) {

@@ -44,6 +44,17 @@ inline int indexedInPort(const char *portName, int maxInputs = 8)
     return (n >= 1 && n <= maxInputs) ? (n - 1) : -1;
 }
 
+// Matches "gain1".."gain8" and returns a 0-based channel index.
+inline int indexedGainPort(const char *portName)
+{
+    if (portName == nullptr || strncmp(portName, "gain", 4) != 0)
+    {
+        return -1;
+    }
+    const char *number = portName + 4;
+    return number[0] >= '1' && number[0] <= '8' && number[1] == '\0' ? number[0] - '1' : -1;
+}
+
 inline bool is(const char *a, const char *b)
 {
     return a != nullptr && strcmp(a, b) == 0;
@@ -65,10 +76,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "tune"))
             return 2;
         // "waveform" is a real, but control-only audio-rate port (see
-        // isControlOnlyInput) - 0-10V CV, 2V bands in WaveType order (0-2V
-        // Sine, 2-4V Square, 4-6V Triangle, 6-8V Sawtooth, 8-10V Noise, see
-        // NodeInstance.cpp's waveTypeFromCv()). Not wired: falls back to the
-        // waveform dropdown value (OscillatorState::wave), as before.
+        // isControlOnlyInput) - 0-10V CV, six equal bands in WaveType order
+        // (Sine, Square, Triangle, Sawtooth, white Noise, Pink Noise; see
+        // nodes/OscillatorNode.h's waveTypeFromCv()). Not wired: falls back
+        // to the waveform dropdown value (OscillatorState::wave), as before.
         if (is(portName, "waveform"))
             return 3;
         // "gain" is a real audio-rate port (like Gain's "amount") - no
@@ -129,6 +140,7 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 1;
         return -1;
     case NodeType::Filter:
+    case NodeType::CurtisFilter:
         // "cutoff"/"resonance" are real, but control-only audio-rate ports
         // (see isControlOnlyInput) - any source may feed them via a DSP edge;
         // NodeInstance.cpp's Filter case evaluates them sample-accurately
@@ -195,7 +207,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         return (idx >= 0 && idx < 2) ? idx : -1;
     }
     case NodeType::FrequencyDivider:
-        if (is(portName, "hz"))
+        if (is(portName, "cv") || is(portName, "hz"))
             return 0;
         if (is(portName, "divider"))
             return 1;
@@ -203,8 +215,6 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Abs:
     case NodeType::ValueMapper:
         return is(portName, "in") ? 0 : -1;
-    case NodeType::AudioToValue:
-        return is(portName, "audio") ? 0 : -1;
     case NodeType::Chorus:
         return is(portName, "in") ? 0 : -1;
     case NodeType::Delay:
@@ -260,15 +270,18 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 6;
         return -1;
     case NodeType::AudioOutputLink:
-        if (is(portName, "inL"))
+        if (is(portName, "inL")) // legacy bus 1
             return 0;
-        if (is(portName, "inR"))
+        if (is(portName, "inR")) // legacy bus 2
             return 1;
-        return -1;
+        return indexedInPort(portName, synth::kLinkBusCount);
     case NodeType::AudioInputLink:
-        // No user-facing input port - the implicit output-link->input-link
-        // bridge edges target port index 0/1 directly (see GraphBuilder).
-        return -1;
+    {
+        // Buses 1-8 are internal page-link edges. gain1..gain8 are visible
+        // 0-10V level-CV inputs on the Audio Outputs widget.
+        const int gain = indexedGainPort(portName);
+        return gain >= 0 ? static_cast<int>(synth::kLinkBusCount) + gain : -1;
+    }
     case NodeType::AudioOut:
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
@@ -368,7 +381,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         // block needed.
         return -1;
     case NodeType::Const:
-        return is(portName, "audio") ? 0 : -1;
+        // Const exposes only its scalar "value" through ControlRoute.
+        return -1;
     case NodeType::Button:
     case NodeType::UpDownButton:
         // Like Knob: current value is delivered exclusively via ControlRoute
@@ -379,6 +393,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Adsr:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Filter:
+    case NodeType::CurtisFilter:
     case NodeType::Gain:
         return is(portName, "out") ? 0 : -1;
     case NodeType::EspEq:
@@ -402,13 +417,11 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Divide:
         return is(portName, "value") ? 0 : -1;
     case NodeType::FrequencyDivider:
-        return is(portName, "hz") ? 0 : -1;
+        return (is(portName, "cv") || is(portName, "hz")) ? 0 : -1;
     case NodeType::Abs:
         return is(portName, "value") ? 0 : -1;
     case NodeType::ValueMapper:
         return is(portName, "out") ? 0 : -1;
-    case NodeType::AudioToValue:
-        return is(portName, "value") ? 0 : -1;
     case NodeType::Chorus:
         if (is(portName, "left"))
             return 0;
@@ -424,13 +437,19 @@ inline int audioOutIndex(NodeType type, const char *portName)
             return 1;
         return -1;
     case NodeType::AudioOutputLink:
-        // No user-facing output port - internal bridge only (source index 0/1).
+        // No user-facing output port - internal bridge only.
         return -1;
     case NodeType::AudioInputLink:
-        if (is(portName, "outL"))
+        if (is(portName, "outL")) // legacy bus 1
             return 0;
-        if (is(portName, "outR"))
+        if (is(portName, "outR")) // legacy bus 2
             return 1;
+        if (portName != nullptr && strncmp(portName, "out", 3) == 0)
+        {
+            const char *number = portName + 3;
+            if (number[0] >= '1' && number[0] <= '8' && number[1] == '\0')
+                return number[0] - '1';
+        }
         return -1;
     case NodeType::WavePlayer:
         if (is(portName, "left"))
@@ -472,6 +491,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Switch:
         return 2;
     case NodeType::Filter:
+    case NodeType::CurtisFilter:
         return 4; // "in" + "cutoff" + "resonance" + "global" (CV)
     case NodeType::Gain:
         return 3; // "in" + "amount" (CV) + "global" (CV)
@@ -497,8 +517,6 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Abs:
     case NodeType::ValueMapper:
         return 1;
-    case NodeType::AudioToValue:
-        return 1;
     case NodeType::Chorus:
         return 1;
     case NodeType::Delay:
@@ -508,12 +526,10 @@ inline int audioInPortCount(NodeType type)
     case NodeType::ReverbLight:
         return 7; // like Reverb, without "preDelay"
     case NodeType::AudioOutputLink:
-        return 2;
+        return synth::kLinkBusCount;
     case NodeType::AudioInputLink:
-        // Not user-connectable from a preset (audioInIndex() returns -1 for
-        // it), but still needs two real port buffers: GraphBuilder wires the
-        // implicit output-link->input-link bridge straight to port index 0/1.
-        return 2;
+        // Eight page-link buses plus eight visible level-CV inputs.
+        return synth::kLinkBusCount * 2;
     case NodeType::AudioOut:
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
@@ -618,8 +634,6 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Abs:
     case NodeType::ValueMapper:
         return true; // all inputs
-    case NodeType::AudioToValue:
-        return false; // input stays real audio, output is control-rate
     case NodeType::Oscillator:
         return portIdx == 1 || portIdx == 2 || portIdx == 3; // "pitchCv"+"tune"+"waveform" - "amplitude" (index 0) stays real audio-rate
     case NodeType::Hammond:
@@ -634,6 +648,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Gain:
         return portIdx == 2; // "global" - "amount" (index 1) stays real audio-rate
     case NodeType::Filter:
+    case NodeType::CurtisFilter:
         return portIdx == 1 || portIdx == 2 || portIdx == 3; // "cutoff"+"resonance"+"global"
     case NodeType::Clock:
         return portIdx == 0; // "tempo"

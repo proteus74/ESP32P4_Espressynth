@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Espressynth P4</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/style.css?v=20260909-link-output-ports-center-8">
 </head>
 <body>
 
@@ -28,7 +28,6 @@
       <button>Undo</button>
       <button>Copy</button>
       <button id="menuShowLog">Show Log Window</button>
-      <button id="menuToggleNodeCpu">Show Node CPU %</button>
     </div>
   </div>
   <div class="menu-item">
@@ -41,6 +40,14 @@
       <label class="dropdown-check">
         <input type="checkbox" id="menuOrthogonalCables">
         <span>Orthogonal Cables</span>
+      </label>
+      <button id="menuToggleNodeCpu">Show Node CPU %</button>
+      <label class="dropdown-range" for="menuWidgetOpacity">
+        <span class="dropdown-range-label">
+          <span>Widget Opacity</span>
+          <output id="menuWidgetOpacityValue">100%</output>
+        </span>
+        <input id="menuWidgetOpacity" type="range" min="50" max="100" step="1" value="100">
       </label>
     </div>
   </div>
@@ -457,6 +464,20 @@
   </div>
 </div>
 
+<div id="lfoSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>LFO Settings</h3>
+    <label>Max. Rate bei 10 V (Hz)
+      <input id="lfoMaxRateInput" type="number" min="0" max="50" step="0.01">
+    </label>
+    <p class="modal-hint">0–10 V werden linear auf 0–diese Maximalrate abgebildet.</p>
+    <div class="modal-actions">
+      <button id="lfoSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="lfoSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="mixerSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Mixer Settings</h3>
@@ -477,6 +498,10 @@
     <label class="modal-field">
       <span>Number of Inputs (2–16)</span>
       <input type="number" id="multiplexerCountInput" min="2" max="16" value="2">
+    </label>
+    <label class="modal-field" title="Fade time when switching between inputs">
+      <span>Soft Fade (ms)</span>
+      <input type="number" id="multiplexerSoftFadeInput" min="0" max="100" step="0.1" value="5">
     </label>
     <div class="modal-actions">
       <button id="multiplexerSettingsCancel" class="btn-secondary">Cancel</button>
@@ -594,7 +619,7 @@
     </div>
     <div class="modal-field-row">
       <label class="modal-field" title="Only affects audio-rate cutoff/resonance modulation (a genuine cable wired into Cutoff/Resonance CV) - only recompute the filter's coefficients every Nth sample instead of every sample. 1x = fully sample-accurate (most CPU). Higher values save CPU but modulation gets slightly stepped/aliased - inaudible for slow modulators (ADSR/LFO), more noticeable for fast ones (e.g. an oscillator FM'ing the cutoff).">
-        <span>Cutoff/Resonance Update Rate</span>
+        <span>Cutoff/Resonance CV Update Rate (only with cable)</span>
         <select id="filterCoeffStrideSelect">
           <option value="1">Every sample (1x, most CPU)</option>
           <option value="2">Every 2nd sample</option>
@@ -708,6 +733,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js"></script>
+<script type="module" src="/static/js/main.js?v=20260909-link-output-ports-center-8"></script>
 </body>
 </html>

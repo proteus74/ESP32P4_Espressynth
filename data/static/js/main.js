@@ -1,7 +1,8 @@
-import { AudioEngine } from "./audio-engine.js";
+import { AudioEngine } from "./audio-engine.js?v=20260909-link-output-levels-8";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 
 const GRID = 20;
+const LINK_BUS_COUNT = 8;
 const SOUNDFONT_DEFAULT_MAX_BANK = 128;
 const audioEngine = new AudioEngine();
 window.audioEngine = audioEngine; // debug: inspect from DevTools console (module scope isn't global)
@@ -152,7 +153,7 @@ function pollAssetLoadProgress() {
 
 const presetSelect = document.getElementById("presetSelect");
 presetSelect.addEventListener("change", () => {
-  loadPresetByName(presetSelect.value);
+  loadPresetByName(presetSelect.value, { activate: true });
 });
 
 document.getElementById("menuNew").addEventListener("click", (e) => {
@@ -637,28 +638,22 @@ const WIDGET_TYPES = {
     label: "Frequency Divider",
     icon: "➗",
     inputs: [
-      { id: "hz", label: "Frequency (Hz)" },
+      { id: "cv", label: "CV (V)" },
       { id: "divider", label: "Divider" },
     ],
-    outputs: [{ id: "hz", label: "Frequency (Hz)" }],
+    outputs: [{ id: "cv", label: "CV (V)" }],
   },
   abs: {
     label: "Abs",
     icon: "|x|",
     inputs: [{ id: "in", label: "In" }],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "" }],
   },
   "value-mapper": {
     label: "Value Mapper",
     icon: "🗺️",
     inputs: [{ id: "in", label: "In" }],
     outputs: [{ id: "out", label: "Out" }],
-  },
-  "audio-to-value": {
-    label: "AudioToValue",
-    icon: "A→V",
-    inputs: [{ id: "audio", label: "Audio" }],
-    outputs: [{ id: "value", label: "Value" }],
   },
   clock: {
     label: "Clock",
@@ -813,6 +808,17 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "curtis-filter": {
+    label: "CEM3320 Filter",
+    icon: "🎚️",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "cutoff", label: "Cutoff (CV)" },
+      { id: "resonance", label: "Resonance (CV)" },
+      { id: "global", label: "Global" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   "esp-eq": { label: "EQ", icon: "📶", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "frequency", label: "Frequency" }, { id: "q", label: "Q" }, { id: "gainDb", label: "Gain dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
   "esp-alc": { label: "ESP ALC", icon: "ALC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "gainL", label: "Gain L dB" }, { id: "gainR", label: "Gain R dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
   "esp-channel-convert": { label: "ESP Channel Convert", icon: "CH", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
@@ -846,10 +852,7 @@ const WIDGET_TYPES = {
     label: "Const",
     icon: "🔢",
     inputs: [],
-    outputs: [
-      { id: "value", label: "Value" },
-      { id: "audio", label: "Audio" },
-    ],
+    outputs: [{ id: "value", label: "" }],
   },
   chorus: {
     label: "Chorus",
@@ -916,22 +919,16 @@ const WIDGET_TYPES = {
     ],
   },
   "audio-output-link": {
-    label: "Audio-Output-Link",
+    label: "To Master",
     icon: "🔗",
-    inputs: [
-      { id: "inL", label: "In L" },
-      { id: "inR", label: "In R" },
-    ],
+    inputs: Array.from({ length: LINK_BUS_COUNT }, (_, i) => ({ id: `in${i + 1}`, label: String(i + 1) })),
     outputs: [],
   },
   "audio-input-link": {
-    label: "Audio-Input-Link",
+    label: "Audio Outputs",
     icon: "🔗",
-    inputs: [],
-    outputs: [
-      { id: "outL", label: "Out L" },
-      { id: "outR", label: "Out R" },
-    ],
+    inputs: Array.from({ length: LINK_BUS_COUNT }, (_, i) => ({ id: `gain${i + 1}`, label: String(i + 1) })),
+    outputs: Array.from({ length: LINK_BUS_COUNT }, (_, i) => ({ id: `out${i + 1}`, label: "" })),
   },
   lfo: {
     label: "LFO",
@@ -992,8 +989,8 @@ const WIDGET_CATEGORIES = [
   { label: "Generator", types: ["oscillator", "hammond", "wave-player", "soundfont-player"] },
   { label: "Modulator", types: ["lfo", "adsr", "detune", "clock"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
-  { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "audio-to-value"] },
-  { label: "Filter", types: ["filter", "esp-eq"] },
+  { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
+  { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
   { label: "Effects", types: ["chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
@@ -1029,8 +1026,8 @@ const AUDIO_PORTS = {
   
   
   lfo: { out: ["value"] },
-  "audio-to-value": { in: ["audio"] },
-  const: { out: ["audio"] },
+  // Const is a scalar control source. It is not an audio-rate output.
+  const: { out: [] },
   
   
   
@@ -1048,6 +1045,7 @@ const AUDIO_PORTS = {
   
   
   filter: { in: ["in", "cutoff", "resonance"], out: ["out"] },
+  "curtis-filter": { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "esp-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
   "esp-alc": { in: ["inL", "inR"], out: ["outL", "outR"] },
   "esp-channel-convert": { in: ["inL", "inR"], out: ["outL", "outR"] },
@@ -1080,8 +1078,11 @@ const AUDIO_PORTS = {
   delay: { in: ["inL", "inR"], out: ["outL", "outR"] },
   reverb: { in: ["inL", "inR"], out: ["outL", "outR"] },
   "reverb-light": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "audio-output-link": { in: ["inL", "inR"] },
-  "audio-input-link": { out: ["outL", "outR"] },
+  "audio-output-link": { in: Array.from({ length: LINK_BUS_COUNT }, (_, i) => `in${i + 1}`) },
+  "audio-input-link": {
+    in: Array.from({ length: LINK_BUS_COUNT }, (_, i) => `gain${i + 1}`),
+    out: Array.from({ length: LINK_BUS_COUNT }, (_, i) => `out${i + 1}`),
+  },
   "audio-out": { in: ["left", "right"] },
   "usb-out": { in: ["left", "right"] },
   "es8311-out": { in: ["left", "right"] },
@@ -1158,6 +1159,7 @@ const WAVE_TYPE_LABELS = {
   triangle: "Triangle",
   sawtooth: "Sawtooth",
   noise: "Noise",
+  "pink-noise": "Pink Noise",
 };
 
 const WAVE_ICON_ATTRS = 'viewBox="0 0 18 12" width="18" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
@@ -1183,11 +1185,16 @@ const WAVE_TYPE_BUTTONS = [
     id: "noise",
     icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 L3,2 L4,9 L6,4 L7,10 L9,3 L10,7 L12,1 L13,8 L15,5 L17,9"/></svg>`,
   },
+  {
+    id: "pink-noise",
+    className: "osc-wave-btn-pink-noise",
+    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 L3,2 L4,9 L6,4 L7,10 L9,3 L10,7 L12,1 L13,8 L15,5 L17,9"/></svg>`,
+  },
 ];
 
 
 
-const LFO_TYPE_BUTTONS = WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise");
+const LFO_TYPE_BUTTONS = WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise" && w.id !== "pink-noise");
 
 const LFO_ZERO_MODE_BUTTONS = [
   { id: "auto", label: "Auto" },
@@ -1207,6 +1214,7 @@ const GENERATOR_PAGE_TYPES = [
   "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "const",
 ];
 const FX_PAGE_TYPES = [
+  "midi-in", "adsr",
   "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
   "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
@@ -1218,7 +1226,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "audio-to-value", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "mixer", "esp-eq"];
+const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq"];
 
 
 
@@ -1403,6 +1411,14 @@ function clearSelection() {
     if (prev) prev.classList.remove("selected");
     selectedConnectionId = null;
   }
+}
+
+function openLfoSettings(widgetId) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  pendingLfoId = widgetId;
+  lfoMaxRateInput.value = String(state.maxRate);
+  lfoSettingsOverlay.classList.remove("hidden");
 }
 
 function createWidget(type, label, x, y, forcedId) {
@@ -1596,7 +1612,7 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "filter") {
+  if (type === "filter" || type === "curtis-filter") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
       e.stopPropagation();
@@ -1671,7 +1687,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "frequency-divider") {
-    frequencyDividerStates.set(id, { frequency: 0, divider: 2, audioMode: false });
+    frequencyDividerStates.set(id, { cv: 0, divider: 2, audioMode: false });
   }
 
   if (type === "abs") {
@@ -1690,22 +1706,6 @@ function createWidget(type, label, x, y, forcedId) {
       listText: "",
       audioMode: false,
     });
-
-    const body = document.createElement("div");
-    body.className = "widget-instance-body value-mapper-body";
-
-    const readout = document.createElement("div");
-    readout.className = "value-mapper-readout";
-    readout.dataset.role = "value-mapper-readout";
-    readout.textContent = "In 0.00 → Out 0.00";
-
-    body.appendChild(readout);
-    el.appendChild(body);
-  }
-
-  if (type === "audio-to-value") {
-    audioToValueStates.set(id, { value: 0 });
-    audioEngine.createNode(id, "audio-to-value", {});
   }
 
   if (type === "adder") {
@@ -1783,6 +1783,7 @@ function createWidget(type, label, x, y, forcedId) {
     WAVE_TYPE_BUTTONS.forEach((w) => {
       const btn = document.createElement("button");
       btn.className = "osc-wave-btn";
+      if (w.className) btn.classList.add(w.className);
       btn.innerHTML = w.icon;
       btn.dataset.wave = w.id;
       btn.title = WAVE_TYPE_LABELS[w.id];
@@ -1963,9 +1964,9 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(body);
   }
 
-  if (type === "filter") {
+  if (type === "filter" || type === "curtis-filter") {
     const filterDefaults = {
-      filterType: "lowpass",
+      filterType: type === "curtis-filter" ? "lp24" : "lowpass",
       cutoff: 5,
       cutoffMinHz: 20,
       cutoffMaxHz: 20000,
@@ -1984,20 +1985,22 @@ function createWidget(type, label, x, y, forcedId) {
       global: false,
     };
     filterStates.set(id, { ...filterDefaults });
-    audioEngine.createNode(id, "filter", { ...filterDefaults });
+    audioEngine.createNode(id, type, { ...filterDefaults });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body filter-body";
 
     const typeButtons = document.createElement("div");
     typeButtons.className = "filter-type-buttons";
-    FILTER_TYPE_BUTTONS.forEach((f) => {
+    const typeButtonsDefinition = type === "curtis-filter" ? CURTIS_FILTER_TYPE_BUTTONS : FILTER_TYPE_BUTTONS;
+    const typeLabels = type === "curtis-filter" ? CURTIS_FILTER_TYPE_LABELS : FILTER_TYPE_LABELS;
+    typeButtonsDefinition.forEach((f) => {
       const btn = document.createElement("button");
       btn.className = "filter-type-btn";
       btn.textContent = f.label;
       btn.dataset.filterType = f.id;
-      btn.title = FILTER_TYPE_LABELS[f.id];
-      if (f.id === "lowpass") btn.classList.add("active");
+      btn.title = typeLabels[f.id];
+      if (f.id === filterDefaults.filterType) btn.classList.add("active");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         setFilterType(id, f.id);
@@ -2049,9 +2052,11 @@ function createWidget(type, label, x, y, forcedId) {
       inputCount: 2,
       manualSelect: 0,
       activeIndex: 0,
+      cvVolts: null,
+      softFadeMs: 5,
       values: new Array(MULTIPLEXER_MAX_INPUTS).fill(0),
     });
-    audioEngine.createNode(id, "multiplexer", { select: 0 });
+    audioEngine.createNode(id, "multiplexer", { select: 0, softFadeMs: 5 });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body switch-body multiplexer-switch-body";
@@ -2092,6 +2097,14 @@ function createWidget(type, label, x, y, forcedId) {
     multiplexerSwitchBody = body;
   }
 
+  if (type === "lfo") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input, .port-dot")) return;
+      e.stopPropagation();
+      openLfoSettings(id);
+    });
+  }
+
   if (type === "adsr") {
     const adsrDefaults = {
       attack: 0.4,
@@ -2122,13 +2135,16 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "audio-output-link" || type === "audio-input-link") {
-    audioEngine.createNode(id, type, {});
+    const state = type === "audio-input-link" ? { gains: Array(LINK_BUS_COUNT).fill(CV_MAX_VOLTS) } : {};
+    if (type === "audio-input-link") audioInputLinkStates.set(id, state);
+    audioEngine.createNode(id, type, state);
   }
 
   if (type === "lfo") {
     lfoStates.set(id, {
       waveType: "sine",
       rate: 2,
+      maxRate: LFO_MAX_RATE_HZ,
       amplitude: 10,
       phase: 0, 
       zeroPointFixed: false,
@@ -2146,6 +2162,7 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, "lfo", {
       waveType: "sine",
       rate: 2,
+      maxRate: LFO_MAX_RATE_HZ,
       amplitude: 10,
       phase: 0,
       zeroPointFixed: false,
@@ -2655,8 +2672,38 @@ function createWidget(type, label, x, y, forcedId) {
   } else {
     def.inputs.forEach((port) => {
       const row = createPortRow(id, port, "in", type);
+      if (type === "value-mapper" && port.id === "in") {
+        const label = row.querySelector(".port-label");
+        if (label) {
+          const value = document.createElement("span");
+          value.className = "value-mapper-port-value";
+          value.dataset.role = "value-mapper-in-value";
+          value.textContent = formatNumber(valueMapperStates.get(id)?.value ?? 0);
+          label.appendChild(value);
+        }
+      }
       const isAudioOut = type === "audio-out" || type === "usb-out" ||
         type === "es8311-out" || type === "wm8960-out";
+      if (type === "audio-input-link" && /^gain[1-8]$/.test(port.id)) {
+        const channel = Number(port.id.slice(4)) - 1;
+        const state = audioInputLinkStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state?.gains[channel] ?? CV_MAX_VOLTS);
+        slider.dataset.role = `audio-input-link-gain-${channel}`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setAudioInputLinkGain(id, channel, Number(slider.value)));
+        const value = document.createElement("span");
+        value.className = "port-value";
+        value.dataset.role = `audio-input-link-gain-value-${channel}`;
+        value.textContent = `${formatNumber(state?.gains[channel] ?? CV_MAX_VOLTS)} V`;
+        row.append(slider, value);
+      }
       if (isAudioOut && (port.id === "gain" || port.id === "muted")) {
         const controlRow = el.querySelector(port.id === "gain" ? ".audio-out-volume-row" : ".audio-out-mute-row");
         const dot = row.querySelector(".port-dot");
@@ -2688,7 +2735,7 @@ function createWidget(type, label, x, y, forcedId) {
         slider.type = "range";
         slider.className = "port-slider";
         slider.min = String(MIDI_IN_MIN_VOICES);
-        slider.max = String(MIDI_IN_MAX_VOICES);
+        slider.max = String(midiInVoiceLimit(id));
         slider.step = "1";
         slider.value = String(state.voices);
         slider.dataset.role = "midi-in-voices-slider";
@@ -2797,8 +2844,8 @@ function createWidget(type, label, x, y, forcedId) {
         switchLabel.appendChild(switchTrack);
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
       }
-      if ((type === "lfo" || type === "gain" || type === "filter") && port.id === "global") {
-        const stateMap = { lfo: lfoStates, gain: gainStates, filter: filterStates }[type];
+      if ((type === "lfo" || type === "gain" || type === "filter" || type === "curtis-filter") && port.id === "global") {
+        const stateMap = { lfo: lfoStates, gain: gainStates, filter: filterStates, "curtis-filter": filterStates }[type];
         const state = stateMap.get(id);
         const switchLabel = document.createElement("label");
         switchLabel.className = "switch";
@@ -2848,7 +2895,7 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = `${formatNumber(state.zeroPoint)} V`;
         row.appendChild(valueSpan);
       }
-      if (type === "filter" && (port.id === "cutoff" || port.id === "resonance")) {
+      if ((type === "filter" || type === "curtis-filter") && (port.id === "cutoff" || port.id === "resonance")) {
         const filterState = filterStates.get(id);
         const isCutoff = port.id === "cutoff";
 
@@ -3141,14 +3188,16 @@ function createWidget(type, label, x, y, forcedId) {
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "port-slider";
-        slider.min = "1";
-        slider.max = "128";
+        slider.min = "0";
+        slider.max = String(FREQUENCY_DIVIDER_STEPS.length - 1);
         slider.step = "1";
-        slider.value = String(state.divider);
+        slider.value = String(frequencyDividerStepIndex(state.divider));
         slider.dataset.role = "frequency-divider-slider";
         slider.addEventListener("mousedown", (e) => e.stopPropagation());
         slider.addEventListener("click", (e) => e.stopPropagation());
-        slider.addEventListener("input", () => deliverToWidget(id, "divider", Number(slider.value)));
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "divider", FREQUENCY_DIVIDER_STEPS[Number(slider.value)]);
+        });
         row.appendChild(slider);
 
         const valueSpan = document.createElement("span");
@@ -3189,7 +3238,7 @@ function createWidget(type, label, x, y, forcedId) {
         slider.type = "range";
         slider.className = "port-slider";
         slider.min = String(cfg.min);
-        slider.max = String(cfg.max);
+        slider.max = String(port.id === "rate" ? lfoState.maxRate : cfg.max);
         slider.step = String(cfg.step);
         slider.value = String(lfoState[port.id]);
         slider.dataset.role = `lfo-${port.id}-slider`;
@@ -3205,7 +3254,8 @@ function createWidget(type, label, x, y, forcedId) {
             value = snapToDetent(value, LFO_PHASE_DETENTS, LFO_PHASE_SNAP_RANGE);
             slider.value = String(value);
           }
-          deliverToWidget(id, port.id, value);
+          if (port.id === "rate") setLfoManualRate(id, value);
+          else deliverToWidget(id, port.id, value);
         });
         row.appendChild(slider);
 
@@ -3223,6 +3273,24 @@ function createWidget(type, label, x, y, forcedId) {
         const pulseRow = el.querySelector(".clock-pulse-row");
         if (pulseRow) pulseRow.appendChild(row);
         return;
+      }
+      if (type === "abs" && port.id === "value") {
+        row.classList.add("abs-output-row");
+        const readout = document.createElement("span");
+        readout.className = "port-value";
+        readout.dataset.role = "abs-readout";
+        readout.textContent = formatNumber(Math.abs(absStates.get(id)?.value ?? 0));
+        row.appendChild(readout);
+      }
+      if (type === "value-mapper" && port.id === "out") {
+        const label = row.querySelector(".port-label");
+        if (label) {
+          const value = document.createElement("span");
+          value.className = "value-mapper-port-value";
+          value.dataset.role = "value-mapper-out-value";
+          value.textContent = formatNumber(mapValueMapperValue(valueMapperStates.get(id)));
+          label.appendChild(value);
+        }
       }
       ports.appendChild(row);
     });
@@ -3264,6 +3332,11 @@ function createWidget(type, label, x, y, forcedId) {
     ports.classList.add("up-down-button-output-ports");
     const pressRow = el.querySelector(".up-down-button-press-row");
     if (pressRow) pressRow.appendChild(ports);
+    else el.appendChild(ports);
+  } else if (type === "const") {
+    ports.classList.add("const-output-ports");
+    const constBody = el.querySelector(".const-body");
+    if (constBody) constBody.appendChild(ports);
     else el.appendChild(ports);
   } else {
     el.appendChild(ports);
@@ -3319,7 +3392,6 @@ function removeWidget(id, force = false) {
   frequencyDividerStates.delete(id);
   absStates.delete(id);
   valueMapperStates.delete(id);
-  audioToValueStates.delete(id);
   stopClockTimer(id);
   clockStates.delete(id);
   stopLfoTimer(id);
@@ -3330,6 +3402,7 @@ function removeWidget(id, force = false) {
   soundFontPlayerStates.delete(id);
   detuneStates.delete(id);
   audioOutStates.delete(id);
+  audioInputLinkStates.delete(id);
   gainStates.delete(id);
   filterStates.delete(id);
   espEffectStates.delete(id);
@@ -3385,7 +3458,7 @@ function loadInitTemplate() {
   const outputLinkEl = pages.generator.canvasContentEl.querySelector(
     '[data-widget-type="audio-output-link"]'
   );
-  ["inL", "inR"].forEach((portId) => {
+  ["in1", "in2"].forEach((portId) => {
     connectionCounter += 1;
     connections.push({
       id: `conn-${connectionCounter}`,
@@ -3415,8 +3488,8 @@ function loadInitTemplate() {
   outDefs.forEach((def) => {
     const outEl = createWidget(def.type, def.label, def.x, def.y);
     [
-      { portId: "outL", channel: "left" },
-      { portId: "outR", channel: "right" },
+      { portId: "out1", channel: "left" },
+      { portId: "out2", channel: "right" },
     ].forEach(({ portId, channel }) => {
       connectionCounter += 1;
       connections.push({
@@ -3501,6 +3574,7 @@ function layoutPortsGrid(portsEl) {
   const outRows = Array.from(portsEl.querySelectorAll(".port-row-out"));
   const isSoundFontPlayer = portsEl.closest('[data-widget-type="soundfont-player"]') !== null;
   const isMidiIn = portsEl.closest('[data-widget-type="midi-in"]') !== null;
+  const isAudioInputLink = portsEl.closest('[data-widget-type="audio-input-link"]') !== null;
 
   outRows.forEach((row) => {
     row.style.position = "";
@@ -3526,19 +3600,22 @@ function layoutPortsGrid(portsEl) {
   const multiplexerBody = portsEl.closest('[data-widget-type="multiplexer"]')?.querySelector('.multiplexer-switch-body');
   const multiplexerControl = multiplexerBody?.querySelector('.multiplexer-switch');
   const multiplexerRows = inRows.filter((row) => row.classList.contains("mux-in-row"));
+  const paddingTop = parseFloat(getComputedStyle(portsEl).paddingTop) || 0;
   if (multiplexerBody && multiplexerControl && multiplexerRows.length > 0) {
     const firstMultiplexerRow = inRows.indexOf(multiplexerRows[0]);
-    const paddingTop = parseFloat(getComputedStyle(portsEl).paddingTop) || 0;
     multiplexerBody.style.top = `${paddingTop + firstMultiplexerRow * rowHeight}px`;
     multiplexerControl.style.height = `${rowHeight * multiplexerRows.length}px`;
     multiplexerControl.style.setProperty("--switch-offset", `${Math.max(0, (rowHeight - 12) / 2)}px`);
   }
   const outputRowStart = isMidiIn ? 2 : 0;
-  const outputTop = isSoundFontPlayer ? -(portsEl.previousElementSibling?.offsetHeight || 0) : outputRowStart * rowHeight;
+  const outputTop = isSoundFontPlayer
+    ? -(portsEl.previousElementSibling?.offsetHeight || 0)
+    : paddingTop + outputRowStart * rowHeight;
+  const outputCenterOffset = isAudioInputLink ? Math.max(0, (rowHeight - 14) / 2) : 0;
   portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowStart + outRows.length)}px`;
   outRows.forEach((row, i) => {
     row.style.position = "absolute";
-    row.style.top = `${outputTop + i * rowHeight}px`;
+    row.style.top = `${outputTop + outputCenterOffset + i * rowHeight}px`;
     row.style.right = "0";
   });
 }
@@ -4409,6 +4486,17 @@ const midiInChannelSelect = document.getElementById("midiInChannelSelect");
 const midiInOverflowModeSelect = document.getElementById("midiInOverflowModeSelect");
 let pendingMidiInId = null;
 
+function midiInVoiceLimit(widgetId) {
+  return isFxMidiIn(widgetId) ? 1 : MIDI_IN_MAX_VOICES;
+}
+
+function isFxMidiIn(widgetId) {
+  const el = document.getElementById(widgetId);
+  return el
+    ? pages.fx.canvasContentEl.contains(el)
+    : canvasContent === pages.fx.canvasContentEl;
+}
+
 const omniOption = document.createElement("option");
 omniOption.value = "omni";
 omniOption.textContent = "Omni (all channels)";
@@ -4441,10 +4529,16 @@ function updateMidiInControls(widgetId) {
   const state = midiInStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
+  const voiceLimit = midiInVoiceLimit(widgetId);
+  state.voices = clamp(Math.round(state.voices), MIDI_IN_MIN_VOICES, voiceLimit);
+  if (isFxMidiIn(widgetId)) state.overflowMode = "ignore";
   const mono = state.voices === 1;
   const voicesSlider = el.querySelector('[data-role="midi-in-voices-slider"]');
   const voicesValue = el.querySelector('[data-role="midi-in-voices-value"]');
-  if (voicesSlider) voicesSlider.value = String(state.voices);
+  if (voicesSlider) {
+    voicesSlider.max = String(voiceLimit);
+    voicesSlider.value = String(state.voices);
+  }
   if (voicesValue) voicesValue.textContent = String(state.voices);
   const glideToggle = el.querySelector('[data-role="midi-in-glide-switch"]');
   const glideTimeSlider = el.querySelector('[data-role="midi-in-glide-time-slider"]');
@@ -4466,7 +4560,7 @@ function updateMidiInControls(widgetId) {
 function setMidiInVoices(widgetId, voices) {
   const state = midiInStates.get(widgetId);
   if (!state) return;
-  state.voices = clamp(Math.round(voices), MIDI_IN_MIN_VOICES, MIDI_IN_MAX_VOICES);
+  state.voices = clamp(Math.round(voices), MIDI_IN_MIN_VOICES, midiInVoiceLimit(widgetId));
   resizeVoiceSlots(widgetId, state.voices);
   updateMidiInControls(widgetId);
   refreshVoiceGroups();
@@ -4494,7 +4588,11 @@ function openMidiInSettings(widgetId) {
   if (!state) return;
   pendingMidiInId = widgetId;
   midiInChannelSelect.value = state.channel === null ? "omni" : String(state.channel);
+  const fxMidiIn = isFxMidiIn(widgetId);
+  if (fxMidiIn) state.overflowMode = "ignore";
   midiInOverflowModeSelect.value = state.overflowMode;
+  midiInOverflowModeSelect.disabled = fxMidiIn;
+  midiInOverflowModeSelect.closest(".modal-field")?.classList.toggle("disabled", fxMidiIn);
   midiInSettingsOverlay.classList.remove("hidden");
 }
 
@@ -4515,7 +4613,9 @@ document.getElementById("midiInSettingsSave").addEventListener("click", () => {
   if (state) {
     const value = midiInChannelSelect.value;
     state.channel = value === "omni" ? null : parseInt(value, 10);
-    state.overflowMode = midiInOverflowModeSelect.value === "ignore" ? "ignore" : "steal-oldest";
+    state.overflowMode = isFxMidiIn(pendingMidiInId) || midiInOverflowModeSelect.value === "ignore"
+      ? "ignore"
+      : "steal-oldest";
     savePresetNow();
   }
   closeMidiInSettings();
@@ -5562,11 +5662,12 @@ function renderMultiplierPorts(widgetId, portsEl) {
     portsEl.appendChild(createPortRow(widgetId, { id: `in${i}`, label: `In ${i}` }, "in", "multiplier"));
   }
 
-  const outRow = createPortRow(widgetId, { id: "value", label: "Value" }, "out", "multiplier");
+  const outRow = createPortRow(widgetId, { id: "value", label: "" }, "out", "multiplier");
+  outRow.classList.add("multiplier-output-row");
   const readout = document.createElement("span");
   readout.className = "port-value";
   readout.dataset.role = "multiplier-readout";
-  readout.textContent = state.audioMode ? "🔊 Audio" : formatNumber(multiplierProduct(state));
+  readout.textContent = formatNumber(multiplierProduct(state));
   outRow.appendChild(readout);
   portsEl.appendChild(outRow);
   layoutPortsGrid(portsEl);
@@ -5586,14 +5687,9 @@ function recomputeMultiplier(widgetId) {
   if (!state || !el) return;
   const readout = el.querySelector('[data-role="multiplier-readout"]');
 
-  if (state.audioMode) {
-    if (readout) readout.textContent = "🔊 Audio";
-    return;
-  }
-
   const product = multiplierProduct(state);
   if (readout) readout.textContent = formatNumber(product);
-  propagate(widgetId, "value", product);
+  if (!state.audioMode) propagate(widgetId, "value", product);
 }
 
 
@@ -5662,6 +5758,34 @@ function refreshControlGraph() {
   buttonStates.forEach((state, id) => push(id, "value", buttonCurrentOutput(state)));
   upDownButtonStates.forEach((state, id) => push(id, "value", upDownButtonCurrentOutput(state)));
   sources.forEach(({ widgetId, portId, value }) => propagate(widgetId, portId, value));
+
+  // Source values are replayed above. Re-apply direct control-source voltage
+  // after replay so a loaded 10 V Knob immediately selects the bottom row.
+  multiplexerStates.forEach((state, muxId) => {
+    const connection = connections.find(
+      (c) => c.to.widgetId === muxId && c.to.portId === "select"
+    );
+    if (!connection) return;
+    const sourceEl = document.getElementById(connection.from.widgetId);
+    const sourceType = sourceEl?.dataset.widgetType;
+    let value = null;
+    if (sourceType === "knob" && connection.from.portId === "voltage") {
+      const sourceState = knobStates.get(connection.from.widgetId);
+      if (sourceState) value = mapKnobValue(sourceState);
+    } else if (sourceType === "const" && connection.from.portId === "value") {
+      value = constStates.get(connection.from.widgetId)?.value ?? null;
+    } else if (sourceType === "button" && connection.from.portId === "value") {
+      const sourceState = buttonStates.get(connection.from.widgetId);
+      if (sourceState) value = buttonCurrentOutput(sourceState);
+    } else if (sourceType === "up-down-button" && connection.from.portId === "value") {
+      const sourceState = upDownButtonStates.get(connection.from.widgetId);
+      if (sourceState) value = upDownButtonCurrentOutput(sourceState);
+    }
+    if (Number.isFinite(value)) {
+      state.cvVolts = clamp(value, 0, CV_MAX_VOLTS);
+      multiplexerSetActiveIndex(muxId, multiplexerSelectFromCv(state.cvVolts, state.inputCount));
+    }
+  });
 
   const derivedTypes = new Set(["multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "detune"]);
   const pending = new Set(
@@ -5856,11 +5980,12 @@ function renderAdderPorts(widgetId, portsEl) {
     portsEl.appendChild(createPortRow(widgetId, { id: `in${i}`, label: `In ${i}` }, "in", "adder"));
   }
 
-  const outRow = createPortRow(widgetId, { id: "value", label: "Value" }, "out", "adder");
+  const outRow = createPortRow(widgetId, { id: "value", label: "" }, "out", "adder");
+  outRow.classList.add("adder-output-row");
   const readout = document.createElement("span");
   readout.className = "port-value";
   readout.dataset.role = "adder-readout";
-  readout.textContent = state.audioMode ? "🔊 Audio" : formatNumber(adderSum(state));
+  readout.textContent = formatNumber(adderSum(state));
   outRow.appendChild(readout);
   portsEl.appendChild(outRow);
   layoutPortsGrid(portsEl);
@@ -5880,14 +6005,9 @@ function recomputeAdder(widgetId) {
   if (!state || !el) return;
   const readout = el.querySelector('[data-role="adder-readout"]');
 
-  if (state.audioMode) {
-    if (readout) readout.textContent = "🔊 Audio";
-    return;
-  }
-
   const sum = adderSum(state);
   if (readout) readout.textContent = formatNumber(sum);
-  propagate(widgetId, "value", sum);
+  if (!state.audioMode) propagate(widgetId, "value", sum);
 }
 
 
@@ -5969,11 +6089,12 @@ function renderDividePorts(widgetId, portsEl) {
   portsEl.appendChild(createPortRow(widgetId, { id: "in1", label: "In 1" }, "in", "divide"));
   portsEl.appendChild(createPortRow(widgetId, { id: "in2", label: "In 2" }, "in", "divide"));
 
-  const outRow = createPortRow(widgetId, { id: "value", label: "Value" }, "out", "divide");
+  const outRow = createPortRow(widgetId, { id: "value", label: "" }, "out", "divide");
+  outRow.classList.add("divide-output-row");
   const readout = document.createElement("span");
   readout.className = "port-value";
   readout.dataset.role = "divide-readout";
-  readout.textContent = state.audioMode ? "🔊 Audio" : formatNumber(divideQuotient(state));
+  readout.textContent = formatNumber(divideQuotient(state));
   outRow.appendChild(readout);
   portsEl.appendChild(outRow);
   layoutPortsGrid(portsEl);
@@ -5992,14 +6113,9 @@ function recomputeDivide(widgetId) {
   if (!state || !el) return;
   const readout = el.querySelector('[data-role="divide-readout"]');
 
-  if (state.audioMode) {
-    if (readout) readout.textContent = "🔊 Audio";
-    return;
-  }
-
   const quotient = divideQuotient(state);
   if (readout) readout.textContent = formatNumber(quotient);
-  propagate(widgetId, "value", quotient);
+  if (!state.audioMode) propagate(widgetId, "value", quotient);
 }
 
 
@@ -6021,11 +6137,26 @@ function updateDivideMode(widgetId) {
 }
 
 const frequencyDividerStates = new Map();
+const FREQUENCY_DIVIDER_STEPS = [1, 2, 4, 8, 16];
+
+function nearestFrequencyDivider(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 2;
+  return FREQUENCY_DIVIDER_STEPS.reduce((nearest, step) =>
+    Math.abs(step - numeric) < Math.abs(nearest - numeric) ? step : nearest
+  );
+}
+
+function frequencyDividerStepIndex(value) {
+  return FREQUENCY_DIVIDER_STEPS.indexOf(nearestFrequencyDivider(value));
+}
 
 function recomputeFrequencyDivider(widgetId, voiceIndex) {
   const state = frequencyDividerStates.get(widgetId);
   if (!state || state.audioMode) return;
-  propagate(widgetId, "hz", state.frequency / state.divider, voiceIndex);
+  const divider = nearestFrequencyDivider(state.divider);
+  const outputCv = clamp(state.cv - Math.log2(divider), 0, CV_MAX_VOLTS);
+  propagate(widgetId, "cv", outputCv, voiceIndex);
 }
 
 
@@ -6034,7 +6165,8 @@ function recomputeFrequencyDivider(widgetId, voiceIndex) {
 function updateFrequencyDividerMode(widgetId) {
   const state = frequencyDividerStates.get(widgetId);
   if (!state) return;
-  updateDualModeAudioNode(widgetId, "frequency-divider", state, ["hz", "divider"], { divider: state.divider });
+  state.divider = nearestFrequencyDivider(state.divider);
+  updateDualModeAudioNode(widgetId, "frequency-divider", state, ["cv", "divider"], { divider: state.divider });
   recomputeFrequencyDivider(widgetId);
   updateFrequencyDividerVisual(widgetId);
 }
@@ -6044,7 +6176,7 @@ function updateFrequencyDividerVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   const slider = el.querySelector('[data-role="frequency-divider-slider"]');
-  if (slider) slider.value = String(state.divider);
+  if (slider) slider.value = String(frequencyDividerStepIndex(state.divider));
   const value = el.querySelector('[data-role="frequency-divider-value"]');
   if (value) value.textContent = String(state.divider);
 }
@@ -6053,7 +6185,12 @@ const absStates = new Map();
 
 function recomputeAbs(widgetId, voiceIndex) {
   const state = absStates.get(widgetId);
-  if (state && !state.audioMode) propagate(widgetId, "value", Math.abs(state.value), voiceIndex);
+  if (!state) return;
+  const result = Math.abs(state.value);
+  const el = document.getElementById(widgetId);
+  const readout = el?.querySelector('[data-role="abs-readout"]');
+  if (readout) readout.textContent = formatNumber(result);
+  if (!state.audioMode) propagate(widgetId, "value", result, voiceIndex);
 }
 
 
@@ -6100,12 +6237,11 @@ function updateValueMapperVisual(widgetId) {
   const state = valueMapperStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
-  const readout = el.querySelector('[data-role="value-mapper-readout"]');
-  if (readout) {
-    readout.textContent = state.audioMode
-      ? "🔊 Audio"
-      : `In ${formatNumber(state.value)} → Out ${formatNumber(mapValueMapperValue(state))}`;
-  }
+  const inValue = el.querySelector('[data-role="value-mapper-in-value"]');
+  const outValue = el.querySelector('[data-role="value-mapper-out-value"]');
+  const mappedValue = mapValueMapperValue(state);
+  if (inValue) inValue.textContent = state.audioMode ? "Audio" : formatNumber(state.value);
+  if (outValue) outValue.textContent = state.audioMode ? "Audio" : formatNumber(mappedValue);
 }
 
 
@@ -6228,17 +6364,10 @@ document.getElementById("valueMapperSettingsSave").addEventListener("click", () 
   closeValueMapperSettings();
 });
 
-const audioToValueStates = new Map();
 
 
 
 
-setInterval(() => {
-  audioToValueStates.forEach((state, id) => {
-    state.value = audioEngine.getAudioValue(id);
-    propagate(id, "value", state.value);
-  });
-}, 3);
 
 
 
@@ -6345,15 +6474,44 @@ function restartClockTimer(widgetId) {
 
 const lfoStates = new Map();
 const LFO_TICK_MS = 30;
+const LFO_MAX_RATE_HZ = 50;
+const lfoSettingsOverlay = document.getElementById("lfoSettingsOverlay");
+const lfoMaxRateInput = document.getElementById("lfoMaxRateInput");
+let pendingLfoId = null;
 
 const LFO_SLIDER_CONFIG = {
-  rate: { min: 0.01, max: 20, step: 0.01 },
+  rate: { min: 0, max: LFO_MAX_RATE_HZ, step: 0.01 },
   amplitude: { min: 0, max: 10, step: 0.01 }, 
   phase: { min: -180, max: 180, step: 1 },
 };
 
 const LFO_PHASE_DETENTS = [-180, -90, 0, 90, 180];
-const LFO_PHASE_SNAP_RANGE = 4; 
+const LFO_PHASE_SNAP_RANGE = 4;
+
+function closeLfoSettings() {
+  lfoSettingsOverlay.classList.add("hidden");
+  pendingLfoId = null;
+}
+
+function setLfoMaxRate(widgetId, maxRate) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  state.maxRate = clamp(Number(maxRate) || 0, 0, LFO_MAX_RATE_HZ);
+  if (state.rate > state.maxRate) state.rate = state.maxRate;
+  audioEngine.setParam(widgetId, "maxRate", state.maxRate);
+  audioEngine.setParam(widgetId, "rate", state.rate);
+  updateLfoVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { maxRate: state.maxRate, rate: state.rate });
+}
+
+lfoSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === lfoSettingsOverlay) closeLfoSettings();
+});
+document.getElementById("lfoSettingsCancel").addEventListener("click", closeLfoSettings);
+document.getElementById("lfoSettingsSave").addEventListener("click", () => {
+  if (pendingLfoId !== null) setLfoMaxRate(pendingLfoId, lfoMaxRateInput.value);
+  closeLfoSettings();
+});
 
 function ensurePhaseDetentDatalist() {
   if (document.getElementById("lfo-phase-detents")) return;
@@ -6569,6 +6727,9 @@ function updateLfoVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
 
+  const rateSlider = el.querySelector('[data-role="lfo-rate-slider"]');
+  if (rateSlider) rateSlider.max = String(state.maxRate);
+
   ["rate", "amplitude", "phase"].forEach((portId) => {
     const slider = el.querySelector(`[data-role="lfo-${portId}-slider"]`);
     if (slider) slider.value = String(state[portId]);
@@ -6735,6 +6896,7 @@ const SCOPE_CH2_COLOR = "#f59e0b";
 
 
 const SCOPE_CV_DISPLAY_VOLTS = 12;
+const SCOPE_AUDIO_DISPLAY_VOLTS = 5;
 
 function drawOscilloscopeTrace(ctx2d, waveform, w, toY) {
   ctx2d.beginPath();
@@ -6759,7 +6921,10 @@ function drawOscilloscope(canvas, waveform1, waveform2, cvMode) {
   
   
   
-  const range = cvMode ? SCOPE_CV_DISPLAY_VOLTS : 1;
+  // Audio signals use the engine's nominal +/-5 V domain. Using Web Audio's
+  // conventional +/-1 range here clipped every normal full-level waveform.
+  // CV stays wider so regular 0-10 V control signals remain fully visible.
+  const range = cvMode ? SCOPE_CV_DISPLAY_VOLTS : SCOPE_AUDIO_DISPLAY_VOLTS;
   const toY = (v) => (1 - clamp(v, -range, range) / range) * (h / 2);
 
   if (cvMode) {
@@ -7032,13 +7197,14 @@ function setOscillatorWaveType(widgetId, waveType) {
 
 
 function mapWaveformValue(value) {
-  const idx = clamp(Math.floor(value / 2), 0, WAVE_TYPE_BUTTONS.length - 1);
+  const idx = clamp(Math.floor(value / (CV_MAX_VOLTS / WAVE_TYPE_BUTTONS.length)), 0, WAVE_TYPE_BUTTONS.length - 1);
   return WAVE_TYPE_BUTTONS[idx].id;
 }
 
 
 
 const audioOutStates = new Map();
+const audioInputLinkStates = new Map();
 
 function buildAudioMeterTrack(role) {
   const track = document.createElement("div");
@@ -7072,6 +7238,27 @@ function setAudioOutParams(widgetId, params, sendLive = true) {
   audioEngine.setParam(widgetId, "gain", state.gain);
   updateAudioOutVisual(widgetId);
   if (sendLive) sendLiveParamUpdateThrottled(widgetId, { muted: state.muted, gain: state.gain });
+}
+
+function updateAudioInputLinkVisual(widgetId) {
+  const state = audioInputLinkStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  state.gains.forEach((gain, channel) => {
+    const slider = el.querySelector(`[data-role="audio-input-link-gain-${channel}"]`);
+    const value = el.querySelector(`[data-role="audio-input-link-gain-value-${channel}"]`);
+    if (slider) slider.value = String(gain);
+    if (value) value.textContent = `${formatNumber(gain)} V`;
+  });
+}
+
+function setAudioInputLinkGain(widgetId, channel, value, sendLive = true) {
+  const state = audioInputLinkStates.get(widgetId);
+  if (!state || channel < 0 || channel >= LINK_BUS_COUNT) return;
+  state.gains[channel] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, `gain${channel + 1}`, state.gains[channel]);
+  updateAudioInputLinkVisual(widgetId);
+  if (sendLive) sendLiveParamUpdateThrottled(widgetId, { [`gain${channel + 1}`]: state.gains[channel] });
 }
 
 
@@ -7244,6 +7431,20 @@ const FILTER_TYPE_BUTTONS = [
   { id: "lowpass", label: "LP" },
   { id: "highpass", label: "HP" },
   { id: "bandpass", label: "BP" },
+];
+
+const CURTIS_FILTER_TYPE_LABELS = {
+  lp24: "24 dB Lowpass",
+  lp12: "12 dB Lowpass",
+  bp12: "12 dB Bandpass",
+  hp12: "12 dB Highpass",
+};
+
+const CURTIS_FILTER_TYPE_BUTTONS = [
+  { id: "lp24", label: "LP24" },
+  { id: "lp12", label: "LP12" },
+  { id: "bp12", label: "BP12" },
+  { id: "hp12", label: "HP12" },
 ];
 
 function setFilterType(widgetId, filterType) {
@@ -7845,6 +8046,15 @@ function multiplexerSelectFromCv(volts, inputCount) {
   return idx;
 }
 
+function setLfoManualRate(widgetId, hz) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  state.rate = clamp(Number(hz) || 0, 0, state.maxRate);
+  audioEngine.setParam(widgetId, "rate", state.rate);
+  updateLfoVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { rate: state.rate });
+}
+
 function multiplexerHasCvConnection(widgetId) {
   return connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
 }
@@ -7895,8 +8105,10 @@ function publishMultiplexerValue(widgetId) {
 function multiplexerSetActiveIndex(widgetId, idx) {
   const state = multiplexerStates.get(widgetId);
   if (!state) return;
-  state.activeIndex = idx;
-  audioEngine.setParam(widgetId, "select", idx);
+  const nextIndex = clamp(Math.round(Number(idx) || 0), 0, Math.max(0, state.inputCount - 1));
+  const changed = state.activeIndex !== nextIndex;
+  state.activeIndex = nextIndex;
+  if (changed) audioEngine.setParam(widgetId, "select", state.activeIndex);
   updateMultiplexerVisual(widgetId);
   publishMultiplexerValue(widgetId);
 }
@@ -7905,8 +8117,12 @@ function updateMultiplexerVisual(widgetId) {
   const state = multiplexerStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
+  const cvConnected = multiplexerHasCvConnection(widgetId);
   const selector = el.querySelector(".multiplexer-switch");
-  if (selector) selector.classList.toggle("cv-connected", multiplexerHasCvConnection(widgetId));
+  if (selector) selector.classList.toggle("cv-connected", cvConnected);
+  if (cvConnected && Number.isFinite(state.cvVolts)) {
+    state.activeIndex = multiplexerSelectFromCv(state.cvVolts, state.inputCount);
+  }
   el.querySelectorAll(".mux-in-row").forEach((row) => {
     row.classList.toggle("active", parseInt(row.dataset.muxIndex, 10) === state.activeIndex);
   });
@@ -8267,6 +8483,9 @@ document.getElementById("mixerSettingsSave").addEventListener("click", () => {
 
 const multiplexerSettingsOverlay = document.getElementById("multiplexerSettingsOverlay");
 const multiplexerCountInput = document.getElementById("multiplexerCountInput");
+const multiplexerSoftFadeInput = document.getElementById("multiplexerSoftFadeInput");
+const MULTIPLEXER_DEFAULT_SOFT_FADE_MS = 5;
+const MULTIPLEXER_MAX_SOFT_FADE_MS = 100;
 let pendingMultiplexerId = null;
 
 function openMultiplexerSettings(widgetId) {
@@ -8274,6 +8493,7 @@ function openMultiplexerSettings(widgetId) {
   if (!state) return;
   pendingMultiplexerId = widgetId;
   multiplexerCountInput.value = state.inputCount;
+  multiplexerSoftFadeInput.value = state.softFadeMs;
   multiplexerSettingsOverlay.classList.remove("hidden");
 }
 
@@ -8295,6 +8515,9 @@ document.getElementById("multiplexerSettingsSave").addEventListener("click", () 
     let count = parseInt(multiplexerCountInput.value, 10);
     if (Number.isNaN(count)) count = MULTIPLEXER_MIN_INPUTS;
     count = clamp(count, MULTIPLEXER_MIN_INPUTS, MULTIPLEXER_MAX_INPUTS);
+    let softFadeMs = parseFloat(multiplexerSoftFadeInput.value);
+    if (Number.isNaN(softFadeMs)) softFadeMs = MULTIPLEXER_DEFAULT_SOFT_FADE_MS;
+    softFadeMs = clamp(softFadeMs, 0, MULTIPLEXER_MAX_SOFT_FADE_MS);
 
     if (count < state.inputCount) {
       for (let i = count + 1; i <= state.inputCount; i += 1) {
@@ -8302,7 +8525,10 @@ document.getElementById("multiplexerSettingsSave").addEventListener("click", () 
       }
     }
     state.inputCount = count;
+    state.softFadeMs = softFadeMs;
     if (state.manualSelect > count - 1) state.manualSelect = count - 1;
+    audioEngine.setParam(pendingMultiplexerId, "softFadeMs", softFadeMs);
+    sendLiveParamUpdate(pendingMultiplexerId, { softFadeMs });
 
     const el = document.getElementById(pendingMultiplexerId);
     const portsEl = el ? el.querySelector(".widget-ports") : null;
@@ -9381,9 +9607,22 @@ function startConnectionDrag(e, fromDot) {
 
 
 function propagate(widgetId, portId, value, voiceIndex) {
+  const sourceKind = getPortKind(widgetId, portId, "out");
   connections
     .filter((c) => c.from.widgetId === widgetId && c.from.portId === portId)
-    .forEach((c) => deliverToWidget(c.to.widgetId, c.to.portId, value, voiceIndex));
+    .forEach((c) => {
+      // Audio sources are sampled by tickDebugVoltmeterAudioSources(). Do not
+      // also push the parallel control-domain value into these displays: an
+      // LFO would then make the needle alternate between two independent
+      // sample paths and appear to flicker.
+      if (sourceKind === "audio" && c.to.portId === "in") {
+        const target = document.getElementById(c.to.widgetId);
+        if (target && (target.dataset.widgetType === "debug" || target.dataset.widgetType === "voltmeter")) {
+          return;
+        }
+      }
+      deliverToWidget(c.to.widgetId, c.to.portId, value, voiceIndex);
+    });
 }
 
 function deliverToWidget(widgetId, portId, value, voiceIndex) {
@@ -9392,7 +9631,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   if (el.dataset.widgetType === "midi-in" && portId === "voices") {
     const normalized = clamp(Number(value) || 0, 0, CV_MAX_VOLTS) / CV_MAX_VOLTS;
-    setMidiInVoices(widgetId, 1 + normalized * (MIDI_IN_MAX_VOICES - 1));
+    setMidiInVoices(widgetId, 1 + normalized * (midiInVoiceLimit(widgetId) - 1));
   } else if (el.dataset.widgetType === "midi-in" && portId === "glide") {
     setMidiInGlide(widgetId, Number(value) >= GATE_THRESHOLD_VOLTS);
   } else if (el.dataset.widgetType === "midi-in" && portId === "glideTime") {
@@ -9469,11 +9708,11 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const state = frequencyDividerStates.get(widgetId);
     if (state) {
       const num = Number(value);
-      if (portId === "hz" && !Number.isNaN(num)) {
-        state.frequency = num;
+      if ((portId === "cv" || portId === "hz") && !Number.isNaN(num)) {
+        state.cv = clamp(num, 0, CV_MAX_VOLTS);
         recomputeFrequencyDivider(widgetId, voiceIndex);
       } else if (portId === "divider") {
-        state.divider = clamp(Math.round(Number.isNaN(num) ? 1 : num), 1, 128);
+        state.divider = nearestFrequencyDivider(num);
         updateFrequencyDividerVisual(widgetId);
         sendLiveParamUpdateThrottled(widgetId, { divider: state.divider });
         
@@ -9527,8 +9766,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       const num = Number(value);
       if (wired) {
         const volts = Number.isNaN(num) ? 0 : clamp(num, 0, CV_MAX_VOLTS);
+        state.cvVolts = volts;
         multiplexerSetActiveIndex(widgetId, multiplexerSelectFromCv(volts, state.inputCount));
       } else {
+        state.cvVolts = null;
         const idx = clamp(Number.isNaN(num) ? 0 : Math.round(num), 0, Math.max(0, state.inputCount - 1));
         state.manualSelect = idx;
         sendLiveParamUpdateThrottled(widgetId, { select: idx });
@@ -9564,7 +9805,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const state = lfoStates.get(widgetId);
     if (state) {
       const num = Number(value);
-      state.rate = Number.isNaN(num) ? 0 : Math.max(0, num);
+      // Connected CV is 0-10 V and maps linearly to the configured max rate.
+      state.rate = Number.isNaN(num) ? 0 : clamp(num, 0, CV_MAX_VOLTS) * state.maxRate / CV_MAX_VOLTS;
       audioEngine.setParam(widgetId, "rate", state.rate);
       updateLfoVisual(widgetId);
       sendLiveParamUpdateThrottled(widgetId, { rate: state.rate });
@@ -9938,6 +10180,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "audio-input-link" && /^gain[1-8]$/.test(portId)) {
+    setAudioInputLinkGain(widgetId, Number(portId.slice(4)) - 1, value);
+  }
+
   if (el.dataset.widgetType === "gain" && portId === "amount") {
     const state = gainStates.get(widgetId);
     if (state) {
@@ -9961,7 +10207,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "filter" && (portId === "cutoff" || portId === "resonance")) {
+  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && (portId === "cutoff" || portId === "resonance")) {
     const state = filterStates.get(widgetId);
     if (state) {
       const num = Number(value);
@@ -9975,7 +10221,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   
   
-  if (el.dataset.widgetType === "filter" && portId === "global") {
+  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "global") {
     const state = filterStates.get(widgetId);
     if (state) {
       state.global = Number(value) >= GATE_THRESHOLD_VOLTS;
@@ -10371,6 +10617,7 @@ function routeMidiToWidgets(data) {
 
     if (data.midiType === "note_on") {
       if (state.voices <= 1) {
+        if (isFxMidiIn(id) && slotState.monoCurrentNote !== null) return;
         slotState.pendingRelease = false;
         slotState.holdCounter += 1;
         slotState.monoHeldNotes.set(data.note, { order: slotState.holdCounter, velocity: data.velocity });
@@ -10493,6 +10740,34 @@ function routeMidiToSoundFontPlayer(data) {
 
 
 
+function applyFilterWidgetParams(id, params, curtis = false) {
+  const state = filterStates.get(id);
+  if (!state || !params) return;
+  state.filterType = params.filterType || (curtis ? "lp24" : "lowpass");
+  state.cutoff = params.cutoff ?? 5;
+  state.cutoffMinHz = params.cutoffMinHz ?? 20;
+  state.cutoffMaxHz = params.cutoffMaxHz ?? 20000;
+  state.cutoffCurve = params.cutoffCurve === "linear" ? "linear" : "log";
+  state.resonance = params.resonance ?? 5;
+  state.resonanceMinQ = params.resonanceMinQ ?? 0.1;
+  state.resonanceMaxQ = params.resonanceMaxQ ?? 20;
+  state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
+  state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
+  state.global = params.global === true;
+  audioEngine.setParam(id, "filterType", state.filterType);
+  audioEngine.setParam(id, "cutoffMinHz", state.cutoffMinHz);
+  audioEngine.setParam(id, "cutoffMaxHz", state.cutoffMaxHz);
+  audioEngine.setParam(id, "cutoffCurve", state.cutoffCurve);
+  audioEngine.setParam(id, "resonanceMinQ", state.resonanceMinQ);
+  audioEngine.setParam(id, "resonanceMaxQ", state.resonanceMaxQ);
+  audioEngine.setParam(id, "resonanceCurve", state.resonanceCurve);
+  audioEngine.setParam(id, "coeffStride", state.coeffStride);
+  audioEngine.setParam(id, "cutoff", state.cutoff);
+  audioEngine.setParam(id, "resonance", state.resonance);
+  audioEngine.setParam(id, "global", state.global);
+  updateFilterVisual(id);
+}
+
 const WIDGET_ENGINES = {
   debug: {
     getParams: () => ({}),
@@ -10511,7 +10786,8 @@ const WIDGET_ENGINES = {
       const state = midiInStates.get(id);
       if (!state || !params) return;
       Object.assign(state, params);
-      state.voices = clamp(Math.round(state.voices ?? 1), MIDI_IN_MIN_VOICES, MIDI_IN_MAX_VOICES);
+      state.voices = clamp(Math.round(state.voices ?? 1), MIDI_IN_MIN_VOICES, midiInVoiceLimit(id));
+      if (isFxMidiIn(id)) state.overflowMode = "ignore";
       state.glide = state.glide === true;
       state.glideTime = clamp(Number(state.glideTime) || 0, 0, 2);
       resizeVoiceSlots(id, state.voices);
@@ -10668,7 +10944,7 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => {
       const state = frequencyDividerStates.get(id);
       if (!state || !params) return;
-      state.divider = clamp(Math.round(params.divider ?? 2), 1, 128);
+      state.divider = nearestFrequencyDivider(params.divider ?? 2);
       updateFrequencyDividerVisual(id);
       recomputeFrequencyDivider(id);
     },
@@ -10696,10 +10972,6 @@ const WIDGET_ENGINES = {
       state.listText = params.listText || "";
       updateValueMapperVisual(id);
     },
-  },
-  "audio-to-value": {
-    getParams: () => ({}),
-    applyParams: () => {},
   },
   clock: {
     getParams: (id) => {
@@ -10732,6 +11004,7 @@ const WIDGET_ENGINES = {
         ? {
             waveType: state.waveType,
             rate: state.rate,
+            maxRate: state.maxRate,
             amplitude: state.amplitude,
             phase: state.phase,
             zeroPointFixed: state.zeroPointFixed,
@@ -10746,7 +11019,8 @@ const WIDGET_ENGINES = {
       const state = lfoStates.get(id);
       if (!state || !params) return;
       state.waveType = params.waveType || "sine";
-      state.rate = params.rate ?? 2;
+      state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
+      state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
       state.amplitude = params.amplitude ?? CV_MAX_VOLTS;
       state.phase = clamp(params.phase ?? 0, -180, 180);
       state.zeroPointFixed = params.zeroPointFixed === true;
@@ -10759,6 +11033,7 @@ const WIDGET_ENGINES = {
       state.oneShotDone = true;
       state.oneShotAccum = 0;
       audioEngine.setParam(id, "waveType", state.waveType);
+      audioEngine.setParam(id, "maxRate", state.maxRate);
       audioEngine.setParam(id, "rate", state.rate);
       audioEngine.setParam(id, "amplitude", state.amplitude);
       audioEngine.setParam(id, "phase", state.phase);
@@ -10907,6 +11182,27 @@ const WIDGET_ENGINES = {
     getParams: (id) => ({ ...audioOutStates.get(id) }),
     applyParams: (id, params) => setAudioOutParams(id, params || {}, false),
   },
+  "audio-output-link": {
+    getParams: () => ({}),
+    applyParams: () => {},
+  },
+  "audio-input-link": {
+    getParams: (id) => {
+      const state = audioInputLinkStates.get(id);
+      return state ? { gains: [...state.gains] } : {};
+    },
+    applyParams: (id, params) => {
+      const state = audioInputLinkStates.get(id);
+      if (!state) return;
+      if (Array.isArray(params?.gains)) {
+        for (let channel = 0; channel < LINK_BUS_COUNT; channel += 1) {
+          state.gains[channel] = clamp(Number(params.gains[channel] ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
+          audioEngine.setParam(id, `gain${channel + 1}`, state.gains[channel]);
+        }
+      }
+      updateAudioInputLinkVisual(id);
+    },
+  },
   detune: {
     getParams: (id) => {
       const state = detuneStates.get(id);
@@ -10946,34 +11242,14 @@ const WIDGET_ENGINES = {
       const state = filterStates.get(id);
       return state ? { ...state } : {};
     },
-    applyParams: (id, params) => {
+    applyParams: (id, params) => applyFilterWidgetParams(id, params, false),
+  },
+  "curtis-filter": {
+    getParams: (id) => {
       const state = filterStates.get(id);
-      if (!state || !params) return;
-      state.filterType = params.filterType || "lowpass";
-      state.cutoff = params.cutoff ?? 5;
-      state.cutoffMinHz = params.cutoffMinHz ?? 20;
-      state.cutoffMaxHz = params.cutoffMaxHz ?? 20000;
-      state.cutoffCurve = params.cutoffCurve === "linear" ? "linear" : "log";
-      state.resonance = params.resonance ?? 5;
-      state.resonanceMinQ = params.resonanceMinQ ?? 0.1;
-      state.resonanceMaxQ = params.resonanceMaxQ ?? 20;
-      state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
-      
-      
-      state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
-      state.global = params.global === true;
-      audioEngine.setParam(id, "filterType", state.filterType);
-      audioEngine.setParam(id, "cutoffMinHz", state.cutoffMinHz);
-      audioEngine.setParam(id, "cutoffMaxHz", state.cutoffMaxHz);
-      audioEngine.setParam(id, "cutoffCurve", state.cutoffCurve);
-      audioEngine.setParam(id, "resonanceMinQ", state.resonanceMinQ);
-      audioEngine.setParam(id, "resonanceMaxQ", state.resonanceMaxQ);
-      audioEngine.setParam(id, "resonanceCurve", state.resonanceCurve);
-      audioEngine.setParam(id, "cutoff", state.cutoff);
-      audioEngine.setParam(id, "resonance", state.resonance);
-      audioEngine.setParam(id, "global", state.global);
-      updateFilterVisual(id);
+      return state ? { ...state } : {};
     },
+    applyParams: (id, params) => applyFilterWidgetParams(id, params, true),
   },
   ...Object.fromEntries(Object.keys(ESP_EFFECT_DEFAULTS).map((type) => [type, {
     getParams: (id) => ({ ...(espEffectStates.get(id) || ESP_EFFECT_DEFAULTS[type]) }),
@@ -11009,14 +11285,21 @@ const WIDGET_ENGINES = {
   multiplexer: {
     getParams: (id) => {
       const state = multiplexerStates.get(id);
-      return state ? { inputCount: state.inputCount, select: state.manualSelect } : {};
+      return state
+        ? { inputCount: state.inputCount, select: state.manualSelect, softFadeMs: state.softFadeMs }
+        : {};
     },
     applyParams: (id, params) => {
       const state = multiplexerStates.get(id);
       if (!state || !params) return;
       state.inputCount = clamp(params.inputCount || 2, MULTIPLEXER_MIN_INPUTS, MULTIPLEXER_MAX_INPUTS);
+      const softFadeMs = Number(params.softFadeMs ?? MULTIPLEXER_DEFAULT_SOFT_FADE_MS);
+      state.softFadeMs = Number.isFinite(softFadeMs)
+        ? clamp(softFadeMs, 0, MULTIPLEXER_MAX_SOFT_FADE_MS)
+        : MULTIPLEXER_DEFAULT_SOFT_FADE_MS;
       state.manualSelect = clamp(parseInt(params.select, 10) || 0, 0, state.inputCount - 1);
       audioEngine.setParam(id, "select", state.manualSelect);
+      audioEngine.setParam(id, "softFadeMs", state.softFadeMs);
       const el = document.getElementById(id);
       const portsEl = el ? el.querySelector(".widget-ports") : null;
       if (portsEl) renderMultiplexerPorts(id, portsEl);
@@ -11424,9 +11707,29 @@ function fitPageToView() {
 
 async function applyPresetData(data, { fitToView = false } = {}) {
   const pageData = normalizePresetData(data);
+  let removedAudioToValueWidgets = false;
+  ["generator", "fx"].forEach((name) => {
+    const page = pageData[name];
+    const removedIds = new Set();
+    page.widgets = page.widgets.filter((widget) => {
+      if (widget.type === "audio-to-value") {
+        removedIds.add(widget.id);
+        removedAudioToValueWidgets = true;
+        return false;
+      }
+      return true;
+    });
+    page.connections = page.connections.filter(
+      (connection) => !removedIds.has(connection.from.widgetId) && !removedIds.has(connection.to.widgetId)
+    );
+  });
   let migratedLfoAudioConnections = false;
   let migratedKnobAudioConnections = false;
   let migratedButtonAudioConnections = false;
+  let migratedConstAudioConnections = false;
+  let migratedFrequencyDividerCvConnections = false;
+  let migratedLinkBusConnections = false;
+  let migratedLinkBusWidgets = false;
   let migratedSoundFontMidiConnections = false;
   let migratedKnobValueConnections = false;
   let migratedOscilloscopeInConnections = false;
@@ -11451,6 +11754,14 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   
   ["generator", "fx"].forEach((name) => {
     pageData[name].widgets.forEach((w) => {
+      if (w.type === "audio-output-link" && w.label !== "To Master") {
+        w.label = "To Master";
+        migratedLinkBusWidgets = true;
+      }
+      if (w.type === "audio-input-link" && w.label !== "Audio Outputs") {
+        w.label = "Audio Outputs";
+        migratedLinkBusWidgets = true;
+      }
       const num = parseInt(String(w.id).replace("widget-", ""), 10);
       if (!Number.isNaN(num)) widgetCounter = Math.max(widgetCounter, num);
     });
@@ -11552,6 +11863,52 @@ async function applyPresetData(data, { fitToView = false } = {}) {
     }
   });
 
+  // Stereo page links became eight numbered mono buses. Preserve old presets
+  // by moving their L/R pair onto buses 1/2 before ports are reconnected.
+  connections.forEach((c) => {
+    const fromEl = document.getElementById(c.from.widgetId);
+    const toEl = document.getElementById(c.to.widgetId);
+    if (fromEl?.dataset.widgetType === "audio-input-link") {
+      if (c.from.portId === "outL") {
+        c.from.portId = "out1";
+        migratedLinkBusConnections = true;
+      } else if (c.from.portId === "outR") {
+        c.from.portId = "out2";
+        migratedLinkBusConnections = true;
+      }
+    }
+    if (toEl?.dataset.widgetType === "audio-output-link") {
+      if (c.to.portId === "inL") {
+        c.to.portId = "in1";
+        migratedLinkBusConnections = true;
+      } else if (c.to.portId === "inR") {
+        c.to.portId = "in2";
+        migratedLinkBusConnections = true;
+      }
+    }
+  });
+
+  connections.forEach((c) => {
+    const fromEl = document.getElementById(c.from.widgetId);
+    if (fromEl && fromEl.dataset.widgetType === "const" && c.from.portId === "audio") {
+      c.from.portId = "value";
+      migratedConstAudioConnections = true;
+    }
+  });
+
+  connections.forEach((c) => {
+    const fromEl = document.getElementById(c.from.widgetId);
+    const toEl = document.getElementById(c.to.widgetId);
+    if (fromEl?.dataset.widgetType === "frequency-divider" && c.from.portId === "hz") {
+      c.from.portId = "cv";
+      migratedFrequencyDividerCvConnections = true;
+    }
+    if (toEl?.dataset.widgetType === "frequency-divider" && c.to.portId === "hz") {
+      c.to.portId = "cv";
+      migratedFrequencyDividerCvConnections = true;
+    }
+  });
+
   
   
   
@@ -11580,7 +11937,7 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   
   
   pollAssetLoadProgress();
-  if (migratedLfoAudioConnections || migratedKnobAudioConnections || migratedButtonAudioConnections || migratedSoundFontMidiConnections || migratedKnobValueConnections || migratedOscilloscopeInConnections) {
+  if (removedAudioToValueWidgets || migratedLfoAudioConnections || migratedKnobAudioConnections || migratedButtonAudioConnections || migratedConstAudioConnections || migratedFrequencyDividerCvConnections || migratedLinkBusConnections || migratedLinkBusWidgets || migratedSoundFontMidiConnections || migratedKnobValueConnections || migratedOscilloscopeInConnections) {
     await saveToServer(currentPresetName);
   }
 }
@@ -11601,8 +11958,15 @@ async function loadPresetOnStartup() {
   audioStartBtn.disabled = false;
 }
 
-async function loadPresetByName(name) {
+async function loadPresetByName(name, { activate = true } = {}) {
   try {
+    if (activate) {
+      const selectUrl = name
+        ? `/api/preset/select?name=${encodeURIComponent(name)}`
+        : "/api/preset/select";
+      const selectRes = await fetch(selectUrl, { method: "POST" });
+      if (!selectRes.ok) throw new Error(`Select HTTP ${selectRes.status}`);
+    }
     const url = name ? `/api/preset?name=${encodeURIComponent(name)}` : "/api/preset";
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -11846,7 +12210,12 @@ function connectWs() {
     } catch (err) {
       return;
     }
-    if (data.type === "midi") {
+    if (data.type === "presetChanged") {
+      const incomingName = data.name || "";
+      if (incomingName !== (currentPresetName || "")) {
+        loadPresetByName(incomingName, { activate: false });
+      }
+    } else if (data.type === "midi") {
       appendLog(`[${data.time}] ${data.port}: ${data.message}`);
       routeMidiToWidgets(data);
       routeMidiToKnobs(data);
@@ -12064,6 +12433,24 @@ const menuOrthogonalCables = document.getElementById("menuOrthogonalCables");
 menuOrthogonalCables.checked = orthogonalCablesEnabled;
 menuOrthogonalCables.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
 menuOrthogonalCables.addEventListener("change", () => setOrthogonalCablesEnabled(menuOrthogonalCables.checked));
+
+const WIDGET_OPACITY_KEY = "espressynth.widgetOpacity";
+const menuWidgetOpacity = document.getElementById("menuWidgetOpacity");
+const menuWidgetOpacityValue = document.getElementById("menuWidgetOpacityValue");
+
+function setWidgetOpacity(percent, persist = true) {
+  const value = Math.min(100, Math.max(50, Number(percent) || 100));
+  const roundedValue = Math.round(value);
+  document.documentElement.style.setProperty("--widget-opacity", String(roundedValue / 100));
+  menuWidgetOpacity.value = String(roundedValue);
+  menuWidgetOpacityValue.textContent = `${roundedValue}%`;
+  if (persist) localStorage.setItem(WIDGET_OPACITY_KEY, String(roundedValue));
+}
+
+const savedWidgetOpacity = Number(localStorage.getItem(WIDGET_OPACITY_KEY));
+setWidgetOpacity(Number.isFinite(savedWidgetOpacity) ? savedWidgetOpacity : 100, false);
+menuWidgetOpacity.closest(".dropdown-range").addEventListener("click", (e) => e.stopPropagation());
+menuWidgetOpacity.addEventListener("input", () => setWidgetOpacity(menuWidgetOpacity.value));
 
 document.getElementById("logWindowClose").addEventListener("click", () => {
   setLogWindowVisible(false);

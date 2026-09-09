@@ -19,10 +19,12 @@
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
+#include "nodes/CurtisFilterNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/LinkNodes.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
@@ -73,6 +75,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
         // "cutoffCurve"/"resonanceCurve" are strings ("linear"/"log"), same
         // pattern as "filterType" below - see Graph.cpp's applyLiveParams.
         return nodes::filter::setParam(inst, name, value);
+
+    case NodeType::CurtisFilter:
+        return nodes::curtisfilter::setParam(inst, name, value);
 
     case NodeType::Gain:
         // "curve" ("linear"/"exponential") is a string, same pattern as
@@ -154,6 +159,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
         return nodes::output::setParam(inst, name, value);
+
+    case NodeType::AudioInputLink:
+        return nodes::link::setParam(inst, name, value);
 
     case NodeType::Knob:
         return nodes::knob::setParam(inst, name, value);

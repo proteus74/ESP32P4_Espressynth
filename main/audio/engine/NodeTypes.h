@@ -29,7 +29,6 @@ enum class NodeType : uint8_t
     FrequencyDivider,
     Abs,
     ValueMapper,
-    AudioToValue,
     Chorus,
     Delay,
     Reverb,
@@ -55,6 +54,7 @@ enum class NodeType : uint8_t
     ReverbLight,
     Hammond,
     Multiplexer,
+    CurtisFilter,
     Unknown,
 };
 
@@ -65,6 +65,7 @@ enum class WaveType : uint8_t
     Triangle,
     Sawtooth,
     Noise,
+    PinkNoise,
 };
 
 enum class FilterKind : uint8_t
@@ -72,6 +73,14 @@ enum class FilterKind : uint8_t
     LowPass,
     HighPass,
     BandPass,
+};
+
+enum class CurtisFilterMode : uint8_t
+{
+    LowPass24,
+    LowPass12,
+    BandPass12,
+    HighPass12,
 };
 
 // Mirrors esp_ae_eq_filter_type_t (managed_components/espressif__esp_audio_effects/
@@ -141,8 +150,6 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Abs;
     if (strcmp(typeStr, "value-mapper") == 0)
         return NodeType::ValueMapper;
-    if (strcmp(typeStr, "audio-to-value") == 0)
-        return NodeType::AudioToValue;
     if (strcmp(typeStr, "chorus") == 0)
         return NodeType::Chorus;
     if (strcmp(typeStr, "delay") == 0)
@@ -193,6 +200,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Hammond;
     if (strcmp(typeStr, "multiplexer") == 0)
         return NodeType::Multiplexer;
+    if (strcmp(typeStr, "curtis-filter") == 0)
+        return NodeType::CurtisFilter;
     return NodeType::Unknown;
 }
 
@@ -208,6 +217,8 @@ inline WaveType waveTypeFromString(const char *s)
         return WaveType::Sawtooth;
     if (strcmp(s, "noise") == 0)
         return WaveType::Noise;
+    if (strcmp(s, "pink-noise") == 0)
+        return WaveType::PinkNoise;
     return WaveType::Sine;
 }
 
@@ -220,6 +231,19 @@ inline FilterKind filterKindFromString(const char *s)
     if (strcmp(s, "bandpass") == 0)
         return FilterKind::BandPass;
     return FilterKind::LowPass;
+}
+
+inline CurtisFilterMode curtisFilterModeFromString(const char *s)
+{
+    if (s == nullptr)
+        return CurtisFilterMode::LowPass24;
+    if (strcmp(s, "lp12") == 0)
+        return CurtisFilterMode::LowPass12;
+    if (strcmp(s, "bp12") == 0 || strcmp(s, "bandpass") == 0)
+        return CurtisFilterMode::BandPass12;
+    if (strcmp(s, "hp12") == 0 || strcmp(s, "highpass") == 0)
+        return CurtisFilterMode::HighPass12;
+    return CurtisFilterMode::LowPass24;
 }
 
 inline EqFilterKind eqFilterKindFromString(const char *s)

@@ -19,24 +19,47 @@ namespace nodes::oscillator
 namespace
 {
 // Oscillator's "waveform" CV port (see PortTables.h): 0-10V split into 5
-// equal 2V bands, in WaveType enum order (Sine/Square/Triangle/Sawtooth/
-// Noise) - matches main.js's mapWaveformValue() 1:1. 10V itself must still
-// resolve to Noise (last band), not fall off the end.
+// equal bands, in WaveType enum order (Sine/Square/Triangle/Sawtooth/white
+// noise/pink noise) - matches main.js's mapWaveformValue() 1:1. 10V itself
+// must still resolve to pink noise (last band), not fall off the end.
 inline WaveType waveTypeFromCv(float volts)
 {
-    int idx = static_cast<int>(volts / (cv::kMaxVolts / 5.0f));
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 6.0f));
     if (idx < 0)
         idx = 0;
-    if (idx > 4)
-        idx = 4;
+    if (idx > 5)
+        idx = 5;
     switch (idx)
     {
     case 0: return WaveType::Sine;
     case 1: return WaveType::Square;
     case 2: return WaveType::Triangle;
     case 3: return WaveType::Sawtooth;
-    default: return WaveType::Noise;
+    case 4: return WaveType::Noise;
+    default: return WaveType::PinkNoise;
     }
+}
+
+// Audio cables normally require audio-rate pitch. Some nodes, such as a
+// FrequencyDivider fed by a held MIDI note, still produce one identical CV
+// value for the entire block. Detect that case once here so the oscillator can
+// use its normal one-Hz-calculation-per-block path.
+inline bool audioPortConstantForBlock(const NodeInstance &inst, int port, size_t frames, float &value)
+{
+    const float *samples = inst.inPorts[port];
+    if (samples == nullptr || frames == 0)
+    {
+        value = inst.controlValue[port];
+        return true;
+    }
+
+    value = samples[0];
+    for (size_t i = 1; i < frames; ++i)
+    {
+        if (samples[i] != value)
+            return false;
+    }
+    return true;
 }
 } // namespace
 
@@ -73,6 +96,9 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool pitchControlRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     const bool pitchControlFed = controlPortConnected(inst, 1);
     const bool tuneAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    float constantPitchCv = kCenterVolts;
+    const bool pitchAudioConstant = pitchAudioFed && audioPortConstantForBlock(inst, 1, frames, constantPitchCv);
+    const bool pitchNeedsAudioRate = (pitchAudioFed && !pitchAudioConstant) || pitchControlRamping;
     // "waveform" (port 3) is control-only too (see isControlOnlyInput) -
     // stays read once per block: an audio-rate switch between discrete
     // waveforms has no meaningful "signal shape" (unlike cutoff/pitch), it
@@ -106,12 +132,12 @@ inline void render(NodeInstance &inst, size_t frames)
         return;
     }
     const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
-    if (pitchAudioFed || pitchControlRamping || tuneAudioFed)
+    if (pitchNeedsAudioRate || tuneAudioFed)
     {
         for (size_t i = 0; i < frames; ++i)
         {
             const float pitchCv =
-                (pitchAudioFed || pitchControlRamping) ? portSample(inst, 1, i) : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts);
+                pitchNeedsAudioRate ? portSample(inst, 1, i) : (pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts));
             const float tuneVolts = tuneAudioFed ? portSample(inst, 2, i) : s.tuneVolts;
             const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * s.detuneMul;
             const float amp = baseAmp + cv::vcaGain(portSample(inst, 0, i), false);
@@ -122,7 +148,7 @@ inline void render(NodeInstance &inst, size_t frames)
         }
         return;
     }
-    const float pitchCv = pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts;
+    const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts);
     const float hz = cv::hzFromPitchCv(pitchCv + (s.tuneVolts - kCenterVolts)) * s.detuneMul;
     for (size_t i = 0; i < frames; ++i)
     {

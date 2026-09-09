@@ -27,6 +27,7 @@
 #include "nodes/AdsrNode.h"
 #include "nodes/ButtonNode.h"
 #include "nodes/ChorusNode.h"
+#include "nodes/CurtisFilterNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/HammondNode.h"
@@ -37,6 +38,7 @@
 struct WidgetSlot
 {
     char id[24] = {};
+    char label[48] = {};
     NodeType type = NodeType::Unknown;
     bool voiced = false;
     bool renderWhenIdle = false;
@@ -58,9 +60,9 @@ struct Edge
 
 // A non-audio-rate connection resolved at build time into a direct
 // (source widget) -> (target widget's control field) route: either one of
-// midi-in's frequency/gate/velocity "virtual" outputs, or a knob's/button's
-// mapped CC value targeting an arbitrary named param on the target
-// (paramName is only populated for Kind::Knob/Kind::Button - the three
+// midi-in's frequency/gate/velocity "virtual" outputs, a Const scalar, or a
+// knob's/button's mapped CC value targeting an arbitrary named param on the
+// target (paramName is only populated for Kind::Const/Kind::Knob/Kind::Button - the three
 // MidiIn kinds have a fixed, implicit target field per Graph::handleMidiEvent).
 struct ControlRoute
 {
@@ -73,14 +75,15 @@ struct ControlRoute
         MidiPitchCv, // MidiIn's "pitchCv" output: 1V/oct CV, see CvConventions.h
         Knob,        // Knob's "voltage" output (0-10V, mapped)
         KnobCc,      // Knob's "cc" output (raw 0-127, unmapped)
+        Const,       // Const's scalar "value" output
         Button,
         UpDownButton,
     };
 
-    uint16_t sourceWidget = 0; // midi-in, knob, or button widget index
+    uint16_t sourceWidget = 0; // midi-in, const, knob, or button widget index
     uint16_t targetWidget = 0;
     Kind kind = Kind::MidiGate;
-    char paramName[16] = {}; // populated only for Kind::Knob/Kind::Button
+    char paramName[16] = {}; // populated for scalar source routes
 
     // Target's audio-input port index (see PortTables::audioInIndex), or -1
     // if the target field this route resolves to isn't a real port (e.g. a
@@ -146,6 +149,7 @@ public:
     void renderBlock(Outputs &out, size_t frames);
     void handleMidiEvent(const UsbMidiEvent &event);
     uint16_t activeSoundFontVoiceCount() const;
+    void midiVoiceUsage(uint16_t &active, uint16_t &maximum) const;
 
     // Applies a live parameter patch (from a browser WS "paramUpdate"
     // message) to every instance of the widget `widgetId`, without touching topology or
@@ -252,10 +256,22 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
         for (uint16_t v = 0; v < targetWidget.instanceCount; ++v)
         {
             NodeInstance &target = graph.instances[targetWidget.instanceBase + v];
-            setFloatFieldByName(target, target.type, route.paramName, value);
+            float targetValue = value;
+            // LFO Rate is configured in Hz, but its connected CV input is
+            // 0-10 V. Map that voltage to the LFO's 0-50 Hz range. A raw
+            // Knob CC route intentionally stays raw and is clamped by the
+            // LFO parameter setter itself.
+            if (target.type == NodeType::Lfo && strcmp(route.paramName, "rate") == 0 &&
+                kind != ControlRoute::Kind::KnobCc)
+            {
+                if (targetValue < 0.0f) targetValue = 0.0f;
+                if (targetValue > cv::kMaxVolts) targetValue = cv::kMaxVolts;
+                targetValue *= target.lfo.maxRateHz / cv::kMaxVolts;
+            }
+            setFloatFieldByName(target, target.type, route.paramName, targetValue);
             if (route.targetPort >= 0)
             {
-                target.controlValue[route.targetPort] = value;
+                target.controlValue[route.targetPort] = targetValue;
             }
         }
     }
@@ -298,7 +314,7 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::MidiGate:
             if (target.type == NodeType::Oscillator)
             {
-                if (noteOn && target.osc.wave != WaveType::Noise)
+                if (noteOn && target.osc.wave != WaveType::Noise && target.osc.wave != WaveType::PinkNoise)
                 {
                     target.osc.phaseGen.resetPhase();
                 }
@@ -447,6 +463,7 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::KnobCc:
         case ControlRoute::Kind::Button:
         case ControlRoute::Kind::UpDownButton:
+        case ControlRoute::Kind::Const:
             break; // handled in the CC branch above, never reached here
         }
     }
@@ -684,9 +701,9 @@ inline void Graph::renderBlock(Outputs &out, size_t frames)
             {
                 continue;
             }
-            const float *srcBuf = (edge.fromPort == 1) ? src.outR : src.outL;
+            const float *srcBuf = outputPortBuffer(src, edge.fromPort);
             float *dstBuf = dst.inPorts[edge.toPort];
-            if (dstBuf == nullptr)
+            if (srcBuf == nullptr || dstBuf == nullptr)
             {
                 continue;
             }
@@ -969,7 +986,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
             monitorVoiceIndex = static_cast<uint8_t>(voiceIdx);
         }
 
-        if (!noteOn && midiInst.midiIn.voices == 1)
+        if (!noteOn && alloc.voiceCount() == 1)
         {
             const int16_t fallbackNote = alloc.currentNote(0);
             if (fallbackNote >= 0 && fallbackNote != previousNote)
@@ -1002,6 +1019,22 @@ inline uint16_t Graph::activeSoundFontVoiceCount() const
         }
     }
     return total;
+}
+
+inline void Graph::midiVoiceUsage(uint16_t &active, uint16_t &maximum) const
+{
+    active = 0;
+    maximum = 0;
+    for (uint16_t w = 0; w < widgetCount; ++w)
+    {
+        if (widgets[w].type != NodeType::MidiIn)
+        {
+            continue;
+        }
+        active += voiceAllocators[w].activeVoiceCount();
+        const uint16_t configured = instances[widgets[w].instanceBase].midiIn.voices;
+        maximum += configured < 1 ? 1 : configured;
+    }
 }
 
 namespace
@@ -1124,6 +1157,12 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 inst.filter->coeffsDirty = true;
             }
         }
+        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "filterType") == 0 && cJSON_IsString(item))
+        {
+            const CurtisFilterMode mode = curtisFilterModeFromString(item->valuestring);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                nodes::curtisfilter::setMode(instances[slot.instanceBase + v], mode);
+        }
         else if (slot.type == NodeType::Filter && strcmp(key, "cutoffCurve") == 0 && cJSON_IsString(item))
         {
             const bool log = strcmp(item->valuestring, "log") == 0;
@@ -1134,6 +1173,16 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 instances[slot.instanceBase + v].filter->coeffsDirty = true;
             }
         }
+        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "cutoffCurve") == 0 && cJSON_IsString(item))
+        {
+            const bool log = strcmp(item->valuestring, "log") == 0;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].curtisFilter->cutoffLog = log;
+                instances[slot.instanceBase + v].curtisFilter->refreshLog2Ratios();
+                instances[slot.instanceBase + v].curtisFilter->coeffsDirty = true;
+            }
+        }
         else if (slot.type == NodeType::Filter && strcmp(key, "resonanceCurve") == 0 && cJSON_IsString(item))
         {
             const bool log = strcmp(item->valuestring, "log") == 0;
@@ -1142,6 +1191,16 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 instances[slot.instanceBase + v].filter->resonanceLog = log;
                 instances[slot.instanceBase + v].filter->refreshLog2Ratios();
                 instances[slot.instanceBase + v].filter->coeffsDirty = true;
+            }
+        }
+        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "resonanceCurve") == 0 && cJSON_IsString(item))
+        {
+            const bool log = strcmp(item->valuestring, "log") == 0;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].curtisFilter->resonanceLog = log;
+                instances[slot.instanceBase + v].curtisFilter->refreshLog2Ratios();
+                instances[slot.instanceBase + v].curtisFilter->coeffsDirty = true;
             }
         }
         else if (slot.type == NodeType::Adsr && strcmp(key, "attackCurve") == 0 && cJSON_IsString(item))
@@ -1469,6 +1528,12 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 instances[slot.instanceBase + v].filter->global = global;
             }
         }
+        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "global") == 0 && cJSON_IsBool(item))
+        {
+            const bool global = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                instances[slot.instanceBase + v].curtisFilter->global = global;
+        }
         else if (slot.type == NodeType::Reverb && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
         {
             const bool bypass = cJSON_IsTrue(item);
@@ -1519,6 +1584,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
     {
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::UpDownButton,
                                instances[slot.instanceBase].upDownButton->currentOutput());
+    }
+    else if (slot.type == NodeType::Const)
+    {
+        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Const,
+                               instances[slot.instanceBase].constant.value);
     }
 }
 
@@ -1621,6 +1691,9 @@ inline void Graph::destroy()
         case NodeType::Filter:
             nodes::filter::destroy(inst);
             break;
+        case NodeType::CurtisFilter:
+            nodes::curtisfilter::destroy(inst);
+            break;
         case NodeType::Knob:
             nodes::knob::destroy(inst);
             break;
@@ -1638,6 +1711,16 @@ inline void Graph::destroy()
         }
         heap_caps_free(inst.outL);
         heap_caps_free(inst.outR);
+        if (inst.link != nullptr)
+        {
+            for (float *&bus : inst.link->busOut)
+            {
+                heap_caps_free(bus);
+                bus = nullptr;
+            }
+            heap_caps_free(inst.link);
+            inst.link = nullptr;
+        }
         inst.outL = nullptr;
         inst.outR = nullptr;
     }

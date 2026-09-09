@@ -13,6 +13,21 @@
 namespace nodes::lfo
 {
 
+constexpr float kMaxRateHz = 50.0f;
+
+inline float clampRate(float value)
+{
+    if (!(value >= 0.0f)) return 0.0f;
+    return value > kMaxRateHz ? kMaxRateHz : value;
+}
+
+inline float clampRate(float value, float maxRate)
+{
+    const float limit = clampRate(maxRate);
+    const float safe = value >= 0.0f ? value : 0.0f;
+    return safe > limit ? limit : safe;
+}
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
@@ -141,7 +156,8 @@ inline void render(NodeInstance &inst, size_t frames)
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     inst.lfo.wave = p.waveType;
-    inst.lfo.rate = p.lfoRate;
+    inst.lfo.maxRateHz = clampRate(p.lfoMaxRate);
+    inst.lfo.rate = clampRate(p.lfoRate, inst.lfo.maxRateHz);
     inst.lfo.amplitude = p.lfoAmplitude;
     inst.lfo.phaseOffsetDeg = p.lfoPhaseDeg;
     inst.lfo.zeroPointFixed = p.lfoZeroPointFixed;
@@ -159,7 +175,13 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     }
     if (strcmp(name, "rate") == 0)
     {
-        inst.lfo.rate = value;
+        inst.lfo.rate = clampRate(value, inst.lfo.maxRateHz);
+        return true;
+    }
+    if (strcmp(name, "maxRate") == 0)
+    {
+        inst.lfo.maxRateHz = clampRate(value);
+        inst.lfo.rate = clampRate(inst.lfo.rate, inst.lfo.maxRateHz);
         return true;
     }
     if (strcmp(name, "amplitude") == 0)
@@ -188,7 +210,8 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
     out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"));
-    out.lfoRate = presetparser::getFloat(p, "rate", 2.0f);
+    out.lfoMaxRate = clampRate(presetparser::getFloat(p, "maxRate", 50.0f));
+    out.lfoRate = clampRate(presetparser::getFloat(p, "rate", 2.0f), out.lfoMaxRate);
     out.lfoAmplitude = presetparser::getFloat(p, "amplitude", 10.0f);
     out.lfoPhaseDeg = presetparser::getFloat(p, "phase", 0.0f);
     out.lfoZeroPointFixed = presetparser::getBool(p, "zeroPointFixed", false);

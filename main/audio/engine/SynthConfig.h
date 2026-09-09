@@ -18,7 +18,9 @@ constexpr uint32_t kSampleRate = 44100;
 constexpr size_t kBlockSize = CONFIG_AUDIO_SYNTH_BLOCK_SIZE;
 constexpr size_t kMaxWidgets = 64;
 constexpr size_t kMaxConnections = 256;
-constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + 2;
+// Eight mono buses cross the Sound Generation -> FX & Output page boundary.
+constexpr size_t kLinkBusCount = 8;
+constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkBusCount;
 // Multiplexer has 16 audio inputs plus one control input (select) = 17 slots.
 // Keep one bit per slot in NodeInstance's connection masks.
 constexpr size_t kMaxAudioInPorts = 17;
@@ -58,4 +60,10 @@ constexpr size_t kVcaExpLutSize = 1024;
 // and monotonic like the VCA curve above, so the same entry count suffices;
 // the integer part of the exponent is applied separately via ldexpf.
 constexpr size_t kPow2LutSize = 1024;
+
+// Positive half (0..4) of tanh(x), used by nonlinear audio nodes such as
+// the Curtis filter. Beyond 4, tanh is already within 0.07% of saturation.
+// 512 interpolated entries cost 2 KiB and remove libm tanhf() calls from
+// the per-sample DSP hot path.
+constexpr size_t kTanhLutSize = 512;
 } // namespace synth

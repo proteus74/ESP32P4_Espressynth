@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 
+#include "../CvConventions.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 
@@ -95,6 +96,50 @@ inline void renderDivide(NodeInstance &inst, size_t frames)
     }
 }
 
+inline float quantizeFrequencyDivider(float divider)
+{
+    constexpr float kSteps[] = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
+    float nearest = kSteps[0];
+    float distance = std::fabs(divider - nearest);
+    for (float step : kSteps)
+    {
+        const float candidateDistance = std::fabs(divider - step);
+        if (candidateDistance < distance)
+        {
+            nearest = step;
+            distance = candidateDistance;
+        }
+    }
+    return nearest;
+}
+
+inline float frequencyDividerPitchOffset(float divider)
+{
+    // Exact nearest-step mapping for {1, 2, 4, 8, 16}. Besides being faster
+    // than quantizeFrequencyDivider()+log2f(), this is exact: those steps
+    // map to the integer 1 V/oct offsets {0, 1, 2, 3, 4}.
+    if (divider <= 1.5f)
+        return 0.0f;
+    if (divider <= 3.0f)
+        return 1.0f;
+    if (divider <= 6.0f)
+        return 2.0f;
+    if (divider <= 12.0f)
+        return 3.0f;
+    return 4.0f;
+}
+
+inline float applyFrequencyDividerOffset(float inputCv, float pitchOffsetVolts)
+{
+    const float outputCv = inputCv - pitchOffsetVolts;
+    return fminf(cv::kMaxVolts, fmaxf(0.0f, outputCv));
+}
+
+inline float dividePitchCv(float inputCv, float divider)
+{
+    return applyFrequencyDividerOffset(inputCv, frequencyDividerPitchOffset(divider));
+}
+
 inline void renderFrequencyDivider(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
@@ -102,12 +147,7 @@ inline void renderFrequencyDivider(NodeInstance &inst, size_t frames)
                                   (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     if (inst.audioConnectedPortMask == 0)
     {
-        float divider = inst.frequencyDivider.divider;
-        if (divider < 1.0f)
-            divider = 1.0f;
-        if (divider > 128.0f)
-            divider = 128.0f;
-        const float result = portSample(inst, 0, 0) / divider;
+        const float result = applyFrequencyDividerOffset(portSample(inst, 0, 0), inst.frequencyDivider.pitchOffsetVolts);
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = result;
@@ -116,12 +156,9 @@ inline void renderFrequencyDivider(NodeInstance &inst, size_t frames)
     }
     for (size_t i = 0; i < frames; ++i)
     {
-        float divider = dividerConnected ? portSample(inst, 1, i) : inst.frequencyDivider.divider;
-        if (divider < 1.0f)
-            divider = 1.0f;
-        if (divider > 128.0f)
-            divider = 128.0f;
-        inst.outL[i] = portSample(inst, 0, i) / divider;
+        const float offset = dividerConnected ? frequencyDividerPitchOffset(portSample(inst, 1, i))
+                                               : inst.frequencyDivider.pitchOffsetVolts;
+        inst.outL[i] = applyFrequencyDividerOffset(portSample(inst, 0, i), offset);
     }
 }
 
@@ -145,14 +182,16 @@ inline void renderAbs(NodeInstance &inst, size_t frames)
 
 inline void buildFrequencyDivider(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.frequencyDivider.divider = p.frequencyDivider;
+    inst.frequencyDivider.divider = quantizeFrequencyDivider(p.frequencyDivider);
+    inst.frequencyDivider.pitchOffsetVolts = frequencyDividerPitchOffset(inst.frequencyDivider.divider);
 }
 
 inline bool setParamFrequencyDivider(NodeInstance &inst, const char *name, float value)
 {
     if (name != nullptr && strcmp(name, "divider") == 0)
     {
-        inst.frequencyDivider.divider = value;
+        inst.frequencyDivider.divider = quantizeFrequencyDivider(value);
+        inst.frequencyDivider.pitchOffsetVolts = frequencyDividerPitchOffset(inst.frequencyDivider.divider);
         return true;
     }
     return false;
@@ -160,7 +199,7 @@ inline bool setParamFrequencyDivider(NodeInstance &inst, const char *name, float
 
 inline void parsePresetFrequencyDivider(cJSON *p, WidgetParams &out)
 {
-    out.frequencyDivider = presetparser::getFloat(p, "divider", 2.0f);
+    out.frequencyDivider = quantizeFrequencyDivider(presetparser::getFloat(p, "divider", 2.0f));
 }
 
 // Shared by Multiplier and Adder (both configurable 2-8 inputs).

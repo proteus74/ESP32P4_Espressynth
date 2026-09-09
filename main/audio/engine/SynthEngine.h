@@ -105,6 +105,64 @@ public:
     uint32_t renderOverrunCount() const { return renderOverrunCount_.load(std::memory_order_relaxed); }
     uint32_t midiDropCount() const { return midiDropCount_.load(std::memory_order_relaxed); }
     uint16_t activeSoundFontVoices() const { return activeSoundFontVoices_.load(std::memory_order_relaxed); }
+    struct MidiVoiceUsageSnapshot
+    {
+        uint16_t active = 0;
+        uint16_t maximum = 0;
+    };
+    MidiVoiceUsageSnapshot midiVoiceUsage() const
+    {
+        const uint32_t packed = midiVoiceUsagePacked_.load(std::memory_order_acquire);
+        return {static_cast<uint16_t>(packed & 0xFFFFu), static_cast<uint16_t>(packed >> 16)};
+    }
+    uint32_t presetChangeSequence() const { return presetChangeSequence_.load(std::memory_order_acquire); }
+    void readCurrentPresetName(char *out, size_t outSize) const
+    {
+        if (out == nullptr || outSize == 0) return;
+        size_t length = 0;
+        while (length + 1 < outSize && length + 1 < sizeof(currentPresetName_) &&
+               currentPresetName_[length] != '\0')
+        {
+            ++length;
+        }
+        memcpy(out, currentPresetName_, length);
+        out[length] = '\0';
+    }
+
+    struct MidiControlSnapshot
+    {
+        enum class Kind : uint8_t
+        {
+            Knob = 0,
+            Button = 1,
+            UpDownButton = 2,
+            Switch = 3,
+        };
+
+        uint32_t sequence = 0;
+        char widgetLabel[48] = {};
+        Kind kind = Kind::Knob;
+        uint8_t direction = 0; // UpDownButton: 1=up, 2=down
+        uint8_t channel = 0;
+        uint8_t cc = 0;
+        float raw = 0.0f;
+        float value = 0.0f;
+    };
+
+    bool readMidiControlSnapshot(MidiControlSnapshot &out) const
+    {
+        const uint32_t sequence = midiControlSequence_.load(std::memory_order_acquire);
+        if (sequence == 0) return false;
+        memcpy(out.widgetLabel, midiControlWidgetLabel_, sizeof(out.widgetLabel));
+        out.kind = static_cast<MidiControlSnapshot::Kind>(midiControlKind_.load(std::memory_order_relaxed));
+        out.direction = midiControlDirection_.load(std::memory_order_relaxed);
+        out.channel = midiControlChannel_.load(std::memory_order_relaxed);
+        out.cc = midiControlCc_.load(std::memory_order_relaxed);
+        out.raw = midiControlRaw_.load(std::memory_order_relaxed);
+        out.value = midiControlValue_.load(std::memory_order_relaxed);
+        out.sequence = sequence;
+        return true;
+    }
 
     // Set whenever a build (see buildFromFile) had to use fewer voices than
     // requested - either because the requested count wouldn't fit in
@@ -158,6 +216,96 @@ public:
     bool applyOutputParam(const char *widgetId, cJSON *params);
 
 private:
+    void publishMidiVoiceUsage()
+    {
+        uint16_t active = 0;
+        uint16_t maximum = 0;
+        if (liveGraph_ != nullptr)
+        {
+            liveGraph_->midiVoiceUsage(active, maximum);
+        }
+        midiVoiceUsagePacked_.store((static_cast<uint32_t>(maximum) << 16) | active,
+                                    std::memory_order_release);
+    }
+
+    void setCurrentPresetNameFromPath(const char *path)
+    {
+        currentPresetName_[0] = '\0';
+        if (path == nullptr || strcmp(path, presetpaths::unnamedPath()) == 0) return;
+        const char *base = strrchr(path, '/');
+        base = base != nullptr ? base + 1 : path;
+        size_t length = strlen(base);
+        if (length >= 5 && strcmp(base + length - 5, ".json") == 0) length -= 5;
+        if (length >= sizeof(currentPresetName_)) length = sizeof(currentPresetName_) - 1;
+        memcpy(currentPresetName_, base, length);
+        currentPresetName_[length] = '\0';
+    }
+
+    void publishMidiControlActivity(const UsbMidiEvent &event)
+    {
+        if (liveGraph_ == nullptr || event.codeIndex != 0xB) return;
+        const uint8_t channel = event.status & 0x0F;
+        for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w)
+        {
+            const WidgetSlot &widget = liveGraph_->widgets[w];
+            NodeInstance &instance = liveGraph_->instances[widget.instanceBase];
+            const char *label = widget.label[0] != '\0' ? widget.label : widget.id;
+
+            if (widget.type == NodeType::Knob && instance.knob != nullptr &&
+                instance.knob->cc >= 0 && static_cast<uint8_t>(instance.knob->cc) == event.data1 &&
+                instance.knob->channel >= 0 && static_cast<uint8_t>(instance.knob->channel) == channel)
+            {
+                publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, 0, channel,
+                                           event.data1, event.data2, instance.knob->currentValue);
+            }
+            else if (widget.type == NodeType::Button && instance.button != nullptr &&
+                     instance.button->cc >= 0 && static_cast<uint8_t>(instance.button->cc) == event.data1 &&
+                     instance.button->channel >= 0 && static_cast<uint8_t>(instance.button->channel) == channel)
+            {
+                publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Button, 0, channel,
+                                           event.data1, event.data2, instance.button->currentValue);
+            }
+            else if (widget.type == NodeType::UpDownButton && instance.upDownButton != nullptr)
+            {
+                auto &upDown = *instance.upDownButton;
+                const bool matchedUp = upDown.ccUp >= 0 && static_cast<uint8_t>(upDown.ccUp) == event.data1 &&
+                                       upDown.channelUp >= 0 && static_cast<uint8_t>(upDown.channelUp) == channel;
+                const bool matchedDown = upDown.ccDown >= 0 && static_cast<uint8_t>(upDown.ccDown) == event.data1 &&
+                                         upDown.channelDown >= 0 && static_cast<uint8_t>(upDown.channelDown) == channel;
+                if (matchedUp)
+                {
+                    publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::UpDownButton, 1, channel,
+                                               event.data1, event.data2, upDown.currentOutput());
+                }
+                if (matchedDown)
+                {
+                    publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::UpDownButton, 2, channel,
+                                               event.data1, event.data2, upDown.currentOutput());
+                }
+            }
+            else if (widget.type == NodeType::Switch &&
+                     instance.switchState.cc >= 0 && static_cast<uint8_t>(instance.switchState.cc) == event.data1 &&
+                     instance.switchState.channel >= 0 && static_cast<uint8_t>(instance.switchState.channel) == channel)
+            {
+                publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Switch, 0, channel,
+                                           event.data1, event.data2, instance.switchState.selectIn2 ? 1.0f : 0.0f);
+            }
+        }
+    }
+
+    void publishMidiControlSnapshot(const char *label, MidiControlSnapshot::Kind kind, uint8_t direction,
+                                    uint8_t channel, uint8_t cc, uint8_t raw, float value)
+    {
+        snprintf(midiControlWidgetLabel_, sizeof(midiControlWidgetLabel_), "%s", label != nullptr ? label : "");
+        midiControlKind_.store(static_cast<uint8_t>(kind), std::memory_order_relaxed);
+        midiControlDirection_.store(direction, std::memory_order_relaxed);
+        midiControlChannel_.store(channel, std::memory_order_relaxed);
+        midiControlCc_.store(cc, std::memory_order_relaxed);
+        midiControlRaw_.store(static_cast<float>(raw), std::memory_order_relaxed);
+        midiControlValue_.store(value, std::memory_order_relaxed);
+        midiControlSequence_.fetch_add(1, std::memory_order_release);
+    }
+
     static void taskEntry(void *arg);
     void taskLoop();
     // voiceCeiling caps the voice count regardless of what the preset's
@@ -165,8 +313,8 @@ private:
     // additional restriction beyond the preset itself and GraphBuilder's own
     // internal-RAM-fit retry". Only the overload-watchdog reload path (see
     // taskLoop/loaderTaskLoop) passes a tighter one.
-    // allowPreFree: whether a voice-count increase may ask the render task
-    // to free liveGraph_ first (see preFreeRequested_ comment). Must be
+    // allowPreFree: whether this rebuild may ask the render task to free
+    // liveGraph_ first (see preFreeRequested_ comment). Must be
     // false for taskLoop()'s own initial boot call - that call runs
     // synchronously ON the render task itself, before its while(true) loop
     // (the only place that services preFreeRequested_) has even started, so
@@ -203,6 +351,7 @@ private:
     TaskHandle_t taskHandle_ = nullptr;
     TaskHandle_t loaderTaskHandle_ = nullptr;
     char currentPresetPath_[300] = {}; // matches PresetChangedMsg::path - see its comment for the sizing rationale; render-task-owned (only ever written at swap time in taskLoop), see loaderKnownPresetPath_ below for the loader task's own copy
+    char currentPresetName_[presetpaths::kMaxNameLen] = {};
     char loaderKnownPresetPath_[300] = {}; // loader-task-owned twin of currentPresetPath_ - same initial value (set once in begin(), before either task runs), kept in sync independently within loaderTaskLoop as it processes each PresetChangedMsg. Exists solely so the overload-watchdog reload (see taskLoop) has a path to rebuild from without the loader task reading currentPresetPath_ across tasks (a plain char[300], not atomic - the render task can be mid-write to it right as a reload starts)
 
     Graph *liveGraph_ = nullptr; // owned by, and only ever accessed on, the render task
@@ -227,11 +376,11 @@ private:
     Graph *pendingGraph_ = nullptr; // fully built by the loader task, waits for the swap after fade-out
     char pendingPresetPath_[300] = {}; // path of pendingGraph_, for currentPresetPath_ after the swap
 
-    // Pre-free handshake (see buildFromFile()): on a voice-count INCREASE a
-    // rebuild briefly needs room for OLD+NEW simultaneously (the old graph
-    // still renders while the loader task builds the new one) - more internal
-    // RAM peak than boot ever needed (there the "old" graph is only an empty
-    // placeholder). preFreeRequested_ is the loader task's request to the
+    // Pre-free handshake (see buildFromFile()): a rebuild briefly needs room
+    // for OLD+NEW simultaneously (the old graph still renders while the
+    // loader task builds the new one) - more internal RAM peak than boot ever
+    // needed (there the "old" graph is only an empty placeholder).
+    // preFreeRequested_ is the loader task's request to the
     // render task to free liveGraph_ NOW (via fade-out, then placeholder),
     // BEFORE building at all; preFreeDone_ is the confirmation back.
     // preFreeInFlight_ is a pure render-task-owned state flag (no atomic
@@ -273,6 +422,16 @@ private:
     std::atomic<uint32_t> renderOverrunCount_{0};
     std::atomic<uint32_t> midiDropCount_{0};
     std::atomic<uint16_t> activeSoundFontVoices_{0};
+    std::atomic<uint32_t> midiVoiceUsagePacked_{0};
+    std::atomic<uint32_t> presetChangeSequence_{0};
+    char midiControlWidgetLabel_[48] = {};
+    std::atomic<uint8_t> midiControlKind_{0};
+    std::atomic<uint8_t> midiControlDirection_{0};
+    std::atomic<uint8_t> midiControlChannel_{0};
+    std::atomic<uint8_t> midiControlCc_{0};
+    std::atomic<float> midiControlRaw_{0.0f};
+    std::atomic<float> midiControlValue_{0.0f};
+    std::atomic<uint32_t> midiControlSequence_{0};
     std::atomic<uint32_t> voicesCapEventId_{0};
     std::atomic<uint16_t> voicesCapRequested_{0};
     std::atomic<uint16_t> voicesCapEffective_{0};
@@ -476,12 +635,14 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     dsp::initSineLut();    // once, here - never recomputed once the render task starts
     dsp::initVcaExpLut();  // same pattern, see DspPrimitives.h
     dsp::initPow2Lut();    // same pattern, see DspPrimitives.h
+    dsp::initTanhLut();    // nonlinear saturation without tanhf() in the audio hot path
 
     codecHandle_ = codecHandle;
     secondaryI2sTxHandle_ = secondaryI2sTxHandle;
     presetChangedQueue_ = presetChangedQueue;
     liveParamQueue_ = liveParamQueue;
     snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", initialPresetPath);
+    setCurrentPresetNameFromPath(initialPresetPath);
     snprintf(loaderKnownPresetPath_, sizeof(loaderKnownPresetPath_), "%s", initialPresetPath);
 
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
@@ -551,12 +712,10 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
     // A rebuild otherwise briefly needs room for OLD+NEW simultaneously
     // (liveGraph_ still renders while this is being built) - more internal
     // RAM peak than boot ever needed, where the "old" graph is only an empty
-    // placeholder. If the voice count rises compared to the currently active
-    // graph, the swap is worth it: free the old graph first via fade-out
-    // (short, audible dropout), then build - see preFreeRequested_ comment in
-    // the header. currentVoiceCount_ is written exclusively by the loader
-    // task itself (this task here), so the read is the same task, no
-    // cross-thread risk.
+    // placeholder. The caller uses the pre-free path for every reload, so
+    // topology edits cannot push the new graph's hot buffers into PSRAM.
+    // currentVoiceCount_ is written exclusively by the loader task itself
+    // (this task here), so the read is the same task, no cross-thread risk.
     const uint16_t requestedVoicesPeek = GraphBuilder::peekRequestedVoices(*doc);
     if (allowPreFree &&
         (forcePreFree || requestedVoicesPeek > currentVoiceCount_.load(std::memory_order_relaxed)))
@@ -662,7 +821,12 @@ inline void SynthEngine::loaderTaskLoop()
         {
             voiceCeiling = cpuReloadCeiling_.load(std::memory_order_relaxed);
         }
-        Graph *newGraph = buildFromFile(path, voiceCeiling, true, !gotMsg);
+        // Every reload must use the same pre-free path as Panic. A topology
+        // edit can increase the graph's block-buffer footprint even when the
+        // configured voice count stays unchanged. Building beside the old
+        // graph then pushes the new graph's hot buffers into PSRAM, which can
+        // overload Core 1 until the next Panic reloads from a clean heap.
+        Graph *newGraph = buildFromFile(path, voiceCeiling, true, true);
         if (newGraph == nullptr)
         {
             // buildFromFile() already wrote the warning log; the old graph
@@ -700,6 +864,7 @@ inline void SynthEngine::taskLoop()
         Graph::release(liveGraph_);
         liveGraph_ = initial;
     }
+    publishMidiVoiceUsage();
 
     static float fadeMulBlock[synth::kBlockSize];
     static float usbL[synth::kBlockSize];
@@ -763,7 +928,12 @@ inline void SynthEngine::taskLoop()
             while (midiEventQueue_ != nullptr && xQueueReceive(midiEventQueue_, &event, 0) == pdTRUE)
             {
                 liveGraph_->handleMidiEvent(event);
+                publishMidiControlActivity(event);
                 ++midiEventCount;
+            }
+            if (midiEventCount != 0)
+            {
+                publishMidiVoiceUsage();
             }
             midiUs = esp_timer_get_time() - midiStartUs;
         }
@@ -852,6 +1022,7 @@ inline void SynthEngine::taskLoop()
             liveGraph_->destroy();
             Graph::release(liveGraph_);
             liveGraph_ = Graph::allocate();
+            publishMidiVoiceUsage();
             preFreeInFlight_ = false;
             preFreeRequested_.store(false, std::memory_order_relaxed);
             preFreeDone_.store(true, std::memory_order_relaxed);
@@ -863,6 +1034,17 @@ inline void SynthEngine::taskLoop()
             Graph *retiredGraph = liveGraph_;
             liveGraph_ = pendingGraph_;
             pendingGraph_ = nullptr;
+            publishMidiVoiceUsage();
+            // A preset save/reload is a full runtime reset. Drop queued MIDI
+            // and stale live-param messages, same cleanup effect as Panic.
+            if (midiEventQueue_ != nullptr)
+            {
+                xQueueReset(midiEventQueue_);
+            }
+            if (liveParamQueue_ != nullptr)
+            {
+                xQueueReset(liveParamQueue_);
+            }
             if (xQueueSend(retiredGraphQueue_, &retiredGraph, 0) != pdTRUE)
             {
                 // Queue depth two is sufficient because the loader serializes
@@ -871,6 +1053,8 @@ inline void SynthEngine::taskLoop()
                 Graph::release(retiredGraph);
             }
             snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", pendingPresetPath_);
+            setCurrentPresetNameFromPath(currentPresetPath_);
+            presetChangeSequence_.fetch_add(1, std::memory_order_release);
             presetReloadUs = esp_timer_get_time() - swapStartUs;
             outputFadeState_ = OutputFadeState::FadingIn;
             // A freshly swapped-in graph deserves a fresh read on whether it

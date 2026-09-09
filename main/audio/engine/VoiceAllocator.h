@@ -51,6 +51,13 @@ public:
 
         if (voiceCount_ == 1)
         {
+            // FX MIDI-In is explicitly mono with Ignore overflow: while its
+            // one key is held, later notes must not retune/retrigger it or
+            // emit another gate event.
+            if (overflowMode_ == OverflowMode::Ignore && slots_[0].note >= 0)
+            {
+                return -1;
+            }
             monoHeldSince_[note] = holdCounter_;
             slots_[0].note = note;
             slots_[0].heldSince = holdCounter_;
@@ -193,6 +200,21 @@ public:
     {
         return voiceIndex < voiceCount_ ? slots_[voiceIndex].note : -1;
     }
+
+    uint8_t activeVoiceCount() const
+    {
+        uint8_t count = 0;
+        for (uint8_t i = 0; i < voiceCount_; ++i)
+        {
+            if (slots_[i].note >= 0)
+            {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    uint8_t voiceCount() const { return voiceCount_; }
 
 private:
     struct Slot

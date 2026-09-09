@@ -35,6 +35,28 @@
 #include "freertos/semphr.h"
 #include "lvgl.h"
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dirent.h>
+#include "esp_timer.h"
+#include "lwip/ip4_addr.h"
+
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    #include "features/wifi/wifi_manager.hpp"
+#endif
+#if defined(CONFIG_APP_ENABLE_ETHERNET)
+    #include "features/ethernet/ethernet_manager.hpp"
+#endif
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    #include "features/synth/synth_manager.hpp"
+#endif
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    #include "features/usb/host/usb_midi_host.hpp"
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    #include "features/ble/ble_midi_host.hpp"
+#endif
 
 // USB and BLE HID (keyboard/mouse) both feed the same LVGL input devices below. Every
 // block gated on this condition compiles in if either transport's HID host is enabled:
@@ -52,7 +74,6 @@ constexpr size_t FRAME_BUFFER_COUNT = 2;
 // The rotating flush path cycles through the DSI frame buffers itself.
 constexpr size_t FRAME_BUFFER_COUNT = 3;
 #endif
-static lv_obj_t* s_status_label = nullptr;
 static esp_lcd_panel_handle_t s_panel = nullptr;
 static SemaphoreHandle_t s_dpi_vsync = nullptr;
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
@@ -63,10 +84,26 @@ static uint8_t* s_lvgl_frame_buffer = nullptr;
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 static uint8_t s_next_frame_buffer = 1;
 #endif
-static lv_obj_t* s_touch_position_label = nullptr;
-static lv_obj_t* s_touch_popup = nullptr;
-static lv_timer_t* s_touch_popup_timer = nullptr;
 static esp_lcd_touch_handle_t s_touch_handle = nullptr;
+static lv_obj_t* s_ip_label = nullptr;
+static lv_obj_t* s_memory_label = nullptr;
+static lv_obj_t* s_cpu_label = nullptr;
+static lv_obj_t* s_midi_label = nullptr;
+static lv_obj_t* s_overrun_label = nullptr;
+static lv_obj_t* s_preset_label = nullptr;
+static lv_obj_t* s_preset_index_label = nullptr;
+static lv_obj_t* s_activity_panel = nullptr;
+static lv_obj_t* s_activity_label = nullptr;
+static lv_timer_t* s_ui_timer = nullptr;
+static uint32_t s_seen_midi_sequence = 0;
+static uint32_t s_seen_preset_change_sequence = 0;
+static int64_t s_activity_until_us = 0;
+static constexpr size_t kPresetCapacity = 32;
+static constexpr size_t kPresetNameCapacity = 64;
+static char s_preset_names[kPresetCapacity][kPresetNameCapacity] = {};
+static size_t s_preset_count = 0;
+static size_t s_preset_index = 0;
+static bool s_preset_list_loaded = false;
 
 #if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \
     (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_HID_HOST))
@@ -103,38 +140,236 @@ void keypad_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
 }
 #endif
 
-void on_test_button(lv_event_t* event) {
-    (void)event;
-    if (s_status_label != nullptr) {
-        lv_label_set_text_static(s_status_label, "Button pressed!");
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+void refresh_preset_list()
+{
+    s_preset_count = 1;
+    snprintf(s_preset_names[0], sizeof(s_preset_names[0]), "Current");
+
+    DIR* dir = opendir(presetpaths::kDir);
+    if (dir == nullptr) return;
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr && s_preset_count < kPresetCapacity)
+    {
+        const char* name = entry->d_name;
+        const size_t length = strlen(name);
+        if (name[0] == '.' || length < 6 || strcmp(name, "current.json") == 0 ||
+            strcmp(name + length - 5, ".json") != 0) continue;
+        char preset_name[kPresetNameCapacity] = {};
+        snprintf(preset_name, sizeof(preset_name), "%.*s", static_cast<int>(length - 5), name);
+        if (!presetpaths::isSafeName(preset_name)) continue;
+        snprintf(s_preset_names[s_preset_count], sizeof(s_preset_names[0]), "%s", preset_name);
+        ++s_preset_count;
     }
-    if (s_touch_popup == nullptr) {
-        s_touch_popup = lv_obj_create(lv_layer_top());
-        lv_obj_set_size(s_touch_popup, 700, 220);
-        lv_obj_center(s_touch_popup);
-        lv_obj_set_style_bg_color(s_touch_popup, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_bg_opa(s_touch_popup, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(s_touch_popup, 5, 0);
-        lv_obj_set_style_border_color(s_touch_popup, lv_color_hex(0x000000), 0);
-        lv_obj_t* popup_label = lv_label_create(s_touch_popup);
-        lv_label_set_text_static(popup_label, "Button gedrueckt!");
-        lv_obj_set_style_text_color(popup_label, lv_color_hex(0x000000), 0);
-        lv_obj_center(popup_label);
+    closedir(dir);
+    s_preset_list_loaded = true;
+
+    char active_path[300] = {};
+    char active_name[kPresetNameCapacity] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    s_preset_index = 0;
+    for (size_t i = 1; i < s_preset_count; ++i)
+    {
+        if (strcmp(active_name, s_preset_names[i]) == 0)
+        {
+            s_preset_index = i;
+            break;
+        }
     }
-    lv_obj_clear_flag(s_touch_popup, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_touch_popup);
-    if (s_touch_popup_timer == nullptr) {
-        s_touch_popup_timer = lv_timer_create(
-            [](lv_timer_t* timer) {
-                (void)timer;
-                if (s_touch_popup != nullptr) {
-                    lv_obj_add_flag(s_touch_popup, LV_OBJ_FLAG_HIDDEN);
-                }
-            }, 1500, nullptr);
-    } else {
-        lv_timer_reset(s_touch_popup_timer);
+}
+
+void update_preset_labels()
+{
+    if (s_preset_label == nullptr || s_preset_count == 0) return;
+    lv_label_set_text(s_preset_label, s_preset_names[s_preset_index]);
+    lv_label_set_text_fmt(s_preset_index_label, "%u / %u", static_cast<unsigned>(s_preset_index + 1),
+                          static_cast<unsigned>(s_preset_count));
+}
+
+void select_preset(int direction)
+{
+    if (s_preset_count == 0) return;
+    size_t target_index = s_preset_index;
+    if (direction < 0)
+        target_index = target_index == 0 ? s_preset_count - 1 : target_index - 1;
+    else
+        target_index = (target_index + 1) % s_preset_count;
+
+    if (target_index == 0)
+        Feature::Synth::request_current_preset();
+    else
+        Feature::Synth::request_preset_name(s_preset_names[target_index]);
+}
+
+void on_previous_preset(lv_event_t*) { select_preset(-1); }
+void on_next_preset(lv_event_t*) { select_preset(1); }
+void on_panic(lv_event_t*) { Feature::Synth::engine().requestPanic(); }
+#else
+void on_previous_preset(lv_event_t*) {}
+void on_next_preset(lv_event_t*) {}
+void on_panic(lv_event_t*) {}
+#endif
+
+void update_network_label()
+{
+    if (s_ip_label == nullptr) return;
+    char ip_text[24] = "--";
+    esp_netif_ip_info_t info{};
+#if defined(CONFIG_APP_ENABLE_ETHERNET)
+    if (Feature::Ethernet::get_ip_info(info) == ESP_OK && info.ip.addr != 0)
+        ip4addr_ntoa_r(reinterpret_cast<const ip4_addr_t*>(&info.ip), ip_text, sizeof(ip_text));
+#endif
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    if (strcmp(ip_text, "--") == 0 && Feature::WiFi::get_ip_info(info) == ESP_OK && info.ip.addr != 0)
+        ip4addr_ntoa_r(reinterpret_cast<const ip4_addr_t*>(&info.ip), ip_text, sizeof(ip_text));
+#endif
+    lv_label_set_text_fmt(s_ip_label, "IP  %s", ip_text);
+}
+
+void update_midi_label()
+{
+    if (s_midi_label == nullptr) return;
+    const char* text = "Kein MIDI";
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    if (Feature::MIDI::is_connected()) text = "USB MIDI";
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    if (Feature::BLE::MIDI::connected_count() > 0) text = "BLE MIDI";
+#endif
+    lv_label_set_text(s_midi_label, text);
+}
+
+void update_runtime_labels()
+{
+    update_network_label();
+    update_midi_label();
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    const uint32_t preset_sequence = Feature::Synth::engine().presetChangeSequence();
+    if (preset_sequence != 0 && preset_sequence != s_seen_preset_change_sequence)
+    {
+        s_seen_preset_change_sequence = preset_sequence;
+        static char selected_name[kPresetNameCapacity] = {};
+        Feature::Synth::engine().readCurrentPresetName(selected_name, sizeof(selected_name));
+        refresh_preset_list();
+        s_preset_index = 0;
+        for (size_t i = 1; i < s_preset_count; ++i)
+        {
+            if (strcmp(selected_name, s_preset_names[i]) == 0)
+            {
+                s_preset_index = i;
+                break;
+            }
+        }
+        update_preset_labels();
     }
-    ESP_LOGI("FeatureLVGL", "LVGL test button pressed");
+    if (!s_preset_list_loaded)
+    {
+        refresh_preset_list();
+        update_preset_labels();
+    }
+    const unsigned psram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned psram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned internal_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+    const unsigned internal_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL) / 1024);
+    lv_label_set_text_fmt(s_memory_label, "PSRAM  %u / %u KB\nSystem  %u / %u KB", psram_free, psram_total,
+                          internal_free, internal_total);
+
+    static int64_t previous_sample_us = 0;
+    static uint32_t previous_idle_runtime = 0;
+    const int64_t now_us = esp_timer_get_time();
+    const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(0);
+    float core0 = 0.0f;
+    if (previous_sample_us != 0 && now_us > previous_sample_us)
+    {
+        core0 = 100.0f * (1.0f - static_cast<float>(idle_runtime - previous_idle_runtime) /
+                                   static_cast<float>(now_us - previous_sample_us));
+        if (core0 < 0.0f) core0 = 0.0f;
+        if (core0 > 100.0f) core0 = 100.0f;
+    }
+    previous_sample_us = now_us;
+    previous_idle_runtime = idle_runtime;
+    const float core1 = Feature::Synth::engine().audioCoreLoadPercent();
+    const unsigned core0_tenths = static_cast<unsigned>(core0 * 10.0f + 0.5f);
+    const unsigned core1_tenths = static_cast<unsigned>(core1 * 10.0f + 0.5f);
+    lv_label_set_text_fmt(s_cpu_label, "Core 0  %u.%u %%\nCore 1  %u.%u %%",
+                          core0_tenths / 10, core0_tenths % 10,
+                          core1_tenths / 10, core1_tenths % 10);
+    const SynthEngine::MidiVoiceUsageSnapshot voice_usage = Feature::Synth::engine().midiVoiceUsage();
+    lv_label_set_text_fmt(s_overrun_label, "Voices  %u/%u\nOverruns  %lu",
+                          static_cast<unsigned>(voice_usage.active),
+                          static_cast<unsigned>(voice_usage.maximum),
+                          static_cast<unsigned long>(Feature::Synth::engine().renderOverrunCount()));
+
+    SynthEngine::MidiControlSnapshot activity{};
+    if (Feature::Synth::engine().readMidiControlSnapshot(activity) && activity.sequence != s_seen_midi_sequence)
+    {
+        s_seen_midi_sequence = activity.sequence;
+        s_activity_until_us = now_us + 2'000'000;
+        const int32_t value_hundredths = activity.value >= 0.0f
+                                             ? static_cast<int32_t>(activity.value * 100.0f + 0.5f)
+                                             : static_cast<int32_t>(activity.value * 100.0f - 0.5f);
+        const int32_t value_whole = value_hundredths / 100;
+        const unsigned value_fraction = static_cast<unsigned>(
+            value_hundredths < 0 ? -value_hundredths : value_hundredths) % 100;
+        const unsigned raw = static_cast<unsigned>(activity.raw + 0.5f);
+        switch (activity.kind)
+        {
+        case SynthEngine::MidiControlSnapshot::Kind::Button:
+            lv_label_set_text_fmt(s_activity_label, "MIDI-Button\n%s\nCC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
+                                  activity.widgetLabel, static_cast<unsigned>(activity.cc),
+                                  static_cast<unsigned>(activity.channel + 1), static_cast<int>(value_whole),
+                                  value_fraction, raw);
+            break;
+        case SynthEngine::MidiControlSnapshot::Kind::UpDownButton:
+            lv_label_set_text_fmt(s_activity_label, "MIDI-Up/Down\n%s\n%s  CC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
+                                  activity.widgetLabel, activity.direction == 1 ? "Hoch" : "Runter",
+                                  static_cast<unsigned>(activity.cc), static_cast<unsigned>(activity.channel + 1),
+                                  static_cast<int>(value_whole), value_fraction, raw);
+            break;
+        case SynthEngine::MidiControlSnapshot::Kind::Switch:
+            lv_label_set_text_fmt(s_activity_label, "MIDI-Switch\n%s\nCC %u  CH %u\n%s  (MIDI %u)",
+                                  activity.widgetLabel, static_cast<unsigned>(activity.cc),
+                                  static_cast<unsigned>(activity.channel + 1),
+                                  activity.value >= 0.5f ? "In 2" : "In 1", raw);
+            break;
+        case SynthEngine::MidiControlSnapshot::Kind::Knob:
+        default:
+            lv_label_set_text_fmt(s_activity_label, "MIDI-Knopf\n%s\nCC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
+                                  activity.widgetLabel, static_cast<unsigned>(activity.cc),
+                                  static_cast<unsigned>(activity.channel + 1), static_cast<int>(value_whole),
+                                  value_fraction, raw);
+            break;
+        }
+        lv_obj_clear_flag(s_activity_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_activity_panel);
+    }
+    if (s_activity_panel != nullptr && s_activity_until_us != 0 && now_us >= s_activity_until_us)
+        lv_obj_add_flag(s_activity_panel, LV_OBJ_FLAG_HIDDEN);
+#endif
+}
+
+void ui_update_timer(lv_timer_t*) { update_runtime_labels(); }
+
+lv_obj_t* create_card(lv_obj_t* parent, int x, int y, int width, int height, const char* title,
+                      lv_obj_t** value_out)
+{
+    lv_obj_t* card = lv_obj_create(parent);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_size(card, width, height);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x182231), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0x33465D), 0);
+    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* title_label = lv_label_create(card);
+    lv_label_set_text(title_label, title);
+    lv_obj_set_pos(title_label, 14, 10);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0x8EA5BE), 0);
+    *value_out = lv_label_create(card);
+    lv_obj_set_pos(*value_out, 14, 36);
+    lv_obj_set_style_text_color(*value_out, lv_color_hex(0xF3F7FC), 0);
+    return card;
 }
 
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
@@ -176,9 +411,6 @@ void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
-        if (s_touch_position_label != nullptr) {
-            lv_label_set_text_fmt(s_touch_position_label, "Touch X: %u  Y: %u", x, y);
-        }
         static int last_logged_x = -1;
         static int last_logged_y = -1;
         if (last_logged_x != x || last_logged_y != y) {
@@ -292,60 +524,112 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
 
 #endif
 
-void create_test_ui() {
+void create_ui() {
     lv_obj_t* screen = lv_screen_active();
+    lv_display_t* display = lv_obj_get_display(screen);
+    const int screen_width = lv_display_get_horizontal_resolution(display);
+    const int screen_height = lv_display_get_vertical_resolution(display);
+    const int margin = 24;
+    const int gap = 14;
+    const int card_width = (screen_width - margin * 2 - gap * 3) / 4;
+
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x0D131C), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 
     lv_obj_t* title = lv_label_create(screen);
-    lv_label_set_text_static(title, CurrentBoard::BOARD_NAME);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 100);
+    lv_label_set_text(title, "ESPRESSYNTH");
+    lv_obj_set_pos(title, margin, 18);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xF3F7FC), 0);
 
-#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \
-    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_HID_HOST))
-    // Demo text field: proves USB/BLE keyboard text entry (see feed_keyboard_event()),
-    // including Tab/Shift+Tab to move focus and arrow keys/Backspace to edit.
-    lv_obj_t* text_field = lv_textarea_create(screen);
-    lv_textarea_set_one_line(text_field, true);
-    lv_textarea_set_placeholder_text(text_field, "Type here (USB/BLE keyboard)");
-    lv_obj_set_width(text_field, 400);
-    lv_obj_align_to(text_field, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 30);
-    if (s_input_group != nullptr) {
-        lv_group_add_obj(s_input_group, text_field);
-        lv_group_focus_obj(text_field);
-    }
+    lv_obj_t* board = lv_label_create(screen);
+    lv_label_set_text(board, CurrentBoard::BOARD_NAME);
+    lv_obj_set_pos(board, margin, 43);
+    lv_obj_set_style_text_color(board, lv_color_hex(0x8EA5BE), 0);
+
+    s_ip_label = lv_label_create(screen);
+    lv_obj_align(s_ip_label, LV_ALIGN_TOP_RIGHT, -margin, 24);
+    lv_obj_set_style_text_color(s_ip_label, lv_color_hex(0x70D6A3), 0);
+
+    const int metrics_y = 78;
+    create_card(screen, margin, metrics_y, card_width, 88, "SPEICHER", &s_memory_label);
+    create_card(screen, margin + card_width + gap, metrics_y, card_width, 88, "CPU", &s_cpu_label);
+    create_card(screen, margin + (card_width + gap) * 2, metrics_y, card_width, 88, "MIDI", &s_midi_label);
+    create_card(screen, margin + (card_width + gap) * 3, metrics_y, card_width, 88, "AUDIO", &s_overrun_label);
+
+    const int panel_y = metrics_y + 112;
+    const int panel_height = screen_height - panel_y - margin;
+    lv_obj_t* preset_panel = lv_obj_create(screen);
+    lv_obj_set_pos(preset_panel, margin, panel_y);
+    lv_obj_set_size(preset_panel, screen_width - margin * 2, panel_height);
+    lv_obj_set_style_bg_color(preset_panel, lv_color_hex(0x141D29), 0);
+    lv_obj_set_style_bg_opa(preset_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(preset_panel, 1, 0);
+    lv_obj_set_style_border_color(preset_panel, lv_color_hex(0x33465D), 0);
+    lv_obj_set_style_radius(preset_panel, 14, 0);
+    lv_obj_clear_flag(preset_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* preset_title = lv_label_create(preset_panel);
+    lv_label_set_text(preset_title, "AKTIVES PRESET");
+    lv_obj_align(preset_title, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_style_text_color(preset_title, lv_color_hex(0x8EA5BE), 0);
+
+    lv_obj_t* previous = lv_button_create(preset_panel);
+    lv_obj_set_size(previous, 100, 80);
+    lv_obj_align(previous, LV_ALIGN_LEFT_MID, 70, 5);
+    lv_obj_add_event_cb(previous, on_previous_preset, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* previous_label = lv_label_create(previous);
+    lv_label_set_text_static(previous_label, LV_SYMBOL_LEFT);
+    lv_obj_center(previous_label);
+
+    s_preset_label = lv_label_create(preset_panel);
+    lv_label_set_text_static(s_preset_label, "Current");
+    lv_obj_align(s_preset_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_color(s_preset_label, lv_color_hex(0xF3F7FC), 0);
+
+    s_preset_index_label = lv_label_create(preset_panel);
+    lv_label_set_text_static(s_preset_index_label, "1 / 1");
+    lv_obj_align(s_preset_index_label, LV_ALIGN_CENTER, 0, 38);
+    lv_obj_set_style_text_color(s_preset_index_label, lv_color_hex(0x8EA5BE), 0);
+
+    lv_obj_t* next = lv_button_create(preset_panel);
+    lv_obj_set_size(next, 100, 80);
+    lv_obj_align(next, LV_ALIGN_RIGHT_MID, -70, 5);
+    lv_obj_add_event_cb(next, on_next_preset, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* next_label = lv_label_create(next);
+    lv_label_set_text_static(next_label, LV_SYMBOL_RIGHT);
+    lv_obj_center(next_label);
+
+    lv_obj_t* panic = lv_button_create(screen);
+    lv_obj_set_size(panic, 150, 58);
+    lv_obj_align(panic, LV_ALIGN_BOTTOM_RIGHT, -margin, -margin);
+    lv_obj_set_style_bg_color(panic, lv_color_hex(0xB9364A), 0);
+    lv_obj_add_event_cb(panic, on_panic, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* panic_label = lv_label_create(panic);
+    lv_label_set_text_static(panic_label, "PANIC");
+    lv_obj_center(panic_label);
+
+    s_activity_panel = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_activity_panel, 390, 170);
+    lv_obj_align(s_activity_panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_activity_panel, lv_color_hex(0x243A53), 0);
+    lv_obj_set_style_bg_opa(s_activity_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_activity_panel, 2, 0);
+    lv_obj_set_style_border_color(s_activity_panel, lv_color_hex(0x70D6A3), 0);
+    lv_obj_set_style_radius(s_activity_panel, 14, 0);
+    s_activity_label = lv_label_create(s_activity_panel);
+    lv_obj_set_width(s_activity_label, 360);
+    lv_label_set_long_mode(s_activity_label, LV_LABEL_LONG_WRAP);
+    lv_obj_center(s_activity_label);
+    lv_obj_set_style_text_align(s_activity_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_activity_label, lv_color_hex(0xF3F7FC), 0);
+    lv_obj_add_flag(s_activity_panel, LV_OBJ_FLAG_HIDDEN);
+
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    refresh_preset_list();
+    update_preset_labels();
 #endif
-
-    lv_obj_t* button = lv_button_create(screen);
-    lv_obj_set_size(button, 320, 120);
-    lv_obj_center(button);
-    // The default theme only styles PRESSED, not HOVERED, so a mouse resting on
-    // the button (without clicking) shows no feedback at all. Add an explicit
-    // hover tint, plus a darker one for hover+press (touch presses also pass
-    // through HOVERED on the way to PRESSED, see lv_indev.c's pointer handling).
-    lv_obj_set_style_bg_color(button, lv_color_hex(0x4DA3FF),
-                              static_cast<lv_style_selector_t>(LV_PART_MAIN) | LV_STATE_HOVERED);
-    lv_obj_set_style_bg_color(button, lv_color_hex(0x1E5FBF),
-                              static_cast<lv_style_selector_t>(LV_PART_MAIN) | LV_STATE_HOVERED | LV_STATE_PRESSED);
-    // PRESSED is intentional for this hardware test: it gives immediate
-    // feedback even if the controller does not report a clean release yet.
-    lv_obj_add_event_cb(button, on_test_button, LV_EVENT_PRESSED, nullptr);
-#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \
-    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_HID_HOST))
-    if (s_input_group != nullptr) {
-        lv_group_add_obj(s_input_group, button);
-    }
-#endif
-
-    lv_obj_t* button_label = lv_label_create(button);
-    lv_label_set_text_static(button_label, "Test button");
-    lv_obj_center(button_label);
-
-    s_status_label = lv_label_create(screen);
-    lv_label_set_text_static(s_status_label, "Display online");
-    lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -100);
-
-    s_touch_position_label = lv_label_create(screen);
-    lv_label_set_text_static(s_touch_position_label, "Touch X: --  Y: --");
-    lv_obj_align(s_touch_position_label, LV_ALIGN_TOP_LEFT, 30, 30);
+    update_runtime_labels();
+    s_ui_timer = lv_timer_create(ui_update_timer, 250, nullptr);
 }
 
 } // namespace
@@ -648,10 +932,7 @@ inline esp_err_t init() {
                  static_cast<long>(s_mouse_max_x), static_cast<long>(s_mouse_max_y));
     }
 
-    // Physical keyboard support: a keypad indev feeding an LVGL group, so Tab/Shift+Tab
-    // move focus between the widgets added to the group (see create_test_ui()), arrow
-    // keys/Backspace/Delete/Enter go to whichever one is focused, and printable characters
-    // type into a focused text field. Key -> LV_KEY_* mapping lives in app_events.hpp.
+    // Physical keyboard support: keep keypad input available for future UI controls.
     s_input_group = lv_group_create();
     if (s_input_group == nullptr) {
         ESP_LOGW(TAG, "LVGL input group creation failed, keyboard navigation disabled");
@@ -667,10 +948,10 @@ inline esp_err_t init() {
     }
 #endif
 
-    create_test_ui();
+    create_ui();
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "Display and LVGL test button are ready");
+    ESP_LOGI(TAG, "Display and LVGL status UI are ready");
     (void)dsi_phy_ldo; // Keep the PHY rail acquired for the lifetime of the display.
     return ESP_OK;
 }
