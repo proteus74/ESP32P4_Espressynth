@@ -16,14 +16,32 @@ inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = inst.mixer;
+    // Which inputs actually contribute (nonzero gain), resolved once per
+    // block instead of reading+multiplying every port - including zero-
+    // gain ones - on every sample (plan section 5, Mixer row: "Aktive
+    // Eingänge und Gains einmal vorbereiten; Null-Gain-Eingänge nicht
+    // lesen"). Same summation order as before (only zero-gain ports, whose
+    // contribution is 0 regardless of the port's actual sample, are
+    // skipped), so this is bit-identical for the common finite-signal case.
+    uint8_t activePort[8];
+    uint8_t activeCount = 0;
+    for (int p = 0; p < inst.audioInPortCount; ++p)
+    {
+        if (s.inputGain[p] != 0.0f)
+        {
+            activePort[activeCount++] = static_cast<uint8_t>(p);
+        }
+    }
+    const float outputGain = s.outputGain;
     for (size_t i = 0; i < frames; ++i)
     {
         float sum = 0.0f;
-        for (int p = 0; p < inst.audioInPortCount; ++p)
+        for (uint8_t idx = 0; idx < activeCount; ++idx)
         {
+            const int p = activePort[idx];
             sum += portSample(inst, p, i) * s.inputGain[p];
         }
-        inst.outL[i] = sum * s.outputGain;
+        inst.outL[i] = sum * outputGain;
     }
 }
 

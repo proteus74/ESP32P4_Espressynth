@@ -29,56 +29,76 @@ inline int gainIndex(const char *name)
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    // Returns true when the channel is unconditionally silent for this
-    // whole block (no incoming edge and no nonzero default) - lets the
-    // caller skip the per-sample gain multiply below entirely for an unused
-    // bus, since 0 * anything is still 0 (plan section 3, P2: "Nur
-    // verwendete Link-Busse anlegen und transportieren" - the render-side
-    // half; the builder still creates all eight bus edges regardless of
-    // use, see that section, but an unused bus no longer pays for a
-    // pointless gain pass here).
-    auto copyChannel = [&](int port, float *output) -> bool
-    {
-        if (inst.inPorts[port] != nullptr)
-        {
-            memcpy(output, inst.inPorts[port], frames * sizeof(float));
-            return false;
-        }
-        const float value = inst.controlValue[port];
-        if (value == 0.0f)
-        {
-            memset(output, 0, frames * sizeof(float));
-            return true;
-        }
-        for (size_t i = 0; i < frames; ++i)
-        {
-            output[i] = value;
-        }
-        return false;
-    };
     for (int bus = 0; bus < static_cast<int>(synth::kLinkBusCount); ++bus)
     {
         float *output = outputPortBuffer(inst, static_cast<uint8_t>(bus));
-        const bool silent = copyChannel(bus, output);
-        if (inst.type != NodeType::AudioInputLink || silent)
+        const float *source = inst.inPorts[bus];
+        const float sourceScalar = inst.controlValue[bus];
+
+        if (inst.type != NodeType::AudioInputLink)
         {
+            // AudioOutputLink: plain passthrough, no gain stage - unchanged.
+            if (source != nullptr)
+            {
+                memcpy(output, source, frames * sizeof(float));
+            }
+            else if (sourceScalar == 0.0f)
+            {
+                memset(output, 0, frames * sizeof(float));
+            }
+            else
+            {
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    output[i] = sourceScalar;
+                }
+            }
             continue;
         }
+
+        // Unconditionally silent this whole block (no incoming edge and no
+        // nonzero default) - skip the gain stage entirely, since 0 * gain
+        // is still 0 for any bus that nothing actually uses (plan section
+        // 3, P2: "Nur verwendete Link-Busse anlegen und transportieren" -
+        // the render-side half; the builder still creates all eight bus
+        // edges regardless of use, see that section).
+        if (source == nullptr && sourceScalar == 0.0f)
+        {
+            memset(output, 0, frames * sizeof(float));
+            continue;
+        }
+
+        // Copy and gain-multiply merged into one pass instead of a
+        // memcpy/fill followed by a separate per-sample multiply loop
+        // (plan section 5, AudioOutputLink/AudioInputLink row: "Kopieren
+        // und Multiplikation zusammenfassen").
         const int gainPort = static_cast<int>(synth::kLinkBusCount) + bus;
         const bool gainConnected = (inst.audioConnectedPortMask & synth::portBit(gainPort)) != 0;
         if (gainConnected)
         {
             for (size_t i = 0; i < frames; ++i)
             {
-                output[i] *= cv::vcaGain(noderender::portSample(inst, gainPort, i), false);
+                const float value = source != nullptr ? source[i] : sourceScalar;
+                output[i] = value * cv::vcaGain(noderender::portSample(inst, gainPort, i), false);
             }
         }
         else
         {
             const float gain = cv::vcaGain(inst.link->gainCv[bus], false);
-            for (size_t i = 0; i < frames; ++i)
+            if (source != nullptr)
             {
-                output[i] *= gain;
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    output[i] = source[i] * gain;
+                }
+            }
+            else
+            {
+                const float value = sourceScalar * gain;
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    output[i] = value;
+                }
             }
         }
     }

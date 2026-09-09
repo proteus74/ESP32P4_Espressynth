@@ -122,13 +122,13 @@ inline void refreshMixGains(ReverbLightState &s)
     s.dryGain = reverbDbToGain(s.dryLevelDb);
 }
 
-// Re-derives ReverbState's comb feedback gains (from roomSize) and damping
-// filter cutoff (from damping) - same formulas as buildReverb() below,
-// re-applied to the already-allocated (fixed-length) comb buffers, no
-// reinit. Shared by setParamReverb's roomSize/damping cases and render()
-// (per-block recompute when roomSize/damping has a live audio-rate CV edge
-// - see PortTables.h).
-inline void recomputeReverbDerived(ReverbState &s)
+// Re-derives ReverbState's comb feedback gains (from roomSize, one powf()
+// per comb - 8 real transcendental calls) - same formula as buildReverb()
+// below, re-applied to the already-allocated (fixed-length) comb buffers,
+// no reinit. Split from the damping-cutoff derivation below (plan section
+// 5, Reverb row: "beide Ableitungen entkoppeln") so a damping-only change
+// doesn't pay for 8 redundant powf() calls, and vice versa.
+inline void recomputeReverbCombGains(ReverbState &s)
 {
     const float sizeSec = 0.1f + s.roomSize * 7.9f;
     for (int c = 0; c < ReverbState::kCombs; ++c)
@@ -145,14 +145,26 @@ inline void recomputeReverbDerived(ReverbState &s)
             g = 0.0f;
         s.combGain[c] = g;
     }
+}
+
+inline void recomputeReverbDamping(ReverbState &s)
+{
     const float dampCutoffHz = 20000.0f - s.damping * 19800.0f;
     s.dampingL.setCutoff(dampCutoffHz, static_cast<float>(synth::kSampleRate));
     s.dampingR.setCutoff(dampCutoffHz, static_cast<float>(synth::kSampleRate));
 }
 
-// Same as recomputeReverbDerived, for the CPU-cheap mono ReverbLightState
-// (fewer combs, one shared damping filter, no pre-delay).
-inline void recomputeReverbLightDerived(ReverbLightState &s)
+// Convenience wrapper for callers (buildReverb, setParamReverb) that don't
+// need the split - render() below calls the two halves independently.
+inline void recomputeReverbDerived(ReverbState &s)
+{
+    recomputeReverbCombGains(s);
+    recomputeReverbDamping(s);
+}
+
+// Same split as above, for the CPU-cheap mono ReverbLightState (fewer
+// combs, one shared damping filter, no pre-delay).
+inline void recomputeReverbLightCombGains(ReverbLightState &s)
 {
     const float sizeSec = 0.1f + s.roomSize * 7.9f;
     for (int c = 0; c < ReverbLightState::kCombs; ++c)
@@ -169,8 +181,18 @@ inline void recomputeReverbLightDerived(ReverbLightState &s)
             g = 0.0f;
         s.combGain[c] = g;
     }
+}
+
+inline void recomputeReverbLightDamping(ReverbLightState &s)
+{
     const float dampCutoffHz = 20000.0f - s.damping * 19800.0f;
     s.dampingFilter.setCutoff(dampCutoffHz, static_cast<float>(synth::kSampleRate));
+}
+
+inline void recomputeReverbLightDerived(ReverbLightState &s)
+{
+    recomputeReverbLightCombGains(s);
+    recomputeReverbLightDamping(s);
 }
 
 inline void renderReverb(NodeInstance &inst, size_t frames)
@@ -184,20 +206,31 @@ inline void renderReverb(NodeInstance &inst, size_t frames)
     // comb feedback gains/damping cutoff only indirectly
     // (recomputeReverbDerived, same formula as buildReverb()) - hence only
     // recomputed once in a bundle, not per sample.
-    bool derivedDirty = false;
+    // Only recompute when the resolved value actually changed, not merely
+    // because the CV port is connected (plan section 5, Reverb row:
+    // "RoomSize/Damping werden bei angeschlossenen CVs jeden Block neu
+    // abgeleitet, auch bei gleichem Wert" - the wetLevel/dryLevel handling
+    // just below already got this right; roomSize/damping didn't).
+    // recomputeReverbCombGains()/recomputeReverbDamping() are independent
+    // (see their comment), so a damping-only change no longer pays for 8
+    // redundant powf() calls in the comb-gain loop, and vice versa.
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0)
     {
-        s.roomSize = cv::cvToRange(portSample(inst, 3, 0), s.roomSizeMin, s.roomSizeMax, s.roomSizeLog);
-        derivedDirty = true;
+        const float roomSize = cv::cvToRange(portSample(inst, 3, 0), s.roomSizeMin, s.roomSizeMax, s.roomSizeLog);
+        if (roomSize != s.roomSize)
+        {
+            s.roomSize = roomSize;
+            recomputeReverbCombGains(s);
+        }
     }
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0)
     {
-        s.damping = cv::cvToRange(portSample(inst, 4, 0), s.dampingMin, s.dampingMax, s.dampingLog);
-        derivedDirty = true;
-    }
-    if (derivedDirty)
-    {
-        recomputeReverbDerived(s);
+        const float damping = cv::cvToRange(portSample(inst, 4, 0), s.dampingMin, s.dampingMax, s.dampingLog);
+        if (damping != s.damping)
+        {
+            s.damping = damping;
+            recomputeReverbDamping(s);
+        }
     }
     bool mixGainsDirty = false;
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0)
@@ -285,20 +318,25 @@ inline void renderReverbLight(NodeInstance &inst, size_t frames)
     // .claude/plans/schaue-die-die-ganze-zany-moore.md. Dry stays stereo
     // (xl/xr unchanged), only the reverb tail is mixed mono.
     auto &s = *inst.reverbLight;
-    bool derivedDirty = false;
+    // See renderReverb()'s comment above - same value-comparison gating and
+    // combGains/damping split.
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0)
     {
-        s.roomSize = cv::cvToRange(portSample(inst, 3, 0), s.roomSizeMin, s.roomSizeMax, s.roomSizeLog);
-        derivedDirty = true;
+        const float roomSize = cv::cvToRange(portSample(inst, 3, 0), s.roomSizeMin, s.roomSizeMax, s.roomSizeLog);
+        if (roomSize != s.roomSize)
+        {
+            s.roomSize = roomSize;
+            recomputeReverbLightCombGains(s);
+        }
     }
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0)
     {
-        s.damping = cv::cvToRange(portSample(inst, 4, 0), s.dampingMin, s.dampingMax, s.dampingLog);
-        derivedDirty = true;
-    }
-    if (derivedDirty)
-    {
-        recomputeReverbLightDerived(s);
+        const float damping = cv::cvToRange(portSample(inst, 4, 0), s.dampingMin, s.dampingMax, s.dampingLog);
+        if (damping != s.damping)
+        {
+            s.damping = damping;
+            recomputeReverbLightDamping(s);
+        }
     }
     bool mixGainsDirty = false;
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0)

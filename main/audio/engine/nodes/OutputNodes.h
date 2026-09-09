@@ -48,6 +48,21 @@ inline void render(NodeInstance &inst, size_t frames)
         memset(inst.outR, 0, frames * sizeof(float));
         return;
     }
+    // Mute-ramp convergence stop (plan section 5, AudioOut row: "konvergierte
+    // Mute-Rampe stoppen") - once muteSmoothed has settled within epsilon of
+    // its target (the common steady state: unmuted and staying that way, or
+    // muted and already faded - the fully-silent case above already returns
+    // early), snap it there and skip the per-sample IIR update for the rest
+    // of the block. Re-applying `coeff*target + (1-coeff)*target` to an
+    // already-equal value is exactly target again anyway, so this is not an
+    // approximation - the limiter itself still runs every sample, only the
+    // mute-smoothing multiply-add is skipped.
+    constexpr float kMuteConvergeEps = 1e-4f;
+    const bool muteConverged = fabsf(s.muteSmoothed - targetMute) <= kMuteConvergeEps;
+    if (muteConverged)
+    {
+        s.muteSmoothed = targetMute;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         // portSample() arrives in the +/-5V audio domain (cv::kAudioPeakVolts)
@@ -57,7 +72,10 @@ inline void render(NodeInstance &inst, size_t frames)
         float l = portSample(inst, 0, i) * s.leftLevel * cv::kInvAudioPeakVolts;
         float r = portSample(inst, 1, i) * s.rightLevel * cv::kInvAudioPeakVolts;
         s.limiter.process(l, r);
-        s.muteSmoothed = muteCoeff * s.muteSmoothed + (1.0f - muteCoeff) * targetMute;
+        if (!muteConverged)
+        {
+            s.muteSmoothed = muteCoeff * s.muteSmoothed + (1.0f - muteCoeff) * targetMute;
+        }
         inst.outL[i] = l * s.muteSmoothed;
         inst.outR[i] = r * s.muteSmoothed;
     }

@@ -91,12 +91,39 @@ inline void renderDivide(NodeInstance &inst, size_t frames)
     // See renderMultiplier()'s comment above.
     float numerator = 0.0f;
     float denominator = 0.0f;
-    if (audioPortConstantForBlock(inst, 0, frames, numerator) && audioPortConstantForBlock(inst, 1, frames, denominator))
+    const bool numeratorConstant = audioPortConstantForBlock(inst, 0, frames, numerator);
+    const bool denominatorConstant = audioPortConstantForBlock(inst, 1, frames, denominator);
+    if (numeratorConstant && denominatorConstant)
     {
         const float result = denominator == 0.0f ? 0.0f : numerator / denominator;
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = result;
+        }
+        return;
+    }
+    if (denominatorConstant)
+    {
+        // Numerator varies, denominator doesn't - cache its reciprocal once
+        // and multiply per sample instead of dividing (plan section 5,
+        // Adder/Multiplier/Divide/Abs row: "konstante Nenner beim Divide
+        // durch gecachten Kehrwert behandeln"). Same "compute 1/x once,
+        // multiply from then on" technique this codebase already uses
+        // elsewhere without -ffast-math (see Biquad::setCoeffs()'s
+        // "Reciprocal trick" comment in DspPrimitives.h) - not literally
+        // bit-identical to a fresh division every sample, but an already-
+        // established, deliberate tradeoff in this codebase, unlike a
+        // blanket -ffast-math flag. Division-by-zero keeps the existing
+        // "outputs 0, not Inf/NaN" semantics.
+        if (denominator == 0.0f)
+        {
+            memset(inst.outL, 0, frames * sizeof(float));
+            return;
+        }
+        const float invDenominator = 1.0f / denominator;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = portSample(inst, 0, i) * invDenominator;
         }
         return;
     }

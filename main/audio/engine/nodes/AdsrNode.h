@@ -83,9 +83,26 @@ inline void render(NodeInstance &inst, size_t frames)
     // Oscillator.amplitude wire sounds identical to before this change
     // (envelope*10 in, /10 back out via vcaGain), it's just genuinely
     // 0-10V CV now so any other CV-mappable target can consume it too.
+    // Velocity*kMaxVolts is loop-invariant - hoisted once instead of
+    // recomputed every sample (plan section 5, ADSR row: "Velocity*10
+    // einmal vorberechnen").
+    const float velocityScale = s.velocity * cv::kMaxVolts;
+    if (s.ramp.isHolding())
+    {
+        // Sustain plateau or fully idle - process() would just keep
+        // returning the same current() value sample after sample. Compute
+        // it once and fill the block directly (plan section 5: "Sustain
+        // und Idle als konstante Ausgänge").
+        const float held = s.ramp.current() * velocityScale;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = held;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = s.ramp.process() * s.velocity * cv::kMaxVolts;
+        inst.outL[i] = s.ramp.process() * velocityScale;
     }
 }
 

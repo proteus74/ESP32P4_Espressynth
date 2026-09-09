@@ -107,6 +107,18 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool pitchControlRamping = (inst.controlRampPortMask & synth::portBit(kPitchCvPort)) != 0;
     const bool pitchControlFed = controlPortConnected(inst, kPitchCvPort);
     const bool tuneAudioFed = (inst.audioConnectedPortMask & synth::portBit(kTunePort)) != 0;
+    // Same constant-for-block detection as Oscillator (OscillatorNode.h) -
+    // plan section 2 explicitly calls out that Hammond lacked this. A held
+    // note through e.g. a Frequency Divider still produces one repeated CV
+    // value all block; recomputing nine hz*ratio phase steps from it every
+    // sample (or even every modulationStride-th sample) is pure waste when
+    // it never actually changes.
+    float constantPitchCv = kCenterVolts;
+    const bool pitchAudioConstant = pitchAudioFed && audioPortConstantForBlock(inst, kPitchCvPort, frames, constantPitchCv);
+    const bool pitchNeedsAudioRate = (pitchAudioFed && !pitchAudioConstant) || pitchControlRamping;
+    float constantTuneVolts = s.tuneVolts;
+    const bool tuneAudioConstant = tuneAudioFed && audioPortConstantForBlock(inst, kTunePort, frames, constantTuneVolts);
+    const bool tuneNeedsAudioRate = tuneAudioFed && !tuneAudioConstant;
     const bool amplitudeAudioFed = (inst.audioConnectedPortMask & synth::portBit(kAmplitudePort)) != 0;
     const bool gainFed = (inst.audioConnectedPortMask & synth::portBit(kGainPort)) != 0;
     const float gainTarget = cv::vcaGain(s.gainCv, false);
@@ -152,7 +164,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // is the common case. Getting this wrong here is nine times worse than
     // getting it wrong in Oscillator, since every recompute feeds all nine
     // independent phase accumulators below.
-    const bool frequencyModulated = pitchAudioFed || pitchControlRamping || tuneAudioFed;
+    const bool frequencyModulated = pitchNeedsAudioRate || tuneNeedsAudioRate;
     if (frequencyModulated || amplitudeAudioFed)
     {
         const size_t modulationStride = static_cast<size_t>(clampf(static_cast<float>(s.modulationStride), 1.0f, 16.0f));
@@ -161,8 +173,9 @@ inline void render(NodeInstance &inst, size_t frames)
         uint32_t phaseIncrement[kDrawbarCount] = {};
         if (!frequencyModulated)
         {
-            const float pitchCv = pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts;
-            const float hz = cv::hzFromPitchCv(pitchCv + (s.tuneVolts - kCenterVolts));
+            const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
+            const float tuneVolts = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
+            const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
             for (int k = 0; k < kDrawbarCount; ++k)
             {
                 phaseIncrement[k] = phaseStep(hz, s.ratio[k]);
@@ -175,9 +188,10 @@ inline void render(NodeInstance &inst, size_t frames)
                 nextModulationSample += modulationStride;
                 if (frequencyModulated)
                 {
-                    const float pitchCv = (pitchAudioFed || pitchControlRamping) ? portSample(inst, kPitchCvPort, i)
-                                         : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
-                    const float tuneVolts = tuneAudioFed ? portSample(inst, kTunePort, i) : s.tuneVolts;
+                    const float pitchCv = pitchNeedsAudioRate ? portSample(inst, kPitchCvPort, i)
+                                         : (pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts));
+                    const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, kTunePort, i)
+                                           : (tuneAudioFed ? constantTuneVolts : s.tuneVolts);
                     const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
                     for (int k = 0; k < kDrawbarCount; ++k)
                     {
@@ -188,31 +202,33 @@ inline void render(NodeInstance &inst, size_t frames)
                       (amplitudeAudioFed ? cv::vcaGain(portSample(inst, kAmplitudePort, i), false) : 0.0f);
             }
 
-            float sum = 0.0f;
+            // Every drawbar's phase accumulator always advances (continuous
+            // by construction for ANY ratio, including one just edited mid-
+            // note - see HammondState::phase's comment), regardless of
+            // whether it's currently active - cheap (one integer add each).
             for (int k = 0; k < kDrawbarCount; ++k)
             {
-                // Each drawbar's own phase accumulator advances at
-                // hz*ratio[k], independent of every other drawbar -
-                // continuous by construction for ANY ratio value, including
-                // one just edited in the settings dialog mid-note.
                 s.phase[k] += phaseIncrement[k];
+            }
 
+            // Only the ACTIVE drawbars pay for sineLookup + gain/smoothing -
+            // same activeDrawbar[]/activeDrawbarCount restriction the static
+            // (non-modulated) path below already used; a typical registration
+            // (e.g. classic 888000000) only has 3-4 of the nine drawbars
+            // active at all (plan section 5: "im modulierten Pfad ...
+            // aktive Drawbars stärker nutzen").
+            float sum = 0.0f;
+            for (uint8_t activeIndex = 0; activeIndex < activeDrawbarCount; ++activeIndex)
+            {
+                const int k = activeDrawbar[activeIndex];
                 if (dbBuf[k] != nullptr)
                 {
                     // Live cable: CV arrives per sample, like Oscillator's
                     // wired "gain" - never skipped, regardless of level.
                     sum += sineLookup(s.phase[k]) * cv::vcaGain(dbBuf[k][i], false);
                 }
-                else if (dbActive[k])
+                else
                 {
-                    // Only smoothed (and only sineLookup'd) while genuinely
-                    // active - dbActive[k] false means the target is
-                    // already 0 AND the smoother has already converged
-                    // there, so calling process() would just keep
-                    // recomputing 0 forever. Skipping it costs nothing on
-                    // resume: the very next block a nonzero target reaches
-                    // this branch again, ramping up from wherever the
-                    // smoother was left (already ~0), never a stale jump.
                     const float drawbarGain = dbSmoothing[k] ? s.drawbarSmooth[k].process(dbTarget[k]) : dbTarget[k];
                     sum += sineLookup(s.phase[k]) * drawbarGain;
                 }
@@ -226,8 +242,9 @@ inline void render(NodeInstance &inst, size_t frames)
         return;
     }
 
-    const float pitchCv = pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts;
-    const float hz = cv::hzFromPitchCv(pitchCv + (s.tuneVolts - kCenterVolts));
+    const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
+    const float tuneVoltsConst = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
+    const float hz = cv::hzFromPitchCv(pitchCv + (tuneVoltsConst - kCenterVolts));
     const float amp = baseAmp + (amplitudeAudioFed ? cv::vcaGain(portSample(inst, kAmplitudePort, 0), false) : 0.0f);
     uint32_t phaseIncrement[kDrawbarCount];
     for (int k = 0; k < kDrawbarCount; ++k)

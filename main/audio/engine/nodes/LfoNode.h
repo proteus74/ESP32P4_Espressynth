@@ -45,10 +45,18 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool globalActive = modeFed ? (portSample(inst, 2, 0) >= cv::kGateThresholdVolts) : s.global;
     if (globalActive && inst.primary != nullptr && inst.primary != &inst)
     {
-        for (size_t i = 0; i < frames; ++i)
-        {
-            inst.outL[i] = inst.primary->outL[i];
-        }
+        // A true buffer VIEW (aliasing inst.outL directly to inst.primary->
+        // outL, plan section 5's literal wording) was considered and
+        // rejected: Graph::renderBlock's per-instance idle-silence handling
+        // (the "first silent block after activity" memset) operates on each
+        // instance's OWN outL independently - if a non-primary voice went
+        // idle while primary/other mirrored voices stayed active, that
+        // memset would zero the SHARED buffer out from under all of them.
+        // A plain bulk copy has no such hazard and is already about as
+        // cheap as this gets - memcpy instead of a manual per-sample loop
+        // lets the compiler/hardware use a wider copy than one float at a
+        // time.
+        memcpy(inst.outL, inst.primary->outL, frames * sizeof(float));
         return;
     }
     // The LFO's "value" output always swings within the project's 0-10V CV
@@ -117,24 +125,31 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         for (size_t i = 0; i < frames; ++i)
         {
-            float raw;
             if (oneShotOn && s.oneShotDone)
             {
-                // Frozen: hold the waveform at its current (unadvanced)
-                // phase until the next sync edge re-arms it.
-                raw = s.phaseGen.currentSample(s.wave, phaseOffset);
-            }
-            else
-            {
-                raw = s.phaseGen.process(s.wave, s.rate, kSampleRate, phaseOffset);
-                if (oneShotOn)
+                // Frozen (from an earlier sample this block, or an earlier
+                // block entirely): the phase isn't advancing anymore, so
+                // the waveform value is now constant until the next sync
+                // edge re-arms it. Compute it once and fill the rest of
+                // the block directly instead of recomputing the identical
+                // value every remaining sample (plan section 5: "One-Shot-
+                // Endwert direkt halten").
+                const float frozenValue =
+                    clampf(center + s.phaseGen.currentSample(s.wave, phaseOffset) * halfSwing, clampLo, clampHi);
+                for (; i < frames; ++i)
                 {
-                    s.oneShotAccum += s.rate / kSampleRate;
-                    if (s.oneShotAccum >= 1.0f)
-                    {
-                        s.oneShotDone = true;
-                        s.oneShotAccum = 0.0f;
-                    }
+                    inst.outL[i] = frozenValue;
+                }
+                return;
+            }
+            const float raw = s.phaseGen.process(s.wave, s.rate, kSampleRate, phaseOffset);
+            if (oneShotOn)
+            {
+                s.oneShotAccum += s.rate / kSampleRate;
+                if (s.oneShotAccum >= 1.0f)
+                {
+                    s.oneShotDone = true;
+                    s.oneShotAccum = 0.0f;
                 }
             }
             inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);

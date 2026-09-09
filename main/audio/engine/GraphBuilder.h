@@ -1165,8 +1165,28 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
 
     if (outputLinkIdx >= 0 && inputLinkIdx >= 0)
     {
+        // Only wire a bus that actually carries something from the Sound
+        // Generation page (plan section 3, P2: "Nur verwendete Link-Busse
+        // anlegen und transportieren" - the builder-side half; the render-
+        // side half, skipping AudioInputLink's gain pass for a silent bus,
+        // is already in LinkNodes.h). AudioOutputLink's own
+        // audioConnectedPortMask already reflects the preset's real
+        // connections into it at this point (set by the general per-
+        // connection loop above, well before this Link-pairing code runs),
+        // so it's safe to read here as "is this bus genuinely fed". A bus
+        // with no source just stays unconnected on the AudioInputLink side
+        // too, exactly like any other never-wired audio input port
+        // elsewhere in this engine - Graph::renderBlock fills it from
+        // Link's own audioInDefault() (0.0f) instead of paying for an
+        // edge + accumulator + per-sample add that would only ever produce
+        // silence anyway.
+        const NodeInstance &outputLinkInst = g->instances[g->widgets[outputLinkIdx].instanceBase];
         for (uint8_t bus = 0; bus < synth::kLinkBusCount; ++bus)
         {
+            if ((outputLinkInst.audioConnectedPortMask & synth::portBit(bus)) == 0)
+            {
+                continue;
+            }
             addEdge(*g, g->widgets[outputLinkIdx].instanceBase, bus, g->widgets[inputLinkIdx].instanceBase, bus, 1.0f);
             g->instances[g->widgets[inputLinkIdx].instanceBase].audioConnectedPortMask |= synth::portBit(bus);
         }

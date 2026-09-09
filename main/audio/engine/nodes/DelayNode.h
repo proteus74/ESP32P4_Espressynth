@@ -38,6 +38,14 @@ struct DelayState
     bool feedbackLog = false;
     float mixMin = 0.0f, mixMax = 1.0f;
     bool mixLog = false;
+    // Cached cos/sin of the current mix angle - recomputed only when mix
+    // actually changes (plan section 5, Delay row: "Sinus/Cosinus des Mix
+    // nur bei Änderung berechnen"), not unconditionally every block. -1.0f
+    // is outside mix's valid [0,1] range, so the very first render() call
+    // always computes once regardless of the initial mix value.
+    float cachedMix = -1.0f;
+    float dryGain = 1.0f;
+    float wetGain = 0.0f;
 };
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -59,9 +67,18 @@ inline void render(NodeInstance &inst, size_t frames)
     const uint32_t delaySamples = static_cast<uint32_t>(s.delayTimeMs * 0.001f * kSampleRate);
     // Equal-power crossfade (matches esp_ae_delay_para_t's documented mix
     // behavior): dry/wet gains trace a quarter sine so the perceived
-    // loudness stays constant across the whole 0..1 mix range.
-    const float dryGain = cosf(s.mix * 1.5707963267948966f);
-    const float wetGain = sinf(s.mix * 1.5707963267948966f);
+    // loudness stays constant across the whole 0..1 mix range. cosf/sinf
+    // are real transcendental calls (no LUT here) - only worth paying when
+    // mix actually changed since the last block, not on every block
+    // regardless (the common case, since mix is rarely modulated).
+    if (s.mix != s.cachedMix)
+    {
+        s.cachedMix = s.mix;
+        s.dryGain = cosf(s.mix * 1.5707963267948966f);
+        s.wetGain = sinf(s.mix * 1.5707963267948966f);
+    }
+    const float dryGain = s.dryGain;
+    const float wetGain = s.wetGain;
     for (size_t i = 0; i < frames; ++i)
     {
         const float xl = portSample(inst, 0, i);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -49,9 +50,20 @@ inline void render(NodeInstance &inst, size_t frames)
     else
     {
         const float target = cv::vcaGain(s.amountCv, s.exponential);
+        // Smoothing convergence stop (plan section 5, Gain/VCA row: same
+        // pattern already applied to Oscillator/Hammond's gain - see
+        // OscillatorNode.h): once the smoother has settled within epsilon
+        // of its target, snap it there and skip the per-sample
+        // OnePoleLowpass::process() call for the rest of this block.
+        constexpr float kConvergeEps = 1e-4f;
+        const bool converged = fabsf(s.amountSmooth.current() - target) <= kConvergeEps;
+        if (converged)
+        {
+            s.amountSmooth.snapTo(target);
+        }
         for (size_t i = 0; i < frames; ++i)
         {
-            const float amount = s.amountSmooth.process(target);
+            const float amount = converged ? target : s.amountSmooth.process(target);
             inst.outL[i] = portSample(inst, 0, i) * amount;
         }
     }

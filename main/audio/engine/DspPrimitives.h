@@ -356,6 +356,15 @@ public:
     // release tail early).
     bool isIdle() const { return segCount_ == 0 && current_ == 0.0f; }
 
+    // True whenever process() would just return current_ unchanged, sample
+    // after sample - no pending segment, regardless of whether current_
+    // happens to be silence (isIdle() above) or a plateaued sustain level.
+    // Lets a caller (AdsrNode.h's render()) fill a whole block with one
+    // precomputed value instead of calling process() once per sample only
+    // to hit its own no-op branch every time (plan section 5, ADSR row:
+    // "Sustain und Idle als konstante Ausgänge").
+    bool isHolding() const { return segCount_ == 0; }
+
     // Read back the currently-configured segment durations/level, so a live
     // single-field update (see ParamDispatch.cpp) can re-call configure()
     // with the other three unchanged instead of needing them passed in too.
