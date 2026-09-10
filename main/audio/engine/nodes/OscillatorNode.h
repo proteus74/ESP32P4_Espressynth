@@ -43,6 +43,11 @@ inline WaveType waveTypeFromCv(float volts)
     }
 }
 
+// One full cycle at 10V. Feedback uses the previous raw oscillator sample,
+// giving the loop its required one-sample delay without creating a graph
+// cycle or disturbing block rendering.
+constexpr float kSelfFeedbackMaxPhaseDeviation = 1.0f;
+
 // audioPortConstantForBlock() now lives in NodeInstance.h's noderender
 // namespace (shared by every node type that wants this fast path, not just
 // Oscillator - see its comment there and allPortsConstantForBlock() next to
@@ -64,6 +69,8 @@ struct FastLoopCtx
     float ampConstantValue;
     float gainTarget;
     float phaseIncrement;
+    float feedbackAmount;
+    float *feedbackSample;
     bool gainFed;
     bool gainConverged;
     bool ampConstantForBlock;
@@ -86,6 +93,33 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
         const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
+}
+
+template <WaveType W>
+IRAM_ATTR inline void renderFeedbackLoop(FastLoopCtx &c, size_t frames)
+{
+    float previous = *c.feedbackSample;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float amp = c.ampConstantForBlock ? c.ampConstantValue
+                                                 : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+        const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
+                                         : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
+        const float sample =
+            c.phaseGen->processWithIncrementT<W, true>(c.phaseIncrement, previous * c.feedbackAmount);
+        previous = sample;
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+    }
+    *c.feedbackSample = previous;
+}
+
+template <WaveType W>
+IRAM_ATTR inline void renderSelectedFastLoop(FastLoopCtx &c, size_t frames, bool feedbackActive)
+{
+    if (feedbackActive)
+        renderFeedbackLoop<W>(c, frames);
+    else
+        renderFastLoop<W>(c, frames);
 }
 } // namespace
 
@@ -152,6 +186,11 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // dropdown (s.wave), unchanged from before.
     const bool waveFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     const WaveType wave = waveFed ? waveTypeFromCv(portSample(inst, 3, 0)) : s.wave;
+    const bool feedbackFed =
+        controlPortConnected(inst, 5) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+    const float feedbackCv = feedbackFed ? portSample(inst, 5, 0) : s.feedbackCv;
+    const float feedbackAmount = cv::vcaGain(feedbackCv, false) * kSelfFeedbackMaxPhaseDeviation;
+    const bool feedbackActive = feedbackAmount != 0.0f;
     // "gain" (Port-Index 4) is a real audio-rate port (like Gain's
     // "amount") - 0-10V CV, 10V = unchanged output signal. When wired, the
     // CV already arrives natively per sample (no smoothing needed); when
@@ -240,7 +279,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                                                    : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
             const float gainMul =
                 gainFed ? cv::vcaGain(gainBuf[i], false) : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
-            const float sample = s.phaseGen.process(wave, hz, kSampleRate);
+            const float phaseOffset = feedbackActive ? s.feedbackSample * feedbackAmount : 0.0f;
+            const float sample = s.phaseGen.process(wave, hz, kSampleRate, phaseOffset);
+            if (feedbackActive)
+                s.feedbackSample = sample;
             inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
         }
         return;
@@ -256,28 +298,29 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // not once per sample the way PhaseOsc::process()'s internal `switch`
     // would (plan section 3, P1 item 3). See renderFastLoop()/FastLoopCtx
     // above.
-    FastLoopCtx ctx{&inst,        &s.phaseGen, &s.gainSmooth,      ampBuf,       gainBuf,
-                     ampScalar,    baseAmp,     ampConstantValue,  gainTarget,   phaseIncrement,
-                     gainFed,      gainConverged, ampConstantForBlock};
+    FastLoopCtx ctx{&inst,          &s.phaseGen,      &s.gainSmooth, ampBuf,
+                    gainBuf,        ampScalar,        baseAmp,       ampConstantValue,
+                    gainTarget,     phaseIncrement,   feedbackAmount, &s.feedbackSample,
+                    gainFed,        gainConverged,    ampConstantForBlock};
     switch (wave)
     {
     case WaveType::Sine:
-        renderFastLoop<WaveType::Sine>(ctx, frames);
+        renderSelectedFastLoop<WaveType::Sine>(ctx, frames, feedbackActive);
         break;
     case WaveType::Square:
-        renderFastLoop<WaveType::Square>(ctx, frames);
+        renderSelectedFastLoop<WaveType::Square>(ctx, frames, feedbackActive);
         break;
     case WaveType::Triangle:
-        renderFastLoop<WaveType::Triangle>(ctx, frames);
+        renderSelectedFastLoop<WaveType::Triangle>(ctx, frames, feedbackActive);
         break;
     case WaveType::Sawtooth:
-        renderFastLoop<WaveType::Sawtooth>(ctx, frames);
+        renderSelectedFastLoop<WaveType::Sawtooth>(ctx, frames, feedbackActive);
         break;
     case WaveType::Noise:
-        renderFastLoop<WaveType::Noise>(ctx, frames);
+        renderSelectedFastLoop<WaveType::Noise>(ctx, frames, feedbackActive);
         break;
     case WaveType::PinkNoise:
-        renderFastLoop<WaveType::PinkNoise>(ctx, frames);
+        renderSelectedFastLoop<WaveType::PinkNoise>(ctx, frames, feedbackActive);
         break;
     }
 }
@@ -290,6 +333,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.osc.detuneMul = powf(2.0f, p.detune / 1200.0f);
     inst.osc.amplitude = p.amplitude;
     inst.osc.gainCv = p.gain;
+    inst.osc.feedbackCv = p.oscillatorFeedback;
     // Same cutoff/reason as Gain's amountSmooth - see NodeState.h.
     inst.osc.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 }
@@ -321,6 +365,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.osc.gainCv = value;
         return true;
     }
+    if (strcmp(name, "feedback") == 0)
+    {
+        inst.osc.feedbackCv = value;
+        return true;
+    }
     return false;
 }
 
@@ -333,6 +382,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.detune = presetparser::getFloat(p, "detune", 0.0f);
     out.amplitude = presetparser::getFloat(p, "amplitude", 1.0f);
     out.gain = presetparser::getFloat(p, "gain", 10.0f);
+    out.oscillatorFeedback = presetparser::getFloat(p, "feedback", 0.0f);
 }
 
 } // namespace nodes::oscillator

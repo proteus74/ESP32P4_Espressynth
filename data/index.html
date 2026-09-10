@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260910-annotation-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20260910-widgetpicker-3">
 </head>
 <body>
 
@@ -29,19 +29,19 @@
     <div class="dropdown">
       <button>Undo</button>
       <button>Copy</button>
-      <button id="menuShowLog">Show Log Window</button>
     </div>
   </div>
   <div class="menu-item">
     <span>View</span>
     <div class="dropdown">
-      <label class="dropdown-check">
-        <input type="checkbox" id="menuCableSag">
-        <span>Cable Sag</span>
-      </label>
-      <label class="dropdown-check">
-        <input type="checkbox" id="menuOrthogonalCables">
-        <span>Orthogonal Cables</span>
+      <button id="menuShowLog">Show Log Window</button>
+      <label class="dropdown-select" for="menuCableStyle">
+        <span>Cables</span>
+        <select id="menuCableStyle">
+          <option value="normal">Normal</option>
+          <option value="sag">Sag Mode</option>
+          <option value="orthogonal">Orthogonal</option>
+        </select>
       </label>
       <label class="dropdown-check">
         <input type="checkbox" id="menuGridSnap">
@@ -51,7 +51,10 @@
         <input type="checkbox" id="menuBackgroundDots">
         <span>Background Dots</span>
       </label>
-      <button id="menuToggleNodeCpu">Show Node CPU %</button>
+      <label class="dropdown-check">
+        <input type="checkbox" id="menuToggleNodeCpu">
+        <span>Show Node CPU %</span>
+      </label>
       <label class="dropdown-range" for="menuWidgetOpacity">
         <span class="dropdown-range-label">
           <span>Widget Opacity</span>
@@ -85,8 +88,6 @@
       <div class="preset-load-progress-track"><div class="preset-load-progress-fill" id="presetLoadProgressFill"></div></div>
     </div>
     <div class="stat-group" title="Free PSRAM / internal RAM">
-      <button id="panicBtn" class="panic-btn" title="Stop MIDI notes and reload current preset">Panic</button>
-      <span class="panic-separator" aria-hidden="true"></span>
       <span class="stat-icon">💾</span>
       <span class="mem-stat-label">PS</span>
       <span class="mem-stat-value" id="psMemValue">–</span>
@@ -105,6 +106,8 @@
     <span class="cpu-load-value" id="cpuLoadCore1Value">–</span>
     <span class="cpu-load-core" id="cpuLoadUnderrunsLabel" title="DMA-Ring wirklich leergelaufen seit Start (I2S-Sendequeue-Overflow) - jeder Zaehler-Sprung ist ein tatsaechlich hoerbarer Klick/Knacken">Underruns</span>
     <span class="cpu-load-value" id="cpuLoadUnderrunsValue">–</span>
+    <span class="panic-separator" aria-hidden="true"></span>
+    <button id="panicBtn" class="panic-btn" title="Stop MIDI notes and reload current preset">Panic</button>
   </div>
 </div>
 
@@ -233,12 +236,17 @@
 </div>
 
 <div id="widgetPickerOverlay" class="modal-overlay hidden">
-  <div class="modal widget-picker">
-    <div class="modal-title-row">
-      <h3>Add Widget</h3>
+  <div class="widget-picker">
+    <div class="widget-instance-header" id="widgetPickerHeader">
+      <span class="widget-instance-title">
+        <span>➕</span>
+        <span class="widget-instance-label">Add Node</span>
+      </span>
       <button id="widgetPickerClose" class="widget-instance-close" type="button" aria-label="Close">×</button>
     </div>
-    <div class="widget-picker-list" id="widgetPickerList"></div>
+    <div class="widget-picker-body">
+      <div class="widget-picker-list" id="widgetPickerList"></div>
+    </div>
   </div>
 </div>
 
@@ -390,6 +398,35 @@
     <div class="modal-actions">
       <button id="switchSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="switchSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="linkedInputSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Linked Input Settings</h3>
+    <label class="modal-field">
+      <span>Link Name</span>
+      <input type="text" id="linkedInputNameInput" maxlength="47">
+    </label>
+    <p class="modal-hint modal-hint-error" id="linkedInputNameError" style="display:none;"></p>
+    <div class="modal-actions">
+      <button id="linkedInputSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="linkedInputSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="linkedOutputSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Linked Output Settings</h3>
+    <label class="modal-field">
+      <span>Source</span>
+      <select id="linkedOutputSourceSelect"></select>
+    </label>
+    <div class="modal-actions">
+      <button id="linkedOutputSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="linkedOutputSettingsSave">Save</button>
     </div>
   </div>
 </div>
@@ -750,6 +787,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260910-annotation-1"></script>
+<script type="module" src="/static/js/main.js?v=20260910-widgetpicker-3"></script>
 </body>
 </html>

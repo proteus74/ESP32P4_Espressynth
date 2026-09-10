@@ -22,6 +22,7 @@
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
+#include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -34,6 +35,7 @@
 #include "nodes/ReverbNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
+#include "nodes/LinkedIONodes.h"
 #include "nodes/WavePlayerNode.h"
 
 // Switch-dispatch DSP render for one block, aggregating every node type's
@@ -53,6 +55,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     {
     case NodeType::Oscillator:
         nodes::oscillator::render(inst, frames);
+        break;
+    case NodeType::FmOscillator:
+        nodes::fmoscillator::render(inst, frames);
         break;
     case NodeType::Hammond:
         nodes::hammond::render(inst, frames);
@@ -143,6 +148,10 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::AudioOutputLink:
     case NodeType::AudioInputLink:
         nodes::link::render(inst, frames);
+        break;
+    case NodeType::LinkedInput:
+    case NodeType::LinkedOutput:
+        nodes::linkedio::render(inst, frames);
         break;
     case NodeType::AudioOut:
     case NodeType::UsbOut:

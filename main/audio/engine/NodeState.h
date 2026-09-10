@@ -38,6 +38,37 @@ struct OscillatorState
     // Oscillator case.
     float gainCv = 10.0f;
     OnePoleLowpass gainSmooth;
+    // Internal one-sample feedback. feedbackSample stores the raw waveform
+    // before amplitude/gain so loudness controls do not alter timbre.
+    float feedbackCv = 0.0f;
+    float feedbackSample = 0.0f;
+};
+
+// Single-operator phase-modulation FM oscillator (see
+// nodes/FmOscillatorNode.h). Carrier is a plain PhaseOsc, exactly like
+// OscillatorState; "fmIn" (a modulator signal, typically another
+// Oscillator's "value") is applied as PhaseOsc::process()'s phaseOffset
+// argument each sample, scaled by fmIndexCv - no change to the carrier's hz
+// itself, so this is genuine phase modulation, not frequency modulation.
+// fmIndexCv follows the same smoothed-when-unwired pattern as gainCv above.
+struct FmOscillatorState
+{
+    PhaseOsc phaseGen;
+    WaveType wave = WaveType::Sine;
+    float tuneVolts = 5.0f;
+    float amplitude = 1.0f;
+    bool gatePrev = false;
+    float gainCv = 10.0f;
+    OnePoleLowpass gainSmooth;
+    // "fmIndex" (Port-Index 6, control-only CV, see PortTables.h) - 0-10V,
+    // 0V = no FM (node sounds identical to a plain Oscillator), 10V = max
+    // phase deviation (see kFmIndexMaxPhaseDeviation in FmOscillatorNode.h).
+    // Read once per block, same un-smoothed substitution pattern as
+    // tuneVolts above - not per-sample like gainCv, since it's classified
+    // control-only (see PortTables.h::isControlOnlyInput).
+    float fmIndexCv = 0.0f;
+    float feedbackCv = 0.0f;
+    float feedbackSample = 0.0f;
 };
 
 struct LfoState

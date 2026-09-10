@@ -20,6 +20,7 @@
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/CurtisFilterNode.h"
+#include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -58,6 +59,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Oscillator:
         return nodes::oscillator::setParam(inst, name, value);
+
+    case NodeType::FmOscillator:
+        return nodes::fmoscillator::setParam(inst, name, value);
 
     case NodeType::Hammond:
         return nodes::hammond::setParam(inst, name, value);

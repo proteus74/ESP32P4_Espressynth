@@ -22,6 +22,7 @@
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
+#include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -36,6 +37,7 @@
 #include "nodes/ReverbNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
+#include "nodes/LinkedIONodes.h"
 #include "nodes/WavePlayerNode.h"
 
 // Parses the /api/preset JSON schema into a PresetDoc, aggregating every
@@ -60,6 +62,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     {
     case NodeType::Oscillator:
         nodes::oscillator::parsePreset(p, out);
+        break;
+    case NodeType::FmOscillator:
+        nodes::fmoscillator::parsePreset(p, out);
         break;
     case NodeType::Hammond:
         nodes::hammond::parsePreset(p, out);
@@ -133,6 +138,12 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::AudioInputLink:
         nodes::link::parsePreset(p, out);
+        break;
+    case NodeType::LinkedInput:
+        nodes::linkedio::parseLinkDefinition(p, out);
+        break;
+    case NodeType::LinkedOutput:
+        nodes::linkedio::parseLinkSelection(p, out);
         break;
     case NodeType::AudioOut:
     case NodeType::UsbOut:

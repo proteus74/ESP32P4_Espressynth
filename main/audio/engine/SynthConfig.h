@@ -20,7 +20,11 @@ constexpr size_t kMaxWidgets = 64;
 constexpr size_t kMaxConnections = 256;
 // Eight mono buses cross the Sound Generation -> FX & Output page boundary.
 constexpr size_t kLinkBusCount = 8;
-constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkBusCount;
+// + kMaxWidgets: linked-input/linked-output links (see GraphBuilder.h) are
+// always non-voiced, so each contributes at most one hidden edge - kMaxWidgets
+// is the correct worst-case margin, not SYNTH_VOICE_COUNT-scaled like the
+// preset connections above.
+constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkBusCount + kMaxWidgets;
 // Multiplexer has 16 audio inputs plus one control input (select) = 17 slots.
 // Keep one bit per slot in NodeInstance's connection masks.
 constexpr size_t kMaxAudioInPorts = 17;

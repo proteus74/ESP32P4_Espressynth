@@ -27,6 +27,7 @@
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/FilterNode.h"
+#include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -440,6 +441,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     {
     case NodeType::Oscillator:
         nodes::oscillator::build(inst, p);
+        break;
+    case NodeType::FmOscillator:
+        nodes::fmoscillator::build(inst, p);
         break;
     case NodeType::Hammond:
         nodes::hammond::build(inst, p);
@@ -1194,6 +1198,119 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             g->instances[g->widgets[inputLinkIdx].instanceBase].audioConnectedPortMask |= synth::portBit(bus);
         }
         markDependency(static_cast<uint16_t>(outputLinkIdx), static_cast<uint16_t>(inputLinkIdx));
+    }
+
+    // Linked-IO resolution: freely-placeable linked-input/linked-output
+    // widgets, keyed by linkId rather than a fixed bus index - unrelated to
+    // the fixed 8-bus bridge above. First-linkId-wins, deterministic (preset
+    // widget order); duplicate linkId or a hidden cycle -> warn and skip,
+    // never crash or silently misconnect. Must run before the input-port
+    // allocation loop below (it needs audioConnectedPortMask already set)
+    // and while adjacency/markDependency are still alive.
+    {
+        const char *liLinkId[synth::kMaxWidgets];
+        uint16_t liWidgetIdx[synth::kMaxWidgets];
+        size_t liCount = 0;
+        for (uint16_t i = 0; i < doc.widgetCount; ++i)
+        {
+            if (doc.widgets[i].type != NodeType::LinkedInput)
+            {
+                continue;
+            }
+            const char *linkId = doc.widgets[i].params.linkId;
+            if (linkId[0] == '\0')
+            {
+                continue;
+            }
+            bool duplicate = false;
+            for (size_t k = 0; k < liCount; ++k)
+            {
+                if (strcmp(liLinkId[k], linkId) == 0)
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate)
+            {
+                ESP_LOGW(kGraphBuilderTag,
+                         "Duplicate linked-input linkId '%s' on widget '%s' - keeping first definition", linkId,
+                         doc.widgets[i].id);
+                continue;
+            }
+            liLinkId[liCount] = linkId;
+            liWidgetIdx[liCount] = i;
+            ++liCount;
+        }
+
+        // Can `from` already reach `to` via the widget-dependency adjacency
+        // matrix built above? Used to reject a hidden linked-io edge that
+        // would otherwise close a cycle, regardless of preset widget order.
+        auto canReach = [&](uint16_t from, uint16_t to)
+        {
+            bool visited[synth::kMaxWidgets] = {};
+            uint16_t queue[synth::kMaxWidgets];
+            uint16_t qh = 0, qt = 0;
+            visited[from] = true;
+            queue[qt++] = from;
+            while (qh < qt)
+            {
+                const uint16_t cur = queue[qh++];
+                if (cur == to)
+                {
+                    return true;
+                }
+                for (uint16_t j = 0; j < n; ++j)
+                {
+                    if (adjacency[static_cast<size_t>(cur) * n + j] && !visited[j])
+                    {
+                        visited[j] = true;
+                        queue[qt++] = j;
+                    }
+                }
+            }
+            return false;
+        };
+
+        for (uint16_t i = 0; i < doc.widgetCount; ++i)
+        {
+            if (doc.widgets[i].type != NodeType::LinkedOutput)
+            {
+                continue;
+            }
+            const char *sourceLinkId = doc.widgets[i].params.sourceLinkId;
+            if (sourceLinkId[0] == '\0')
+            {
+                continue; // not connected - silence, no warning (by design)
+            }
+            int liIdx = -1;
+            for (size_t k = 0; k < liCount; ++k)
+            {
+                if (strcmp(liLinkId[k], sourceLinkId) == 0)
+                {
+                    liIdx = static_cast<int>(liWidgetIdx[k]);
+                    break;
+                }
+            }
+            if (liIdx < 0)
+            {
+                continue; // unresolved linkId - silence, no warning (by design)
+            }
+            if (canReach(i, static_cast<uint16_t>(liIdx)))
+            {
+                ESP_LOGW(kGraphBuilderTag,
+                         "Linked-input '%s' -> linked-output widget '%s' would create a hidden cycle - rejected",
+                         sourceLinkId, doc.widgets[i].id);
+                continue;
+            }
+            wireConnection(*g, static_cast<uint16_t>(liIdx), 0, i, 0);
+            markDependency(static_cast<uint16_t>(liIdx), i);
+            const WidgetSlot &loSlot = g->widgets[i];
+            for (uint16_t v = 0; v < loSlot.instanceCount; ++v)
+            {
+                g->instances[loSlot.instanceBase + v].audioConnectedPortMask |= synth::portBit(0);
+            }
+        }
     }
 
     // Allocate only ports that receive sample-rate data. Scalar defaults and

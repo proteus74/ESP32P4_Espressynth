@@ -196,6 +196,7 @@ struct NodeInstance
     } outRamp;
 
     OscillatorState osc;
+    FmOscillatorState fmOsc;
     LfoState lfo;
     DetuneState detune;
     FrequencyDividerState frequencyDivider;

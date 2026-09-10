@@ -55,6 +55,9 @@ enum class NodeType : uint8_t
     Hammond,
     Multiplexer,
     CurtisFilter,
+    LinkedInput,
+    LinkedOutput,
+    FmOscillator,
     Unknown,
 };
 
@@ -112,6 +115,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
     }
     if (strcmp(typeStr, "oscillator") == 0)
         return NodeType::Oscillator;
+    if (strcmp(typeStr, "fm-oscillator") == 0)
+        return NodeType::FmOscillator;
     if (strcmp(typeStr, "lfo") == 0)
         return NodeType::Lfo;
     if (strcmp(typeStr, "detune") == 0)
@@ -162,6 +167,13 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::AudioOutputLink;
     if (strcmp(typeStr, "audio-input-link") == 0)
         return NodeType::AudioInputLink;
+    // linked-input/linked-output: freely-placeable linkId-keyed passthrough
+    // links - a separate, unrelated mechanism from the fixed 8-bus
+    // audio-output-link/audio-input-link pair above.
+    if (strcmp(typeStr, "linked-input") == 0)
+        return NodeType::LinkedInput;
+    if (strcmp(typeStr, "linked-output") == 0)
+        return NodeType::LinkedOutput;
     if (strcmp(typeStr, "audio-out") == 0)
         return NodeType::AudioOut;
     if (strcmp(typeStr, "usb-out") == 0)

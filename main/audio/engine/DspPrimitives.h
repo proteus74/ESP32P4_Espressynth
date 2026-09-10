@@ -454,15 +454,8 @@ public:
     IRAM_ATTR float currentSample(WaveType wave, float phaseOffset = 0.0f) const
     {
         float p = phase_ + phaseOffset;
-        // floorf() measures ~16 cycles (almost like a division, see the FpuBench
-        // diagnosis in chat) - phase_ itself has always kept advance() in
-        // [0,1), phaseOffset is always 0.0f for Oscillator (no caller sets it
-        // there), and usually small for Lfo too (phase-degrees/360).
-        // Guard like in sineLookup() above: floorf() only in the real wrap
-        // case (Lfo phaseOffset pushes over 1.0/below 0.0), no longer on
-        // EVERY sample.
         if (p < 0.0f || p >= 1.0f)
-            p -= floorf(p); // wrap to [0, 1) - phaseOffset may be negative or >1
+            p -= floorf(p);
 
         float sample;
         switch (wave)
@@ -529,9 +522,9 @@ public:
     }
 
     // Compile-time-specialized twin of processWithIncrement() above, for
-    // Oscillator's fast per-block-constant-pitch path only (never called
-    // with a nonzero phaseOffset - that's an Lfo-only concept, see
-    // currentSample()'s comment - so this drops the parameter entirely).
+    // oscillator fast paths. The regular oscillator instantiates the default
+    // no-offset form; the FM operator selects UsePhaseOffset=true so waveform
+    // and phase-offset handling are both resolved at compile time.
     // `wave` is already selected once per block by the caller (see
     // OscillatorNode.h's render()); W being a template parameter means the
     // `switch (wave)` inside currentSample() collapses to a single
@@ -541,8 +534,8 @@ public:
     // innerhalb der Sample-Schleife"). One shared definition, not six
     // hand-duplicated copies - the compiler generates the six
     // specializations from this single template.
-    template <WaveType W>
-    IRAM_ATTR float processWithIncrementT(float phaseIncrement)
+    template <WaveType W, bool UsePhaseOffset = false>
+    IRAM_ATTR float processWithIncrementT(float phaseIncrement, float phaseOffset = 0.0f)
     {
         if constexpr (W == WaveType::Noise)
         {
@@ -555,6 +548,10 @@ public:
         else
         {
             float p = phase_;
+            if constexpr (UsePhaseOffset)
+            {
+                p += phaseOffset;
+            }
             if (p < 0.0f || p >= 1.0f)
                 p -= floorf(p);
             float sample;

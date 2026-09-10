@@ -86,6 +86,32 @@ inline int audioInIndex(NodeType type, const char *portName)
         // entry in isControlOnlyInput needed, see NodeInstance.cpp.
         if (is(portName, "gain"))
             return 4;
+        if (is(portName, "feedback"))
+            return 5;
+        return -1;
+    case NodeType::FmOscillator:
+        // Oscillator's port set plus "fmIn"/"fmIndex" for phase-modulation FM
+        // synthesis (see nodes/FmOscillatorNode.h). "fmIn" is a genuine
+        // audio-rate port (NOT in isControlOnlyInput) - the whole point is a
+        // per-sample phase offset from whatever is patched in (typically
+        // another Oscillator's "value"). "fmIndex" is control-only, like
+        // Oscillator's "tune".
+        if (is(portName, "amplitude"))
+            return 0;
+        if (is(portName, "pitchCv"))
+            return 1;
+        if (is(portName, "tune"))
+            return 2;
+        if (is(portName, "waveform"))
+            return 3;
+        if (is(portName, "gain"))
+            return 4;
+        if (is(portName, "fmIn"))
+            return 5;
+        if (is(portName, "fmIndex"))
+            return 6;
+        if (is(portName, "feedback"))
+            return 7;
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -304,6 +330,8 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::VuMeter:
     case NodeType::Spectrum:
         return is(portName, "in") ? 0 : -1;
+    case NodeType::LinkedInput:
+        return is(portName, "in") ? 0 : -1;
     case NodeType::Oscilloscope:
         if (is(portName, "in1"))
             return 0;
@@ -365,6 +393,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     switch (type)
     {
     case NodeType::Oscillator:
+        return is(portName, "value") ? 0 : -1;
+    case NodeType::FmOscillator:
         return is(portName, "value") ? 0 : -1;
     case NodeType::Hammond:
         return is(portName, "value") ? 0 : -1; // mono, like Oscillator - only outL is ever written
@@ -445,6 +475,13 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::AudioOutputLink:
         // No user-facing output port - internal bridge only.
         return -1;
+    case NodeType::LinkedInput:
+        // No visible output port - the hidden linked-io edge sources from
+        // this widget's inPorts[0] directly (see GraphBuilder.h), never from
+        // a named audioOutIndex lookup.
+        return -1;
+    case NodeType::LinkedOutput:
+        return is(portName, "out") ? 0 : -1;
     case NodeType::AudioInputLink:
         if (is(portName, "outL")) // legacy bus 1
             return 0;
@@ -487,7 +524,9 @@ inline int audioInPortCount(NodeType type)
     switch (type)
     {
     case NodeType::Oscillator:
-        return 5; // "amplitude" (CV) + "pitchCv" + "tune" + "waveform" (CV) + "gain" (CV)
+        return 6; // existing five inputs + internal-feedback depth (CV)
+    case NodeType::FmOscillator:
+        return 8; // Oscillator's first five + "fmIn" + "fmIndex" + feedback
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
@@ -543,6 +582,14 @@ inline int audioInPortCount(NodeType type)
         return 4;
     case NodeType::VuMeter:
     case NodeType::Spectrum:
+        return 1;
+    case NodeType::LinkedInput:
+    case NodeType::LinkedOutput:
+        // LinkedInput's slot 0 is its visible "in"; LinkedOutput's slot 0
+        // is the hidden landing point for its resolved linked-io edge
+        // (never reached via audioInIndex by name - only via a raw-index
+        // wireConnection() call from GraphBuilder, same as the fixed 8-bus
+        // link's hidden bus slots).
         return 1;
     case NodeType::Oscilloscope:
         return 2;
@@ -601,7 +648,7 @@ inline bool hasNoOutputs(NodeType type)
 {
     return type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
-           type == NodeType::Spectrum || type == NodeType::MidiIn;
+           type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::LinkedInput;
     // Note: Button/UpDownButton/Switch are deliberately NOT listed here even
     // though they may have no *audio* output port - hasNoOutputs() gates the
     // voiced/global BFS sink check, and these types still produce a value
@@ -641,7 +688,12 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::ValueMapper:
         return true; // all inputs
     case NodeType::Oscillator:
-        return portIdx == 1 || portIdx == 2 || portIdx == 3; // "pitchCv"+"tune"+"waveform" - "amplitude" (index 0) stays real audio-rate
+        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5; // pitch/tune/waveform/feedback
+    case NodeType::FmOscillator:
+        // "pitchCv"(1)+"tune"(2)+"waveform"(3)+"fmIndex"(6) - "amplitude"(0),
+        // "gain"(4) AND "fmIn"(5) stay genuinely audio-rate; "fmIn" being
+        // read per-sample is the entire point of this node.
+        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7;
     case NodeType::Hammond:
         // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
         // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars

@@ -349,8 +349,18 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 if (noteOn && target.osc.wave != WaveType::Noise && target.osc.wave != WaveType::PinkNoise)
                 {
                     target.osc.phaseGen.resetPhase();
+                    target.osc.feedbackSample = 0.0f;
                 }
                 target.osc.gatePrev = noteOn;
+            }
+            else if (target.type == NodeType::FmOscillator)
+            {
+                if (noteOn && target.fmOsc.wave != WaveType::Noise && target.fmOsc.wave != WaveType::PinkNoise)
+                {
+                    target.fmOsc.phaseGen.resetPhase();
+                    target.fmOsc.feedbackSample = 0.0f;
+                }
+                target.fmOsc.gatePrev = noteOn;
             }
             else if (target.type == NodeType::Adsr)
             {
@@ -444,6 +454,10 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
             if (target.type == NodeType::Oscillator)
             {
                 target.osc.amplitude = velGain;
+            }
+            else if (target.type == NodeType::FmOscillator)
+            {
+                target.fmOsc.amplitude = velGain;
             }
             else if (target.type == NodeType::Hammond)
             {
@@ -1261,8 +1275,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
 
         // Non-float / special-cased fields that setFloatFieldByName doesn't
         // cover (strings, nullable ints, bools).
-        if ((slot.type == NodeType::Oscillator || slot.type == NodeType::Lfo) && strcmp(key, "waveType") == 0 &&
-            cJSON_IsString(item))
+        if ((slot.type == NodeType::Oscillator || slot.type == NodeType::Lfo || slot.type == NodeType::FmOscillator) &&
+            strcmp(key, "waveType") == 0 && cJSON_IsString(item))
         {
             const WaveType wave = waveTypeFromString(item->valuestring);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
@@ -1271,6 +1285,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 if (slot.type == NodeType::Oscillator)
                 {
                     inst.osc.wave = wave;
+                }
+                else if (slot.type == NodeType::FmOscillator)
+                {
+                    inst.fmOsc.wave = wave;
                 }
                 else
                 {

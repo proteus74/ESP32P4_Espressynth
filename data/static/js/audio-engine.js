@@ -49,6 +49,19 @@ const AUDIO_PEAK_VOLTS = 5;
 const LINK_BUS_COUNT = 8;
 const GATE_THRESHOLD_VOLTS = 5;
 const ANALYSER_BLACKMAN_COHERENT_GAIN = 0.42;
+// fm-oscillator preview: WebAudio's OscillatorNode has no phase-modulation
+// input (only frequency/detune AudioParams), so the browser approximates the
+// firmware's true phase modulation (see nodes/FmOscillatorNode.h's
+// kFmIndexMaxPhaseDeviation) with plain linear frequency modulation instead -
+// the modulator signal, scaled by this many Hz at max fmIndex/full-scale
+// modulator amplitude, is summed directly into the carrier's osc.frequency.
+// Expect the browser preview and real hardware to sound similar but not
+// identical for this node; the firmware is the authoritative output.
+const FM_INDEX_MAX_HZ_DEVIATION = 2000;
+// WebAudio preview approximation for firmware's one-sample phase feedback.
+// One delayed raw sample modulates carrier frequency; hardware remains the
+// authoritative phase-modulation implementation.
+const SELF_FEEDBACK_MAX_HZ_DEVIATION = 2000;
 
 
 
@@ -397,6 +410,37 @@ export class AudioEngine {
     }
   }
 
+  // Freely-placeable linked-input/linked-output widgets, matched by
+  // linkId/sourceLinkId rather than a fixed bus index. Unlike
+  // _wireLinkBridge() above (a fixed singleton pair wired once, ever) this
+  // rebuilds from scratch on every call, since Web Audio has no "list
+  // current connections" API to introspect what's already wired - it must
+  // remember and explicitly disconnect what it connected last time.
+  _wireLinkedIO() {
+    (this._linkedIOEdges || []).forEach(({ from, to }) => {
+      try {
+        from.disconnect(to);
+      } catch (e) {
+        // Already disconnected (e.g. its node was torn down) - fine to ignore.
+      }
+    });
+    this._linkedIOEdges = [];
+
+    const sourcesByLinkId = new Map();
+    this.nodes.forEach((entry) => {
+      if (entry.type === "linked-input" && entry.linkId) {
+        sourcesByLinkId.set(entry.linkId, entry.gainNode);
+      }
+    });
+    this.nodes.forEach((entry) => {
+      if (entry.type !== "linked-output" || !entry.sourceLinkId) return;
+      const source = sourcesByLinkId.get(entry.sourceLinkId);
+      if (!source) return;
+      source.connect(entry.gainNode);
+      this._linkedIOEdges.push({ from: source, to: entry.gainNode });
+    });
+  }
+
   
   
   
@@ -408,13 +452,25 @@ export class AudioEngine {
   
   
   retriggerOscillatorEntry(entry) {
-    if (!entry || entry.type !== "oscillator") return;
+    if (!entry || (entry.type !== "oscillator" && entry.type !== "fm-oscillator")) return;
     const now = this.ctx.currentTime;
 
     const newOsc = this.ctx.createOscillator();
     newOsc.type = entry.osc.type;
     newOsc.frequency.value = entry.osc.frequency.value;
     newOsc.detune.value = entry.osc.detune.value;
+    try {
+      entry.pitchWaveShaper.disconnect(entry.osc.frequency);
+      entry.pitchWaveShaper.connect(newOsc.frequency);
+      entry.feedbackGain.disconnect(entry.osc.frequency);
+      entry.feedbackGain.connect(newOsc.frequency);
+      if (entry.fmDepthGain) {
+        entry.fmDepthGain.disconnect(entry.osc.frequency);
+        entry.fmDepthGain.connect(newOsc.frequency);
+      }
+    } catch (err) {
+    }
+    newOsc.connect(entry.feedbackDelay);
     if (!isNoiseWave(entry.waveType)) {
       newOsc.connect(entry.ampGain);
     }
@@ -1201,6 +1257,19 @@ export class AudioEngine {
         pitchShaperInput.connect(pitchWaveShaper);
         pitchWaveShaper.connect(osc.frequency);
 
+        const feedbackDelay = ctx.createDelay(1);
+        feedbackDelay.delayTime.value = 1 / ctx.sampleRate;
+        const feedbackGain = ctx.createGain();
+        feedbackGain.gain.value = ((params.feedback ?? 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION;
+        osc.connect(feedbackDelay);
+        feedbackDelay.connect(feedbackGain);
+        feedbackGain.connect(osc.frequency);
+        const feedbackCv = this._createCvGainChain(ctx, "linear");
+        const feedbackCvScale = ctx.createGain();
+        feedbackCvScale.gain.value = SELF_FEEDBACK_MAX_HZ_DEVIATION;
+        feedbackCv.waveShaper.connect(feedbackCvScale);
+        feedbackCvScale.connect(feedbackGain.gain);
+
         osc.start();
         noiseSource.start();
         pinkNoiseSource.start();
@@ -1233,6 +1302,164 @@ export class AudioEngine {
           pitchWaveShaper,
           pitchCvActive: false,
           tuneCvActive: false,
+          feedbackDelay,
+          feedbackGain,
+          feedbackCv,
+          feedbackCvScale,
+          feedback: params.feedback ?? 0,
+          feedbackCvActive: false,
+        };
+      }
+      case "fm-oscillator": {
+        // Structurally a clone of "oscillator" above (same carrier/pitch-CV
+        // machinery, copy-pasted rather than shared to keep each _buildNode
+        // case self-contained, matching the firmware's one-node-per-file
+        // convention) plus a phase-modulation-FM approximation: see
+        // FM_INDEX_MAX_HZ_DEVIATION's comment for why this is linear
+        // frequency modulation here, not true phase modulation like the
+        // firmware.
+        const waveType = params.waveType || "sine";
+        const osc = ctx.createOscillator();
+        osc.type = isNoiseWave(waveType) ? "sine" : waveType;
+        osc.frequency.value = params.frequency ?? 0;
+
+        const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+        const noiseData = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < noiseData.length; i += 1) {
+          noiseData[i] = Math.random() * 2 - 1;
+        }
+        const noiseSource = ctx.createBufferSource();
+        noiseSource.buffer = noiseBuffer;
+        noiseSource.loop = true;
+
+        const pinkNoiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+        fillPinkNoise(pinkNoiseBuffer.getChannelData(0));
+        const pinkNoiseSource = ctx.createBufferSource();
+        pinkNoiseSource.buffer = pinkNoiseBuffer;
+        pinkNoiseSource.loop = true;
+
+        const ampGain = ctx.createGain();
+        ampGain.gain.value = 0;
+        const ampCv = this._createCvGainChain(ctx, "linear");
+        ampCv.waveShaper.connect(ampGain.gain);
+
+        const outGain = ctx.createGain();
+        outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+        const gainCv = this._createCvGainChain(ctx, "linear");
+        gainCv.waveShaper.connect(outGain.gain);
+        ampGain.connect(outGain);
+
+        const pitchSum = ctx.createGain();
+        pitchSum.gain.value = 1;
+        const pitchRestConst = ctx.createConstantSource();
+        pitchRestConst.offset.value = CV_MAX_VOLTS / 2;
+        pitchRestConst.start();
+        const pitchRestGate = ctx.createGain();
+        pitchRestGate.gain.value = 0; // see "oscillator" case above for why
+        pitchRestConst.connect(pitchRestGate);
+        pitchRestGate.connect(pitchSum);
+
+        const tuneSum = ctx.createGain();
+        tuneSum.gain.value = 1;
+        const tuneRestConst = ctx.createConstantSource();
+        tuneRestConst.offset.value = params.tuneVolts ?? CV_MAX_VOLTS / 2;
+        tuneRestConst.start();
+        const tuneRestGate = ctx.createGain();
+        tuneRestGate.gain.value = 0;
+        tuneRestConst.connect(tuneRestGate);
+        tuneRestGate.connect(tuneSum);
+
+        const pitchPreScale = ctx.createGain();
+        pitchPreScale.gain.value = 0.1;
+        pitchSum.connect(pitchPreScale);
+        tuneSum.connect(pitchPreScale);
+        const pitchFinalShift = ctx.createConstantSource();
+        pitchFinalShift.offset.value = -1;
+        pitchFinalShift.start();
+        const pitchShaperInput = ctx.createGain();
+        pitchShaperInput.gain.value = 1;
+        pitchPreScale.connect(pitchShaperInput);
+        pitchFinalShift.connect(pitchShaperInput);
+        const pitchWaveShaper = ctx.createWaveShaper();
+        pitchWaveShaper.curve = buildPitchCvCurve();
+        pitchShaperInput.connect(pitchWaveShaper);
+        pitchWaveShaper.connect(osc.frequency);
+
+        // "fmIn" (audio-rate modulator input) + "fmIndex" (0-10V depth CV):
+        // fmInScale normalizes the incoming +-AUDIO_PEAK_VOLTS waveform to
+        // +-1, fmDepthGain scales that by the current index (in Hz) and sums
+        // the result directly into osc.frequency - additive with the
+        // pitchWaveShaper connection above, exactly like Web Audio already
+        // sums multiple signals into one AudioParam elsewhere in this file.
+        const fmInScale = ctx.createGain();
+        fmInScale.gain.value = 1 / AUDIO_PEAK_VOLTS;
+        const fmDepthGain = ctx.createGain();
+        fmDepthGain.gain.value = ((params.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
+        fmInScale.connect(fmDepthGain);
+        fmDepthGain.connect(osc.frequency);
+
+        const fmIndexCv = this._createCvGainChain(ctx, "linear");
+        const fmIndexCvScale = ctx.createGain();
+        fmIndexCvScale.gain.value = FM_INDEX_MAX_HZ_DEVIATION;
+        fmIndexCv.waveShaper.connect(fmIndexCvScale);
+        fmIndexCvScale.connect(fmDepthGain.gain);
+
+        const feedbackDelay = ctx.createDelay(1);
+        feedbackDelay.delayTime.value = 1 / ctx.sampleRate;
+        const feedbackGain = ctx.createGain();
+        feedbackGain.gain.value = ((params.feedback ?? 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION;
+        osc.connect(feedbackDelay);
+        feedbackDelay.connect(feedbackGain);
+        feedbackGain.connect(osc.frequency);
+        const feedbackCv = this._createCvGainChain(ctx, "linear");
+        const feedbackCvScale = ctx.createGain();
+        feedbackCvScale.gain.value = SELF_FEEDBACK_MAX_HZ_DEVIATION;
+        feedbackCv.waveShaper.connect(feedbackCvScale);
+        feedbackCvScale.connect(feedbackGain.gain);
+
+        osc.start();
+        noiseSource.start();
+        pinkNoiseSource.start();
+        if (waveType === "noise") {
+          noiseSource.connect(ampGain);
+        } else if (waveType === "pink-noise") {
+          pinkNoiseSource.connect(ampGain);
+        } else {
+          osc.connect(ampGain);
+        }
+
+        return {
+          type,
+          osc,
+          noiseSource,
+          pinkNoiseSource,
+          ampGain,
+          ampCv,
+          waveType,
+          outGain,
+          gainCv,
+          gain: params.gain ?? CV_MAX_VOLTS,
+          gainCvActive: false,
+          pitchSum,
+          pitchRestConst,
+          pitchRestGate,
+          tuneSum,
+          tuneRestConst,
+          tuneRestGate,
+          pitchWaveShaper,
+          pitchCvActive: false,
+          tuneCvActive: false,
+          fmInScale,
+          fmDepthGain,
+          fmIndexCv,
+          fmIndex: params.fmIndex ?? 0,
+          fmIndexCvActive: false,
+          feedbackDelay,
+          feedbackGain,
+          feedbackCv,
+          feedbackCvScale,
+          feedback: params.feedback ?? 0,
+          feedbackCvActive: false,
         };
       }
       case "hammond": {
@@ -1578,6 +1805,21 @@ export class AudioEngine {
         };
         gainNode.gain.value = vcaAmountFromCv(entry.amount, entry.curve);
         return entry;
+      }
+      case "linked-input":
+      case "linked-output": {
+        // Transparent, fixed-unity passthrough - the actual fan-out wiring
+        // between matching linkId/sourceLinkId pairs happens in
+        // _wireLinkedIO(), not here (see createNode()/_removeEntry()).
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = 1;
+        return {
+          type,
+          gainNode,
+          linkId: params.linkId,
+          linkName: params.linkName,
+          sourceLinkId: params.sourceLinkId,
+        };
       }
       case "filter":
       case "curtis-filter": {
@@ -2388,6 +2630,10 @@ export class AudioEngine {
     if (type === "audio-output-link" || type === "audio-input-link") {
       this._wireLinkBridge();
     }
+
+    if (type === "linked-input" || type === "linked-output") {
+      this._wireLinkedIO();
+    }
   }
 
   _getLevelFromEntry(entry, channel) {
@@ -2615,6 +2861,25 @@ export class AudioEngine {
         entry.gainCv.shiftConst.stop();
         entry.gainCv.shiftConst.disconnect();
       }
+      if (entry.fmIndexCv) {
+        entry.fmIndexCv.waveShaper.disconnect();
+        entry.fmIndexCv.sumNode.disconnect();
+        entry.fmIndexCv.prescale.disconnect();
+        entry.fmIndexCv.shiftConst.stop();
+        entry.fmIndexCv.shiftConst.disconnect();
+      }
+      if (entry.feedbackCv) {
+        entry.feedbackCv.waveShaper.disconnect();
+        entry.feedbackCv.sumNode.disconnect();
+        entry.feedbackCv.prescale.disconnect();
+        entry.feedbackCv.shiftConst.stop();
+        entry.feedbackCv.shiftConst.disconnect();
+      }
+      if (entry.fmInScale) entry.fmInScale.disconnect();
+      if (entry.fmDepthGain) entry.fmDepthGain.disconnect();
+      if (entry.feedbackDelay) entry.feedbackDelay.disconnect();
+      if (entry.feedbackGain) entry.feedbackGain.disconnect();
+      if (entry.feedbackCvScale) entry.feedbackCvScale.disconnect();
       if (entry.oscs) entry.oscs.forEach((o) => { o.stop(); o.disconnect(); });
       if (entry.footageScale) entry.footageScale.forEach((g) => g.disconnect());
       if (entry.drawbarGains) entry.drawbarGains.forEach((g) => g.disconnect());
@@ -2687,6 +2952,10 @@ export class AudioEngine {
         entry.nodes.forEach((node) => node.disconnect());
         if (entry.linkGainPrescales) entry.linkGainPrescales.forEach((node) => node.disconnect());
         this._linkBridged = false;
+      }
+      if ((entry.type === "linked-input" || entry.type === "linked-output") && entry.gainNode) {
+        entry.gainNode.disconnect();
+        this._wireLinkedIO();
       }
       if (entry.analyser) entry.analyser.disconnect();
       if (entry.spectrumAnalyser) entry.spectrumAnalyser.disconnect();
@@ -2849,6 +3118,7 @@ export class AudioEngine {
 
     switch (entry.type) {
       case "oscillator":
+      case "fm-oscillator":
         if (paramName === "frequency") {
           
           
@@ -2894,6 +3164,18 @@ export class AudioEngine {
           if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         } else if (paramName === "gate") {
           if (value > GATE_THRESHOLD_VOLTS) this.retriggerOscillatorEntry(entry);
+        } else if (paramName === "fmIndex") {
+          // fm-oscillator only (entry.fmDepthGain doesn't exist on a plain
+          // oscillator entry, and this param name is never sent to one).
+          entry.fmIndex = value;
+          if (!entry.fmIndexCvActive) {
+            applyRampValue(entry.fmDepthGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION);
+          }
+        } else if (paramName === "feedback") {
+          entry.feedback = value;
+          if (!entry.feedbackCvActive) {
+            applyRampValue(entry.feedbackGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION);
+          }
         }
         break;
       case "hammond": {
@@ -2963,6 +3245,13 @@ export class AudioEngine {
         }
         break;
       }
+      case "linked-input":
+        if (paramName === "linkId") entry.linkId = value;
+        else if (paramName === "linkName") entry.linkName = value;
+        break;
+      case "linked-output":
+        if (paramName === "sourceLinkId") entry.sourceLinkId = value;
+        break;
       case "filter":
       case "curtis-filter": {
         
@@ -3424,6 +3713,7 @@ export class AudioEngine {
   _resolveOutputFromEntry(entry, port) {
     if (!entry) return null;
     if (entry.type === "oscillator" && port === "value") return entry.outGain;
+    if (entry.type === "fm-oscillator" && port === "value") return entry.outGain;
     if (entry.type === "hammond" && port === "value") return entry.outGain;
     if (entry.type === "lfo" && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
@@ -3432,6 +3722,7 @@ export class AudioEngine {
     
     if (entry.type === "const" && port === "audio") return entry.constant;
     if (entry.type === "gain" && port === "out") return entry.gainNode;
+    if (entry.type === "linked-output" && port === "out") return entry.gainNode;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {
       return entry.filterOutput || entry.filterNode;
     }
@@ -3474,6 +3765,7 @@ export class AudioEngine {
       if (port === "right") return entry.rightGain;
     }
     if (entry.type === "gain" && port === "in") return entry.gainNode;
+    if (entry.type === "linked-input" && port === "in") return entry.gainNode;
     
     
     
@@ -3511,6 +3803,16 @@ export class AudioEngine {
       
       if (port === "pitchCv") return entry.pitchSum;
       if (port === "tune") return entry.tuneSum;
+      if (port === "feedback") return entry.feedbackCv.prescale;
+    }
+    if (entry.type === "fm-oscillator") {
+      if (port === "amplitude") return entry.ampCv.prescale;
+      if (port === "gain") return entry.gainCv.prescale;
+      if (port === "pitchCv") return entry.pitchSum;
+      if (port === "tune") return entry.tuneSum;
+      if (port === "fmIn") return entry.fmInScale;
+      if (port === "fmIndex") return entry.fmIndexCv.prescale;
+      if (port === "feedback") return entry.feedbackCv.prescale;
     }
     if (entry.type === "hammond") {
       if (port === "amplitude") return entry.ampCv.prescale;
@@ -3623,7 +3925,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "amplitude") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -3635,13 +3937,38 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.connect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = true;
           toEntry.outGain.gain.value = 0;
+        } catch (err) {
+
+        }
+      }
+      return;
+    }
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "fm-oscillator") && toPort === "feedback") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.connect(toEntry.feedbackCv.prescale);
+          toEntry.feedbackCvActive = true;
+          toEntry.feedbackGain.gain.value = 0;
+        } catch (err) {
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "fm-oscillator" && toPort === "fmIndex") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.connect(toEntry.fmIndexCv.prescale);
+          toEntry.fmIndexCvActive = true;
+          toEntry.fmDepthGain.gain.value = 0;
         } catch (err) {
 
         }
@@ -3682,7 +4009,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && (toPort === "pitchCv" || toPort === "tune")) {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;
@@ -3780,7 +4107,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "amplitude") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -3792,13 +4119,38 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.disconnect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = false;
           toEntry.outGain.gain.value = ((toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+        } catch (err) {
+
+        }
+      }
+      return;
+    }
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "fm-oscillator") && toPort === "feedback") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.disconnect(toEntry.feedbackCv.prescale);
+          toEntry.feedbackCvActive = false;
+          toEntry.feedbackGain.gain.value = ((toEntry.feedback ?? 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION;
+        } catch (err) {
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "fm-oscillator" && toPort === "fmIndex") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.disconnect(toEntry.fmIndexCv.prescale);
+          toEntry.fmIndexCvActive = false;
+          toEntry.fmDepthGain.gain.value = ((toEntry.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
         } catch (err) {
 
         }
@@ -3833,7 +4185,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond") && (toPort === "pitchCv" || toPort === "tune")) {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget Help</title>
+<link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --card-border: #334155;
+    --text: #e2e8f0;
+    --accent: #38bdf8;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html, body {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .help-page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+  }
+  .help-back {
+    display: inline-block;
+    margin-bottom: 1.5rem;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+  .help-back:hover {
+    text-decoration: underline;
+  }
+  .help-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    padding: 1.5rem 1.75rem;
+  }
+  .help-card h1 {
+    margin: 0 0 0.25rem;
+    font-size: 1.4rem;
+  }
+  .help-card .help-type {
+    margin: 0 0 1.25rem;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .help-placeholder {
+    border: 1px dashed var(--card-border);
+    border-radius: 0.5rem;
+    padding: 1.25rem;
+    color: #94a3b8;
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="help-page">
+  <a class="help-back" href="/">← Back to ESPRESSYNTH</a>
+  <div class="help-card">
+    <h1 id="helpTitle">Widget Help</h1>
+    <p class="help-type" id="helpType"></p>
+    <div class="help-placeholder">
+      Help content for this widget is not written yet. This page will explain what the
+      widget does, its inputs/outputs, and how to use it.
+    </div>
+  </div>
+</div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const type = params.get("type");
+  if (type) {
+    document.getElementById("helpTitle").textContent = `${type} Help`;
+    document.getElementById("helpType").textContent = `Widget type: ${type}`;
+  }
+</script>
+
+</body>
+</html>

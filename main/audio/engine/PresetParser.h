@@ -24,6 +24,13 @@ struct WidgetParams
     // "gain" (0-10V CV, 10V = unchanged - see OscillatorState::gainCv)
     // shares the "gain" field further down with AudioOut/UsbOut/Es8311Out/
     // Wm8960Out/SoundFontPlayer (same 10.0f default convention there).
+    // fm-oscillator - fmIndex is FmOscillatorState::fmIndexCv (0-10V,
+    // 0V = no FM, see FmOscillatorNode.h). Reuses waveType/tuneVolts/
+    // amplitude/gain above (same fields/defaults as oscillator).
+    float fmIndex = 0.0f;
+    // WaveGen/FM-operator internal one-sample feedback, 0-10V. Shared field
+    // because both oscillator types expose the same "feedback" parameter.
+    float oscillatorFeedback = 0.0f;
     // lfo - amplitude is 0-10V peak swing (see LfoState); zeroPointFixed
     // selects fixed (zeroPoint) vs auto (amplitude/2) center; oneShot plays
     // one cycle per sync edge then freezes (see NodeInstance's Lfo case).
@@ -124,6 +131,11 @@ struct WidgetParams
     float left = 1.0f, right = 1.0f, gain = 10.0f;
     // Audio Outputs page-link: eight 0-10V per-bus level controls.
     float linkGain[synth::kLinkBusCount] = {10, 10, 10, 10, 10, 10, 10, 10};
+    // linked-input / linked-output: freely-placeable, linkId-keyed links -
+    // NOT the fixed 8-bus audio-output-link/audio-input-link mechanism above.
+    char linkId[24] = {};
+    char linkName[48] = {};
+    char sourceLinkId[24] = {};
     // clock - "cvVolts" is raw CV (0-10V), scaled linearly between minBpm/
     // maxBpm (see ClockState); pulseMs is the pulse width in ms.
     float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
