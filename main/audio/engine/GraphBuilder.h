@@ -464,13 +464,16 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::EspEq:
         initEspEq(*inst.espEq, p.eqFilterType, p.eqFrequency, p.eqQ, p.eqGainDb);
+        inst.espEq->bypass = p.eqBypass;
         break;
-    case NodeType::EspAlc: initEspEffect(*inst.espEffect, EspEffectKind::Alc, p.espParam, 2); break;
-    case NodeType::EspChannelConvert: initEspEffect(*inst.espEffect, EspEffectKind::ChannelConvert, p.espParam, 2); break;
+    case NodeType::EspAlc: initEspEffect(*inst.espEffect, EspEffectKind::Alc, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
+    case NodeType::EspChannelConvert: initEspEffect(*inst.espEffect, EspEffectKind::ChannelConvert, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
+    // EspMixer deliberately excluded - a 2-input mixer has no single dry
+    // signal to bypass to (see plan); s.bypass stays permanently false.
     case NodeType::EspMixer: initEspEffect(*inst.espEffect, EspEffectKind::Mixer, p.espParam, 4); break;
-    case NodeType::EspSonic: initEspEffect(*inst.espEffect, EspEffectKind::Sonic, p.espParam, 2); break;
-    case NodeType::EspDrc: initEspEffect(*inst.espEffect, EspEffectKind::Drc, p.espParam, 6); break;
-    case NodeType::EspMbc: initEspEffect(*inst.espEffect, EspEffectKind::Mbc, p.espParam, 3); break;
+    case NodeType::EspSonic: initEspEffect(*inst.espEffect, EspEffectKind::Sonic, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
+    case NodeType::EspDrc: initEspEffect(*inst.espEffect, EspEffectKind::Drc, p.espParam, 6); inst.espEffect->bypass = p.espBypass; break;
+    case NodeType::EspMbc: initEspEffect(*inst.espEffect, EspEffectKind::Mbc, p.espParam, 3); inst.espEffect->bypass = p.espBypass; break;
     case NodeType::Gain:
         nodes::gain::build(inst, p);
         break;

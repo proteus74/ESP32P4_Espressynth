@@ -156,6 +156,45 @@ struct NodeInstance
     bool midiPitchInitialized = false;
     synth::PortMask controlRampPortMask = 0;
 
+    // Third per-port signal state (see Constant/Buffer in
+    // audioPortConstantForBlock's comment below) - a linear ramp
+    // start+i*inc for this whole block, published by a producer whose own
+    // output happens to be exactly that shape (currently only AdsrNode's
+    // active attack/decay/release segment, see RampScheduler::
+    // wholeBlockRamp() in DspPrimitives.h) and consumed only by node types
+    // that explicitly check it (see noderender::rampForPort below). NOT
+    // the same thing as controlRampPortMask above (that one is a transient
+    // "don't treat as constant" safety flag for the MIDI-glide fill,
+    // carries no value/step itself, and is unrelated to this mechanism -
+    // do not conflate the two).
+    synth::PortMask rampPortMask = 0;
+    struct RampDescriptor
+    {
+        uint8_t port = 0xFF;
+        float start = 0.0f;
+        float inc = 0.0f;
+    };
+    // Small fixed cap, not kMaxAudioInPorts(17) wide - mirrors
+    // RampScheduler's own segs_[2] precedent: a ramp is advertised on at
+    // most a couple of ports of a handful of instances per block in
+    // practice. Overflow (a 3rd simultaneously-ramped port on the same
+    // instance) simply isn't tagged - falls back to the always-correct
+    // existing scan/loop path, never a correctness risk, just a missed
+    // fast path in a rare case.
+    static constexpr uint8_t kMaxRampedPorts = 2;
+    RampDescriptor rampDesc[kMaxRampedPorts] = {};
+    // Output side: does THIS instance's own outL currently also happen to
+    // be a whole-block linear ramp (set only by AdsrNode.h's render() for
+    // now). outL itself is ALWAYS still fully materialized regardless -
+    // this is purely additional metadata a Ramp-aware consumer may use
+    // instead of re-deriving the same thing via a per-sample scan.
+    bool outIsRamp = false;
+    struct
+    {
+        float start = 0.0f;
+        float inc = 0.0f;
+    } outRamp;
+
     OscillatorState osc;
     LfoState lfo;
     DetuneState detune;
@@ -320,6 +359,29 @@ inline bool allPortsConstantForBlock(const NodeInstance &inst, int portCount, si
         }
     }
     return true;
+}
+
+// Returns the tagged Ramp descriptor for `port` this block, or nullptr if
+// that port isn't a tagged ramp right now (either genuinely not one, or
+// the NodeInstance::kMaxRampedPorts cap was hit - see that constant's
+// comment). A Ramp-aware node checks this ONLY after audioPortConstantForBlock
+// already returned false for the same port (a tagged ramp is never also
+// block-constant, see Graph.h's tag-copy site) - never a substitute for
+// that existing check, an additional third branch alongside it.
+inline const NodeInstance::RampDescriptor *rampForPort(const NodeInstance &inst, int port)
+{
+    if ((inst.rampPortMask & synth::portBit(port)) == 0)
+    {
+        return nullptr;
+    }
+    for (uint8_t k = 0; k < NodeInstance::kMaxRampedPorts; ++k)
+    {
+        if (inst.rampDesc[k].port == static_cast<uint8_t>(port))
+        {
+            return &inst.rampDesc[k];
+        }
+    }
+    return nullptr;
 }
 } // namespace noderender
 

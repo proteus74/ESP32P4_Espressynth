@@ -36,6 +36,7 @@ struct FilterState
     float resonanceMaxQ = 20.0f;
     bool resonanceLog = true;
     bool coeffsDirty = true;
+    bool bypass = false;
 
     // Cached log2(max/lo) for cv::cvToRangeLogFast (see filterCutoffHz/
     // filterResonanceQ below) - avoids powf()/log2f() PER SAMPLE, as soon
@@ -116,7 +117,21 @@ inline void render(NodeInstance &inst, size_t frames)
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = *inst.filter;
-    // "cutoff"/"resonance" (Port-Index 1/2): a genuine DSP edge
+    // "bypass" (Port-Index 1, control-only) - same wired-CV-or-manual
+    // pattern as Reverb's bypass (see ReverbNode.h). Dry passthrough skips
+    // the whole biquad, exactly like an unconnected/unmodified signal.
+    const bool bypass = (inst.controlConnectedPortMask & (1u << 1)) != 0
+                            ? inst.controlValue[1] >= cv::kGateThresholdVolts
+                            : s.bypass;
+    if (bypass)
+    {
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = portSample(inst, 0, i);
+        }
+        return;
+    }
+    // "cutoff"/"resonance" (Port-Index 2/3): a genuine DSP edge
     // (audioConnectedPortMask) recomputes the biquad coefficients every
     // s.coeffStride-th sample below (1-16, Settings-Dialog-Feld, Default 4
     // - see FilterState::coeffStride) - close to audio-rate filter FM/sweep
@@ -136,7 +151,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // scalar): falls back to the existing coeffsDirty lazy path (only
     // recompute on actual change, unchanged behavior, coeffStride has no
     // effect there).
-    // "global" (Port-Index 3, control-only) - same pattern as Gain's
+    // "global" (Port-Index 4, control-only) - same pattern as Gain's
     // "global": only takes effect when cutoff/resonance is genuinely
     // DSP-edge-fed on voice 0 - every other voice then borrows voice 0's
     // raw cutoff/resonance CV instead of its own. "in" (Port 0) always
@@ -144,12 +159,12 @@ inline void render(NodeInstance &inst, size_t frames)
     // only the modulation source is shared. A purely manual (unwired)
     // cutoff/resonance is already the same widget-level value on every
     // voice by construction - Global has no extra effect there.
-    const bool modeFed = controlPortConnected(inst, 3) ||
-                          (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
-    const bool globalActive = modeFed ? (portSample(inst, 3, 0) >= cv::kGateThresholdVolts) : s.global;
+    const bool modeFed = controlPortConnected(inst, 4) ||
+                          (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    const bool globalActive = modeFed ? (portSample(inst, 4, 0) >= cv::kGateThresholdVolts) : s.global;
     const NodeInstance &src = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
-    const bool cutoffAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
-    const bool resonanceAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool cutoffAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool resonanceAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     if (cutoffAudioFed || resonanceAudioFed)
     {
         const size_t coeffStride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
@@ -159,8 +174,8 @@ inline void render(NodeInstance &inst, size_t frames)
             if (i == nextCoeffSample)
             {
                 nextCoeffSample += coeffStride;
-                const float cutoffCv = cutoffAudioFed ? src.inPorts[1][i] : s.cutoffCv;
-                const float resonanceCv = resonanceAudioFed ? src.inPorts[2][i] : s.resonanceCv;
+                const float cutoffCv = cutoffAudioFed ? src.inPorts[2][i] : s.cutoffCv;
+                const float resonanceCv = resonanceAudioFed ? src.inPorts[3][i] : s.resonanceCv;
                 if (!s.audioCoeffsInitialized || cutoffCv != s.lastAudioCutoffCv ||
                     resonanceCv != s.lastAudioResonanceCv)
                 {
@@ -224,6 +239,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.filter->resonanceLog = p.resonanceLog;
     inst.filter->coeffStride = p.coeffStride;
     inst.filter->global = p.filterGlobal;
+    inst.filter->bypass = p.filterBypass;
     inst.filter->refreshLog2Ratios();
     inst.filter->coeffsDirty = true;
 }
@@ -294,6 +310,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.filter->coeffStride = static_cast<uint8_t>(clamped);
         return true;
     }
+    if (strcmp(name, "bypass") == 0)
+    {
+        inst.filter->bypass = value >= 0.5f;
+        return true;
+    }
     // "cutoffCurve"/"resonanceCurve" are strings ("linear"/"log"), same
     // pattern as Gain's "curve" - see Graph.cpp's applyLiveParams.
     return false;
@@ -318,6 +339,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
         out.coeffStride = static_cast<uint8_t>(coeffStride < 1 ? 1 : (coeffStride > 16 ? 16 : coeffStride));
     }
     out.filterGlobal = presetparser::getBool(p, "global", false);
+    out.filterBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::filter

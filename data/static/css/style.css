@@ -65,6 +65,19 @@ button:hover {
   flex-shrink: 0;
 }
 
+/* App logo, left of the "File" menu item - source PNG is 128px (see
+   data/static/img/logo-menu.png) for retina sharpness, displayed small here
+   via height/width so the menubar's own row height (driven by .menu-item's
+   padding+text) stays unchanged. Doubles as the Info button (replaces the
+   old text-only "Info" menu item, see menubarLogo's click handler). */
+.menubar-logo {
+  height: 1.5rem;
+  width: 1.5rem;
+  margin: 0 0.4rem 0 0.2rem;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .menu-item {
   position: relative;
   padding: 0.6rem 1rem;
@@ -520,10 +533,13 @@ button:hover {
 }
 
 /* Pro-Node-CPU-Last-Debug-Badge (siehe main.js's updateNodeCpuDisplay) - im
-   Widget-Titel, zwischen Label und Close-Button. Standardmaessig
+   Widget-Titel, direkt links neben dem Close-Button. Standardmaessig
    ausgeblendet, nur sichtbar bei aktivem Debug-Toggle (View-Menue ->
    "Show Node CPU %", setzt body.show-node-cpu). Gleiche Farbschwellen-
-   Logik wie .cpu-load-value oben, nur kompakter fuer die Titelleiste. */
+   Logik wie .cpu-load-value oben, nur kompakter fuer die Titelleiste.
+   margin-left:auto verdraengt es (samt Close-Button) an den rechten Rand,
+   statt es per .widget-instance-header's justify-content:space-between
+   mittig zwischen Titel und Close-Button schweben zu lassen. */
 .widget-cpu-badge {
   display: none;
   font-variant-numeric: tabular-nums;
@@ -532,7 +548,8 @@ button:hover {
   color: var(--ok);
   white-space: nowrap;
   flex-shrink: 0;
-  margin: 0 0.3rem;
+  margin-left: auto;
+  margin-right: 0.3rem;
 }
 
 body.show-node-cpu .widget-cpu-badge {
@@ -618,6 +635,10 @@ body.show-node-cpu .widget-cpu-badge {
   cursor: default;
 }
 
+.canvas.hide-background-dots {
+  background-image: none;
+}
+
 .canvas.hidden {
   display: none;
 }
@@ -691,7 +712,11 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="midi-in"] {
-  min-width: 330px;
+  min-width: 270px;
+}
+
+.widget-instance[data-widget-type="midi-in"] .port-row-in > .port-label {
+  flex-basis: 90px;
 }
 
 .widget-instance[data-widget-type="button"] {
@@ -704,12 +729,27 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="adsr"] {
-  min-width: 260px;
+  min-width: 220px;
+}
+
+.widget-instance[data-widget-type="adsr"] .port-row-in > .port-label {
+  flex-basis: 90px;
 }
 
 .widget-instance[data-widget-type="oscillator"],
 .widget-instance[data-widget-type="gain"] {
-  min-width: 220px;
+  min-width: 200px;
+}
+
+.widget-instance[data-widget-type="oscillator"] .port-row-in > .port-label {
+  flex-basis: 100px;
+}
+
+.widget-instance[data-widget-type="audio-out"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="usb-out"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="es8311-out"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="wm8960-out"] .port-row-in > .port-label {
+  flex-basis: 48px;
 }
 
 .widget-instance[data-widget-type="filter"],
@@ -726,15 +766,185 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 260px;
 }
 
-.widget-instance[data-widget-type="mixer"],
+.widget-instance[data-widget-type="mixer"] {
+  min-width: 190px;
+}
+
 .widget-instance[data-widget-type="lfo"],
 .widget-instance[data-widget-type="vu-meter"],
 .widget-instance[data-widget-type="oscilloscope"] {
   min-width: 220px;
 }
 
+.widget-instance[data-widget-type="mixer"] .port-row-in > .port-label {
+  flex-basis: 72px;
+}
+
 .widget-instance[data-widget-type="hammond"] {
   min-width: 240px;
+}
+
+.widget-instance[data-widget-type="annotation"] {
+  width: 300px;
+  height: 180px;
+  min-width: 180px;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--annotation-text-color, var(--text));
+}
+
+.widget-instance[data-widget-type="annotation"] .widget-instance-header {
+  flex: 0 0 auto;
+}
+
+.annotation-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.annotation-toolbar {
+  flex: 0 0 auto;
+  display: none;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem 0.3rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.05);
+  scrollbar-width: thin;
+}
+
+.widget-instance[data-widget-type="annotation"]:focus-within .annotation-toolbar {
+  display: flex;
+}
+
+.annotation-tool {
+  flex: 0 0 25px;
+  width: 25px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.55);
+  color: #111827;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.annotation-tool-bold {
+  font-weight: 800;
+}
+
+.annotation-tool-italic {
+  font-style: italic;
+}
+
+.annotation-tool-underline {
+  text-decoration: underline;
+}
+
+.annotation-font-size {
+  flex: 0 0 46px;
+  width: 46px;
+  height: 24px;
+  padding: 0 0.15rem;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.7);
+  color: #111827;
+  font-size: 0.72rem;
+}
+
+.annotation-color-control {
+  flex: 0 0 auto;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 0.12rem;
+  padding: 0 0.18rem;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.55);
+  color: #111827;
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.annotation-color-control input[type="color"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.annotation-editor {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0.5rem 0.6rem 0.8rem;
+  outline: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.annotation-editor:empty::before {
+  content: attr(data-placeholder);
+  color: currentColor;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.annotation-editor ul,
+.annotation-editor ol {
+  margin: 0.2rem 0;
+  padding-left: 1.4rem;
+}
+
+.annotation-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 3;
+  background: linear-gradient(135deg, transparent 45%, currentColor 46%, currentColor 58%, transparent 59%, transparent 68%, currentColor 69%);
+  opacity: 0.45;
+}
+
+/* Compact control rows: keep labels aligned without reserving a wide empty
+   column in widgets whose labels are short. */
+.widget-instance[data-widget-type="hammond"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="detune"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="frequency-divider"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="gain"] .port-row-in > .port-label {
+  flex-basis: 72px;
+}
+
+.widget-instance[data-widget-type="soundfont-player"] .port-row-in > .port-label {
+  flex-basis: 100px;
+}
+
+.widget-instance[data-widget-type="filter"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="curtis-filter"] .port-row-in > .port-label {
+  flex-basis: 78px;
+}
+
+.widget-instance[data-widget-type="detune"] .port-slider {
+  flex-basis: 110px;
+  width: 110px;
 }
 
 .widget-instance.selected {
@@ -1202,6 +1412,20 @@ body.show-node-cpu .widget-cpu-badge {
   background: var(--accent);
   color: #0f172a;
   border-color: var(--accent);
+}
+
+.lfo-zero-mode-buttons,
+.lfo-polarity-buttons {
+  width: 220px;
+  align-self: center;
+}
+
+.lfo-zero-mode-buttons .filter-type-btn,
+.lfo-polarity-buttons .filter-type-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.16rem 0.35rem;
+  font-size: 0.7rem;
 }
 
 /* Same jagged mark as white noise, deliberately pink for Pink Noise. */

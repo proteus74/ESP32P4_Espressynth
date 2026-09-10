@@ -158,17 +158,23 @@ inline void init() {
     ESP_ERROR_CHECK(Feature::USBDevice::init());
 #endif
 
-#if defined(CONFIG_APP_ENABLE_LVGL)
-    ESP_LOGI(TAG, "Feature: LVGL enabled -> Initializing...");
-    ESP_ERROR_CHECK(Feature::LVGL::init());
-#endif
-
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
+    // Deliberately ahead of LVGL below (was the other way round before the boot splash
+    // screen existed): Feature::LVGL::init() now reads its splash image from
+    // /littlefs/system/splash.png (see display_lvgl.hpp), which needs this mount to already
+    // be up. Each feature still checks its own Kconfig guard independently - either can stay
+    // disabled without the other breaking, this only fixes their relative order when both
+    // are on.
     ESP_LOGI(TAG, "Feature: LittleFS enabled -> Initializing...");
     const esp_err_t littlefs_err = Feature::LittleFS::init();
     if (littlefs_err != ESP_OK) {
         ESP_LOGW(TAG, "LittleFS unavailable: %s", esp_err_to_name(littlefs_err));
     }
+#endif
+
+#if defined(CONFIG_APP_ENABLE_LVGL)
+    ESP_LOGI(TAG, "Feature: LVGL enabled -> Initializing...");
+    ESP_ERROR_CHECK(Feature::LVGL::init());
 #endif
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_ETHERNET)
@@ -256,6 +262,10 @@ inline void init() {
 #if defined(CONFIG_APP_ENABLE_CLI)
     ESP_LOGI(TAG, "Feature: CLI enabled -> Initializing...");
     ESP_ERROR_CHECK(Feature::CLI::init());
+#endif
+
+#if defined(CONFIG_APP_ENABLE_LVGL)
+    Feature::LVGL::finish_startup_screen();
 #endif
 
     ESP_LOGI(TAG, "Application initialization complete. Running main loop...");

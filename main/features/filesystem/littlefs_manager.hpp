@@ -5,7 +5,11 @@
 #include "esp_log.h"
 
 // Mounts the "littlefs" data partition (see ../../partitions.csv) as a LittleFS filesystem,
-// via the joltwallet/littlefs component (main/idf_component.yml).
+// via the joltwallet/littlefs component (main/idf_component.yml). Default/seed content
+// (e.g. the boot splash image, see display_lvgl.hpp) is provisioned separately, offline, by
+// flashing littlefs_data/ onto this same partition via `idf.py littlefs-flash` (see the root
+// CMakeLists.txt's littlefs_create_partition_image(littlefs ...) call and its warning
+// comment) - NOT at runtime here, and NOT embedded in the app binary at all.
 namespace Feature::LittleFS {
 
 constexpr const char* MOUNT_POINT = "/littlefs";

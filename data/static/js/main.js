@@ -87,7 +87,7 @@ async function applyWm8960Availability() {
 
 applyWm8960Availability();
 
-document.getElementById("menuInfo").addEventListener("click", (e) => {
+document.getElementById("menubarLogo").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
   openInfo();
@@ -532,6 +532,12 @@ async function importPresetFromFile(file) {
 
 
 const WIDGET_TYPES = {
+  annotation: {
+    label: "Annotation",
+    icon: "📝",
+    inputs: [],
+    outputs: [],
+  },
   debug: {
     label: "Debug",
     icon: "🐞",
@@ -542,15 +548,15 @@ const WIDGET_TYPES = {
     label: "Midi-In",
     icon: "🎹",
     inputs: [
-      { id: "voices", label: "Voices (CV)" },
+      { id: "voices", label: "Voices" },
       { id: "glide", label: "Glide" },
-      { id: "glideTime", label: "Glide Time (CV)" },
+      { id: "glideTime", label: "Glide Time" },
     ],
     outputs: [
       { id: "midi", label: "MIDI" },
-      { id: "pitchCv", label: "Pitch CV" },
+      { id: "pitchCv", label: "Pitch" },
       { id: "note", label: "Note (0–127)" },
-      { id: "velocity", label: "Velocity (CV)" },
+      { id: "velocity", label: "Velocity" },
       { id: "gate", label: "Gate" },
     ],
   },
@@ -593,7 +599,7 @@ const WIDGET_TYPES = {
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   multiplexer: {
     label: "Multiplexer",
@@ -601,11 +607,11 @@ const WIDGET_TYPES = {
     // Static/default shape (2 inputs) - live input count (2-16) is handled by
     // renderMultiplexerPorts() below, same pattern as Mixer.
     inputs: [
-      { id: "select", label: "Select (CV)" },
+      { id: "select", label: "Select" },
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   multiplier: {
     label: "Multiplier",
@@ -614,7 +620,7 @@ const WIDGET_TYPES = {
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   adder: {
     label: "Adder",
@@ -623,7 +629,7 @@ const WIDGET_TYPES = {
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   divide: {
     label: "Divide",
@@ -632,16 +638,16 @@ const WIDGET_TYPES = {
       { id: "in1", label: "In 1" },
       { id: "in2", label: "In 2" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   "frequency-divider": {
     label: "Frequency Divider",
     icon: "➗",
     inputs: [
-      { id: "cv", label: "CV (V)" },
+      { id: "cv", label: "In" },
       { id: "divider", label: "Divider" },
     ],
-    outputs: [{ id: "cv", label: "CV (V)" }],
+    outputs: [{ id: "cv", label: "Out" }],
   },
   abs: {
     label: "Abs",
@@ -665,14 +671,14 @@ const WIDGET_TYPES = {
     label: "WaveGen",
     icon: "〰️",
     inputs: [
-      { id: "pitchCv", label: "Pitch (CV)" },
-      { id: "tune", label: "Tune (CV)" },
-      { id: "amplitude", label: "Amplitude (CV)" },
-      { id: "waveform", label: "Waveform (CV)" },
+      { id: "pitchCv", label: "Pitch" },
+      { id: "tune", label: "Tune" },
+      { id: "amplitude", label: "Amplitude" },
+      { id: "waveform", label: "Waveform" },
       { id: "gate", label: "Gate" },
-      { id: "gain", label: "Gain (CV)" },
+      { id: "gain", label: "Gain" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   hammond: {
     label: "Hammond",
@@ -685,10 +691,10 @@ const WIDGET_TYPES = {
     // shaping. The nine "drawbarN" rows ARE real audio-rate ports here
     // (unlike Mixer's "gainN") - renderHammondPorts() below draws them.
     inputs: [
-      { id: "pitchCv", label: "Pitch (CV)" },
-      { id: "tune", label: "Tune (CV)" },
-      { id: "amplitude", label: "Amplitude (CV)" },
-      { id: "gain", label: "Gain (CV)" },
+      { id: "pitchCv", label: "Pitch" },
+      { id: "tune", label: "Tune" },
+      { id: "amplitude", label: "Amplitude" },
+      { id: "gain", label: "Gain" },
       { id: "drawbar1", label: "16′" },
       { id: "drawbar2", label: "5⅓′" },
       { id: "drawbar3", label: "8′" },
@@ -699,7 +705,7 @@ const WIDGET_TYPES = {
       { id: "drawbar8", label: "1⅓′" },
       { id: "drawbar9", label: "1′" },
     ],
-    outputs: [{ id: "value", label: "Value" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   "wave-player": {
     label: "Wave Player",
@@ -724,7 +730,7 @@ const WIDGET_TYPES = {
       { id: "enableCc", label: "Enable CC Messages" },
       { id: "enableModWheel", label: "Enable Mod Wheel (Ch 1, CC 1)" },
       { id: "enablePitchWheel", label: "Enable Pitch Wheel" },
-      { id: "gain", label: "Gain (CV)" },
+      { id: "gain", label: "Gain" },
     ],
     outputs: [
       { id: "left", label: "Out L" },
@@ -735,7 +741,7 @@ const WIDGET_TYPES = {
     label: "DeTune",
     icon: "↔️",
     inputs: [
-      { id: "cv", label: "CV In" },
+      { id: "cv", label: "In" },
       { id: "amount", label: "Amount" },
     ],
     outputs: [
@@ -749,7 +755,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "left", label: "In L" },
       { id: "right", label: "In R" },
-      { id: "gain", label: "Volume (0–10 V)" },
+      { id: "gain", label: "Volume" },
       { id: "muted", label: "Mute (Gate)" },
     ],
     outputs: [],
@@ -760,7 +766,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "left", label: "In L" },
       { id: "right", label: "In R" },
-      { id: "gain", label: "Volume (0–10 V)" },
+      { id: "gain", label: "Volume" },
       { id: "muted", label: "Mute (Gate)" },
     ],
     outputs: [],
@@ -771,7 +777,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "left", label: "In L" },
       { id: "right", label: "In R" },
-      { id: "gain", label: "Volume (0–10 V)" },
+      { id: "gain", label: "Volume" },
       { id: "muted", label: "Mute (Gate)" },
     ],
     outputs: [],
@@ -782,7 +788,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "left", label: "In L" },
       { id: "right", label: "In R" },
-      { id: "gain", label: "Volume (0–10 V)" },
+      { id: "gain", label: "Volume" },
       { id: "muted", label: "Mute (Gate)" },
     ],
     outputs: [],
@@ -792,7 +798,7 @@ const WIDGET_TYPES = {
     icon: "🔉",
     inputs: [
       { id: "in", label: "In" },
-      { id: "amount", label: "CV (0–10 V)" },
+      { id: "amount", label: "Gain" },
       { id: "global", label: "Global" },
     ],
     outputs: [{ id: "out", label: "Out" }],
@@ -802,8 +808,9 @@ const WIDGET_TYPES = {
     icon: "🎚️",
     inputs: [
       { id: "in", label: "In" },
-      { id: "cutoff", label: "Cutoff (CV)" },
-      { id: "resonance", label: "Resonance (CV)" },
+      { id: "bypass", label: "Bypass" },
+      { id: "cutoff", label: "Cutoff" },
+      { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
     ],
     outputs: [{ id: "out", label: "Out" }],
@@ -813,19 +820,20 @@ const WIDGET_TYPES = {
     icon: "🎚️",
     inputs: [
       { id: "in", label: "In" },
-      { id: "cutoff", label: "Cutoff (CV)" },
-      { id: "resonance", label: "Resonance (CV)" },
+      { id: "bypass", label: "Bypass" },
+      { id: "cutoff", label: "Cutoff" },
+      { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
-  "esp-eq": { label: "EQ", icon: "📶", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "frequency", label: "Frequency" }, { id: "q", label: "Q" }, { id: "gainDb", label: "Gain dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-alc": { label: "ESP ALC", icon: "ALC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "gainL", label: "Gain L dB" }, { id: "gainR", label: "Gain R dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-channel-convert": { label: "ESP Channel Convert", icon: "CH", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-eq": { label: "EQ", icon: "📶", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "frequency", label: "Frequency" }, { id: "q", label: "Q" }, { id: "gainDb", label: "Gain dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-alc": { label: "ESP ALC", icon: "ALC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "gainL", label: "Gain L dB" }, { id: "gainR", label: "Gain R dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-channel-convert": { label: "ESP Channel Convert", icon: "CH", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
   "esp-mixer": { label: "ESP Crossfade Mixer", icon: "MX", inputs: [{ id: "in1L", label: "A In L" }, { id: "in1R", label: "A In R" }, { id: "in2L", label: "B In L" }, { id: "in2R", label: "B In R" }, { id: "mode", label: "Scene" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-sonic": { label: "Sonic", icon: "Sonic", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "speed", label: "Speed" }, { id: "pitch", label: "Pitch" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-drc": { label: "Dynamic Range Control", icon: "DRC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "attackMs", label: "Attack ms" }, { id: "releaseMs", label: "Release ms" }, { id: "makeupDb", label: "Makeup dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-mbc": { label: "ESP MBC", icon: "MBC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-sonic": { label: "Sonic", icon: "Sonic", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "speed", label: "Speed" }, { id: "pitch", label: "Pitch" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-drc": { label: "Dynamic Range Control", icon: "DRC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "attackMs", label: "Attack ms" }, { id: "releaseMs", label: "Release ms" }, { id: "makeupDb", label: "Makeup dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "esp-mbc": { label: "ESP MBC", icon: "MBC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
   mixer: {
     label: "Mixer",
     icon: "🎧",
@@ -840,11 +848,11 @@ const WIDGET_TYPES = {
     icon: "⛰️",
     inputs: [
       { id: "gate", label: "Gate" },
-      { id: "velocity", label: "Velocity (CV)" },
-      { id: "att", label: "Attack (CV)" },
-      { id: "dec", label: "Decay (CV)" },
-      { id: "sus", label: "Sustain (CV)" },
-      { id: "rel", label: "Release (CV)" },
+      { id: "velocity", label: "Velocity" },
+      { id: "att", label: "Attack" },
+      { id: "dec", label: "Decay" },
+      { id: "sus", label: "Sustain" },
+      { id: "rel", label: "Release" },
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
@@ -859,7 +867,8 @@ const WIDGET_TYPES = {
     icon: "🌀",
     inputs: [
       { id: "in", label: "In" },
-      { id: "rate", label: "Rate (Hz)" },
+      { id: "bypass", label: "Bypass" },
+      { id: "rate", label: "Rate" },
       { id: "depth", label: "Depth" },
       { id: "offset", label: "Offset" },
     ],
@@ -874,9 +883,10 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "inL", label: "In L" },
       { id: "inR", label: "In R" },
-      { id: "time", label: "Time (CV)" },
-      { id: "feedback", label: "Feedback (CV)" },
-      { id: "mix", label: "Mix (CV)" },
+      { id: "bypass", label: "Bypass" },
+      { id: "time", label: "Time" },
+      { id: "feedback", label: "Feedback" },
+      { id: "mix", label: "Mix" },
     ],
     outputs: [
       { id: "outL", label: "Out L" },
@@ -890,11 +900,11 @@ const WIDGET_TYPES = {
       { id: "inL", label: "In L" },
       { id: "inR", label: "In R" },
       { id: "bypass", label: "Bypass" },
-      { id: "roomSize", label: "Room Size (CV)" },
-      { id: "damping", label: "Damping (CV)" },
-      { id: "wetLevel", label: "Wet Level (CV)" },
-      { id: "dryLevel", label: "Dry Level (CV)" },
-      { id: "preDelay", label: "Pre-Delay (CV)" },
+      { id: "roomSize", label: "Room Size" },
+      { id: "damping", label: "Damping" },
+      { id: "wetLevel", label: "Wet Level" },
+      { id: "dryLevel", label: "Dry Level" },
+      { id: "preDelay", label: "Pre-Delay" },
     ],
     outputs: [
       { id: "outL", label: "Out L" },
@@ -908,10 +918,10 @@ const WIDGET_TYPES = {
       { id: "inL", label: "In L" },
       { id: "inR", label: "In R" },
       { id: "bypass", label: "Bypass" },
-      { id: "roomSize", label: "Room Size (CV)" },
-      { id: "damping", label: "Damping (CV)" },
-      { id: "wetLevel", label: "Wet Level (CV)" },
-      { id: "dryLevel", label: "Dry Level (CV)" },
+      { id: "roomSize", label: "Room Size" },
+      { id: "damping", label: "Damping" },
+      { id: "wetLevel", label: "Wet Level" },
+      { id: "dryLevel", label: "Dry Level" },
     ],
     outputs: [
       { id: "outL", label: "Out L" },
@@ -934,15 +944,15 @@ const WIDGET_TYPES = {
     label: "LFO",
     icon: "🔄",
     inputs: [
-      { id: "rate", label: "Rate (Hz)" },
+      { id: "rate", label: "Rate" },
       { id: "amplitude", label: "Amplitude" },
       { id: "phase", label: "Phase" },
       { id: "sync", label: "Sync" },
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
-      { id: "zeroPoint", label: "Zero Point (CV)" },
+      { id: "zeroPoint", label: "Zero Point" },
     ],
-    outputs: [{ id: "value", label: "CV" }],
+    outputs: [{ id: "value", label: "Out" }],
   },
   "vu-meter": {
     label: "VU-Meter",
@@ -993,7 +1003,7 @@ const WIDGET_CATEGORIES = [
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
   { label: "Effects", types: ["chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out"] },
-  { label: "Misc", types: ["debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
+  { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
 ];
 
 
@@ -1226,7 +1236,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq"];
 
 
 
@@ -1369,8 +1379,11 @@ function formatNumber(value) {
   return Number.isFinite(num) ? num.toFixed(2) : String(value);
 }
 
+const GRID_SNAP_KEY = "espressynth.gridSnap";
+let gridSnapEnabled = localStorage.getItem(GRID_SNAP_KEY) !== "0";
+
 function snap(value) {
-  return Math.round(value / GRID) * GRID;
+  return gridSnapEnabled ? Math.round(value / GRID) * GRID : value;
 }
 
 function applyTransform() {
@@ -1637,6 +1650,10 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   el.appendChild(header);
+
+  if (type === "annotation") {
+    createAnnotationBody(id, el);
+  }
 
   if (type === "midi-in") {
     midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0 });
@@ -1983,6 +2000,7 @@ function createWidget(type, label, x, y, forcedId) {
       
       coeffStride: 4,
       global: false,
+      bypass: false,
     };
     filterStates.set(id, { ...filterDefaults });
     audioEngine.createNode(id, type, { ...filterDefaults });
@@ -2123,7 +2141,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "chorus") {
-    const chorusDefaults = { rate: 1.5, depth: 0.003, offset: 0.02 };
+    const chorusDefaults = { rate: 1.5, depth: 0.003, offset: 0.02, bypass: false };
     chorusStates.set(id, { ...chorusDefaults });
     audioEngine.createNode(id, "chorus", { ...chorusDefaults });
   }
@@ -2466,6 +2484,7 @@ function createWidget(type, label, x, y, forcedId) {
     const readout = document.createElement("div");
     readout.className = "knob-readout";
     readout.dataset.role = "knob-readout";
+    readout.textContent = "0.00";
 
     const ccLabel = document.createElement("div");
     ccLabel.className = "knob-cc-label";
@@ -2588,8 +2607,8 @@ function createWidget(type, label, x, y, forcedId) {
   let switchBody = null;
 
   if (type === "switch") {
-    switchStates.set(id, { cc: null, channel: null, selectIn2: false, in1: 0, in2: 0 });
-    audioEngine.createNode(id, "switch", { selectIn2: false });
+    switchStates.set(id, { cc: null, channel: null, selectIn2: false, in1: 0, in2: 0, in1Default: 0, in2Default: 0 });
+    audioEngine.createNode(id, "switch", { selectIn2: false, in1Default: 0, in2Default: 0 });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body switch-body";
@@ -2999,8 +3018,8 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatNumber(state.gain ?? CV_MAX_VOLTS);
         row.appendChild(valueSpan);
       }
-      if ((type === "reverb" || type === "reverb-light") && port.id === "bypass") {
-        const state = effectCvStates.get(id);
+      if (hasBypass(type) && port.id === "bypass") {
+        const state = bypassStateMapFor(type).get(id);
         const switchLabel = document.createElement("label");
         switchLabel.className = "switch";
         const toggle = document.createElement("input");
@@ -3338,7 +3357,7 @@ function createWidget(type, label, x, y, forcedId) {
     const constBody = el.querySelector(".const-body");
     if (constBody) constBody.appendChild(ports);
     else el.appendChild(ports);
-  } else {
+  } else if (type !== "annotation") {
     el.appendChild(ports);
   }
 
@@ -3364,7 +3383,7 @@ function createWidget(type, label, x, y, forcedId) {
   
   
   
-  layoutPortsGrid(ports);
+  if (type !== "annotation") layoutPortsGrid(ports);
   if (type === "multiplexer") {
     updateMultiplexerVisual(id);
     requestAnimationFrame(() => updateMultiplexerRouting(id));
@@ -3412,6 +3431,10 @@ function removeWidget(id, force = false) {
   constStates.delete(id);
   voltmeterStates.delete(id);
   audioMonitorStates.delete(id);
+  annotationStates.delete(id);
+  annotationSelections.delete(id);
+  clearTimeout(annotationSaveTimers.get(id));
+  annotationSaveTimers.delete(id);
   chorusStates.delete(id);
   effectCvStates.delete(id);
   audioEngine.removeNode(id);
@@ -3575,6 +3598,7 @@ function layoutPortsGrid(portsEl) {
   const isSoundFontPlayer = portsEl.closest('[data-widget-type="soundfont-player"]') !== null;
   const isMidiIn = portsEl.closest('[data-widget-type="midi-in"]') !== null;
   const isAudioInputLink = portsEl.closest('[data-widget-type="audio-input-link"]') !== null;
+  const isDetune = portsEl.closest('[data-widget-type="detune"]') !== null;
 
   outRows.forEach((row) => {
     row.style.position = "";
@@ -3612,10 +3636,14 @@ function layoutPortsGrid(portsEl) {
     ? -(portsEl.previousElementSibling?.offsetHeight || 0)
     : paddingTop + outputRowStart * rowHeight;
   const outputCenterOffset = isAudioInputLink ? Math.max(0, (rowHeight - 14) / 2) : 0;
-  portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowStart + outRows.length)}px`;
+  const outputRowCount = outputRowStart + outRows.length + (isDetune ? 1 : 0);
+  portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowCount)}px`;
   outRows.forEach((row, i) => {
     row.style.position = "absolute";
-    row.style.top = `${outputTop + outputCenterOffset + i * rowHeight}px`;
+    // DeTune has a slider on its second input row. Keep second output label
+    // below that row instead of painting "Tune Down" over the slider/value.
+    const outputIndex = isDetune && i === 1 ? 2 : i;
+    row.style.top = `${outputTop + outputCenterOffset + outputIndex * rowHeight}px`;
     row.style.right = "0";
   });
 }
@@ -3656,6 +3684,407 @@ const constStates = new Map();
 
 const voltmeterStates = new Map();
 const audioMonitorStates = new Map();
+const annotationStates = new Map();
+const annotationSelections = new Map();
+const annotationSaveTimers = new Map();
+
+const ANNOTATION_DEFAULT_WIDTH = 300;
+const ANNOTATION_DEFAULT_HEIGHT = 180;
+const ANNOTATION_MIN_WIDTH = 180;
+const ANNOTATION_MIN_HEIGHT = 100;
+const ANNOTATION_MAX_WIDTH = 1200;
+const ANNOTATION_MAX_HEIGHT = 900;
+const ANNOTATION_DEFAULT_BACKGROUND = "default";
+const ANNOTATION_CARD_BACKGROUND_FALLBACK = "#1e293b";
+
+function sanitizeAnnotationBackground(value) {
+  const color = String(value || "").trim();
+  if (!color || color === ANNOTATION_DEFAULT_BACKGROUND) return ANNOTATION_DEFAULT_BACKGROUND;
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : ANNOTATION_DEFAULT_BACKGROUND;
+}
+
+function annotationBackgroundPickerColor(value) {
+  if (/^#[0-9a-f]{6}$/i.test(value || "")) return value;
+  const cardColor = getComputedStyle(document.documentElement).getPropertyValue("--card").trim();
+  return /^#[0-9a-f]{6}$/i.test(cardColor) ? cardColor : ANNOTATION_CARD_BACKGROUND_FALLBACK;
+}
+
+function applyAnnotationAppearance(el, backgroundColor) {
+  if (backgroundColor === ANNOTATION_DEFAULT_BACKGROUND) {
+    el.style.removeProperty("background-color");
+    el.style.removeProperty("--annotation-text-color");
+    return;
+  }
+  el.style.backgroundColor = backgroundColor;
+  const red = Number.parseInt(backgroundColor.slice(1, 3), 16);
+  const green = Number.parseInt(backgroundColor.slice(3, 5), 16);
+  const blue = Number.parseInt(backgroundColor.slice(5, 7), 16);
+  const brightness = (red * 299 + green * 587 + blue * 114) / 1000;
+  el.style.setProperty("--annotation-text-color", brightness >= 150 ? "#111827" : "#e2e8f0");
+}
+
+function sanitizeAnnotationHtml(html) {
+  const source = document.createElement("template");
+  source.innerHTML = String(html || "");
+  const output = document.createElement("div");
+  const allowedTags = new Set(["DIV", "P", "BR", "STRONG", "EM", "U", "UL", "OL", "LI", "SPAN", "FONT"]);
+  const droppedTags = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "IMG", "SVG", "MATH", "LINK", "META"]);
+  const fontSizeMap = { "1": 10, "2": 12, "3": 14, "4": 18, "5": 24, "6": 32, "7": 40 };
+
+  function safeColor(value) {
+    const probe = document.createElement("span");
+    probe.style.color = String(value || "").trim();
+    return probe.style.color;
+  }
+
+  function copyChildren(from, to) {
+    Array.from(from.childNodes).forEach((child) => copyNode(child, to));
+  }
+
+  function copyNode(node, parent) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parent.appendChild(document.createTextNode(node.textContent || ""));
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (droppedTags.has(node.tagName)) return;
+    if (!allowedTags.has(node.tagName) && node.tagName !== "B" && node.tagName !== "I") {
+      copyChildren(node, parent);
+      return;
+    }
+
+    let tag = node.tagName;
+    if (tag === "B") tag = "STRONG";
+    if (tag === "I") tag = "EM";
+    if (tag === "FONT") tag = "SPAN";
+    const clean = document.createElement(tag.toLowerCase());
+
+    if (tag === "SPAN") {
+      const color = safeColor(node.style.color || node.getAttribute("color"));
+      if (color) clean.style.color = color;
+
+      let size = 0;
+      if (node.tagName === "FONT") size = fontSizeMap[node.getAttribute("size")] || 0;
+      if (!size && /px$/i.test(node.style.fontSize || "")) size = Number.parseFloat(node.style.fontSize);
+      if (Number.isFinite(size) && size > 0) clean.style.fontSize = `${clamp(size, 10, 48)}px`;
+
+      const weight = node.style.fontWeight;
+      if (weight === "bold" || Number.parseInt(weight, 10) >= 600) clean.style.fontWeight = "bold";
+      if (node.style.fontStyle === "italic") clean.style.fontStyle = "italic";
+      if ((node.style.textDecorationLine || node.style.textDecoration || "").includes("underline")) {
+        clean.style.textDecoration = "underline";
+      }
+    }
+
+    copyChildren(node, clean);
+    parent.appendChild(clean);
+  }
+
+  copyChildren(source.content, output);
+  return output.innerHTML;
+}
+
+function saveAnnotationSelection(widgetId) {
+  const editor = document.getElementById(widgetId)?.querySelector('[data-role="annotation-editor"]');
+  const selection = window.getSelection();
+  if (!editor || !selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const container = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+    ? range.commonAncestorContainer.parentNode
+    : range.commonAncestorContainer;
+  if (container === editor || editor.contains(container)) annotationSelections.set(widgetId, range.cloneRange());
+}
+
+function restoreAnnotationSelection(widgetId) {
+  const editor = document.getElementById(widgetId)?.querySelector('[data-role="annotation-editor"]');
+  if (!editor) return null;
+  editor.focus({ preventScroll: true });
+  const selection = window.getSelection();
+  const saved = annotationSelections.get(widgetId);
+  if (selection && saved && editor.contains(saved.commonAncestorContainer)) {
+    selection.removeAllRanges();
+    selection.addRange(saved);
+  }
+  return editor;
+}
+
+function beginAnnotationHistory(widgetId) {
+  const state = annotationStates.get(widgetId);
+  if (!state || state.historyOpen) return;
+  pushHistorySnapshot();
+  state.historyOpen = true;
+}
+
+function scheduleAnnotationSave(widgetId) {
+  clearTimeout(annotationSaveTimers.get(widgetId));
+  annotationSaveTimers.set(widgetId, setTimeout(() => {
+    annotationSaveTimers.delete(widgetId);
+    savePresetNow();
+  }, 800));
+}
+
+function syncAnnotationState(widgetId, persist = true) {
+  const state = annotationStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  const editor = el?.querySelector('[data-role="annotation-editor"]');
+  if (!state || !el || !editor) return;
+  state.html = sanitizeAnnotationHtml(editor.innerHTML);
+  state.width = clamp(Math.round(el.offsetWidth), ANNOTATION_MIN_WIDTH, ANNOTATION_MAX_WIDTH);
+  state.height = clamp(Math.round(el.offsetHeight), ANNOTATION_MIN_HEIGHT, ANNOTATION_MAX_HEIGHT);
+  if (persist) {
+    markDirty();
+    scheduleAnnotationSave(widgetId);
+  }
+}
+
+function applyAnnotationCommand(widgetId, command, value = null) {
+  beginAnnotationHistory(widgetId);
+  const editor = restoreAnnotationSelection(widgetId);
+  if (!editor) return;
+  document.execCommand(command, false, value);
+  saveAnnotationSelection(widgetId);
+  syncAnnotationState(widgetId);
+}
+
+function applyAnnotationFontSize(widgetId, size) {
+  const px = clamp(Number(size) || 14, 10, 48);
+  beginAnnotationHistory(widgetId);
+  const editor = restoreAnnotationSelection(widgetId);
+  if (!editor) return;
+  document.execCommand("fontSize", false, "7");
+  editor.querySelectorAll('font[size="7"]').forEach((font) => {
+    const span = document.createElement("span");
+    span.style.fontSize = `${px}px`;
+    while (font.firstChild) span.appendChild(font.firstChild);
+    font.replaceWith(span);
+  });
+  saveAnnotationSelection(widgetId);
+  syncAnnotationState(widgetId);
+}
+
+function createAnnotationToolbarButton(widgetId, label, title, command) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `annotation-tool annotation-tool-${command}`;
+  button.textContent = label;
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    saveAnnotationSelection(widgetId);
+  });
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    applyAnnotationCommand(widgetId, command);
+  });
+  return button;
+}
+
+function startAnnotationResize(event, widgetId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const el = document.getElementById(widgetId);
+  const state = annotationStates.get(widgetId);
+  if (!el || !state) return;
+  selectOnlyWidget(widgetId);
+
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const startWidth = el.offsetWidth;
+  const startHeight = el.offsetHeight;
+  let moved = false;
+
+  function onMove(moveEvent) {
+    if (!moved) {
+      pushHistorySnapshot();
+      moved = true;
+    }
+    const width = clamp(startWidth + (moveEvent.clientX - startX) / zoom, ANNOTATION_MIN_WIDTH, ANNOTATION_MAX_WIDTH);
+    const height = clamp(startHeight + (moveEvent.clientY - startY) / zoom, ANNOTATION_MIN_HEIGHT, ANNOTATION_MAX_HEIGHT);
+    el.style.width = `${Math.round(width)}px`;
+    el.style.height = `${Math.round(height)}px`;
+    state.width = Math.round(width);
+    state.height = Math.round(height);
+  }
+
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (!moved) return;
+    markDirty();
+    savePresetNow();
+  }
+
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function createAnnotationBody(widgetId, el) {
+  const state = {
+    html: "",
+    width: ANNOTATION_DEFAULT_WIDTH,
+    height: ANNOTATION_DEFAULT_HEIGHT,
+    backgroundColor: ANNOTATION_DEFAULT_BACKGROUND,
+    historyOpen: false,
+  };
+  annotationStates.set(widgetId, state);
+  el.style.width = `${state.width}px`;
+  el.style.height = `${state.height}px`;
+  applyAnnotationAppearance(el, state.backgroundColor);
+
+  const body = document.createElement("div");
+  body.className = "annotation-body";
+  const toolbar = document.createElement("div");
+  toolbar.className = "annotation-toolbar";
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Annotation formatting");
+  toolbar.appendChild(createAnnotationToolbarButton(widgetId, "B", "Bold", "bold"));
+  toolbar.appendChild(createAnnotationToolbarButton(widgetId, "I", "Italic", "italic"));
+  toolbar.appendChild(createAnnotationToolbarButton(widgetId, "U", "Underline", "underline"));
+  toolbar.appendChild(createAnnotationToolbarButton(widgetId, "•", "Bulleted list", "insertUnorderedList"));
+  toolbar.appendChild(createAnnotationToolbarButton(widgetId, "1.", "Numbered list", "insertOrderedList"));
+
+  const fontSize = document.createElement("select");
+  fontSize.className = "annotation-font-size";
+  fontSize.title = "Font size";
+  fontSize.setAttribute("aria-label", "Font size");
+  [10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48].forEach((size) => {
+    const option = document.createElement("option");
+    option.value = String(size);
+    option.textContent = String(size);
+    if (size === 14) option.selected = true;
+    fontSize.appendChild(option);
+  });
+  fontSize.addEventListener("mousedown", (event) => {
+    event.stopPropagation();
+    saveAnnotationSelection(widgetId);
+  });
+  fontSize.addEventListener("click", (event) => event.stopPropagation());
+  fontSize.addEventListener("change", () => applyAnnotationFontSize(widgetId, fontSize.value));
+  toolbar.appendChild(fontSize);
+
+  const textColorLabel = document.createElement("label");
+  textColorLabel.className = "annotation-color-control";
+  textColorLabel.title = "Text color";
+  textColorLabel.textContent = "A";
+  const textColor = document.createElement("input");
+  textColor.type = "color";
+  textColor.value = "#e2e8f0";
+  textColor.setAttribute("aria-label", "Text color");
+  textColor.addEventListener("mousedown", (event) => {
+    event.stopPropagation();
+    saveAnnotationSelection(widgetId);
+  });
+  textColor.addEventListener("click", (event) => event.stopPropagation());
+  textColor.addEventListener("change", () => applyAnnotationCommand(widgetId, "foreColor", textColor.value));
+  textColorLabel.appendChild(textColor);
+  toolbar.appendChild(textColorLabel);
+
+  const backgroundLabel = document.createElement("label");
+  backgroundLabel.className = "annotation-color-control annotation-background-control";
+  backgroundLabel.title = "Background color";
+  backgroundLabel.textContent = "BG";
+  const background = document.createElement("input");
+  background.type = "color";
+  background.value = annotationBackgroundPickerColor(state.backgroundColor);
+  background.dataset.role = "annotation-background";
+  background.setAttribute("aria-label", "Background color");
+  background.addEventListener("mousedown", (event) => event.stopPropagation());
+  background.addEventListener("click", (event) => event.stopPropagation());
+  background.addEventListener("change", () => {
+    pushHistorySnapshot();
+    state.backgroundColor = sanitizeAnnotationBackground(background.value);
+    applyAnnotationAppearance(el, state.backgroundColor);
+    markDirty();
+    savePresetNow();
+  });
+  backgroundLabel.appendChild(background);
+  toolbar.appendChild(backgroundLabel);
+
+  const editor = document.createElement("div");
+  editor.className = "annotation-editor";
+  editor.dataset.role = "annotation-editor";
+  editor.dataset.placeholder = "Write a note…";
+  editor.contentEditable = "true";
+  editor.spellcheck = true;
+  editor.setAttribute("role", "textbox");
+  editor.setAttribute("aria-multiline", "true");
+  editor.setAttribute("aria-label", "Annotation text");
+  editor.addEventListener("mousedown", (event) => event.stopPropagation());
+  editor.addEventListener("click", (event) => event.stopPropagation());
+  editor.addEventListener("dblclick", (event) => event.stopPropagation());
+  editor.addEventListener("focus", () => selectOnlyWidget(widgetId));
+  editor.addEventListener("beforeinput", () => beginAnnotationHistory(widgetId));
+  editor.addEventListener("input", () => {
+    saveAnnotationSelection(widgetId);
+    syncAnnotationState(widgetId);
+  });
+  editor.addEventListener("mouseup", () => saveAnnotationSelection(widgetId));
+  editor.addEventListener("keyup", () => saveAnnotationSelection(widgetId));
+  editor.addEventListener("blur", () => {
+    state.historyOpen = false;
+    syncAnnotationState(widgetId, false);
+    clearTimeout(annotationSaveTimers.get(widgetId));
+    annotationSaveTimers.delete(widgetId);
+    savePresetNow();
+  });
+  editor.addEventListener("paste", (event) => {
+    event.preventDefault();
+    beginAnnotationHistory(widgetId);
+    document.execCommand("insertText", false, event.clipboardData?.getData("text/plain") || "");
+  });
+  editor.addEventListener("drop", (event) => {
+    event.preventDefault();
+    beginAnnotationHistory(widgetId);
+    restoreAnnotationSelection(widgetId);
+    document.execCommand("insertText", false, event.dataTransfer?.getData("text/plain") || "");
+  });
+
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "annotation-resize-handle";
+  resizeHandle.title = "Resize annotation";
+  resizeHandle.setAttribute("aria-hidden", "true");
+  resizeHandle.addEventListener("mousedown", (event) => startAnnotationResize(event, widgetId));
+
+  body.appendChild(toolbar);
+  body.appendChild(editor);
+  el.appendChild(body);
+  el.appendChild(resizeHandle);
+}
+
+function getAnnotationParams(widgetId) {
+  syncAnnotationState(widgetId, false);
+  const state = annotationStates.get(widgetId);
+  if (!state) return {};
+  return {
+    html: state.html,
+    width: state.width,
+    height: state.height,
+    backgroundColor: state.backgroundColor,
+  };
+}
+
+function applyAnnotationParams(widgetId, params) {
+  const state = annotationStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const width = Number(params?.width);
+  const height = Number(params?.height);
+  state.html = sanitizeAnnotationHtml(params?.html);
+  state.width = clamp(Number.isFinite(width) ? Math.round(width) : ANNOTATION_DEFAULT_WIDTH, ANNOTATION_MIN_WIDTH, ANNOTATION_MAX_WIDTH);
+  state.height = clamp(Number.isFinite(height) ? Math.round(height) : ANNOTATION_DEFAULT_HEIGHT, ANNOTATION_MIN_HEIGHT, ANNOTATION_MAX_HEIGHT);
+  state.backgroundColor = sanitizeAnnotationBackground(params?.backgroundColor);
+  state.historyOpen = false;
+  el.style.width = `${state.width}px`;
+  el.style.height = `${state.height}px`;
+  applyAnnotationAppearance(el, state.backgroundColor);
+  const editor = el.querySelector('[data-role="annotation-editor"]');
+  const background = el.querySelector('[data-role="annotation-background"]');
+  if (editor) editor.innerHTML = state.html;
+  if (background) background.value = annotationBackgroundPickerColor(state.backgroundColor);
+  annotationSelections.delete(widgetId);
+}
 
 function createAudioMonitorState() {
   return { rangeVolts: AUDIO_PEAK_VOLTS, peakVolts: 0, holdUntil: 0, lastFrameMs: performance.now() };
@@ -4381,7 +4810,18 @@ function updateSwitchVisual(widgetId) {
   if (label) label.textContent = state.selectIn2 ? "In 2" : "In 1";
   ["in1", "in2"].forEach((portId) => {
     const row = el.querySelector(`.port-row-in:has(.port-dot[data-port-id="${portId}"])`);
-    if (row) row.classList.toggle("switch-selected", (portId === "in2") === state.selectIn2);
+    if (!row) return;
+    row.classList.toggle("switch-selected", (portId === "in2") === state.selectIn2);
+    // No cable on this input - show the settings-dialog fallback that the
+    // engine actually outputs in that case, right next to the port label
+    // (e.g. "In 1 (52)"), so it's visible without opening Settings.
+    const labelEl = row.querySelector(".port-label");
+    if (labelEl) {
+      const baseLabel = portId === "in2" ? "In 2" : "In 1";
+      const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === portId);
+      const fallback = portId === "in2" ? state.in2Default : state.in1Default;
+      labelEl.textContent = connected ? baseLabel : `${baseLabel} (${formatNumber(fallback ?? 0)})`;
+    }
   });
   const ccLabel = el.querySelector('[data-role="switch-cc-label"]');
   if (ccLabel) {
@@ -4437,6 +4877,8 @@ function routeMidiToSwitches(data) {
 const switchSettingsOverlay = document.getElementById("switchSettingsOverlay");
 const switchCcDisplay = document.getElementById("switchCcDisplay");
 const switchLearnBtn = document.getElementById("switchLearnBtn");
+const switchIn1DefaultInput = document.getElementById("switchIn1DefaultInput");
+const switchIn2DefaultInput = document.getElementById("switchIn2DefaultInput");
 let pendingSwitchId = null;
 
 function openSwitchSettings(widgetId) {
@@ -4444,6 +4886,8 @@ function openSwitchSettings(widgetId) {
   if (!state) return;
   pendingSwitchId = widgetId;
   switchCcDisplay.value = state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
+  switchIn1DefaultInput.value = state.in1Default ?? 0;
+  switchIn2DefaultInput.value = state.in2Default ?? 0;
   switchLearnBtn.textContent = "Learn";
   switchMidiLearnTargetId = null;
   switchSettingsOverlay.classList.remove("hidden");
@@ -4469,6 +4913,19 @@ switchLearnBtn.addEventListener("click", () => {
 });
 
 document.getElementById("switchSettingsSave").addEventListener("click", () => {
+  if (pendingSwitchId) {
+    const state = switchStates.get(pendingSwitchId);
+    if (state) {
+      const in1Default = parseFloatFlexible(switchIn1DefaultInput.value);
+      const in2Default = parseFloatFlexible(switchIn2DefaultInput.value);
+      state.in1Default = Number.isNaN(in1Default) ? 0 : in1Default;
+      state.in2Default = Number.isNaN(in2Default) ? 0 : in2Default;
+      audioEngine.setParam(pendingSwitchId, "in1Default", state.in1Default);
+      audioEngine.setParam(pendingSwitchId, "in2Default", state.in2Default);
+      updateSwitchVisual(pendingSwitchId);
+      sendLiveParamUpdate(pendingSwitchId, { in1Default: state.in1Default, in2Default: state.in2Default });
+    }
+  }
   closeSwitchSettings();
 });
 
@@ -5734,6 +6191,7 @@ function refreshAllDualModeWidgets() {
   gainStates.forEach((_, id) => updateGainVisual(id));
   filterStates.forEach((_, id) => updateFilterVisual(id));
   multiplexerStates.forEach((_, id) => updateMultiplexerVisual(id));
+  switchStates.forEach((_, id) => updateSwitchVisual(id));
   
   
   
@@ -7342,13 +7800,14 @@ function updateGainVisual(widgetId) {
 
 const filterStates = new Map();
 const ESP_EFFECT_DEFAULTS = {
-  "esp-eq": { filterType: "peak", frequency: 1000, q: 1, gainDb: 0 },
-  "esp-alc": { gainL: 0, gainR: 0 },
-  "esp-channel-convert": { weightL: 0.70710678, weightR: 0.70710678 },
+  "esp-eq": { filterType: "peak", frequency: 1000, q: 1, gainDb: 0, bypass: false },
+  "esp-alc": { gainL: 0, gainR: 0, bypass: false },
+  "esp-channel-convert": { weightL: 0.70710678, weightR: 0.70710678, bypass: false },
+  // esp-mixer deliberately excluded from bypass (see hasBypass()'s comment).
   "esp-mixer": { weight1: 1, weight2: 0, fadeMs: 100, mode: 0 },
-  "esp-sonic": { speed: 1, pitch: 1 },
-  "esp-drc": { threshold: -20, ratio: 4, attackMs: 10, releaseMs: 100, makeupDb: 0, kneeDb: 2 },
-  "esp-mbc": { threshold: -22, ratio: 2, makeupDb: 0 },
+  "esp-sonic": { speed: 1, pitch: 1, bypass: false },
+  "esp-drc": { threshold: -20, ratio: 4, attackMs: 10, releaseMs: 100, makeupDb: 0, kneeDb: 2, bypass: false },
+  "esp-mbc": { threshold: -22, ratio: 2, makeupDb: 0, bypass: false },
 };
 const espEffectStates = new Map();
 
@@ -7382,6 +7841,8 @@ function updateEspEffectVisual(widgetId) {
       btn.classList.toggle("active", btn.dataset.filterType === state.filterType);
     });
   }
+  const bypassToggle = el.querySelector(`[data-role="${el.dataset.widgetType}-bypass-switch"]`);
+  if (bypassToggle) bypassToggle.checked = state.bypass === true;
   const config = ESP_EFFECT_SLIDER_CONFIG[el.dataset.widgetType];
   if (!config) return;
   Object.entries(config).forEach(([portId, cfg]) => {
@@ -7492,6 +7953,8 @@ function updateFilterVisual(widgetId) {
 
   const globalToggle = el.querySelector('[data-role="filter-global-switch"]');
   if (globalToggle) globalToggle.checked = state.global === true;
+  const bypassToggle = el.querySelector(`[data-role="${el.dataset.widgetType}-bypass-switch"]`);
+  if (bypassToggle) bypassToggle.checked = state.bypass === true;
 
   
   
@@ -7772,6 +8235,8 @@ function updateChorusVisual(widgetId) {
     const valueSpan = el.querySelector(`[data-role="chorus-${portId}-value"]`);
     if (valueSpan) valueSpan.textContent = formatChorusValue(portId, state[portId]);
   });
+  const bypassToggle = el.querySelector('[data-role="chorus-bypass-switch"]');
+  if (bypassToggle) bypassToggle.checked = state.bypass === true;
 }
 
 
@@ -7806,6 +8271,47 @@ function isReverbType(type) {
   return type === "reverb" || type === "reverb-light";
 }
 
+// Types whose "bypass" flows through the generic effectCvStates/
+// makeEffectCvEngine machinery below (reverb/reverb-light already did;
+// delay gets bypass the same way). Filter/CurtisFilter/Chorus/the ESP
+// effects have their OWN state maps (filterStates/chorusStates/
+// espEffectStates) and do NOT go through this engine - see hasBypass()
+// below for the full cross-type set used by the shared toggle-switch UI.
+function isEffectCvBypassType(type) {
+  return isReverbType(type) || type === "delay";
+}
+
+// Every widget type that gets a Bypass toggle switch (see the port-row
+// loop below and BYPASS_STATE_MAPS just after it) - reverb/reverb-light/
+// delay share effectCvStates via isEffectCvBypassType(); filter/curtis-
+// filter/chorus/the 5 ESP effects each keep their own state map. EspMixer
+// deliberately excluded (2-input mixer, no single dry signal - see the
+// backend plan).
+function hasBypass(type) {
+  return (
+    isEffectCvBypassType(type) ||
+    type === "filter" ||
+    type === "curtis-filter" ||
+    type === "chorus" ||
+    type === "esp-eq" ||
+    type === "esp-alc" ||
+    type === "esp-channel-convert" ||
+    type === "esp-sonic" ||
+    type === "esp-drc" ||
+    type === "esp-mbc"
+  );
+}
+
+// Resolves the right per-widget state Map for a bypass-capable type (see
+// hasBypass() above) - used by the shared toggle-switch UI so it doesn't
+// need a type-by-type if/else at every call site.
+function bypassStateMapFor(type) {
+  if (isEffectCvBypassType(type)) return effectCvStates;
+  if (type === "filter" || type === "curtis-filter") return filterStates;
+  if (type === "chorus") return chorusStates;
+  return espEffectStates;
+}
+
 const effectCvStates = new Map(); 
 
 function effectCvParamDef(type, portId) {
@@ -7822,7 +8328,7 @@ function defaultEffectCvState(type) {
       volts: rangeToCv(p.defaultValue, p.defaultMin, p.defaultMax, p.defaultCurve),
     };
   }
-  if (isReverbType(type)) state.bypass = false;
+  if (isEffectCvBypassType(type)) state.bypass = false;
   return state;
 }
 
@@ -7834,7 +8340,7 @@ function effectCvParamsToValues(type, state) {
     const s = state[p.portId];
     values[p.paramName] = s ? cvToRange(s.volts, s.min, s.max, s.curve) : p.defaultValue;
   }
-  if (isReverbType(type)) values.bypass = state.bypass === true;
+  if (isEffectCvBypassType(type)) values.bypass = state.bypass === true;
   return values;
 }
 
@@ -7856,7 +8362,7 @@ function updateEffectCvVisual(widgetId) {
     const valueSpan = el.querySelector(`[data-role="effect-cv-${p.portId}-value"]`);
     if (valueSpan) valueSpan.textContent = formatEffectCvValue(type, p.portId, s);
   }
-  if (isReverbType(type)) {
+  if (isEffectCvBypassType(type)) {
     const toggle = el.querySelector(`[data-role="${type}-bypass-switch"]`);
     if (toggle) toggle.checked = state.bypass === true;
   }
@@ -7883,7 +8389,7 @@ function makeEffectCvEngine(type) {
         out[`${p.portId}Max`] = s.max;
         out[`${p.portId}Curve`] = s.curve;
       }
-      if (isReverbType(type)) out.bypass = state.bypass === true;
+      if (isEffectCvBypassType(type)) out.bypass = state.bypass === true;
       return out;
     },
     applyParams: (id, params) => {
@@ -7899,12 +8405,12 @@ function makeEffectCvEngine(type) {
         const volts = params[`${p.portId}Volts`] ?? rangeToCv(params[p.paramName] ?? p.defaultValue, min, max, curve);
         state[p.portId] = { min, max, curve, volts };
       }
-      if (isReverbType(type)) state.bypass = params.bypass === true;
+      if (isEffectCvBypassType(type)) state.bypass = params.bypass === true;
       const values = effectCvParamsToValues(type, state);
       for (const p of EFFECT_CV_PARAMS[type] || []) {
         audioEngine.setParam(id, p.paramName, values[p.paramName]);
       }
-      if (isReverbType(type)) audioEngine.setParam(id, "bypass", state.bypass);
+      if (isEffectCvBypassType(type)) audioEngine.setParam(id, "bypass", state.bypass);
       updateEffectCvVisual(id);
     },
   };
@@ -9048,6 +9554,7 @@ function confirmPendingPaste(pos, minX, minY) {
   const idMap = new Map();
   const newIds = ghosts.map(({ item, dx, dy }) => {
     const widget = createWidget(item.type, item.label, snap(pos.x + dx), snap(pos.y + dy));
+    if (item.params) applyWidgetParams(item.type, widget.id, item.params);
     idMap.set(item.id, widget.id);
     return widget.id;
   });
@@ -9094,7 +9601,9 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  const tag = document.activeElement ? document.activeElement.tagName : "";
+  const activeElement = document.activeElement;
+  const tag = activeElement ? activeElement.tagName : "";
+  if (activeElement?.isContentEditable || activeElement?.closest?.('[contenteditable="true"]')) return;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
 
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && e.shiftKey) {
@@ -9122,9 +9631,13 @@ document.addEventListener("keydown", (e) => {
         .map((el) => ({
           id: el.id,
           type: el.dataset.widgetType,
-          label: (WIDGET_TYPES[el.dataset.widgetType] || {}).label || el.dataset.widgetType,
+          label: el.querySelector(".widget-instance-label")?.textContent ||
+            (WIDGET_TYPES[el.dataset.widgetType] || {}).label || el.dataset.widgetType,
           x: parseInt(el.style.left, 10) || 0,
           y: parseInt(el.style.top, 10) || 0,
+          ...(el.dataset.widgetType === "annotation"
+            ? { params: JSON.parse(JSON.stringify(getWidgetParams(el.dataset.widgetType, el.id))) }
+            : {}),
         })),
       
       
@@ -9432,6 +9945,26 @@ function setOrthogonalCablesEnabled(enabled) {
   const sagCheckbox = document.getElementById("menuCableSag");
   if (sagCheckbox) sagCheckbox.checked = cableSagEnabled;
   drawConnections();
+}
+
+function setGridSnapEnabled(enabled) {
+  gridSnapEnabled = enabled;
+  localStorage.setItem(GRID_SNAP_KEY, enabled ? "1" : "0");
+  const checkbox = document.getElementById("menuGridSnap");
+  if (checkbox) checkbox.checked = enabled;
+}
+
+const BACKGROUND_DOTS_KEY = "espressynth.backgroundDots";
+let backgroundDotsEnabled = localStorage.getItem(BACKGROUND_DOTS_KEY) !== "0";
+
+function setBackgroundDotsEnabled(enabled) {
+  backgroundDotsEnabled = enabled;
+  localStorage.setItem(BACKGROUND_DOTS_KEY, enabled ? "1" : "0");
+  document.querySelectorAll(".canvas").forEach((canvasEl) => {
+    canvasEl.classList.toggle("hide-background-dots", !enabled);
+  });
+  const checkbox = document.getElementById("menuBackgroundDots");
+  if (checkbox) checkbox.checked = enabled;
 }
 
 let selectedConnectionId = null;
@@ -10331,12 +10864,45 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (isReverbType(el.dataset.widgetType) && portId === "bypass") {
+  if (isEffectCvBypassType(el.dataset.widgetType) && portId === "bypass") {
     const state = effectCvStates.get(widgetId);
     if (state) {
       state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
       audioEngine.setParam(widgetId, "bypass", state.bypass);
       updateEffectCvVisual(widgetId);
+      sendLiveParamUpdate(widgetId, { bypass: state.bypass });
+    }
+  }
+
+  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "bypass") {
+    const state = filterStates.get(widgetId);
+    if (state) {
+      state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
+      audioEngine.setParam(widgetId, "bypass", state.bypass);
+      updateFilterVisual(widgetId);
+      sendLiveParamUpdate(widgetId, { bypass: state.bypass });
+    }
+  }
+
+  if (el.dataset.widgetType === "chorus" && portId === "bypass") {
+    const state = chorusStates.get(widgetId);
+    if (state) {
+      state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
+      audioEngine.setParam(widgetId, "bypass", state.bypass);
+      updateChorusVisual(widgetId);
+      sendLiveParamUpdate(widgetId, { bypass: state.bypass });
+    }
+  }
+
+  // esp-mixer deliberately excluded - see hasBypass()'s comment (no single
+  // dry signal for a 2-input mixer, no bypass toggle exposed for it).
+  if (hasBypass(el.dataset.widgetType) && el.dataset.widgetType !== "esp-mixer" &&
+      el.dataset.widgetType.startsWith("esp-") && portId === "bypass") {
+    const state = espEffectStates.get(widgetId);
+    if (state) {
+      state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
+      audioEngine.setParam(widgetId, "bypass", state.bypass);
+      updateEspEffectVisual(widgetId);
       sendLiveParamUpdate(widgetId, { bypass: state.bypass });
     }
   }
@@ -10839,6 +11405,7 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
   state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
   state.global = params.global === true;
+  state.bypass = params.bypass === true;
   audioEngine.setParam(id, "filterType", state.filterType);
   audioEngine.setParam(id, "cutoffMinHz", state.cutoffMinHz);
   audioEngine.setParam(id, "cutoffMaxHz", state.cutoffMaxHz);
@@ -10850,10 +11417,15 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   audioEngine.setParam(id, "cutoff", state.cutoff);
   audioEngine.setParam(id, "resonance", state.resonance);
   audioEngine.setParam(id, "global", state.global);
+  audioEngine.setParam(id, "bypass", state.bypass);
   updateFilterVisual(id);
 }
 
 const WIDGET_ENGINES = {
+  annotation: {
+    getParams: (id) => getAnnotationParams(id),
+    applyParams: (id, params) => applyAnnotationParams(id, params),
+  },
   debug: {
     getParams: () => ({}),
     applyParams: () => {},
@@ -10970,7 +11542,11 @@ const WIDGET_ENGINES = {
       const state = switchStates.get(id);
       if (state && params) {
         Object.assign(state, params);
+        state.in1Default = state.in1Default ?? 0;
+        state.in2Default = state.in2Default ?? 0;
         audioEngine.setParam(id, "selectIn2", state.selectIn2);
+        audioEngine.setParam(id, "in1Default", state.in1Default);
+        audioEngine.setParam(id, "in2Default", state.in2Default);
         updateSwitchVisual(id);
       }
     },
@@ -11440,9 +12016,11 @@ const WIDGET_ENGINES = {
       state.rate = params.rate ?? 1.5;
       state.depth = params.depth ?? 0.003;
       state.offset = params.offset ?? 0.02;
+      state.bypass = params.bypass === true;
       audioEngine.setParam(id, "rate", state.rate);
       audioEngine.setParam(id, "depth", state.depth);
       audioEngine.setParam(id, "offset", state.offset);
+      audioEngine.setParam(id, "bypass", state.bypass);
       updateChorusVisual(id);
     },
   },
@@ -12363,15 +12941,10 @@ connectWs();
 
 
 
-fetch("/api/settings/network")
-  .then((res) => res.json())
-  .then((data) => {
-    if (data.c6Enabled === false) {
-      document.getElementById("menuBleConnect")?.remove();
-      document.getElementById("wifiSettingsSection")?.remove();
-    }
-  })
-  .catch(() => {});
+// Firmware exposes network configuration through its native configuration surface, not this
+// legacy web API. Hide controls whose /api/settings/network and /api/ble/* routes do not exist.
+document.getElementById("menuBleConnect")?.remove();
+document.getElementById("menuSettings")?.remove();
 
 
 
@@ -12519,6 +13092,17 @@ menuOrthogonalCables.checked = orthogonalCablesEnabled;
 menuOrthogonalCables.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
 menuOrthogonalCables.addEventListener("change", () => setOrthogonalCablesEnabled(menuOrthogonalCables.checked));
 
+const menuGridSnap = document.getElementById("menuGridSnap");
+menuGridSnap.checked = gridSnapEnabled;
+menuGridSnap.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
+menuGridSnap.addEventListener("change", () => setGridSnapEnabled(menuGridSnap.checked));
+
+const menuBackgroundDots = document.getElementById("menuBackgroundDots");
+menuBackgroundDots.checked = backgroundDotsEnabled;
+menuBackgroundDots.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
+menuBackgroundDots.addEventListener("change", () => setBackgroundDotsEnabled(menuBackgroundDots.checked));
+setBackgroundDotsEnabled(backgroundDotsEnabled);
+
 const WIDGET_OPACITY_KEY = "espressynth.widgetOpacity";
 const menuWidgetOpacity = document.getElementById("menuWidgetOpacity");
 const menuWidgetOpacityValue = document.getElementById("menuWidgetOpacityValue");
@@ -12546,7 +13130,6 @@ document.getElementById("logWindowClose").addEventListener("click", () => {
 const midiNoDevice = document.getElementById("midiNoDevice");
 const midiDeviceList = document.getElementById("midiDeviceList");
 const midiActivity = document.getElementById("midiActivity");
-let midiConnectedPort = null;
 let midiFlashTimer = null;
 
 function flashMidiActivity() {
@@ -12557,32 +13140,6 @@ function flashMidiActivity() {
 
 
 
-const midiChipContextMenu = document.createElement("div");
-midiChipContextMenu.className = "midi-chip-context-menu hidden";
-const midiChipDisconnectBtn = document.createElement("button");
-midiChipDisconnectBtn.type = "button";
-midiChipDisconnectBtn.textContent = "Disconnect";
-midiChipContextMenu.appendChild(midiChipDisconnectBtn);
-document.body.appendChild(midiChipContextMenu);
-
-function hideMidiChipContextMenu() {
-  midiChipContextMenu.classList.add("hidden");
-}
-
-midiChipDisconnectBtn.addEventListener("click", async () => {
-  hideMidiChipContextMenu();
-  try {
-    await fetch("/api/ble/disconnect", { method: "POST" });
-  } catch (err) {
-    appendLog(`BLE error: ${err.message}`);
-  }
-});
-
-document.addEventListener("click", hideMidiChipContextMenu);
-document.addEventListener("contextmenu", (e) => {
-  if (!e.target.closest(".midi-device-chip-ble")) hideMidiChipContextMenu();
-});
-
 function renderMidiDevices(devices) {
   midiNoDevice.hidden = devices.length > 0;
   midiDeviceList.replaceChildren();
@@ -12591,52 +13148,19 @@ function renderMidiDevices(devices) {
     const chip = document.createElement("span");
     chip.className = isBle ? "midi-device-chip midi-device-chip-ble" : "midi-device-chip";
     chip.textContent = name;
-    if (isBle) {
-      chip.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        midiChipContextMenu.style.left = `${e.clientX}px`;
-        midiChipContextMenu.style.top = `${e.clientY}px`;
-        midiChipContextMenu.classList.remove("hidden");
-      });
-    }
     midiDeviceList.appendChild(chip);
   }
 }
 
-async function connectMidiDevice(port) {
-  try {
-    const res = await fetch("/api/midi/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port }),
-    });
-    const data = await res.json();
-    if (data.connected) {
-      midiConnectedPort = data.connected;
-      appendLog(`MIDI connected: ${data.connected}`);
-    }
-  } catch (err) {
-    appendLog(`MIDI error: ${err.message}`);
-  }
-}
-
-async function handleMidiDevicesPush(data) {
+function handleMidiDevicesPush(data) {
   const devices = data.devices || [];
   renderMidiDevices(devices);
-  if (midiConnectedPort && !devices.includes(midiConnectedPort)) {
-    midiConnectedPort = null;
-  }
-  if (!midiConnectedPort) {
-    const candidate = devices.find((name) => !name.startsWith("BLE-MIDI "));
-    if (candidate) await connectMidiDevice(candidate);
-  }
 }
 
 async function loadMidiDevices() {
   try {
     const res = await fetch("/api/midi/devices");
-    await handleMidiDevicesPush(await res.json());
+    handleMidiDevicesPush(await res.json());
   } catch (err) {
     appendLog(`MIDI device list could not be loaded: ${err.message}`);
   }

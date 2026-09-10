@@ -60,6 +60,19 @@ inline void render(NodeInstance &inst, size_t frames)
         if (converged)
         {
             s.amountSmooth.snapTo(target);
+            // "amount" is block-constant here (target) - if "in" (port 0)
+            // is itself a tagged ramp, the product is still linear.
+            if (const NodeInstance::RampDescriptor *r = rampForPort(inst, 0))
+            {
+                float acc = r->start * target;
+                const float step = r->inc * target;
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    inst.outL[i] = acc;
+                    acc += step;
+                }
+                return;
+            }
         }
         for (size_t i = 0; i < frames; ++i)
         {

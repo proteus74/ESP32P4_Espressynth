@@ -584,6 +584,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             continue;
         }
         inst.controlRampPortMask = 0;
+        inst.rampPortMask = 0;
         for (int p = 0; p < inst.audioInPortCount; ++p)
         {
             if (inst.inPorts[p] == nullptr)
@@ -794,6 +795,22 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
                 // NodeInstance.h/GraphBuilder.h's post-pass) - nothing to
                 // accumulate, `dstBuf[i] += srcBuf[i]` here would double the
                 // value since both names refer to the same memory.
+                //
+                // GraphBuilder.h's post-pass already proved this is the
+                // sole edge into this port (view-eligibility requires
+                // targetEdgeCount==1) - safe to copy src's ramp tag (if
+                // any) without risk of a second edge overwriting or
+                // contradicting it later in this same loop. See
+                // NodeInstance.h's rampPortMask comment.
+                if (src.outIsRamp)
+                {
+                    const uint8_t slot = static_cast<uint8_t>(__builtin_popcount(dst.rampPortMask));
+                    if (slot < NodeInstance::kMaxRampedPorts)
+                    {
+                        dst.rampDesc[slot] = {edge.toPort, src.outRamp.start, src.outRamp.inc};
+                        dst.rampPortMask |= synth::portBit(edge.toPort);
+                    }
+                }
                 continue;
             }
             const float *srcBuf = outputPortBuffer(src, edge.fromPort);
@@ -1602,6 +1619,22 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 instances[slot.instanceBase + v].switchState.selectIn2 = sel;
             }
         }
+        else if (slot.type == NodeType::Switch && strcmp(key, "in1Default") == 0 && cJSON_IsNumber(item))
+        {
+            const float value = static_cast<float>(item->valuedouble);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].switchState.in1Default = value;
+            }
+        }
+        else if (slot.type == NodeType::Switch && strcmp(key, "in2Default") == 0 && cJSON_IsNumber(item))
+        {
+            const float value = static_cast<float>(item->valuedouble);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].switchState.in2Default = value;
+            }
+        }
         else if (slot.type == NodeType::Lfo && strcmp(key, "zeroPointFixed") == 0 && cJSON_IsBool(item))
         {
             const bool fixed = cJSON_IsTrue(item);
@@ -1662,6 +1695,59 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 instances[slot.instanceBase + v].reverbLight->bypass = bypass;
+            }
+        }
+        else if (slot.type == NodeType::Filter && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].filter->bypass = bypass;
+            }
+        }
+        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].curtisFilter->bypass = bypass;
+            }
+        }
+        else if (slot.type == NodeType::Delay && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].delay->bypass = bypass;
+            }
+        }
+        else if (slot.type == NodeType::Chorus && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].chorus->bypass = bypass;
+            }
+        }
+        else if (slot.type == NodeType::EspEq && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].espEq->bypass = bypass;
+            }
+        }
+        else if ((slot.type == NodeType::EspAlc || slot.type == NodeType::EspChannelConvert ||
+                  slot.type == NodeType::EspSonic || slot.type == NodeType::EspDrc ||
+                  slot.type == NodeType::EspMbc) &&
+                 strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            // EspMixer deliberately excluded - see GraphBuilder.h's build-time
+            // init comment.
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].espEffect->bypass = bypass;
             }
         }
         else if ((slot.type == NodeType::AudioOut || slot.type == NodeType::UsbOut ||

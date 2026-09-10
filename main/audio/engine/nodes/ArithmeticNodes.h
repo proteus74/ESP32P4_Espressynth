@@ -74,6 +74,45 @@ inline void renderAdder(NodeInstance &inst, size_t frames)
         }
         return;
     }
+    // Ramp fast path: every port that isn't block-constant (values[p]
+    // wasn't filled above, allPortsConstantForBlock returned false at the
+    // first such port) must instead be a tagged linear ramp for this to
+    // apply - sum of ramps (and constants, inc=0) is itself a ramp, same
+    // port order and same closed-form result the per-sample loop below
+    // would have produced. Falls straight through to that loop if any
+    // varying port lacks a tag.
+    {
+        float sumStart = 0.0f;
+        float sumInc = 0.0f;
+        bool allRampOrConstant = true;
+        for (int p = 0; p < inst.audioInPortCount && allRampOrConstant; ++p)
+        {
+            float constantValue = 0.0f;
+            if (audioPortConstantForBlock(inst, p, frames, constantValue))
+            {
+                sumStart += constantValue;
+                continue;
+            }
+            const NodeInstance::RampDescriptor *r = rampForPort(inst, p);
+            if (r == nullptr)
+            {
+                allRampOrConstant = false;
+                break;
+            }
+            sumStart += r->start;
+            sumInc += r->inc;
+        }
+        if (allRampOrConstant)
+        {
+            float acc = sumStart;
+            for (size_t i = 0; i < frames; ++i)
+            {
+                inst.outL[i] = acc;
+                acc += sumInc;
+            }
+            return;
+        }
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         float sum = 0.0f;
@@ -121,6 +160,19 @@ inline void renderDivide(NodeInstance &inst, size_t frames)
             return;
         }
         const float invDenominator = 1.0f / denominator;
+        // Numerator isn't block-constant (checked above) - if it's a
+        // tagged ramp instead, ramp/constant-denominator is still linear.
+        if (const NodeInstance::RampDescriptor *r = rampForPort(inst, 0))
+        {
+            float acc = r->start * invDenominator;
+            const float step = r->inc * invDenominator;
+            for (size_t i = 0; i < frames; ++i)
+            {
+                inst.outL[i] = acc;
+                acc += step;
+            }
+            return;
+        }
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = portSample(inst, 0, i) * invDenominator;

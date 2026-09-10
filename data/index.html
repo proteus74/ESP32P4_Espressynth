@@ -3,12 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Espressynth P4</title>
-<link rel="stylesheet" href="/static/css/style.css?v=20260909-link-output-ports-center-8">
+<title>ESPRESSYNTH</title>
+<link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
+<link rel="stylesheet" href="/static/css/style.css?v=20260910-annotation-1">
 </head>
 <body>
 
 <nav class="menubar">
+  <img class="menubar-logo" id="menubarLogo" src="/static/img/logo-menu.png?v=20260910-128px" alt="Info" width="128" height="128" title="Info">
   <div class="menu-item">
     <span>File</span>
     <div class="dropdown">
@@ -41,6 +43,14 @@
         <input type="checkbox" id="menuOrthogonalCables">
         <span>Orthogonal Cables</span>
       </label>
+      <label class="dropdown-check">
+        <input type="checkbox" id="menuGridSnap">
+        <span>Snap to Grid</span>
+      </label>
+      <label class="dropdown-check">
+        <input type="checkbox" id="menuBackgroundDots">
+        <span>Background Dots</span>
+      </label>
       <button id="menuToggleNodeCpu">Show Node CPU %</button>
       <label class="dropdown-range" for="menuWidgetOpacity">
         <span class="dropdown-range-label">
@@ -51,15 +61,12 @@
       </label>
     </div>
   </div>
-  <div class="menu-item menu-item-static" id="menuInfo">
-    <span>Info</span>
-  </div>
   <div class="preset-inline">
     <span class="preset-label">Preset:</span>
     <select id="presetSelect"></select>
   </div>
 
-  <span class="app-title">ESPressSynth</span>
+  <span class="app-title">ESPRESSYNTH</span>
 
   <div class="header-right">
     <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
@@ -370,6 +377,16 @@
       <button id="switchLearnBtn" class="btn-secondary">Learn</button>
     </div>
     <p class="modal-hint">Press-Flanke (CC-Wert &gt;= 64) schaltet um (In 1 &lt;-&gt; In 2), latching.</p>
+    <div class="modal-field-row">
+      <label class="modal-field">
+        <span>In 1 Default (kein Kabel)</span>
+        <input type="number" id="switchIn1DefaultInput" step="any">
+      </label>
+      <label class="modal-field">
+        <span>In 2 Default (kein Kabel)</span>
+        <input type="number" id="switchIn2DefaultInput" step="any">
+      </label>
+    </div>
     <div class="modal-actions">
       <button id="switchSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="switchSettingsSave">Save</button>
@@ -733,6 +750,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260910-orthogonal-direct-route"></script>
+<script type="module" src="/static/js/main.js?v=20260910-annotation-1"></script>
 </body>
 </html>

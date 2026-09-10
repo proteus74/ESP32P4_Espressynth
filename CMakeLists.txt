@@ -5,6 +5,20 @@ cmake_minimum_required(VERSION 3.22)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 idf_build_set_property(COMPILE_DEFINITIONS "CFG_TUSB_CONFIG_FILE=\"${CMAKE_CURRENT_LIST_DIR}/main/tusb_config.h\"" APPEND)
+
+# LVGL's builtin allocator needs a 4 MB pool for lodepng's compressed-file and inflate scratch
+# allocations. Put that pool in PSRAM through LVGL's documented allocator hook. Keep the macro
+# object-like: CMake silently drops function-style definitions such as
+# `LV_MEM_POOL_ALLOC(size)=...`, leaving the pool as a large internal-RAM array.
+idf_build_set_property(
+    COMPILE_DEFINITIONS
+    "LV_MEM_POOL_INCLUDE=\"${CMAKE_CURRENT_LIST_DIR}/main/lvgl_pool_alloc/lv_mem_pool_alloc.h\""
+    APPEND)
+idf_build_set_property(
+    COMPILE_DEFINITIONS
+    "LV_MEM_POOL_ALLOC=espressynth_lv_mem_pool_alloc"
+    APPEND)
+
 project(ESP32P4_Espressynth)
 
 # jonlidgard/wm8960 v0.0.3 has a real bug: wm8960_t.register_local_copy is sized with
@@ -29,3 +43,20 @@ endif()
 # Deliberately NOT FLASH_IN_PROJECT -- these assets are meant to be rebuilt/reflashed
 # independently of the app via `idf.py www-flash`, not on every `idf.py flash`.
 littlefs_create_partition_image(www "${CMAKE_CURRENT_LIST_DIR}/data")
+
+# Default/seed content for the "littlefs" partition (see partitions.csv and
+# main/features/filesystem/littlefs_manager.hpp) - e.g. the boot splash image
+# (main/features/display/display_lvgl.hpp reads /littlefs/system/splash.png). Same mechanism
+# as "www" above: built from littlefs_data/ into build/littlefs.bin by the
+# "littlefs_littlefs_bin" target, reflashed independently via `idf.py littlefs-flash`, not on
+# every `idf.py flash` (deliberately not FLASH_IN_PROJECT).
+#
+# WARNING, unlike "www": this is the SAME partition the running firmware writes user data to
+# at runtime (saved presets/samples/soundfonts - see synth_manager.hpp's
+# ensure_storage_directories(), synth_web_api.hpp's upload/save routes). `idf.py
+# littlefs-flash` REPLACES THE ENTIRE PARTITION with only what's currently in littlefs_data/ -
+# anything saved on the device that isn't also checked into littlefs_data/ is PERMANENTLY
+# LOST the moment this runs. Safe for provisioning a fresh/blank device; back up anything
+# worth keeping (File Explorer) before running it again on a device that already has real
+# saved content.
+littlefs_create_partition_image(littlefs "${CMAKE_CURRENT_LIST_DIR}/littlefs_data")

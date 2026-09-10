@@ -38,6 +38,9 @@ struct ChorusState
     float lfoStep = 0.0f;
     float offsetSamples = 0.0f;
     float depthSamples = 0.0f;
+    // Manual-only (no PortTables.h port, see plan's "Muster B" - same as
+    // rate/offset/depth above, pure UI toggle + setParam, no wired CV).
+    bool bypass = false;
 };
 
 inline void refreshDerived(ChorusState &s)
@@ -52,6 +55,19 @@ inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = *inst.chorus;
+    if (s.bypass)
+    {
+        // Dry passthrough - mono "in" duplicated to both outputs, same as
+        // the normal (non-bypassed) signal is always mono-sourced stereo
+        // here (chorus has no separate dry/wet mix, unlike Reverb/Delay).
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const float x = portSample(inst, 0, i);
+            inst.outL[i] = x;
+            inst.outR[i] = x;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         const float x = portSample(inst, 0, i);
@@ -78,6 +94,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p, bool psram)
     inst.chorus->rateHz = p.rate;
     inst.chorus->offsetSec = p.offset;
     inst.chorus->depthSec = p.depth;
+    inst.chorus->bypass = p.chorusBypass;
     refreshDerived(*inst.chorus);
     // 100ms buffer covers offset (max 0.04s) + depth (max 0.015s) with
     // headroom - see CHORUS_SLIDER_CONFIG in data/static/js/main.js.
@@ -118,6 +135,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         refreshDerived(*inst.chorus);
         return true;
     }
+    if (strcmp(name, "bypass") == 0)
+    {
+        inst.chorus->bypass = value >= 0.5f;
+        return true;
+    }
     return false;
 }
 
@@ -126,6 +148,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.rate = presetparser::getFloat(p, "rate", 1.5f);
     out.offset = presetparser::getFloat(p, "offset", 0.02f);
     out.depth = presetparser::getFloat(p, "depth", 0.003f);
+    out.chorusBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::chorus

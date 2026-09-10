@@ -87,6 +87,10 @@ inline void render(NodeInstance &inst, size_t frames)
     // recomputed every sample (plan section 5, ADSR row: "Velocity*10
     // einmal vorberechnen").
     const float velocityScale = s.velocity * cv::kMaxVolts;
+    // Cleared unconditionally up front so a Ramp-aware downstream consumer
+    // (see NodeInstance.h's rampPortMask) never reads a stale true from a
+    // previous block, regardless of which branch below actually runs.
+    inst.outIsRamp = false;
     if (s.ramp.isHolding())
     {
         // Sustain plateau or fully idle - process() would just keep
@@ -99,6 +103,13 @@ inline void render(NodeInstance &inst, size_t frames)
             inst.outL[i] = held;
         }
         return;
+    }
+    float rampStart = 0.0f, rampInc = 0.0f;
+    if (s.ramp.wholeBlockRamp(frames, rampStart, rampInc))
+    {
+        inst.outIsRamp = true;
+        inst.outRamp.start = rampStart * velocityScale;
+        inst.outRamp.inc = rampInc * velocityScale;
     }
     for (size_t i = 0; i < frames; ++i)
     {

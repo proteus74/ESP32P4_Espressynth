@@ -41,6 +41,22 @@ inline void render(NodeInstance &inst, size_t frames)
         }
         return;
     }
+    // cv is a tagged ramp (not block-constant, but a linear start+i*inc):
+    // a constant offset add keeps it linear, both outputs share the same
+    // inc since deltaVolts is block-constant.
+    if (const NodeInstance::RampDescriptor *r = rampForPort(inst, 0))
+    {
+        float f1 = r->start + deltaVolts;
+        float f2 = r->start - deltaVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = f1;
+            inst.outR[i] = f2;
+            f1 += r->inc;
+            f2 += r->inc;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         const float cvIn = portSample(inst, 0, i);

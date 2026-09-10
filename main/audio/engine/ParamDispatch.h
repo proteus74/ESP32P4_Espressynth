@@ -119,6 +119,11 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::EspEq:
     {
         auto &eq = *inst.espEq;
+        if (paramDispatchIs(name, "bypass"))
+        {
+            eq.bypass = value >= 0.5f;
+            return true;
+        }
         if (paramDispatchIs(name, "frequency"))
             return updateEspEq(eq, eq.filterType, value, eq.q, eq.gainDb);
         if (paramDispatchIs(name, "q"))
@@ -128,9 +133,11 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
         return false;
     }
     case NodeType::EspAlc:
+    case NodeType::EspChannelConvert:
     case NodeType::EspMixer:
     case NodeType::EspSonic:
     case NodeType::EspDrc:
+    case NodeType::EspMbc:
         return updateEspEffect(*inst.espEffect, name, value);
 
     case NodeType::Mixer:

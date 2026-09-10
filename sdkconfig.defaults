@@ -84,6 +84,36 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y
 
+# --- Boot splash screen (main/features/display/display_lvgl.hpp): the embedded splash PNG is
+# decoded via LVGL's bundled lodepng, read through a stdio-backed LVGL filesystem driver
+# registered under drive letter 'S' (ASCII 83) so lv_image_set_src() can open it straight from
+# LittleFS ("S:/littlefs/system/splash.png") - no path prefix configured
+# (CONFIG_LV_FS_STDIO_PATH left empty), so paths passed to LVGL must always be the full
+# absolute VFS path. ---
+CONFIG_LV_USE_LODEPNG=y
+CONFIG_LV_USE_FS_STDIO=y
+CONFIG_LV_FS_STDIO_LETTER=83
+
+# Keep the decoded splash in LVGL's image cache during its display interval. 4 MiB comfortably
+# holds one decoded 1024x600 ARGB8888 frame with headroom for future images; the image buffer
+# allocator in display_lvgl.hpp places the pixel data in PSRAM.
+CONFIG_LV_CACHE_DEF_SIZE=4194304
+CONFIG_LV_IMAGE_HEADER_CACHE_DEF_CNT=4
+
+# LVGL's own internal log (LV_LOG_WARN/ERROR, e.g. from the image decoder/cache) is otherwise
+# completely silent - CONFIG_LV_USE_LOG was off, so a failed PNG decode never printed anything at
+# all, anywhere. CONFIG_LV_LOG_PRINTF=y routes it straight to printf/UART with no extra callback
+# code needed. WARN threshold catches WARN+ERROR without the very chatty TRACE/INFO levels.
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+CONFIG_LV_LOG_PRINTF=y
+
+# 64KB default is nowhere near enough once LV_MEM_POOL_ALLOC (root CMakeLists.txt) redirects
+# this whole pool to PSRAM for lodepng's file-load/inflate scratch buffers - see that comment
+# for the full story. 4MB covers lodepng's reallocating decode scratch plus normal widget/style
+# allocations with headroom; PSRAM is 32MB.
+CONFIG_LV_MEM_SIZE_KILOBYTES=4096
+
 # --- Web server capacity for the synth engine's browser UI (main/features/synth/
 # synth_web_api.hpp): a persistent /ws connection for the whole session, on top of overlapping
 # preset/sample-list/file-explorer requests and static asset fetches. Off/at their default by

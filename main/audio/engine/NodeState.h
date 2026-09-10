@@ -159,6 +159,7 @@ struct EspEqState
     float gainDb = 0.0f;
     EqFilterKind filterType = EqFilterKind::Peak;
     bool ready = false;
+    bool bypass = false;
 };
 
 struct EspEffectState
@@ -172,6 +173,12 @@ struct EspEffectState
     uint8_t kind = 0;
     uint8_t inputCount = 2;
     bool ready = false;
+    // Shared by Alc/ChannelConvert/Sonic/Drc/Mbc, deliberately never set
+    // true for Mixer (a 2-input mixer has no single dry signal - see
+    // GraphBuilder.h's build-time init, which skips this field for
+    // EspMixer). processEspEffect() already OR's it into its existing
+    // ready-check, so this needs no special-casing there either.
+    bool bypass = false;
 };
 
 struct GainState
@@ -293,6 +300,12 @@ struct SwitchState
     int16_t cc = -1;
     int8_t channel = -1;
     bool selectIn2 = false;
+    // Settings-dialog-configured fallback used instead of the usual 0V
+    // default whenever the SELECTED input has no DSP edge (see
+    // nodes/SwitchNode.h's render()) - lets a patch route "no cable on In 1/
+    // In 2" to a deliberate value instead of silence/0.
+    float in1Default = 0.0f;
+    float in2Default = 0.0f;
 };
 
 // Per-voice one-shot sample playback. sampleData/frameCount/channels point

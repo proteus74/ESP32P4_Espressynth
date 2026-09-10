@@ -29,7 +29,8 @@ constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 
 // Bit-per-audio-input-port mask type for NodeInstance's
-// controlConnectedPortMask/audioConnectedPortMask/controlRampPortMask.
+// controlConnectedPortMask/audioConnectedPortMask/controlRampPortMask/
+// rampPortMask.
 // Named rather than a bare uint32_t at each use site so a future widening
 // past kMaxAudioInPorts is one edit here, caught by the static_assert.
 using PortMask = uint32_t;

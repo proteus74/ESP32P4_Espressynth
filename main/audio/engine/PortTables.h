@@ -147,14 +147,18 @@ inline int audioInIndex(NodeType type, const char *portName)
         // under a genuine DSP edge (real frequency modulation possible).
         if (is(portName, "in"))
             return 0;
-        if (is(portName, "cutoff"))
+        // "bypass" - same pattern as Reverb's "bypass" (control-only, see
+        // isControlOnlyInput), see FilterState::bypass.
+        if (is(portName, "bypass"))
             return 1;
-        if (is(portName, "resonance"))
+        if (is(portName, "cutoff"))
             return 2;
+        if (is(portName, "resonance"))
+            return 3;
         // "global" - same pattern as Gain's "global" above (control-only,
         // see isControlOnlyInput), see FilterState::global.
         if (is(portName, "global"))
-            return 3;
+            return 4;
         return -1;
     case NodeType::Gain:
         // "amount" (CV, 0-10V) is a real audio-rate port, not a ControlRoute
@@ -220,17 +224,19 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Delay:
         // "time"/"feedback"/"mix" are real, but control-only audio-rate
         // CV ports (see isControlOnlyInput) - same pattern as Filter's
-        // cutoff/resonance.
+        // cutoff/resonance. "bypass" - same pattern as Reverb's "bypass".
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
             return 1;
-        if (is(portName, "time"))
+        if (is(portName, "bypass"))
             return 2;
-        if (is(portName, "feedback"))
+        if (is(portName, "time"))
             return 3;
-        if (is(portName, "mix"))
+        if (is(portName, "feedback"))
             return 4;
+        if (is(portName, "mix"))
+            return 5;
         return -1;
     case NodeType::Reverb:
         // "roomSize"/"damping"/"wetLevel"/"dryLevel"/"preDelay" are real,
@@ -492,7 +498,7 @@ inline int audioInPortCount(NodeType type)
         return 2;
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return 4; // "in" + "cutoff" + "resonance" + "global" (CV)
+        return 5; // "in" + "bypass" + "cutoff" + "resonance" + "global" (CV)
     case NodeType::Gain:
         return 3; // "in" + "amount" (CV) + "global" (CV)
     case NodeType::EspEq:
@@ -520,7 +526,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Chorus:
         return 1;
     case NodeType::Delay:
-        return 5; // "inL"+"inR"+"time"+"feedback"+"mix" (CV)
+        return 6; // "inL"+"inR"+"bypass"+"time"+"feedback"+"mix" (CV)
     case NodeType::Reverb:
         return 8; // "inL"+"inR"+"bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel"+"preDelay" (CV)
     case NodeType::ReverbLight:
@@ -649,7 +655,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 2; // "global" - "amount" (index 1) stays real audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return portIdx == 1 || portIdx == 2 || portIdx == 3; // "cutoff"+"resonance"+"global"
+        return portIdx >= 1; // "bypass"+"cutoff"+"resonance"+"global"
     case NodeType::Clock:
         return portIdx == 0; // "tempo"
     case NodeType::Multiplexer:
@@ -663,7 +669,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::SoundFontPlayer:
         return portIdx != 5; // event/scalar inputs, control-only - except "gain" (index 5), real audio-rate like Oscillator's
     case NodeType::Delay:
-        return portIdx == 2 || portIdx == 3 || portIdx == 4; // "time"+"feedback"+"mix"
+        return portIdx >= 2; // "bypass"+"time"+"feedback"+"mix"
     case NodeType::Reverb:
         return portIdx >= 2; // "bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel"+"preDelay"
     case NodeType::ReverbLight:

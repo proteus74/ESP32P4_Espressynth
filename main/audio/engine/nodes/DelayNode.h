@@ -46,6 +46,7 @@ struct DelayState
     float cachedMix = -1.0f;
     float dryGain = 1.0f;
     float wetGain = 0.0f;
+    bool bypass = false;
 };
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -53,17 +54,31 @@ inline void render(NodeInstance &inst, size_t frames)
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = *inst.delay;
-    // "time"/"feedback"/"mix" (Port-Index 2/3/4) are real, but control-only
+    // "bypass" (Port-Index 2, control-only) - same wired-CV-or-manual
+    // pattern as Reverb's bypass (see ReverbNode.h).
+    const bool bypass = (inst.controlConnectedPortMask & (1u << 2)) != 0
+                            ? inst.controlValue[2] >= cv::kGateThresholdVolts
+                            : s.bypass;
+    if (bypass)
+    {
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = portSample(inst, 0, i);
+            inst.outR[i] = portSample(inst, 1, i);
+        }
+        return;
+    }
+    // "time"/"feedback"/"mix" (Port-Index 3/4/5) are real, but control-only
     // audio-rate CV ports (see PortTables.h) - read once per block (no
     // amplitude sample jump through the coefficients themselves, as with
     // Filter/ADSR). Not wired: falls back to the already existing, directly
     // via setParam() delivered fully mapped value.
-    if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0)
-        s.delayTimeMs = cv::cvToRange(portSample(inst, 2, 0), s.timeMin, s.timeMax, s.timeLog);
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0)
-        s.feedback = cv::cvToRange(portSample(inst, 3, 0), s.feedbackMin, s.feedbackMax, s.feedbackLog);
+        s.delayTimeMs = cv::cvToRange(portSample(inst, 3, 0), s.timeMin, s.timeMax, s.timeLog);
     if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0)
-        s.mix = cv::cvToRange(portSample(inst, 4, 0), s.mixMin, s.mixMax, s.mixLog);
+        s.feedback = cv::cvToRange(portSample(inst, 4, 0), s.feedbackMin, s.feedbackMax, s.feedbackLog);
+    if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0)
+        s.mix = cv::cvToRange(portSample(inst, 5, 0), s.mixMin, s.mixMax, s.mixLog);
     const uint32_t delaySamples = static_cast<uint32_t>(s.delayTimeMs * 0.001f * kSampleRate);
     // Equal-power crossfade (matches esp_ae_delay_para_t's documented mix
     // behavior): dry/wet gains trace a quarter sine so the perceived
@@ -106,6 +121,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p, bool psram)
     inst.delay->mixMin = p.mixMin;
     inst.delay->mixMax = p.mixMax;
     inst.delay->mixLog = p.mixLog;
+    inst.delay->bypass = p.delayBypass;
     // 2.2s buffer covers the 0-2000ms UI range with headroom.
     inst.delay->delayL.init(2.2f, static_cast<float>(synth::kSampleRate), psram);
     inst.delay->delayR.init(2.2f, static_cast<float>(synth::kSampleRate), psram);
@@ -149,6 +165,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (strcmp(name, "feedbackMax") == 0) { inst.delay->feedbackMax = value; return true; }
     if (strcmp(name, "mixMin") == 0) { inst.delay->mixMin = value; return true; }
     if (strcmp(name, "mixMax") == 0) { inst.delay->mixMax = value; return true; }
+    if (strcmp(name, "bypass") == 0) { inst.delay->bypass = value >= 0.5f; return true; }
     // "timeCurve"/"feedbackCurve"/"mixCurve" are strings, see Graph.cpp's
     // applyLiveParams.
     return false;
@@ -168,6 +185,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.mixMin = presetparser::getFloat(p, "mixMin", 0.0f);
     out.mixMax = presetparser::getFloat(p, "mixMax", 1.0f);
     out.mixLog = strcmp(presetparser::getString(p, "mixCurve", "linear"), "log") == 0;
+    out.delayBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::delay

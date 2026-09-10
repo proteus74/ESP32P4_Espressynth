@@ -99,7 +99,7 @@ inline bool initEspEq(EspEqState &state, EqFilterKind filterType, float frequenc
 inline void processEspEq(EspEqState &state, const float *inputL, const float *inputR,
                           float *outputL, float *outputR, size_t frames)
 {
-    if (!state.ready || state.handle == nullptr || frames > state.scratch.capacityFrames)
+    if (state.bypass || !state.ready || state.handle == nullptr || frames > state.scratch.capacityFrames)
     {
         espEqBypass(inputL, inputR, outputL, outputR, frames);
         return;
@@ -150,4 +150,5 @@ inline void parsePresetEspEq(cJSON *p, WidgetParams &out)
     out.eqFrequency = presetparser::getFloat(p, "frequency", 1000.0f);
     out.eqQ = presetparser::getFloat(p, "q", 1.0f);
     out.eqGainDb = presetparser::getFloat(p, "gainDb", 0.0f);
+    out.eqBypass = presetparser::getBool(p, "bypass", false);
 }

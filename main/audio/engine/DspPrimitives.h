@@ -365,6 +365,26 @@ public:
     // "Sustain und Idle als konstante Ausgänge").
     bool isHolding() const { return segCount_ == 0; }
 
+    // True only when the CURRENT segment's remaining count covers the
+    // WHOLE block - process() would compute current_ + k*segs_[0].inc for
+    // every k in [0,frames) with no segment switch mid-block. False (safe
+    // fallback: caller keeps materializing via the ordinary process()
+    // loop) whenever a segment ends partway through, segCount_==0
+    // (isHolding() already covers that faster), or frames==0. Lets a
+    // caller (AdsrNode.h's render()) publish (start, inc) for Ramp-aware
+    // downstream consumers instead of re-deriving the same thing via a
+    // per-sample scan - see NodeInstance.h's rampPortMask.
+    bool wholeBlockRamp(size_t frames, float &start, float &inc) const
+    {
+        if (segCount_ == 0 || frames == 0 || segs_[0].remaining < frames)
+        {
+            return false;
+        }
+        start = current_;
+        inc = segs_[0].inc;
+        return true;
+    }
+
     // Read back the currently-configured segment durations/level, so a live
     // single-field update (see ParamDispatch.cpp) can re-call configure()
     // with the other three unchanged instead of needing them passed in too.

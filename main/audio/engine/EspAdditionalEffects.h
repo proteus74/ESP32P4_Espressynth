@@ -130,7 +130,7 @@ inline bool initEspEffect(EspEffectState &s, EspEffectKind kind, const float *p,
 
 inline void processEspEffect(EspEffectState &s, float *const *in, size_t count, float *l, float *r, size_t n)
 {
-    if (!s.ready || n > synth::kBlockSize) { espEffectBypass(in, count, l, r, n); return; }
+    if (s.bypass || !s.ready || n > synth::kBlockSize) { espEffectBypass(in, count, l, r, n); return; }
     auto ch = s.scratch.channels;
     if (static_cast<EspEffectKind>(s.kind) == EspEffectKind::Mixer)
     {
@@ -163,6 +163,7 @@ inline void processEspEffect(EspEffectState &s, float *const *in, size_t count, 
 
 inline bool updateEspEffect(EspEffectState &s, const char *name, float v)
 {
+    if (!strcmp(name, "bypass")) { s.bypass = v >= 0.5f; return true; }
     if (!s.ready) return false;
     switch(static_cast<EspEffectKind>(s.kind)) {
     case EspEffectKind::Alc: if(!strcmp(name,"gainL")){s.params[0]=v;return esp_ae_alc_set_gain(s.handle,0,static_cast<int8_t>(espEffectClampf(v,-64,63)))==0;} if(!strcmp(name,"gainR")){s.params[1]=v;return esp_ae_alc_set_gain(s.handle,1,static_cast<int8_t>(espEffectClampf(v,-64,63)))==0;} break;
@@ -183,12 +184,14 @@ inline void parsePresetEspAlc(cJSON *p, WidgetParams &out)
 {
     out.espParam[0] = presetparser::getFloat(p, "gainL", 0.0f);
     out.espParam[1] = presetparser::getFloat(p, "gainR", 0.0f);
+    out.espBypass = presetparser::getBool(p, "bypass", false);
 }
 
 inline void parsePresetEspChannelConvert(cJSON *p, WidgetParams &out)
 {
     out.espParam[0] = presetparser::getFloat(p, "weightL", 0.70710678f);
     out.espParam[1] = presetparser::getFloat(p, "weightR", 0.70710678f);
+    out.espBypass = presetparser::getBool(p, "bypass", false);
 }
 
 inline void parsePresetEspMixer(cJSON *p, WidgetParams &out)
@@ -203,6 +206,7 @@ inline void parsePresetEspSonic(cJSON *p, WidgetParams &out)
 {
     out.espParam[0] = presetparser::getFloat(p, "speed", 1.0f);
     out.espParam[1] = presetparser::getFloat(p, "pitch", 1.0f);
+    out.espBypass = presetparser::getBool(p, "bypass", false);
 }
 
 inline void parsePresetEspDrc(cJSON *p, WidgetParams &out)
@@ -213,6 +217,7 @@ inline void parsePresetEspDrc(cJSON *p, WidgetParams &out)
     out.espParam[3] = presetparser::getFloat(p, "releaseMs", 100.0f);
     out.espParam[4] = presetparser::getFloat(p, "makeupDb", 0.0f);
     out.espParam[5] = presetparser::getFloat(p, "kneeDb", 2.0f);
+    out.espBypass = presetparser::getBool(p, "bypass", false);
 }
 
 inline void parsePresetEspMbc(cJSON *p, WidgetParams &out)
@@ -220,4 +225,5 @@ inline void parsePresetEspMbc(cJSON *p, WidgetParams &out)
     out.espParam[0] = presetparser::getFloat(p, "threshold", -22.0f);
     out.espParam[1] = presetparser::getFloat(p, "ratio", 2.0f);
     out.espParam[2] = presetparser::getFloat(p, "makeupDb", 0.0f);
+    out.espBypass = presetparser::getBool(p, "bypass", false);
 }

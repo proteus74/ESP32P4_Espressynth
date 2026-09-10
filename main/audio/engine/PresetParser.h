@@ -66,13 +66,23 @@ struct WidgetParams
     // filterGlobal is the "global" port's UI-toggle fallback (see
     // FilterState::global), same pattern as gainGlobal.
     bool filterGlobal = false;
+    // filterBypass is the "bypass" port's UI-toggle fallback (see
+    // FilterState::bypass), shared by Filter+CurtisFilter same as filterGlobal.
+    bool filterBypass = false;
     // esp-eq: one stereo band, filter type switchable (peak/shelf/hi-lo-pass)
     EqFilterKind eqFilterType = EqFilterKind::Peak;
     float eqFrequency = 1000.0f;
     float eqQ = 1.0f;
     float eqGainDb = 0.0f;
+    // eq-only bypass (see EspEqState::bypass) - separate from espBypass below
+    // since EspEq doesn't share EspEffectState with the other ESP effects.
+    bool eqBypass = false;
     // Generic ESP effect parameters. Kept scalar for first UI/API slice.
     float espParam[16] = {};
+    // Shared by EspAlc/EspChannelConvert/EspSonic/EspDrc/EspMbc (see
+    // EspEffectState::bypass) - deliberately NOT read/written for EspMixer
+    // (a 2-input mixer has no single dry signal to bypass to).
+    bool espBypass = false;
     // gain - "amount" is raw CV (0-10V, see CvConventions.h), 10V = unity-
     // gain default (see GainState). gainGlobal is the "global" port's
     // UI-toggle fallback (see GainState::global), same pattern as lfoGlobal.
@@ -90,6 +100,7 @@ struct WidgetParams
     float multiplexerSoftFadeMs = 5.0f;
     // chorus
     float rate = 1.5f, offset = 0.02f, depth = 0.003f;
+    bool chorusBypass = false;
     // delay (always stereo, "echo" was only ever delay-with-feedback) -
     // time/feedback/mixMin/Max/Log mirror main.js's Settings-Dialog
     // (openEffectCvSettings/EFFECT_CV_PARAMS), only consulted when the
@@ -97,6 +108,7 @@ struct WidgetParams
     float delayTimeMs = 300.0f, delayFeedback = 0.3f, delayMix = 0.35f;
     float timeMin = 0.0f, timeMax = 2000.0f, feedbackMin = 0.0f, feedbackMax = 0.95f, mixMin = 0.0f, mixMax = 1.0f;
     bool timeLog = false, feedbackLog = false, mixLog = false;
+    bool delayBypass = false;
     // reverb (always stereo) - param semantics follow esp_ae_reverb_para_t
     // (see NodeState.h's ReverbState). roomSize/damping/wetLevel/dryLevel/
     // preDelayMin/Max/Log likewise mirror the settings dialog.
@@ -162,6 +174,8 @@ struct WidgetParams
     int16_t switchCc = -1;
     int8_t switchChannel = -1;
     bool switchSelectIn2 = false;
+    float switchIn1Default = 0.0f;
+    float switchIn2Default = 0.0f;
     // wave-player
     char sampleFile[40] = {};
     int rootNoteMidi = 60; // C4 (scientific pitch notation, A4=69)

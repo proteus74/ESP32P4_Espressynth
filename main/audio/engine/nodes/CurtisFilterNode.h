@@ -36,6 +36,7 @@ struct CurtisFilterState
     bool resonanceLog = true;
     uint8_t coeffStride = 4;
     bool global = false;
+    bool bypass = false;
     float cutoffLog2Ratio = 0.0f;
     float resonanceLog2Ratio = 0.0f;
     float stage[4] = {};
@@ -157,12 +158,25 @@ inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     CurtisFilterState &s = *inst.curtisFilter;
-    const bool globalPortFed = controlPortConnected(inst, 3) ||
-                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
-    const bool globalActive = globalPortFed ? (portSample(inst, 3, 0) >= cv::kGateThresholdVolts) : s.global;
+    // "bypass" (Port-Index 1, control-only) - same wired-CV-or-manual
+    // pattern as Reverb's bypass (see ReverbNode.h).
+    const bool bypass = (inst.controlConnectedPortMask & (1u << 1)) != 0
+                            ? inst.controlValue[1] >= cv::kGateThresholdVolts
+                            : s.bypass;
+    if (bypass)
+    {
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = portSample(inst, 0, i);
+        }
+        return;
+    }
+    const bool globalPortFed = controlPortConnected(inst, 4) ||
+                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    const bool globalActive = globalPortFed ? (portSample(inst, 4, 0) >= cv::kGateThresholdVolts) : s.global;
     const NodeInstance &source = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
-    const bool cutoffAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
-    const bool resonanceAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool cutoffAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool resonanceAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     const size_t stride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
 
     if (!cutoffAudioFed && !resonanceAudioFed && s.coeffsDirty)
@@ -177,8 +191,8 @@ inline void render(NodeInstance &inst, size_t frames)
         {
             if (i % stride == 0)
             {
-                const float cutoff = cutoffAudioFed ? source.inPorts[1][i] : s.cutoffCv;
-                const float resonance = resonanceAudioFed ? source.inPorts[2][i] : s.resonanceCv;
+                const float cutoff = cutoffAudioFed ? source.inPorts[2][i] : s.cutoffCv;
+                const float resonance = resonanceAudioFed ? source.inPorts[3][i] : s.resonanceCv;
                 if (!s.audioCoeffsInitialized || cutoff != s.lastAudioCutoffCv || resonance != s.lastAudioResonanceCv)
                 {
                     updateCoefficients(s, cutoff, resonance);
@@ -229,6 +243,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.resonanceLog = p.resonanceLog;
     s.coeffStride = p.coeffStride;
     s.global = p.filterGlobal;
+    s.bypass = p.filterBypass;
     s.refreshLog2Ratios();
     s.coeffsDirty = true;
 }
@@ -263,6 +278,8 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.coeffStride = static_cast<uint8_t>(clampf(value, 1.0f, 16.0f));
     else if (strcmp(name, "global") == 0)
         s.global = value >= 0.5f;
+    else if (strcmp(name, "bypass") == 0)
+        s.bypass = value >= 0.5f;
     else
         return false;
     s.refreshLog2Ratios();
@@ -290,6 +307,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     const int stride = presetparser::getInt(p, "coeffStride", 4);
     out.coeffStride = static_cast<uint8_t>(stride < 1 ? 1 : (stride > 16 ? 16 : stride));
     out.filterGlobal = presetparser::getBool(p, "global", false);
+    out.filterBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::curtisfilter

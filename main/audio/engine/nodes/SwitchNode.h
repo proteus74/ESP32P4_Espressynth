@@ -27,6 +27,17 @@ inline void render(NodeInstance &inst, size_t frames)
     // selected input's buffer would let that memset corrupt whichever
     // OTHER instance actually owns it.
     const int selectedPort = inst.switchState.selectIn2 ? 1 : 0;
+    // No DSP edge on the selected input - use the settings-dialog fallback
+    // instead of portSample()'s usual 0V default (see SwitchState's comment).
+    if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << selectedPort)) == 0)
+    {
+        const float fallback = inst.switchState.selectIn2 ? inst.switchState.in2Default : inst.switchState.in1Default;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = fallback;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         inst.outL[i] = portSample(inst, selectedPort, i);
@@ -38,6 +49,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.switchState.cc = p.switchCc;
     inst.switchState.channel = p.switchChannel;
     inst.switchState.selectIn2 = p.switchSelectIn2;
+    inst.switchState.in1Default = p.switchIn1Default;
+    inst.switchState.in2Default = p.switchIn2Default;
 }
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
@@ -47,6 +60,8 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     cJSON *ch = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "channel") : nullptr;
     out.switchChannel = cJSON_IsNumber(ch) ? static_cast<int8_t>(ch->valueint) : -1;
     out.switchSelectIn2 = presetparser::getBool(p, "selectIn2", false);
+    out.switchIn1Default = presetparser::getFloat(p, "in1Default", 0.0f);
+    out.switchIn2Default = presetparser::getFloat(p, "in2Default", 0.0f);
 }
 
 } // namespace nodes::switchnode
