@@ -178,6 +178,12 @@ public:
         return {static_cast<uint16_t>(packed & 0xFFFFu), static_cast<uint16_t>(packed >> 16)};
     }
     uint32_t presetChangeSequence() const { return presetChangeSequence_.load(std::memory_order_acquire); }
+    // Bumped once per real preset reload (a new/re-saved file, see loaderTaskLoop's `gotMsg`)
+    // or Panic - deliberately NOT on a cpuReloadRequested_ overload-watchdog reload, since that
+    // one reloads *because of* an overload that may itself be producing real DMA underruns, and
+    // resetting right then would erase the evidence. Callers (Feature::Synth::dma_underrun_tick
+    // in synth_manager.hpp) poll this to know when to zero the true DMA-underrun counters.
+    uint32_t underrunResetSequence() const { return underrunResetSequence_.load(std::memory_order_relaxed); }
     void readCurrentPresetName(char *out, size_t outSize) const
     {
         if (out == nullptr || outSize == 0) return;
@@ -505,6 +511,7 @@ private:
     std::atomic<uint16_t> activeSoundFontVoices_{0};
     std::atomic<uint32_t> midiVoiceUsagePacked_{0};
     std::atomic<uint32_t> presetChangeSequence_{0};
+    std::atomic<uint32_t> underrunResetSequence_{0};
     char midiControlWidgetLabel_[48] = {};
     std::atomic<uint8_t> midiControlKind_{0};
     std::atomic<uint8_t> midiControlDirection_{0};
@@ -884,6 +891,10 @@ inline void SynthEngine::loaderTaskLoop()
         if (!gotMsg && !panicReload && !cpuReload)
         {
             continue;
+        }
+        if (gotMsg || panicReload)
+        {
+            underrunResetSequence_.fetch_add(1, std::memory_order_relaxed);
         }
 
         uint16_t voiceCeiling = SYNTH_VOICE_COUNT;

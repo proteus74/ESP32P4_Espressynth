@@ -8,9 +8,11 @@
 #include "driver/i2s_std.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <atomic>
 #include <cmath>
 
 // jonlidgard/wm8960 v0.0.3's public header has no extern "C" guard, so its C-linkage
@@ -205,6 +207,18 @@ inline wm8960_t         s_wm8960    = {};
 inline i2s_chan_handle_t s_tx_handle = nullptr;
 inline i2s_chan_handle_t s_rx_handle = nullptr;
 
+// True DMA-ring-underrun tracking - see the identical comment in es8311_manager.hpp
+// (on_send_q_ovf fires from I2S driver ISR context once the ring has genuinely run out of
+// real data, as opposed to a render-*budget* miss the ring's headroom usually absorbs).
+inline std::atomic<uint32_t> s_underrun_count{0};
+inline std::atomic<int64_t> s_last_underrun_us{0};
+
+bool IRAM_ATTR onSendQueueOverflow(i2s_chan_handle_t /*handle*/, i2s_event_data_t * /*event*/, void * /*user_ctx*/) {
+    s_underrun_count.fetch_add(1, std::memory_order_relaxed);
+    s_last_underrun_us.store(esp_timer_get_time(), std::memory_order_relaxed);
+    return false;
+}
+
 // The WM8960 control interface is write-only (no register readback, see
 // main/boards/board_init.cpp's I2C scan and the per-write init() diagnostics below for the
 // hardware-debugging background), so every get_*() below returns the last value this API
@@ -257,6 +271,22 @@ inline i2s_chan_handle_t get_tx_handle() {
 /** @brief I2S RX channel (WM8960 ADC -> ESP32-P4, microphone data). */
 inline i2s_chan_handle_t get_rx_handle() {
     return s_rx_handle;
+}
+
+/** @brief True DMA-ring underrun count since boot (see on_send_q_ovf comment above). */
+inline uint32_t underrunCount() {
+    return s_underrun_count.load(std::memory_order_relaxed);
+}
+
+/** @brief esp_timer_get_time() timestamp of the most recent underrun, or 0 if none yet. */
+inline int64_t lastUnderrunUs() {
+    return s_last_underrun_us.load(std::memory_order_relaxed);
+}
+
+/** @brief Zeroes the underrun count/timestamp - see Feature::Synth::dma_underrun_tick(). */
+inline void resetUnderrunCount() {
+    s_underrun_count.store(0, std::memory_order_relaxed);
+    s_last_underrun_us.store(0, std::memory_order_relaxed);
 }
 
 /**
@@ -617,6 +647,16 @@ inline esp_err_t init() {
         ESP_LOGE(TAG, "Failed to configure I2S standard mode: %s", esp_err_to_name(err));
         return err;
     }
+
+    // Must be registered before i2s_channel_enable() below - the driver rejects DMA event
+    // callback registration once the channel is running.
+    i2s_event_callbacks_t underrun_callbacks = {};
+    underrun_callbacks.on_send_q_ovf = onSendQueueOverflow;
+    err = i2s_channel_register_event_callback(s_tx_handle, &underrun_callbacks, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register I2S underrun callback: %s", esp_err_to_name(err));
+    }
+
     if ((err = i2s_channel_enable(s_tx_handle)) != ESP_OK ||
         (enable_rx && (err = i2s_channel_enable(s_rx_handle)) != ESP_OK)) {
         ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(err));

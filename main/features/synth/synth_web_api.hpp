@@ -127,10 +127,17 @@ inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
 
 /**
  * @brief Periodic engine-status broadcast: "cpuLoad" (matches main.js's updateCpuLoadDisplay()/
- *        updateMemStatsDisplay() field names exactly - core0/core1/peakUs/budgetUs/overruns/
+ *        updateMemStatsDisplay() field names exactly - core0/core1/peakUs/budgetUs/underruns/
  *        midiDrops/sfVoices/ps*Kb/sys*Kb/...), "nodeCpu" (per-widget load, main.js's
  *        updateNodeCpuDisplay()) and, on change, "voicesCapped". Call roughly once a second
- *        from the main loop (see main.cpp) - a no-op if the web server isn't running.
+ *        from the main loop (see main.cpp) - a no-op if the web server isn't running. "underruns"
+ *        is the true DMA-ring-ran-dry count (Feature::Synth::dma_underrun_count(), an actual
+ *        audible click) - deliberately the only one of the two the browser UI shows, since a
+ *        render-budget miss (the other field, "renderOverruns" = SynthEngine::
+ *        renderOverrunCount(), kept in the JSON for tools/benchmark_synth.mjs but intentionally
+ *        NOT surfaced in index.html/main.js/display_lvgl.hpp) is usually absorbed by the DMA
+ *        ring's headroom without audible effect and was getting mistaken for one - see its own
+ *        "Audio-Overrun" serial log for that diagnostic instead.
  */
 inline void broadcast_status_tick() {
     if (Feature::Web::handle() == nullptr) return;
@@ -193,7 +200,7 @@ inline void broadcast_status_tick() {
     snprintf(json, sizeof(json),
              "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,\"peakUs\":%lu,\"budgetUs\":%lu,"
              "\"p50Us\":%lu,\"p95Us\":%lu,\"p99Us\":%lu,\"timingSamples\":%lu,"
-             "\"overruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
+             "\"underruns\":%lu,\"renderOverruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
              "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
              "\"sysLargestKb\":%lu,\"sysMinKb\":%lu,\"psLargestKb\":%lu,\"psMinKb\":%lu,"
              "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u}",
@@ -201,7 +208,8 @@ inline void broadcast_status_tick() {
              static_cast<unsigned long>(timing.peakUs), static_cast<unsigned long>(kBlockBudgetUs),
              static_cast<unsigned long>(timing.p50Us), static_cast<unsigned long>(timing.p95Us),
              static_cast<unsigned long>(timing.p99Us), static_cast<unsigned long>(timing.sampleCount),
-             static_cast<unsigned long>(engine().renderOverrunCount()), static_cast<unsigned long>(engine().midiDropCount()),
+             static_cast<unsigned long>(dma_underrun_count()), static_cast<unsigned long>(engine().renderOverrunCount()),
+             static_cast<unsigned long>(engine().midiDropCount()),
              engine().activeSoundFontVoices(), ps_free_kb, ps_total_kb, sys_free_kb, sys_total_kb,
              static_cast<unsigned long>(memory.internalLargest / 1024), static_cast<unsigned long>(memory.internalMinimum / 1024),
              static_cast<unsigned long>(memory.psramLargest / 1024), static_cast<unsigned long>(memory.psramMinimum / 1024),

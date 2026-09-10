@@ -23,12 +23,15 @@ extern "C" void app_main(void) {
         Feature::Synth::broadcast_status_tick();
 #endif
 #if defined(CONFIG_APP_ENABLE_SYNTH)
+        // Real DMA-ring underrun log + reset-on-reload/Panic - kept off the web-server gate
+        // above so it still shows up on the serial log with no browser/UI involved.
+        Feature::Synth::dma_underrun_tick();
         // Native P0 baseline diagnostic (documentation/native-synth-
         // optimization-plan-2026-09-09.md) - off the render task on
         // purpose, see log_p0_baseline_tick()'s comment (synth_manager.hpp).
-        if (seconds % 2 == 0) {
-            Feature::Synth::log_p0_baseline_tick();
-        }
+        // if (seconds % 2 == 0) {
+        //     Feature::Synth::log_p0_baseline_tick();
+        // }
 #endif
     }
 #endif

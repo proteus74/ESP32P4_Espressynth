@@ -9314,7 +9314,84 @@ const ORTHOGONAL_CABLES_KEY = "espressynth.orthogonalCables";
 let cableSagEnabled = localStorage.getItem(CABLE_SAG_KEY) === "1";
 let orthogonalCablesEnabled = localStorage.getItem(ORTHOGONAL_CABLES_KEY) === "1";
 
-function orthogonalPath(p1, p2) {
+function roundedOrthogonalPath(points, radius = 12) {
+  const pathPoints = points.filter((point, index) =>
+    index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y
+  );
+  if (pathPoints.length < 3) {
+    return `M ${pathPoints[0].x} ${pathPoints[0].y} L ${pathPoints.at(-1).x} ${pathPoints.at(-1).y}`;
+  }
+
+  let path = `M ${pathPoints[0].x} ${pathPoints[0].y}`;
+  for (let index = 1; index < pathPoints.length - 1; index += 1) {
+    const previous = pathPoints[index - 1];
+    const corner = pathPoints[index];
+    const next = pathPoints[index + 1];
+    const beforeLength = Math.hypot(corner.x - previous.x, corner.y - previous.y);
+    const afterLength = Math.hypot(next.x - corner.x, next.y - corner.y);
+    const cornerRadius = Math.min(radius, beforeLength / 2, afterLength / 2);
+    const before = {
+      x: corner.x + (previous.x - corner.x) * cornerRadius / beforeLength,
+      y: corner.y + (previous.y - corner.y) * cornerRadius / beforeLength,
+    };
+    const after = {
+      x: corner.x + (next.x - corner.x) * cornerRadius / afterLength,
+      y: corner.y + (next.y - corner.y) * cornerRadius / afterLength,
+    };
+    path += ` L ${before.x} ${before.y} Q ${corner.x} ${corner.y}, ${after.x} ${after.y}`;
+  }
+  const last = pathPoints.at(-1);
+  return `${path} L ${last.x} ${last.y}`;
+}
+
+function widgetBounds(widgetEl) {
+  const rect = widgetEl.getBoundingClientRect();
+  const topLeft = clientToContent(rect.left, rect.top);
+  const bottomRight = clientToContent(rect.right, rect.bottom);
+  return { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y };
+}
+
+function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
+  if (fromWidgetEl && toWidgetEl) {
+    const fromBounds = widgetBounds(fromWidgetEl);
+    const toBounds = widgetBounds(toWidgetEl);
+    const clearance = 20;
+    const sourceExitX = Math.max(p1.x + clearance, fromBounds.right + clearance);
+    const targetEntryX = Math.min(p2.x - clearance, toBounds.left - clearance);
+
+    // Source is left of target: use free corridor between both widgets. This
+    // is the normal audio/control flow and needs no detour above or below.
+    if (sourceExitX <= targetEntryX) {
+      const middleX = (sourceExitX + targetEntryX) / 2;
+      return roundedOrthogonalPath([
+        p1,
+        { x: middleX, y: p1.y },
+        { x: middleX, y: p2.y },
+        p2,
+      ]);
+    }
+
+    const targetBelowSource = p2.y >= p1.y;
+    let routeY = targetBelowSource ? fromBounds.bottom + clearance : fromBounds.top - clearance;
+
+    // Prefer gap between widgets. If they overlap vertically, go around their
+    // shared outside edge so no horizontal cable segment crosses either widget.
+    if (targetBelowSource && routeY >= toBounds.top - clearance) {
+      routeY = Math.max(fromBounds.bottom, toBounds.bottom) + clearance;
+    } else if (!targetBelowSource && routeY <= toBounds.bottom + clearance) {
+      routeY = Math.min(fromBounds.top, toBounds.top) - clearance;
+    }
+
+    return roundedOrthogonalPath([
+      p1,
+      { x: sourceExitX, y: p1.y },
+      { x: sourceExitX, y: routeY },
+      { x: targetEntryX, y: routeY },
+      { x: targetEntryX, y: p2.y },
+      p2,
+    ]);
+  }
+
   const midX = (p1.x + p2.x) / 2;
   const horizontalDirection = Math.sign(p2.x - p1.x) || 1;
   const verticalDirection = Math.sign(p2.y - p1.y);
@@ -9323,8 +9400,8 @@ function orthogonalPath(p1, p2) {
   return `M ${p1.x} ${p1.y} L ${midX - horizontalDirection * radius} ${p1.y} Q ${midX} ${p1.y}, ${midX} ${p1.y + verticalDirection * radius} L ${midX} ${p2.y - verticalDirection * radius} Q ${midX} ${p2.y}, ${midX + horizontalDirection * radius} ${p2.y} L ${p2.x} ${p2.y}`;
 }
 
-function bezierPath(p1, p2) {
-  if (orthogonalCablesEnabled) return orthogonalPath(p1, p2);
+function bezierPath(p1, p2, fromWidgetEl, toWidgetEl) {
+  if (orthogonalCablesEnabled) return orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl);
   const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 40);
   if (cableSagEnabled) {
     const sagY = Math.max(p1.y, p2.y) + Math.min(120, 28 + Math.abs(p2.x - p1.x) * 0.08);
@@ -9371,7 +9448,15 @@ function drawConnections() {
     path.setAttribute("class", "connection-path");
     path.dataset.connId = conn.id;
     if (conn.id === selectedConnectionId) path.classList.add("selected");
-    path.setAttribute("d", bezierPath(portPosition(fromDot), portPosition(toDot)));
+    path.setAttribute(
+      "d",
+      bezierPath(
+        portPosition(fromDot),
+        portPosition(toDot),
+        fromDot.closest(".widget-instance"),
+        toDot.closest(".widget-instance")
+      )
+    );
     if (conn.color) path.style.stroke = conn.color;
     path.style.pointerEvents = "stroke";
 
@@ -11993,7 +12078,7 @@ const cpuLoadCore0ValueEl = document.getElementById("cpuLoadCore0Value");
 const cpuLoadCore1ValueEl = document.getElementById("cpuLoadCore1Value");
 const cpuLoadCore0FillEl = document.getElementById("cpuLoadCore0Fill");
 const cpuLoadCore1FillEl = document.getElementById("cpuLoadCore1Fill");
-const cpuLoadOverrunsValueEl = document.getElementById("cpuLoadOverrunsValue");
+const cpuLoadUnderrunsValueEl = document.getElementById("cpuLoadUnderrunsValue");
 
 function setCpuLoadValue(valueEl, fillEl, percent) {
   valueEl.textContent = `${Math.round(percent)}%`;
@@ -12017,15 +12102,15 @@ function setCpuLoadValue(valueEl, fillEl, percent) {
 
 
 
-let lastOverrunCount = null;
-function updateCpuLoadDisplay(core0, core1, overruns) {
+let lastUnderrunCount = null;
+function updateCpuLoadDisplay(core0, core1, underruns) {
   if (typeof core0 === "number" && Number.isFinite(core0)) setCpuLoadValue(cpuLoadCore0ValueEl, cpuLoadCore0FillEl, core0);
   if (typeof core1 === "number" && Number.isFinite(core1)) setCpuLoadValue(cpuLoadCore1ValueEl, cpuLoadCore1FillEl, core1);
-  if (cpuLoadOverrunsValueEl && typeof overruns === "number" && Number.isFinite(overruns)) {
-    cpuLoadOverrunsValueEl.textContent = String(overruns);
-    const rising = lastOverrunCount !== null && overruns > lastOverrunCount;
-    cpuLoadOverrunsValueEl.classList.toggle("danger", rising);
-    lastOverrunCount = overruns;
+  if (cpuLoadUnderrunsValueEl && typeof underruns === "number" && Number.isFinite(underruns)) {
+    cpuLoadUnderrunsValueEl.textContent = String(underruns);
+    const rising = lastUnderrunCount !== null && underruns > lastUnderrunCount;
+    cpuLoadUnderrunsValueEl.classList.toggle("danger", rising);
+    lastUnderrunCount = underruns;
   }
 }
 
@@ -12227,7 +12312,7 @@ function connectWs() {
     } else if (data.type === "midi-error") {
       appendLog(`MIDI error: ${data.error}`);
     } else if (data.type === "cpuLoad") {
-      updateCpuLoadDisplay(data.core0, data.core1, data.overruns);
+      updateCpuLoadDisplay(data.core0, data.core1, data.underruns);
       updateMemStatsDisplay(data.psFreeKb, data.psTotalKb, data.sysFreeKb, data.sysTotalKb);
     } else if (data.type === "nodeCpu") {
       updateNodeCpuDisplay(data.w);

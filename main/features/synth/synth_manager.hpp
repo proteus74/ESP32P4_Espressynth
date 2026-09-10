@@ -239,6 +239,78 @@ void ensure_storage_directories() {
 } // namespace
 
 /**
+ * @brief True DMA-ring underrun count across both onboard codecs (ES8311 always-on primary,
+ *        WM8960 optional secondary) since boot: an `on_send_q_ovf` event from the I2S driver
+ *        (see the comment in es8311_manager.hpp/wm8960_manager.hpp), meaning the ring genuinely
+ *        ran out of real audio and auto-cleared to silence - an actual audible click/dropout.
+ *        Deliberately separate from SynthEngine::renderOverrunCount(): that one fires on a
+ *        render-*budget* miss, which the DMA ring's ~AUDIO_I2S_DMA_DESC_NUM*
+ *        AUDIO_I2S_DMA_FRAME_NUM frames of headroom usually absorb without this ever firing -
+ *        see the "Audio-Overrun" log in SynthEngine.h for that one instead.
+ */
+inline uint32_t dma_underrun_count() {
+    uint32_t total = 0;
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    total += Feature::Audio::ES8311::underrunCount();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    total += Feature::Audio::WM8960::underrunCount();
+#endif
+    return total;
+}
+
+/**
+ * @brief Zeroes the true DMA-underrun counters on both onboard codecs - see
+ *        dma_underrun_tick() below, the only caller (a fresh preset load or Panic deserves a
+ *        clean baseline; on-demand callers are welcome too).
+ */
+inline void reset_dma_underrun_count() {
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    Feature::Audio::ES8311::resetUnderrunCount();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    Feature::Audio::WM8960::resetUnderrunCount();
+#endif
+}
+
+/**
+ * @brief Call roughly once a second from the main loop (see main.cpp), independent of whether
+ *        the web server/UI is running. Two jobs, both cheap no-ops when nothing changed:
+ *        - Zeroes the counters the moment engine().underrunResetSequence() changes, i.e. right
+ *          after a real preset reload or Panic (see that getter's comment in SynthEngine.h) -
+ *          so "underruns" in the UI reflects behavior since the current preset/patch, not a
+ *          number left over from whatever was loaded before.
+ *        - Logs a warning the moment dma_underrun_count() changes since the last call - i.e.
+ *          exactly when the DMA ring actually ran dry and audibly clicked.
+ */
+inline void dma_underrun_tick() {
+    static uint32_t s_last_reset_sequence = 0;
+    static uint32_t s_last_logged_count = 0;
+    const uint32_t reset_sequence = engine().underrunResetSequence();
+    if (reset_sequence != s_last_reset_sequence) {
+        s_last_reset_sequence = reset_sequence;
+        reset_dma_underrun_count();
+        s_last_logged_count = 0;
+    }
+
+    const uint32_t count = dma_underrun_count();
+    if (count == s_last_logged_count) return;
+    const uint32_t new_events = count - s_last_logged_count;
+    s_last_logged_count = count;
+
+    int64_t last_us = 0;
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    if (Feature::Audio::ES8311::lastUnderrunUs() > last_us) last_us = Feature::Audio::ES8311::lastUnderrunUs();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    if (Feature::Audio::WM8960::lastUnderrunUs() > last_us) last_us = Feature::Audio::WM8960::lastUnderrunUs();
+#endif
+    ESP_LOGW(TAG, "Audio-Underrun: DMA ring ran dry (+%lu, %lu total since last reset, last at t=%lld us)",
+             static_cast<unsigned long>(new_events), static_cast<unsigned long>(count),
+             static_cast<long long>(last_us));
+}
+
+/**
  * @brief Brings up the synth engine: creates the preset/sample/soundfont directories (first
  *        boot only), wires whichever codec(s)/USB-audio tap are enabled, and starts the
  *        engine's render + preset-loader tasks. Call once, after Feature::LittleFS::init() and

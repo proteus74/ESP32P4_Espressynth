@@ -89,7 +89,7 @@ static lv_obj_t* s_ip_label = nullptr;
 static lv_obj_t* s_memory_label = nullptr;
 static lv_obj_t* s_cpu_label = nullptr;
 static lv_obj_t* s_midi_label = nullptr;
-static lv_obj_t* s_overrun_label = nullptr;
+static lv_obj_t* s_underrun_label = nullptr;
 static lv_obj_t* s_preset_label = nullptr;
 static lv_obj_t* s_preset_index_label = nullptr;
 static lv_obj_t* s_activity_panel = nullptr;
@@ -295,10 +295,12 @@ void update_runtime_labels()
                           core0_tenths / 10, core0_tenths % 10,
                           core1_tenths / 10, core1_tenths % 10);
     const SynthEngine::MidiVoiceUsageSnapshot voice_usage = Feature::Synth::engine().midiVoiceUsage();
-    lv_label_set_text_fmt(s_overrun_label, "Voices  %u/%u\nOverruns  %lu",
+    // Real DMA-ring underrun count (Feature::Synth::dma_underrun_count()), not
+    // SynthEngine::renderOverrunCount() - see that function's comment in synth_manager.hpp.
+    lv_label_set_text_fmt(s_underrun_label, "Voices  %u/%u\nUnderruns  %lu",
                           static_cast<unsigned>(voice_usage.active),
                           static_cast<unsigned>(voice_usage.maximum),
-                          static_cast<unsigned long>(Feature::Synth::engine().renderOverrunCount()));
+                          static_cast<unsigned long>(Feature::Synth::dma_underrun_count()));
 
     SynthEngine::MidiControlSnapshot activity{};
     if (Feature::Synth::engine().readMidiControlSnapshot(activity) && activity.sequence != s_seen_midi_sequence)
@@ -554,7 +556,7 @@ void create_ui() {
     create_card(screen, margin, metrics_y, card_width, 88, "SPEICHER", &s_memory_label);
     create_card(screen, margin + card_width + gap, metrics_y, card_width, 88, "CPU", &s_cpu_label);
     create_card(screen, margin + (card_width + gap) * 2, metrics_y, card_width, 88, "MIDI", &s_midi_label);
-    create_card(screen, margin + (card_width + gap) * 3, metrics_y, card_width, 88, "AUDIO", &s_overrun_label);
+    create_card(screen, margin + (card_width + gap) * 3, metrics_y, card_width, 88, "AUDIO", &s_underrun_label);
 
     const int panel_y = metrics_y + 112;
     const int panel_height = screen_height - panel_y - margin;

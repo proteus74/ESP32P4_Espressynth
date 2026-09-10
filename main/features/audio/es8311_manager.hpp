@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "boards/board_config.hpp"
 #include "boards/board_init.hpp"
 #include "driver/gpio.h"
@@ -8,6 +10,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 // Generic ES8311 codec support. Pins and I2S/I2C port are Kconfig-configurable rather than
 // board-fixed (same pattern as wm8960_manager.hpp) - defaults match the onboard wiring of
@@ -36,6 +39,24 @@ constexpr gpio_num_t PIN_DIN  = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_ES8
 constexpr gpio_num_t PIN_PA   = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_ES8311_PIN_PA);
 
 inline esp_codec_dev_handle_t s_codec_dev = nullptr;
+
+// True DMA-ring-underrun tracking, as opposed to SynthEngine::renderOverrunCount() (a render-
+// *budget* miss - the DMA ring's ~AUDIO_I2S_DMA_DESC_NUM*AUDIO_I2S_DMA_FRAME_NUM frames of
+// headroom usually absorb that without ever reaching here, see the dma_desc_num/dma_frame_num
+// comment below). on_send_q_ovf fires from I2S driver ISR context only once the ring has
+// genuinely run out of real data: every queued descriptor already finished sending and the
+// render task still hasn't refilled the oldest one, so the driver is about to recycle it
+// (auto_clear_after_cb below zeroes it to silence rather than repeating stale audio). Only
+// atomic stores here - no logging, nothing ISR-unsafe (esp_timer_get_time() is IRAM-resident
+// and safe to call from ISR context, unlike the esp_timer software-timer start/stop calls).
+inline std::atomic<uint32_t> s_underrun_count{0};
+inline std::atomic<int64_t> s_last_underrun_us{0};
+
+bool IRAM_ATTR onSendQueueOverflow(i2s_chan_handle_t /*handle*/, i2s_event_data_t * /*event*/, void * /*user_ctx*/) {
+    s_underrun_count.fetch_add(1, std::memory_order_relaxed);
+    s_last_underrun_us.store(esp_timer_get_time(), std::memory_order_relaxed);
+    return false;
+}
 } // namespace
 
 /**
@@ -44,6 +65,22 @@ inline esp_codec_dev_handle_t s_codec_dev = nullptr;
  */
 inline esp_codec_dev_handle_t get_handle() {
     return s_codec_dev;
+}
+
+/** @brief True DMA-ring underrun count since boot (see on_send_q_ovf comment above). */
+inline uint32_t underrunCount() {
+    return s_underrun_count.load(std::memory_order_relaxed);
+}
+
+/** @brief esp_timer_get_time() timestamp of the most recent underrun, or 0 if none yet. */
+inline int64_t lastUnderrunUs() {
+    return s_last_underrun_us.load(std::memory_order_relaxed);
+}
+
+/** @brief Zeroes the underrun count/timestamp - see Feature::Synth::dma_underrun_tick(). */
+inline void resetUnderrunCount() {
+    s_underrun_count.store(0, std::memory_order_relaxed);
+    s_last_underrun_us.store(0, std::memory_order_relaxed);
 }
 
 /**
@@ -107,6 +144,16 @@ inline esp_err_t init() {
         ESP_LOGE(TAG, "Failed to configure I2S standard mode: %s", esp_err_to_name(err));
         return err;
     }
+
+    // Must be registered before i2s_channel_enable() below - the driver rejects DMA event
+    // callback registration once the channel is running.
+    i2s_event_callbacks_t underrun_callbacks = {};
+    underrun_callbacks.on_send_q_ovf = onSendQueueOverflow;
+    err = i2s_channel_register_event_callback(tx_handle, &underrun_callbacks, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register I2S underrun callback: %s", esp_err_to_name(err));
+    }
+
     if ((err = i2s_channel_enable(tx_handle)) != ESP_OK || (err = i2s_channel_enable(rx_handle)) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(err));
         return err;
