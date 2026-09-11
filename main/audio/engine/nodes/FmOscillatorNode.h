@@ -90,6 +90,15 @@ struct FastLoopCtx
     bool ampConstantForBlock;
     bool fmActive;
     bool feedbackActive;
+    // Set only when amplitude (port 0) is NOT block-constant but IS a
+    // whole-block linear ramp tagged by the producer (typically an ADSR
+    // mid attack/decay - see NodeInstance.h's rampPortMask/RampDescriptor
+    // and AdsrNode.h's wholeBlockRamp() tag). ampRampStart/Step already
+    // fold in baseAmp and the kInvMaxVolts scale render() would otherwise
+    // apply per sample via cv::vcaGain() - see renderRampAmpFastLoop below.
+    bool hasAmpRamp;
+    float ampRampStart;
+    float ampRampStep;
 };
 
 template <WaveType W>
@@ -135,6 +144,31 @@ IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
     }
 }
 
+// Companion to renderConstFastLoop above, for the other common non-silent
+// case: amplitude (port 0) is actively ramping (ADSR attack/decay) rather
+// than block-constant, but still a whole-block LINEAR ramp (see
+// FastLoopCtx::hasAmpRamp). Same established pattern already used by
+// GainNode.h/DetuneNode.h/ArithmeticNodes.h for a tagged ramp input -
+// advance amp by simple accumulation instead of re-deriving it via
+// cv::vcaGain(c.ampBuf[i], false) (itself just a clamp+scale, but paid
+// again every sample through the same un-hoistable ternary P2 above
+// targets) every sample. NOT bit-identical to the per-sample vcaGain
+// path (repeated float addition vs. a fresh multiply each sample) - same
+// trade-off already accepted project-wide for every other ramp-tag
+// consumer, inaudible on a multi-millisecond envelope ramp.
+template <WaveType W>
+IRAM_ATTR inline void renderRampAmpFastLoop(FastLoopCtx &c, size_t frames)
+{
+    const float gainMul = c.gainTarget;
+    float amp = c.ampRampStart;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        amp += c.ampRampStep;
+    }
+}
+
 // FM's normal case has block-constant carrier pitch but an audio-rate
 // modulator. Keep that modulation in the fast loop: Hz conversion and phase
 // increment happen once per block, waveform dispatch once below, while only
@@ -170,6 +204,8 @@ IRAM_ATTR inline void renderSelectedFastLoop(FastLoopCtx &c, size_t frames, bool
         renderModulatedLoop<W>(c, frames);
     else if (c.ampConstantForBlock && c.gainConverged && !c.gainFed)
         renderConstFastLoop<W>(c, frames);
+    else if (c.hasAmpRamp && c.gainConverged && !c.gainFed)
+        renderRampAmpFastLoop<W>(c, frames);
     else
     {
         renderFastLoop<W>(c, frames);
@@ -378,11 +414,23 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         return;
     }
 
+    // P2 continued (fm-plan.md section 3): amplitude actively ramping
+    // (ADSR attack/decay) rather than block-constant - if the producer
+    // tagged it a whole-block linear ramp (see NodeInstance.h's
+    // rampPortMask, same mechanism GainNode.h/DetuneNode.h/ArithmeticNodes.h
+    // already consume), fold baseAmp/kInvMaxVolts in once here instead of
+    // per sample - see renderRampAmpFastLoop above.
+    const NodeInstance::RampDescriptor *ampRamp = ampConstantForBlock ? nullptr : rampForPort(inst, 0);
+    const bool hasAmpRamp = ampRamp != nullptr;
+    const float ampRampStart = hasAmpRamp ? baseAmp + ampRamp->start * cv::kInvMaxVolts : 0.0f;
+    const float ampRampStep = hasAmpRamp ? ampRamp->inc * cv::kInvMaxVolts : 0.0f;
+
     FastLoopCtx ctx{&inst,           &s.phaseGen,        &s.gainSmooth, ampBuf,
                     gainBuf,         fmInBuf,            ampScalar,     baseAmp,
                     ampConstantValue, gainTarget,        phaseIncrement, phaseOffsetScale,
                     feedbackAmount,  &s.feedbackSample,  gainFed,       gainConverged,
-                    ampConstantForBlock, fmActive,       feedbackActive};
+                    ampConstantForBlock, fmActive,       feedbackActive,
+                    hasAmpRamp,      ampRampStart,       ampRampStep};
     switch (wave)
     {
     case WaveType::Sine:
