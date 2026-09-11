@@ -36,6 +36,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/ReverbNode.h"
+#include "nodes/StepArpeggiatorNode.h"
 #include "nodes/ValueMapperNode.h"
 
 struct WidgetSlot
@@ -107,11 +108,9 @@ struct ControlRoute
     // amplitude have.
     int8_t targetPort = -1;
 
-    // Only meaningful when sourceWidget is a midi-split widget: which of its
-    // two outputs (0 = lower, 1 = upper) this route was generated from. Lets
-    // Graph::deliverNoteControlRoutes forward a note-on/off event to only the
-    // matching half's routes when recursing from midi-split's own Gate case
-    // (see handleMidiEvent), instead of delivering both sides for one note.
+    // Index of a virtual source output. MidiSplit uses it for the originating
+    // zone; multi-control sources such as Knob use it for the control index.
+    // The default of zero preserves old, single-output preset connections.
     uint8_t side = 0;
 };
 
@@ -276,12 +275,13 @@ constexpr float kGraphBlockBudgetUs = 1000000.0f * static_cast<float>(synth::kBl
 // do this: a knob dragged by mouse never reached a connected Divide/Adder/
 // Multiplier, only a knob that happened to also be driven by a real CC
 // message).
-inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRoute::Kind kind, float value)
+inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRoute::Kind kind, float value,
+                                  uint8_t sourceSide = 0)
 {
     for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
     {
         const ControlRoute &route = graph.controlRoutes[r];
-        if (route.kind != kind || route.sourceWidget != sourceWidget)
+        if (route.kind != kind || route.sourceWidget != sourceWidget || route.side != sourceSide)
         {
             continue;
         }
@@ -580,13 +580,26 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             continue;
         }
         hasEnvelope = true;
+        // "gate" (Adsr port 4 / DxEnvelope port 8 - see PortTables.h) can
+        // only detect its own rising/falling edges by actually running
+        // render() every block (see AdsrNode.h's/DxEnvelopeNode.h's gateFed
+        // check) - unlike the MIDI-ControlRoute gate path
+        // (Graph::deliverNoteControlRoutes), which wakes an idle envelope
+        // directly/out-of-band, no render() needed. Without this, a
+        // genuinely idle envelope whose ONLY gate source is a wired cable
+        // would never be rendered again once idle - voiceStillSounding[v]
+        // would never observe the very edge that should wake it, a
+        // permanent deadlock. Force the voice live whenever that port is
+        // actually wired, regardless of the envelope's current idle state.
+        const int gatePort = widgets[w].type == NodeType::Adsr ? 4 : 8;
         for (uint16_t v = 0; v < widgets[w].instanceCount; ++v)
         {
             NodeInstance &envelope = instances[widgets[w].instanceBase + v];
             const bool idle = widgets[w].type == NodeType::Adsr
                 ? envelope.adsr->ramp.isIdle()
                 : envelope.dxEnvelope->scheduler.isIdle();
-            if (!idle)
+            const bool gateWired = (envelope.audioConnectedPortMask & synth::portBit(gatePort)) != 0;
+            if (!idle || gateWired)
             {
                 voiceStillSounding[v] = true;
             }
@@ -958,25 +971,19 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
             if (widgets[w].type == NodeType::Knob)
             {
                 NodeInstance &knobInst = instances[widgets[w].instanceBase];
-                KnobState &k = *knobInst.knob;
-                // Identity is the (cc, channel) pair together - some
-                // controllers reuse the same CC number across multiple
-                // physical knobs/faders, distinguishing them only by MIDI
-                // channel.
-                if (k.cc < 0 || static_cast<uint8_t>(k.cc) != ccNumber)
+                for (uint8_t controlIndex = 0; controlIndex < knobInst.knob->count; ++controlIndex)
                 {
-                    continue;
+                    KnobControl &k = knobInst.knob->controls[controlIndex];
+                    if (k.cc < 0 || static_cast<uint8_t>(k.cc) != ccNumber ||
+                        k.channel < 0 || static_cast<uint8_t>(k.channel) != ccChannel0)
+                    {
+                        continue;
+                    }
+                    k.raw = static_cast<float>(ccValue);
+                    k.currentValue = k.mappedValue();
+                    pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
+                    pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
                 }
-                if (k.channel < 0 || static_cast<uint8_t>(k.channel) != ccChannel0)
-                {
-                    continue;
-                }
-
-                k.raw = static_cast<float>(ccValue);
-                k.currentValue = k.mappedValue();
-
-                pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue);
-                pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw);
             }
             else if (widgets[w].type == NodeType::Button)
             {
@@ -1260,12 +1267,37 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
         return;
     }
     WidgetSlot &slot = widgets[widgetIdx];
+    uint8_t knobControlIndex = 0;
+    if (slot.type == NodeType::Knob)
+    {
+        cJSON *indexItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "knobIndex");
+        if (cJSON_IsNumber(indexItem) && indexItem->valueint > 0 &&
+            indexItem->valueint <= static_cast<int>(synth::kKnobControlMax))
+        {
+            knobControlIndex = static_cast<uint8_t>(indexItem->valueint - 1);
+        }
+        cJSON *countItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "knobCount");
+        if (cJSON_IsNumber(countItem))
+        {
+            const int count = countItem->valueint;
+            const uint8_t clamped = static_cast<uint8_t>(count < 1 ? 1 :
+                (count > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : count));
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].knob->count = clamped;
+            }
+        }
+    }
 
     cJSON *item = nullptr;
     cJSON_ArrayForEach(item, paramsObj)
     {
         const char *key = item->string;
         if (key == nullptr)
+        {
+            continue;
+        }
+        if (slot.type == NodeType::Knob && (strcmp(key, "knobIndex") == 0 || strcmp(key, "knobCount") == 0))
         {
             continue;
         }
@@ -1288,7 +1320,14 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             bool handled = false;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                handled = setFloatFieldByName(instances[slot.instanceBase + v], slot.type, key, value) || handled;
+                if (slot.type == NodeType::Knob)
+                {
+                    handled = nodes::knob::setParam(instances[slot.instanceBase + v], key, value, knobControlIndex) || handled;
+                }
+                else
+                {
+                    handled = setFloatFieldByName(instances[slot.instanceBase + v], slot.type, key, value) || handled;
+                }
             }
             if (handled)
             {
@@ -1512,7 +1551,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             const int16_t cc = cJSON_IsNumber(item) ? static_cast<int16_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->cc = cc;
+                instances[slot.instanceBase + v].knob->controls[knobControlIndex].cc = cc;
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "channel") == 0)
@@ -1520,7 +1559,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             const int8_t ch = cJSON_IsNumber(item) ? static_cast<int8_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->channel = ch;
+                instances[slot.instanceBase + v].knob->controls[knobControlIndex].channel = ch;
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "constraintMin") == 0)
@@ -1529,10 +1568,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             const float val = has ? static_cast<float>(item->valuedouble) : 0.0f;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->hasMin = has;
-                instances[slot.instanceBase + v].knob->minVal = val;
-                instances[slot.instanceBase + v].knob->currentValue =
-                    instances[slot.instanceBase + v].knob->mappedValue();
+                KnobControl &control = instances[slot.instanceBase + v].knob->controls[knobControlIndex];
+                control.hasMin = has;
+                control.minVal = val;
+                control.currentValue = control.mappedValue();
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "constraintMax") == 0)
@@ -1541,17 +1580,17 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
             const float val = has ? static_cast<float>(item->valuedouble) : 0.0f;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->hasMax = has;
-                instances[slot.instanceBase + v].knob->maxVal = val;
-                instances[slot.instanceBase + v].knob->currentValue =
-                    instances[slot.instanceBase + v].knob->mappedValue();
+                KnobControl &control = instances[slot.instanceBase + v].knob->controls[knobControlIndex];
+                control.hasMax = has;
+                control.maxVal = val;
+                control.currentValue = control.mappedValue();
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "valueList") == 0)
         {
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                KnobState &k = *instances[slot.instanceBase + v].knob;
+                KnobControl &k = instances[slot.instanceBase + v].knob->controls[knobControlIndex];
                 k.valueListCount = applyFloatArrayItem(item, k.valueList, static_cast<uint8_t>(synth::kValueListMax));
                 k.currentValue = k.mappedValue();
             }
@@ -1830,9 +1869,9 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
     if (slot.type == NodeType::Knob)
     {
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Knob,
-                               instances[slot.instanceBase].knob->currentValue);
+                               instances[slot.instanceBase].knob->controls[knobControlIndex].currentValue, knobControlIndex);
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::KnobCc,
-                               instances[slot.instanceBase].knob->raw);
+                               instances[slot.instanceBase].knob->controls[knobControlIndex].raw, knobControlIndex);
     }
     else if (slot.type == NodeType::Button)
     {
@@ -1957,6 +1996,9 @@ inline void Graph::destroy()
             break;
         case NodeType::DxEnvelope:
             nodes::dxenvelope::destroy(inst);
+            break;
+        case NodeType::StepArpeggiator:
+            nodes::steparp::destroy(inst);
             break;
         case NodeType::Filter:
             nodes::filter::destroy(inst);

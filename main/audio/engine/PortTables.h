@@ -365,11 +365,25 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Clock:
         // "tempo" is a real, but control-only audio-rate port (see
         // isControlOnlyInput) - same pattern as Filter's cutoff/resonance.
-        return is(portName, "tempo") ? 0 : -1;
+        if (is(portName, "tempo"))
+            return 0;
+        // "sync" (index 1) - a rising edge resets the phase accumulator to
+        // 0 (see ClockNode.h's render()), same pattern as Lfo's own "sync"
+        // port (LfoNode.h) - restarts the beat exactly on an external
+        // trigger instead of drifting relative to it.
+        if (is(portName, "sync"))
+            return 1;
+        return -1;
     case NodeType::Adsr:
         // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate
-        // ports (see isControlOnlyInput) - "gate"/"velocity" remain pure
-        // ControlRoutes (MidiGate/MidiVelocity), need no audioInIndex.
+        // ports (see isControlOnlyInput). "velocity" remains a pure
+        // ControlRoute (MidiVelocity), needs no audioInIndex. "gate" (index
+        // 4) is ALSO a real, control-only audio-rate port - unlike
+        // velocity, a non-MIDI source (e.g. a CV Step-Arpeggiator's
+        // "gateOut") must be able to retrigger this envelope directly, same
+        // as WavePlayer's own "gate" port; NodeInstance.cpp's Adsr case
+        // still honors the MIDI-derived ControlRoute gate path unchanged
+        // whenever nothing is wired here (see AdsrNode.h's gateFed check).
         if (is(portName, "att"))
             return 0;
         if (is(portName, "dec"))
@@ -378,8 +392,14 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 2;
         if (is(portName, "rel"))
             return 3;
+        if (is(portName, "gate"))
+            return 4;
         return -1;
     case NodeType::DxEnvelope:
+        // level1-4/time1-4 (0-7) are real, but control-only audio-rate
+        // ports. "gate" (index 8) is likewise real/control-only - same
+        // reasoning and same NodeInstance.cpp fallback pattern as Adsr's
+        // "gate" above (see DxEnvelopeNode.h's gateFed check).
         if (is(portName, "level1")) return 0;
         if (is(portName, "level2")) return 1;
         if (is(portName, "level3")) return 2;
@@ -388,6 +408,48 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "time2")) return 5;
         if (is(portName, "time3")) return 6;
         if (is(portName, "time4")) return 7;
+        if (is(portName, "gate")) return 8;
+        return -1;
+    case NodeType::StepArpeggiator:
+        if (is(portName, "clock"))
+            return 0;
+        if (is(portName, "gate"))
+            return 1;
+        if (is(portName, "pitch"))
+            return 2;
+        if (is(portName, "direction"))
+            return 3;
+        // "pulseTime" (index 20, after the 16 step ports) - gateOut's pulse
+        // width, 0-10V mapped via pulseTimeMinSec/pulseTimeMaxSec (see
+        // StepArpState) to seconds, same cv::cvToRange pattern as Delay's
+        // own "time" port (DelayNode.h) - only consulted when actually
+        // wired, the local pulseMs scalar (already in real ms, see
+        // setParam()) remains the fallback otherwise.
+        if (is(portName, "pulseTime"))
+            return 20;
+        // "rate" (index 21) - the internal fallback clock's own tempo CV,
+        // used only while "clock" (index 0) itself is unwired - same
+        // wired-CV-or-local-slider split as "pulseTime" above (see
+        // StepArpeggiatorNode.h's render()).
+        if (is(portName, "rate"))
+            return 21;
+        if (strncmp(portName, "step", 4) == 0)
+        {
+            // "step1".."step16" (1-based in the name, 0-based return) - same
+            // one-or-two-digit parsing as detail::indexedInPort's "inN", just
+            // with the "step" prefix instead of "in".
+            const char *numPart = portName + 4;
+            if (numPart[0] < '1' || numPart[0] > '9')
+                return -1;
+            int n = numPart[0] - '0';
+            if (numPart[1] != '\0')
+            {
+                if (numPart[1] < '0' || numPart[1] > '9' || numPart[2] != '\0')
+                    return -1;
+                n = n * 10 + (numPart[1] - '0');
+            }
+            return (n >= 1 && n <= 16) ? 3 + n : -1;
+        }
         return -1;
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
@@ -524,6 +586,12 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::Clock:
         return is(portName, "pulse") ? 0 : -1;
+    case NodeType::StepArpeggiator:
+        if (is(portName, "cv"))
+            return 0;
+        if (is(portName, "gateOut"))
+            return 1;
+        return -1;
     case NodeType::AudioOut:
     case NodeType::VuMeter:
     case NodeType::Oscilloscope:
@@ -616,11 +684,13 @@ inline int audioInPortCount(NodeType type)
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
     case NodeType::Clock:
-        return 1; // "tempo" (CV)
+        return 2; // "tempo"+"sync" (CV)
     case NodeType::Adsr:
-        return 4; // "att"+"dec"+"sus"+"rel" (CV)
+        return 5; // "att"+"dec"+"sus"+"rel"+"gate" (CV)
     case NodeType::DxEnvelope:
-        return 8; // four level plus four time CV inputs
+        return 9; // four level plus four time CV inputs, plus "gate" (CV)
+    case NodeType::StepArpeggiator:
+        return 22; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate" + "step1".."step16" (CV)
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
@@ -730,13 +800,13 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::CurtisFilter:
         return portIdx >= 1; // "bypass"+"cutoff"+"resonance"+"global"
     case NodeType::Clock:
-        return portIdx == 0; // "tempo"
+        return portIdx == 0 || portIdx == 1; // "tempo"+"sync" - same block-rate classification as Lfo's own "sync"
     case NodeType::Multiplexer:
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::Adsr:
-        return true; // "att"/"dec"/"sus"/"rel" - all four
+        return true; // "att"/"dec"/"sus"/"rel"/"gate" - all five
     case NodeType::DxEnvelope:
-        return true; // four level and four time inputs, all block-rate
+        return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:
         return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "sync"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
     case NodeType::WavePlayer:

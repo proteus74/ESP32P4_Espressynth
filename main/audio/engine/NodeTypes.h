@@ -59,6 +59,7 @@ enum class NodeType : uint8_t
     LinkedOutput,
     FmOscillator,
     DxEnvelope,
+    StepArpeggiator,
     Unknown,
 };
 
@@ -217,6 +218,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Multiplexer;
     if (strcmp(typeStr, "curtis-filter") == 0)
         return NodeType::CurtisFilter;
+    if (strcmp(typeStr, "step-arpeggiator") == 0)
+        return NodeType::StepArpeggiator;
     return NodeType::Unknown;
 }
 

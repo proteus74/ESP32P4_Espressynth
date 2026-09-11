@@ -43,6 +43,12 @@ struct DxEnvelopeState;
 }
 using nodes::dxenvelope::DxEnvelopeState;
 
+namespace nodes::steparp
+{
+struct StepArpState;
+}
+using nodes::steparp::StepArpState;
+
 namespace nodes::filter
 {
 struct FilterState;
@@ -260,6 +266,7 @@ struct NodeInstance
     EspEffectState *espEffect = nullptr;
     AdsrState *adsr = nullptr;
     DxEnvelopeState *dxEnvelope = nullptr;
+    StepArpState *stepArp = nullptr;
     FilterState *filter = nullptr;
     CurtisFilterState *curtisFilter = nullptr;
     EspEqState *espEq = nullptr;

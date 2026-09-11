@@ -149,6 +149,7 @@ struct WidgetParams
     // clock - "cvVolts" is raw CV (0-10V), scaled linearly between minBpm/
     // maxBpm (see ClockState); pulseMs is the pulse width in ms.
     float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
+    bool clockRoundBpm = false;
     // midi-in
     int8_t channel = -1;
     uint8_t voices = 1;
@@ -163,6 +164,21 @@ struct WidgetParams
     // const
     float constValue = 0.0f;
     // knob
+    struct KnobControlParams
+    {
+        int16_t cc = -1;
+        int8_t channel = -1;
+        float raw = 0.0f;
+        float point1In = 0.0f, point1Out = 0.0f;
+        float point2In = 127.0f, point2Out = 10.0f;
+        bool hasConstraintMin = false, hasConstraintMax = false;
+        float constraintMin = 0.0f, constraintMax = 0.0f;
+        float valueList[synth::kValueListMax] = {};
+        uint8_t valueListCount = 0;
+    };
+    uint8_t knobCount = 1;
+    KnobControlParams knobs[synth::kKnobControlMax] = {};
+    uint8_t knobOutputSide = 1; // top=0, bottom=1, left=2, right=3; browser layout only
     int16_t knobCc = -1;
     int8_t knobChannel = -1;
     float knobRaw = 0.0f;
@@ -217,6 +233,36 @@ struct WidgetParams
     float hammondDrawbar[9] = {10, 10, 10, 0, 0, 0, 0, 0, 0};
     float hammondRatio[9] = {0.5f, 1.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 8.0f};
     uint8_t hammondModulationStride = 4;
+    // step-arpeggiator - sixteen per-step pitch-CV knob values (0-10V,
+    // C4/5V default - see CvConventions.h), only used while the matching
+    // "stepN" port has no DSP edge (see nodes/StepArpeggiatorNode.h).
+    // stepCount is 8 or 16 (the "8/16 steps" switch); values beyond it stay
+    // stored but unplayed. pulseMs is gateOut's pulse width, same convention
+    // as Clock's pulseMs.
+    float stepArpValue[16] = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+    uint8_t stepArpStepCount = 16;
+    // Local knob fallback (0-10V) for the "pulseTime" port - only consulted
+    // while unwired (see StepArpeggiatorNode.h); already in the final,
+    // real-world unit (ms) here, same "local value pre-mapped, wired CV
+    // mapped fresh every time" split as Delay's own delayTimeMs/timeMin/
+    // timeMax. pulseTimeMinSec/MaxSec are the settings-dialog range that
+    // 0-10V maps to (in seconds) whenever the port IS wired.
+    float stepArpPulseMs = 10.0f;
+    float stepArpPulseTimeMinSec = 0.001f, stepArpPulseTimeMaxSec = 2.0f;
+    // Local knob fallback (0-10V) for the "direction" port - only consulted
+    // while unwired. Default 0V = Forward (see directionFromCv()).
+    float stepArpDirectionVolts = 0.0f;
+    // Settings-dialog toggle - see nodes/StepArpeggiatorNode.h's
+    // StepArpState::retriggerGateOut comment.
+    bool stepArpRetriggerGateOut = false;
+    // Internal fallback clock generator (Port-Index 21, "rate") - used only
+    // while the "clock" port itself is unwired (see
+    // nodes/StepArpeggiatorNode.h's render()). Same cvVolts/maxBpm/roundBpm
+    // shape as Clock's own WidgetParams fields above; minBpm is always 0
+    // here, no separate field needed.
+    float stepArpClockCvVolts = 0.0f;
+    float stepArpClockMaxBpm = 120.0f;
+    bool stepArpClockRoundBpm = false;
 };
 
 struct WidgetDesc

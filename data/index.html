@@ -201,6 +201,10 @@
       <span>Version</span>
       <span id="infoVersionValue">–</span>
     </label>
+    <label class="modal-field">
+      <span>Git Commit</span>
+      <span id="infoGitVersionValue">–</span>
+    </label>
     <div class="modal-actions">
       <button id="infoClose" class="btn-secondary">Close</button>
     </div>
@@ -251,50 +255,20 @@
 </div>
 
 <div id="knobSettingsOverlay" class="modal-overlay hidden">
-  <div class="modal">
+  <div class="modal knob-settings-modal">
     <h3>Knob Settings</h3>
-    <div class="modal-cc-learn-row">
-    <label class="modal-field modal-cc-field">
-      <span>Learned CC Number</span>
-      <input type="text" id="knobCcDisplay" readonly placeholder="– none yet –">
-    </label>
-    <button id="knobLearnBtn" class="btn-secondary">Learn</button>
-    </div>
-    <label class="modal-field">
-      <span>Value list (comma-separated, e.g. "10,100") - takes priority over linear mapping once it has 2+ numbers</span>
-      <input type="text" id="knobValueListInput" placeholder="10,100">
-    </label>
     <div class="modal-field-row">
-      <label class="modal-field">
-        <span>Point A: MIDI Value (0–127)</span>
-        <input type="text" inputmode="decimal" id="knobPoint1InInput" value="0">
-      </label>
-      <label class="modal-field">
-        <span>Point A: Output Value</span>
-        <input type="text" inputmode="decimal" id="knobPoint1OutInput" value="0">
-      </label>
+      <button type="button" id="knobSettingsAdd" class="btn-secondary">Add knob</button>
     </div>
-    <div class="modal-field-row">
-      <label class="modal-field">
-        <span>Point B: MIDI Value (0–127)</span>
-        <input type="text" inputmode="decimal" id="knobPoint2InInput" value="127">
-      </label>
-      <label class="modal-field">
-        <span>Point B: Output Value</span>
-        <input type="text" inputmode="decimal" id="knobPoint2OutInput" value="10">
-      </label>
+    <div class="knob-settings-head" aria-hidden="true">
+      <span>Knob</span><span>Label</span><span>CC</span><span>List</span><span>A In</span><span>A Out</span><span>B In</span><span>B Out</span><span>Min</span><span>Max</span><span>Actions</span>
     </div>
-    <div class="modal-field-row">
-      <label class="modal-field">
-        <span>Output never below (optional)</span>
-        <input type="text" inputmode="decimal" id="knobConstraintMinInput" placeholder="no limit">
+    <div id="knobSettingsGrid" class="knob-settings-grid"></div>
+    <div class="modal-actions knob-settings-footer">
+      <label class="knob-settings-output-side">
+        <span>Output side</span>
+        <select id="knobOutputSideInput"><option value="top">Top</option><option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option></select>
       </label>
-      <label class="modal-field">
-        <span>Output never above (optional)</span>
-        <input type="text" inputmode="decimal" id="knobConstraintMaxInput" placeholder="no limit">
-      </label>
-    </div>
-    <div class="modal-actions">
       <button id="knobSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="knobSettingsSave">Save</button>
     </div>
@@ -511,9 +485,50 @@
       <span>Maximum BPM at 10 V</span>
       <input type="number" min="0" step="0.1" inputmode="decimal" id="clockMaxBpmInput" value="240">
     </label>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="clockRoundBpmInput">
+      <span>Whole BPM only</span>
+    </label>
     <div class="modal-actions">
       <button id="clockSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="clockSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="stepArpSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Step Arpeggiator Settings</h3>
+    <label class="modal-field">
+      <span>Steps</span>
+      <select id="stepArpStepCountInput">
+        <option value="8">8</option>
+        <option value="16">16</option>
+      </select>
+    </label>
+    <label class="modal-field">
+      <span>Gate Out Time at 10 V (s)</span>
+      <input type="text" inputmode="decimal" id="stepArpPulseTimeMaxInput" value="2">
+    </label>
+    <p class="modal-hint">Gate Out pulse width itself is the slider on the node body now - this only sets the range that slider's 0–10V covers.</p>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="stepArpRetriggerGateOutInput">
+      <span>Retrigger Gate Out on overlapping steps</span>
+    </label>
+    <p class="modal-hint">If a step's Gate Out pulse is still running when the next step triggers: checked briefly resets it low first (retriggers a downstream envelope); unchecked just lets the next step play through it.</p>
+    <p class="modal-hint">Reducing to 8 Steps removes any cables on Step 9–16.</p>
+    <label class="modal-field">
+      <span>Rate Maximum BPM at 10 V</span>
+      <input type="number" min="0" step="0.1" inputmode="decimal" id="stepArpClockMaxBpmInput" value="120">
+    </label>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="stepArpClockRoundBpmInput">
+      <span>Whole BPM only</span>
+    </label>
+    <p class="modal-hint">Rate slider on the node body drives an internal clock, used only while nothing is cabled into Clock - it always resyncs to Gate.</p>
+    <div class="modal-actions">
+      <button id="stepArpSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="stepArpSettingsSave">Save</button>
     </div>
   </div>
 </div>

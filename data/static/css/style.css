@@ -808,6 +808,7 @@ body.show-node-cpu .widget-cpu-badge {
   width: 100%;
   aspect-ratio: 60 / 24;
   overflow: visible;
+  touch-action: none;
 }
 
 .adsr-grid-line {
@@ -832,6 +833,25 @@ body.show-node-cpu .widget-cpu-badge {
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
+}
+
+.adsr-point {
+  fill: var(--card);
+  stroke: var(--accent);
+  stroke-width: 3;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+
+.adsr-point:hover,
+.adsr-point:focus-visible,
+.adsr-point.dragging {
+  fill: var(--accent);
+  outline: none;
+}
+
+.adsr-point.dragging {
+  cursor: grabbing;
 }
 
 .adsr-live-point {
@@ -985,6 +1005,154 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 240px;
 }
 
+.widget-instance[data-widget-type="step-arpeggiator"] .widget-ports {
+  padding-bottom: 0;
+}
+
+/* Clock/Gate/Pitch/Direction (left) and cv/gateOut (right), built as plain
+   rows rather than createPortRow's own .port-row-in/-out (see
+   buildStepArpIoLine in main.js) - the app-wide layoutPortsGrid() pass every
+   widget gets is sized for a "few inputs, one output" node shape and would
+   otherwise shove these into the wrong place on this node's two-column-top/
+   knob-row-bottom layout. Padding/gap/font/color mirror .port-row exactly,
+   and the dots use the SAME edge-flush negative-margin trick as
+   .port-row-in/-out's own so they end up pixel-identical to every other
+   widget's port dots. */
+.step-arp-io-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.step-arp-io-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.step-arp-io-line {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+
+/* Fixed label column so the Direction/Gate Out Time sliders start at the
+   same x position regardless of their own label text length ("Direction"
+   vs "Gate Out Time") - same idea as .port-row-in > .port-label's own fixed
+   128px elsewhere, just sized for this node's own (shorter) label set. */
+.step-arp-io-line-in .port-label {
+  flex: 0 0 96px;
+}
+
+.step-arp-io-line-out {
+  justify-content: flex-end;
+}
+
+.step-arp-io-line-in .port-dot {
+  margin-left: -0.9rem;
+}
+
+.step-arp-io-line-out .port-dot {
+  margin-right: -0.9rem;
+  order: 2;
+}
+
+/* Dense row of small round step knobs, their own dots flush against the
+   widget's bottom edge (see renderStepArpPorts/updateStepArpKnobVisual in
+   main.js) - deliberately a custom flex row, not the usual vertical
+   .port-row-in list. flex-wrap is a defensive fallback for a narrow
+   viewport (this codebase has no @media breakpoints elsewhere to match). */
+.step-arp-steps-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  padding: 0.3rem 0.4rem 0;
+  justify-content: center;
+}
+
+.step-arp-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  width: 40px;
+}
+
+.step-arp-knob {
+  width: 29px;
+  height: 29px;
+  border-radius: 50%;
+  position: relative;
+  cursor: pointer;
+  border: 2px solid #ece8df;
+  background: radial-gradient(circle at 34% 27%, #fffefa 0 8%, #eeeae1 48%, #cbc6bb 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.9), 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.step-arp-knob:hover {
+  filter: brightness(1.05);
+}
+
+.step-arp-knob-disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.step-arp-knob-indicator {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 3px;
+  height: 11px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  background: #a59e00;
+  transform-origin: 50% 11px;
+}
+
+/* Currently-held step (see updateStepArpActiveHighlight in main.js) -
+   client-side-simulated from incoming clock/gate cable values, same
+   mechanism Clock's own pulse dot/propagate() already uses for every other
+   generator widget's live editor preview. */
+.step-arp-cell.step-arp-cell-active .step-arp-knob {
+  border-color: var(--ok);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.9), 0 0 6px 1px var(--ok);
+}
+
+.step-arp-value {
+  font-family: "Courier New", monospace;
+  font-size: 0.55rem;
+  color: #9ee8b8;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* Hidden while "pitch" is wired - the semitone offset below already says
+   everything needed then (see updateStepArpKnobVisual in main.js). */
+.step-arp-value.hidden {
+  display: none;
+}
+
+.step-arp-note {
+  font-family: "Courier New", monospace;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.step-arp-dot-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.15rem;
+  margin-bottom: -0.75rem;
+  padding-bottom: 0.4rem;
+}
+
 .widget-instance[data-widget-type="annotation"] {
   width: 300px;
   height: 180px;
@@ -1134,6 +1302,10 @@ body.show-node-cpu .widget-cpu-badge {
   flex-basis: 72px;
 }
 
+.widget-instance[data-widget-type="clock"] .port-row-in > .port-label {
+  flex-basis: 48px;
+}
+
 .widget-instance[data-widget-type="soundfont-player"] .port-row-in > .port-label {
   flex-basis: 100px;
 }
@@ -1200,21 +1372,31 @@ body.show-node-cpu .widget-cpu-badge {
 /* Knob-Widget */
 
 .knob-body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
   padding: 0.5rem 0.45rem 0.45rem;
   position: relative;
 }
+
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-top) .knob-body { padding-top: 1.75rem; }
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-bottom) .knob-body { padding-bottom: 1.5rem; }
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-left) .knob-body { padding-left: 1.8rem; }
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-right) .knob-body { padding-right: 1.8rem; }
+
+.knob-controls {
+  display: grid;
+  grid-template-columns: repeat(var(--knob-columns, 1), minmax(76px, 1fr));
+  align-items: start;
+  gap: 0.5rem;
+}
+
+.knob-control { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; min-width: 0; }
 
 .knob-dial {
   width: 76px;
   height: 76px;
   border-radius: 50%;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  background: radial-gradient(circle at 34% 27%, #4c5960 0 8%, #273238 56%, #121a1e 100%);
+  border: 2px solid #70818a;
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.2), inset 0 -3px 6px rgba(0, 0, 0, 0.72), 0 1px 3px rgba(0, 0, 0, 0.72);
   position: relative;
   cursor: pointer;
   overflow: visible;
@@ -1298,13 +1480,38 @@ body.show-node-cpu .widget-cpu-badge {
   gap: 0.35rem;
 }
 
-.knob-body > .knob-output-ports {
+.widget-instance[data-widget-type="knob"] > .knob-output-ports {
   position: absolute;
-  left: -0.45rem;
-  right: -0.2rem;
-  top: calc(0.5rem + 76px + 0.3rem);
+  left: 0.45rem !important;
+  right: 0.45rem !important;
+  top: auto;
+  bottom: 0.3rem;
   padding: 0;
 }
+
+.knob-output-ports { display: grid; grid-template-columns: repeat(var(--knob-count, 1), minmax(0, 1fr)); gap: 0.1rem; }
+.knob-output-ports .port-row { min-width: 0; padding: 0; }
+.knob-output-ports .port-label { font-size: 0.6rem; }
+.knob-output-top, .knob-output-bottom { align-items: start; }
+.knob-output-top .port-row, .knob-output-bottom .port-row { flex-direction: column; gap: 0; justify-content: center; }
+.knob-output-top .port-label, .knob-output-bottom .port-label { display: none; }
+.knob-output-top .port-row-out, .knob-output-bottom .port-row-out { justify-content: center; }
+.knob-output-top .port-row-out > .port-dot, .knob-output-bottom .port-row-out > .port-dot { margin: 0; }
+.knob-output-top { top: -0.5625rem !important; bottom: auto !important; }
+.knob-output-bottom { top: auto !important; bottom: -0.5625rem !important; }
+.knob-output-left, .knob-output-right {
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(var(--knob-count, 1), minmax(14px, 1fr));
+  width: 1.45rem;
+  top: 2rem !important;
+  bottom: 0.4rem;
+}
+.widget-instance[data-widget-type="knob"] > .knob-output-left { left: calc(-0.4375rem - 4.5px) !important; right: auto !important; }
+.widget-instance[data-widget-type="knob"] > .knob-output-right { left: auto !important; right: calc(-0.5625rem - 4px) !important; }
+.knob-output-left .port-row, .knob-output-right .port-row { flex-direction: row; gap: 0.1rem; justify-content: flex-start; }
+.knob-output-left .port-row-out > .port-dot { order: 0; margin: 0; transform: none; }
+.knob-output-left .port-label { order: 1; }
+.knob-output-right .port-row-out > .port-dot { order: 2; margin: 0; }
 
 .knob-cc-label {
   min-height: 0.85rem;
@@ -1486,42 +1693,15 @@ body.show-node-cpu .widget-cpu-badge {
 
 /* Clock-Widget */
 
+.widget-instance[data-widget-type="clock"] {
+  min-width: 130px;
+}
+
 .clock-body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.6rem 0.7rem;
-}
-
-.clock-pulse-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  width: 100%;
-  min-height: 18px;
-}
-
-.clock-pulse-row .port-row-out {
-  position: absolute;
-  right: -0.7rem;
-  padding-top: 0;
-  padding-bottom: 0;
-}
-
-.clock-pulse-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--bg);
-  border: 2px solid var(--card-border);
-  transition: background-color 0.05s ease, border-color 0.05s ease;
-}
-
-.clock-pulse-dot.active {
-  background: var(--ok);
-  border-color: var(--ok);
+  padding: 0.3rem 0.5rem;
 }
 
 .adsr-gate-dot {
@@ -2733,6 +2913,22 @@ body.show-node-cpu .widget-cpu-badge {
   order: 2;
 }
 
+.midi-split-zone-output .port-label {
+  color: var(--midi-split-zone-color);
+}
+
+.midi-split-zone-output .port-dot {
+  border-color: var(--midi-split-zone-color);
+}
+
+.midi-split-zone-output .port-dot:hover {
+  background: var(--midi-split-zone-color);
+}
+
+.midi-split-zone-gate-dot {
+  background: var(--midi-split-zone-color);
+}
+
 .port-dot:hover {
   background: var(--accent);
 }
@@ -2940,6 +3136,99 @@ body.show-node-cpu .widget-cpu-badge {
   padding: 0.5rem 0.75rem;
   font-size: 0.9rem;
   white-space: nowrap;
+}
+
+.knob-settings-modal {
+  width: min(1420px, 96vw);
+  max-height: 90vh;
+  padding: 1rem 1.25rem;
+}
+
+.knob-settings-head,
+.knob-settings-card {
+  display: grid;
+  grid-template-columns: 32px minmax(96px, 1.25fr) minmax(145px, 1.5fr) minmax(120px, 1.5fr) repeat(6, minmax(68px, 0.8fr)) 92px;
+  column-gap: 0.35rem;
+  min-width: 1030px;
+}
+
+.knob-settings-head {
+  align-items: end;
+  margin: 0.65rem 0 0.25rem;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.knob-settings-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.knob-settings-card {
+  align-items: center;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--card-border);
+}
+
+.knob-settings-card input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.76rem;
+}
+
+.knob-settings-number {
+  color: var(--accent);
+  font-family: "Courier New", monospace;
+  text-align: center;
+}
+
+.knob-settings-cc {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.knob-settings-cc button {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.7rem;
+}
+
+#knobSettingsAdd {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.knob-settings-footer {
+  align-items: end;
+}
+
+.knob-settings-output-side {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-right: auto;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.knob-settings-output-side select {
+  min-width: 110px;
+  padding: 0.35rem 0.5rem;
+}
+
+.knob-settings-actions {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.knob-settings-actions button {
+  min-width: 1.7rem;
+  padding: 0.3rem 0.4rem;
 }
 
 #fileExplorerOverlay .file-explorer-modal {
@@ -3287,6 +3576,14 @@ body.show-node-cpu .widget-cpu-badge {
   outline-offset: -2px;
   z-index: 3;
   opacity: 1 !important;
+}
+
+.piano-key-midi-active {
+  outline: 3px solid var(--ok);
+  outline-offset: -3px;
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--ok) 72%, transparent);
+  opacity: 1 !important;
+  z-index: 4;
 }
 
 .piano-key-white {

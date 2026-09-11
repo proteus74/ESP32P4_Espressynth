@@ -76,6 +76,26 @@ inline void render(NodeInstance &inst, size_t frames)
             : s.ramp.releaseSec();
         s.ramp.configure(attackSec, decaySec, sustainLevel, releaseSec, kSampleRate);
     }
+    // "gate" (Port-Index 4, real but control-only audio-rate port, see
+    // PortTables.h) - lets a non-MIDI source (e.g. a CV Step-Arpeggiator's
+    // "gateOut") retrigger this envelope directly, same as WavePlayer's own
+    // "gate" port. Read once per block, same reasoning as att/dec/sus/rel
+    // above (a gate transition anywhere inside the block still takes effect
+    // no later than the next block, exactly like every other control-only
+    // port here). Only consulted when actually wired - Graph::
+    // deliverNoteControlRoutes' MIDI-note-driven ramp.gate()/gatePrev
+    // delivery (unrelated call site) remains the path for every ADSR that
+    // has no cable on this port, unchanged.
+    const bool gateFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    if (gateFed)
+    {
+        const bool gateNow = portSample(inst, 4, 0) >= cv::kGateThresholdVolts;
+        if (gateNow != s.gatePrev)
+        {
+            s.ramp.gate(gateNow);
+            s.gatePrev = gateNow;
+        }
+    }
     // "out" is 0-10V CV like every other CV-carrying port (see
     // CvConventions.h) - the envelope itself (0..1 internally, via
     // RampScheduler) times velocity times kMaxVolts. Consistent with

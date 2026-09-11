@@ -33,6 +33,7 @@
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
+#include "nodes/StepArpeggiatorNode.h"
 #include "nodes/ValueMapperNode.h"
 
 namespace
@@ -168,6 +169,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::DxEnvelope:
         return nodes::dxenvelope::setParam(inst, name, value);
+
+    case NodeType::StepArpeggiator:
+        return nodes::steparp::setParam(inst, name, value);
 
     case NodeType::AudioOut:
     case NodeType::UsbOut:

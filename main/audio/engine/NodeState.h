@@ -256,6 +256,14 @@ struct ClockState
     float pulseMs = 100.0f;
     float phaseSec = 0.0f;
     bool pulseActive = false;
+    // "sync" (Port-Index 1, control-only, see PortTables.h) - a rising edge
+    // restarts phaseSec from 0 (see ClockNode.h's render()), letting an
+    // external trigger resync the beat instead of drifting relative to it.
+    bool syncPrev = false;
+    // Settings-dialog toggle: snaps the CV-mapped BPM to the nearest whole
+    // number before use (see ClockNode.h's render()) - off by default
+    // (existing fractional-BPM behavior unchanged).
+    bool roundBpm = false;
 };
 
 struct MixerState

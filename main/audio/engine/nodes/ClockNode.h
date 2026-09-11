@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -29,7 +30,28 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         s.cvVolts = portSample(inst, 0, 0);
     }
-    const float bpm = s.minBpm + (s.cvVolts / cv::kMaxVolts) * (s.maxBpm - s.minBpm);
+    // "sync" (Port-Index 1) - same block-rate control-only reasoning as
+    // "tempo" above, and the same dual ControlRoute-or-DSP-edge "fed" check
+    // Lfo's own "sync" input uses (LfoNode.h). A rising edge restarts the
+    // phase accumulator from 0, so the very next sample begins a fresh
+    // pulse - resyncs the beat to an external trigger instead of letting it
+    // drift relative to it.
+    const bool syncFed = controlPortConnected(inst, 1) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
+    const float syncVal = syncFed ? portSample(inst, 1, 0) : 0.0f;
+    const bool syncAbove = syncVal >= cv::kGateThresholdVolts;
+    if (syncFed && syncAbove && !s.syncPrev)
+    {
+        s.phaseSec = 0.0f;
+    }
+    if (syncFed)
+    {
+        s.syncPrev = syncAbove;
+    }
+    float bpm = s.minBpm + (s.cvVolts / cv::kMaxVolts) * (s.maxBpm - s.minBpm);
+    if (s.roundBpm)
+    {
+        bpm = roundf(bpm);
+    }
     const float periodSec = bpm > 0.0f ? 60.0f / bpm : 0.0f;
     const float pulseSec = s.pulseMs * 0.001f;
     const float dtSec = 1.0f / static_cast<float>(synth::kSampleRate);
@@ -58,6 +80,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.clock.minBpm = p.clockMinBpm;
     inst.clock.maxBpm = p.clockMaxBpm;
     inst.clock.pulseMs = p.clockPulseMs;
+    inst.clock.roundBpm = p.clockRoundBpm;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -86,6 +109,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.clock.pulseMs = value;
         return true;
     }
+    if (strcmp(name, "roundBpm") == 0)
+    {
+        inst.clock.roundBpm = value >= 0.5f;
+        return true;
+    }
     return false;
 }
 
@@ -95,6 +123,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.clockMinBpm = presetparser::getFloat(p, "minBpm", 0.0f);
     out.clockMaxBpm = presetparser::getFloat(p, "maxBpm", 240.0f);
     out.clockPulseMs = presetparser::getFloat(p, "pulseMs", 100.0f);
+    out.clockRoundBpm = presetparser::getBool(p, "roundBpm", false);
 }
 
 } // namespace nodes::clock

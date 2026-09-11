@@ -41,6 +41,7 @@
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
+#include "nodes/StepArpeggiatorNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
 
@@ -138,7 +139,8 @@ inline bool hasStereoOutput(NodeType type)
     return type == NodeType::Chorus || type == NodeType::EspEq || ports::isGlobalOnly(type) ||
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::Detune || type == NodeType::WavePlayer ||
-           type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink;
+           type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
+           type == NodeType::StepArpeggiator;
 }
 
 inline bool requiresInputBlockBuffers(NodeType type)
@@ -464,6 +466,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::DxEnvelope:
         nodes::dxenvelope::build(inst, p);
         break;
+    case NodeType::StepArpeggiator:
+        nodes::steparp::build(inst, p);
+        break;
     case NodeType::Filter:
         nodes::filter::build(inst, p);
         break;
@@ -775,6 +780,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.dxEnvelope = allocateNodeState<DxEnvelopeState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.dxEnvelope == nullptr);
                 break;
+            case NodeType::StepArpeggiator:
+                inst.stepArp = allocateNodeState<StepArpState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.stepArp == nullptr);
+                break;
             case NodeType::Filter:
                 inst.filter = allocateNodeState<FilterState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.filter == nullptr);
@@ -1021,6 +1030,20 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // field names setFloatFieldByName() (ParamDispatch.h) recognizes.
         if (fromType == NodeType::Knob && g->controlRouteCount < synth::kMaxConnections)
         {
+            int knobIndex = 0;
+            if (strncmp(cd.fromPort, "voltage", 7) == 0 && cd.fromPort[7] != '\0')
+            {
+                knobIndex = atoi(cd.fromPort + 7) - 1;
+            }
+            if (knobIndex < 0 || knobIndex >= static_cast<int>(synth::kKnobControlMax))
+            {
+                continue;
+            }
+            const KnobState *sourceKnob = g->instances[g->widgets[fromIdx].instanceBase].knob;
+            if (sourceKnob == nullptr || knobIndex >= static_cast<int>(sourceKnob->count))
+            {
+                continue;
+            }
             ControlRoute &route = g->controlRoutes[g->controlRouteCount++];
             route.sourceWidget = static_cast<uint16_t>(fromIdx);
             route.targetWidget = static_cast<uint16_t>(toIdx);
@@ -1028,6 +1051,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // preset still using the old single "value" port name) = the
             // 2-point-mapped 0-10V output - see Graph.h's ControlRoute::Kind.
             route.kind = (strcmp(cd.fromPort, "cc") == 0) ? ControlRoute::Kind::KnobCc : ControlRoute::Kind::Knob;
+            route.side = static_cast<uint8_t>(knobIndex);
             snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
             if (toPort >= 0)
             {
@@ -1136,11 +1160,11 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         float initial = 0.0f;
         if (route.kind == ControlRoute::Kind::Knob)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->currentValue;
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[0].currentValue;
         }
         else if (route.kind == ControlRoute::Kind::KnobCc)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->raw;
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[0].raw;
         }
         else if (route.kind == ControlRoute::Kind::Button)
         {

@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "cJSON.h"
+#include "esp_app_desc.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
@@ -953,14 +954,15 @@ esp_err_t midi_devices_handler(httpd_req_t *req) {
 
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
-    char json[160];
-    snprintf(json, sizeof(json), "{\"version\":\"%s\",\"wm8960\":%s}", FIRMWARE_VERSION,
+    const esp_app_desc_t *desc = esp_app_get_description();
+    char json[224];
+    snprintf(json, sizeof(json), "{\"version\":\"%s\",\"wm8960\":%s,\"gitVersion\":\"%s\"}", FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
-             "true"
+             "true",
 #else
-             "false"
+             "false",
 #endif
-    );
+             desc->version);
     httpd_resp_sendstr(req, json);
     return ESP_OK;
 }

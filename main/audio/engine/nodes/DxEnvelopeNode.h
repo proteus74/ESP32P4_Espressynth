@@ -178,6 +178,22 @@ inline void render(NodeInstance &inst, size_t frames)
         state.scheduler.configure(levels, times, static_cast<float>(synth::kSampleRate));
     }
 
+    // "gate" (Port-Index 8, real but control-only audio-rate port, see
+    // PortTables.h) - lets a non-MIDI source (e.g. a CV Step-Arpeggiator's
+    // "gateOut") retrigger this envelope directly, same fallback pattern as
+    // AdsrNode.h's own new "gate" port: only consulted when actually wired,
+    // Graph::deliverNoteControlRoutes' MIDI-note-driven gateOn()/gateOff()
+    // delivery remains the path for every DX Envelope with no cable here.
+    if ((inst.audioConnectedPortMask & synth::portBit(8)) != 0)
+    {
+        const bool gateNow = noderender::portSample(inst, 8, 0) >= cv::kGateThresholdVolts;
+        if (gateNow != state.gatePrev)
+        {
+            gateNow ? state.scheduler.gateOn() : state.scheduler.gateOff();
+            state.gatePrev = gateNow;
+        }
+    }
+
     inst.outIsRamp = false;
     inst.outIsConstant = false;
     if (state.scheduler.isHolding())

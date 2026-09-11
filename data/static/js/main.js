@@ -7,6 +7,38 @@ const SOUNDFONT_DEFAULT_MAX_BANK = 128;
 const audioEngine = new AudioEngine();
 window.audioEngine = audioEngine; // debug: inspect from DevTools console (module scope isn't global)
 
+let midiEventSocket = null;
+let midiEventReconnectTimer = null;
+
+function handleMidiEvent(data) {
+  routeMidiToKnobs(data);
+  routeMidiToButtons(data);
+  routeMidiToUpDownButtons(data);
+  routeMidiToSwitches(data);
+  if (data.type !== "midi" || !["note_on", "note_off"].includes(data.midiType)) return;
+  previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
+}
+
+function connectMidiEventStream() {
+  if (midiEventSocket?.readyState === WebSocket.OPEN || midiEventSocket?.readyState === WebSocket.CONNECTING) return;
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  midiEventSocket = new WebSocket(`${protocol}//${location.host}/ws`);
+  midiEventSocket.addEventListener("message", (event) => {
+    try {
+      handleMidiEvent(JSON.parse(event.data));
+    } catch {
+      // Ignore non-JSON diagnostic frames.
+    }
+  });
+  midiEventSocket.addEventListener("close", () => {
+    midiEventSocket = null;
+    clearTimeout(midiEventReconnectTimer);
+    midiEventReconnectTimer = setTimeout(connectMidiEventStream, 2000);
+  });
+}
+
+connectMidiEventStream();
+
 
 
 const menuItems = document.querySelectorAll(".menu-item:not(.menu-item-static)");
@@ -39,16 +71,20 @@ document.addEventListener("keydown", (e) => {
 
 const infoOverlay = document.getElementById("infoOverlay");
 const infoVersionValue = document.getElementById("infoVersionValue");
+const infoGitVersionValue = document.getElementById("infoGitVersionValue");
 
 async function openInfo() {
   infoVersionValue.textContent = "–";
+  infoGitVersionValue.textContent = "–";
   infoOverlay.classList.remove("hidden");
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
     infoVersionValue.textContent = data.version || "unknown";
+    infoGitVersionValue.textContent = data.gitVersion || "unknown";
   } catch (err) {
     infoVersionValue.textContent = "unknown";
+    infoGitVersionValue.textContent = "unknown";
   }
 }
 
@@ -572,7 +608,7 @@ const WIDGET_TYPES = {
     label: "Knob",
     icon: "🎛️",
     inputs: [],
-    outputs: [{ id: "voltage", label: "" }],
+    outputs: [{ id: "voltage", label: "" }, ...Array.from({ length: 16 }, (_, index) => ({ id: `voltage${index + 1}`, label: String(index + 1) }))],
   },
   button: {
     label: "Button",
@@ -658,7 +694,13 @@ const WIDGET_TYPES = {
   clock: {
     label: "Clock",
     icon: "⏱️",
-    inputs: [{ id: "tempo", label: "CV" }],
+    // "sync" - a rising edge restarts the phase accumulator from 0 (see
+    // nodes/ClockNode.h's render()), resyncing the beat to an external
+    // trigger instead of letting it drift relative to it.
+    inputs: [
+      { id: "tempo", label: "CV" },
+      { id: "sync", label: "Sync" },
+    ],
     outputs: [{ id: "pulse", label: "Pulse" }],
   },
   oscillator: {
@@ -892,6 +934,29 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "step-arpeggiator": {
+    label: "Step Arpeggiator",
+    icon: "▦",
+    // Monophonic 8/16-step CV sequencer/arpeggiator - external clock/gate
+    // drive playback, "direction" picks Forward/Backward/Ping-Pong/Random
+    // (see renderStepArpPorts() below for the sixteen "stepN" rows,
+    // drawn as a dense knob row rather than the usual vertical port list).
+    inputs: [
+      { id: "clock", label: "Clock" },
+      { id: "gate", label: "Gate" },
+      { id: "pitch", label: "Pitch" },
+      { id: "direction", label: "Direction" },
+      { id: "pulseTime", label: "Gate Out Time" },
+      // Internal fallback clock's own rate - only used while "clock" above
+      // is itself unwired (see stepArpRestartInternalClock).
+      { id: "rate", label: "Rate" },
+      ...Array.from({ length: 16 }, (_, i) => ({ id: `step${i + 1}`, label: `Step ${i + 1}` })),
+    ],
+    outputs: [
+      { id: "cv", label: "CV" },
+      { id: "gateOut", label: "Gate Out" },
+    ],
+  },
   const: {
     label: "Const",
     icon: "🔢",
@@ -1045,7 +1110,7 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player"] },
-  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock"] },
+  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
@@ -1129,8 +1194,26 @@ const AUDIO_PORTS = {
   
   
   
-  adsr: { out: ["out"] },
-  "dx-envelope": { out: ["out"] },
+  // "gate" is a real, wireable audio-rate port (e.g. from a CV Step-
+  // Arpeggiator's "gateOut") - att/dec/sus/rel stay unlisted here (existing,
+  // unrelated gap: the C++ engine already treats them as real ports too,
+  // this table just never reflected it).
+  adsr: { in: ["gate"], out: ["out"] },
+  "dx-envelope": { in: ["gate"], out: ["out"] },
+  "step-arpeggiator": {
+    in: ["clock", "gate", "pitch", "direction", "pulseTime", "rate", ...Array.from({ length: 16 }, (_, i) => `step${i + 1}`)],
+    // "cv"/"gateOut" are genuine audio-rate outputs in the C++ engine, but
+    // deliberately left OUT of this list - same reasoning as Clock's own
+    // "pulse" (also absent here): propagate()'s Voltmeter/Debug delivery
+    // skips any "audio"-kind source, on the assumption that
+    // tickDebugVoltmeterAudioSources() will sample it instead from a real
+    // Web Audio node - but this widget (like Clock) never calls
+    // audioEngine.createNode(), so no such node exists to sample. Leaving
+    // these classified "control" here routes their propagate()d value
+    // through the normal deliverToWidget path instead, which is the only
+    // path that will ever actually reach a connected Voltmeter/Debug widget.
+    out: [],
+  },
   chorus: { in: ["in"], out: ["left", "right"] },
   
   
@@ -1273,7 +1356,7 @@ const LFO_POLARITY_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "const",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
@@ -1687,7 +1770,7 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "adsr") {
     el.addEventListener("dblclick", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button, .adsr-graph")) return;
       e.stopPropagation();
       openAdsrSettings(id);
     });
@@ -1816,6 +1899,7 @@ function createWidget(type, label, x, y, forcedId) {
       minBpm: 0,
       maxBpm: 240,
       pulseMs: 100,
+      roundBpm: false,
       tickTimer: null,
       offTimer: null,
     });
@@ -1823,20 +1907,11 @@ function createWidget(type, label, x, y, forcedId) {
     const body = document.createElement("div");
     body.className = "widget-instance-body clock-body";
 
-    const pulseRow = document.createElement("div");
-    pulseRow.className = "clock-pulse-row";
-
-    const dot = document.createElement("div");
-    dot.className = "clock-pulse-dot";
-    dot.dataset.role = "clock-pulse-dot";
-
     const bpmLabel = document.createElement("div");
     bpmLabel.className = "clock-bpm-label";
     bpmLabel.dataset.role = "clock-bpm-label";
     bpmLabel.textContent = "0 BPM";
 
-    pulseRow.appendChild(dot);
-    body.appendChild(pulseRow);
     body.appendChild(bpmLabel);
     el.appendChild(body);
   }
@@ -1995,6 +2070,62 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openHammondSettings(id);
+    });
+  }
+
+  if (type === "step-arpeggiator") {
+    const stepArpState = {
+      steps: new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS),
+      stepCount: STEP_ARP_MAX_STEPS,
+      // "pulseTime" local knob - pulseMs is the resolved value (already in
+      // ms, matches nodes/StepArpeggiatorNode.h's own local fallback field
+      // 1:1); pulseTimeMinSec/MaxSec are the settings-dialog range that
+      // port's 0-10V maps to whenever it IS wired. The slider's own 0-10V
+      // position is never stored separately - derived from pulseMs via
+      // rangeToCv() (inverse of cvToRange()) wherever it's drawn, same
+      // pattern as this file's existing effectCvStates.
+      pulseMs: 10,
+      pulseTimeMinSec: 0.001,
+      pulseTimeMaxSec: 2,
+      // Settings-dialog toggle - see nodes/StepArpeggiatorNode.h's
+      // StepArpState::retriggerGateOut comment. Mirrored here (see the
+      // "clock" branch of deliverToWidget below) purely so the editor's own
+      // gateOut LED/propagate() simulation shows the same brief reset gap.
+      retriggerGateOut: false,
+      // Client-side-simulated sequencing (mirrors nodes/StepArpeggiatorNode.h's
+      // play-then-advance model exactly - see stepArpNextIndex below), driven
+      // by incoming clock/gate cable values via propagate()/deliverToWidget,
+      // purely so the editor can show a clock LED and the currently held
+      // step, same idea as Clock's own local pulse timer.
+      currentStep: 0,
+      pingPongForward: true,
+      clockPrev: false,
+      gatePrev: false,
+      gateVolts: 0,
+      pitchVolts: 0,
+      directionVolts: 0,
+      heldCv: STEP_ARP_DEFAULT_VOLTS,
+      gateOutTimer: null,
+      // Internal fallback clock (Port-Index 21, "rate") - used only while
+      // "clock" itself is unwired, see stepArpRestartInternalClock. Same
+      // cvVolts/maxBpm/roundBpm shape as clockStates, minBpm is always 0.
+      clockCvVolts: 0,
+      clockMaxBpm: 120,
+      clockRoundBpm: false,
+      clockTickTimer: null,
+    };
+    stepArpStates.set(id, stepArpState);
+    // No audioEngine.createNode() call - like Clock, this widget is a pure
+    // CV/gate generator with no browser Web Audio preview counterpart (see
+    // audio-engine.js: neither "clock" nor "step-arpeggiator" is handled
+    // there).
+    // No header/info body - the whole widget-instance still opens settings
+    // on dblclick (below), it just doesn't need a dedicated label to do it.
+
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openStepArpSettings(id);
     });
   }
 
@@ -2642,72 +2773,22 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "knob") {
     knobStates.set(id, {
-      cc: null,
-      channel: null,
-      raw: 0,
-      point1In: 0,
-      point1Out: 0,
-      point2In: 127,
-      point2Out: CV_MAX_VOLTS,
-      constraintMin: null,
-      constraintMax: null,
-      listText: "",
+      count: 1,
+      controls: Array.from({ length: 16 }, () => createKnobControl()),
+      labels: Array(16).fill(""),
+      outputSide: "bottom",
     });
     audioEngine.createNode(id, "knob", { value: 0 });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body knob-body";
-
-    const dial = document.createElement("div");
-    dial.className = "knob-dial";
-
-    const scale = document.createElement("div");
-    scale.className = "knob-scale";
-    const tickCount = 19;
-    const scaleCenter = 46;
-    const tickRadius = 41;
-    for (let tickIndex = 0; tickIndex < tickCount; tickIndex += 1) {
-      const angle = -135 + (270 * tickIndex) / (tickCount - 1);
-      const radians = angle * Math.PI / 180;
-      const tick = document.createElement("span");
-      tick.className = "knob-tick";
-      tick.style.left = `${scaleCenter + Math.sin(radians) * tickRadius}px`;
-      tick.style.top = `${scaleCenter - Math.cos(radians) * tickRadius}px`;
-      tick.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
-      scale.appendChild(tick);
-    }
-    dial.appendChild(scale);
-
-    const indicator = document.createElement("div");
-    indicator.className = "knob-indicator";
-    indicator.dataset.role = "knob-indicator";
-    dial.appendChild(indicator);
-
-    const centerCap = document.createElement("div");
-    centerCap.className = "knob-center-cap";
-    dial.appendChild(centerCap);
-
-    const readout = document.createElement("div");
-    readout.className = "knob-readout";
-    readout.dataset.role = "knob-readout";
-    readout.textContent = "0.00";
-
-    const ccLabel = document.createElement("div");
-    ccLabel.className = "knob-cc-label";
-    ccLabel.dataset.role = "knob-cc-label";
-
-    const valueRow = document.createElement("div");
-    valueRow.className = "knob-value-row";
-    valueRow.appendChild(readout);
-
-    dial.addEventListener("mousedown", (e) => startKnobDrag(e, id));
-
-    body.appendChild(dial);
-    body.appendChild(valueRow);
-    body.appendChild(ccLabel);
+    body.dataset.role = "knob-body";
+    const controls = document.createElement("div");
+    controls.className = "knob-controls";
+    controls.dataset.role = "knob-grid";
+    body.appendChild(controls);
     el.appendChild(body);
-
-    updateKnobVisual(id);
+    renderKnobControls(id, controls);
   }
 
   if (type === "button") {
@@ -2880,7 +2961,9 @@ function createWidget(type, label, x, y, forcedId) {
   const ports = document.createElement("div");
   ports.className = "widget-ports";
 
-  if (type === "multiplier") {
+  if (type === "knob") {
+    renderKnobPorts(id, ports);
+  } else if (type === "multiplier") {
     renderMultiplierPorts(id, ports);
   } else if (type === "adder") {
     renderAdderPorts(id, ports);
@@ -2892,6 +2975,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderMultiplexerPorts(id, ports);
   } else if (type === "hammond") {
     renderHammondPorts(id, ports);
+  } else if (type === "step-arpeggiator") {
+    renderStepArpPorts(id, ports);
   } else if (type === "midi-split") {
     renderMidiSplitPorts(id, ports);
   } else {
@@ -3703,11 +3788,6 @@ function createWidget(type, label, x, y, forcedId) {
           label.textContent = "Nicht verbunden";
         }
       }
-      if (type === "clock" && port.id === "pulse") {
-        const pulseRow = el.querySelector(".clock-pulse-row");
-        if (pulseRow) pulseRow.appendChild(row);
-        return;
-      }
       if (type === "abs" && port.id === "value") {
         row.classList.add("abs-output-row");
         const readout = document.createElement("span");
@@ -3755,8 +3835,7 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(multiplexerContent);
   } else if (type === "knob") {
     ports.classList.add("knob-output-ports");
-    const knobBody = el.querySelector(".knob-body");
-    if (knobBody) knobBody.appendChild(ports);
+    el.appendChild(ports);
   } else if (type === "button") {
     ports.classList.add("button-output-ports");
     const buttonControlRow = el.querySelector(".button-control-row");
@@ -3798,7 +3877,7 @@ function createWidget(type, label, x, y, forcedId) {
   
   
   
-  if (type !== "annotation") layoutPortsGrid(ports);
+  if (type !== "annotation" && type !== "knob") layoutPortsGrid(ports);
   if (type === "multiplexer") {
     updateMultiplexerVisual(id);
     requestAnimationFrame(() => updateMultiplexerRouting(id));
@@ -3806,7 +3885,8 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "midi-in") updateMidiInControls(id);
   if (type === "adsr") updateAdsrSliders(id);
   if (type === "dx-envelope") updateDxEnvelopeVisuals(id);
-  savePresetNow(); 
+  if (type === "step-arpeggiator") updateStepArpVisual(id);
+  savePresetNow();
   return el;
 }
 
@@ -3858,6 +3938,9 @@ function removeWidget(id, force = false) {
   annotationSaveTimers.delete(id);
   chorusStates.delete(id);
   effectCvStates.delete(id);
+  stepArpStopInternalClock(id);
+  clearTimeout(stepArpStates.get(id)?.gateOutTimer);
+  stepArpStates.delete(id);
   const removedWasLinkedIO = el?.dataset.widgetType === "linked-input" || el?.dataset.widgetType === "linked-output";
   audioEngine.removeNode(id);
   refreshControlGraph();
@@ -4105,6 +4188,67 @@ function createPortRow(widgetId, port, direction, widgetType) {
 
 const knobStates = new Map();
 let midiLearnTargetId = null;
+
+function createKnobControl() {
+  return { cc: null, channel: null, raw: 0, point1In: 0, point1Out: 0, point2In: 127, point2Out: CV_MAX_VOLTS, constraintMin: null, constraintMax: null, listText: "" };
+}
+
+function knobPortId(index) {
+  return `voltage${index + 1}`;
+}
+
+function renderKnobPorts(widgetId, portsEl) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+  portsEl.className = `widget-ports knob-output-ports knob-output-${state.outputSide}`;
+  portsEl.style.setProperty("--knob-count", state.count);
+  for (let index = 0; index < state.count; index += 1) {
+    portsEl.appendChild(createPortRow(widgetId, { id: knobPortId(index), label: String(index + 1) }, "out", "knob"));
+  }
+}
+
+function renderKnobControls(widgetId, gridElement = null) {
+  const state = knobStates.get(widgetId);
+  const grid = gridElement || document.getElementById(widgetId)?.querySelector('[data-role="knob-grid"]');
+  if (!state || !grid) return;
+  grid.innerHTML = "";
+  const body = grid.closest('[data-role="knob-body"]');
+  const columns = state.count;
+  grid.style.setProperty("--knob-count", state.count);
+  grid.style.setProperty("--knob-columns", columns);
+  if (body) {
+    body.style.setProperty("--knob-count", state.count);
+    body.style.setProperty("--knob-columns", columns);
+  }
+  for (let index = 0; index < state.count; index += 1) {
+    const cell = document.createElement("div");
+    cell.className = "knob-control";
+    const dial = document.createElement("div");
+    dial.className = "knob-dial";
+    const indicator = document.createElement("div");
+    indicator.className = "knob-indicator";
+    indicator.dataset.role = "knob-indicator";
+    dial.appendChild(indicator);
+    const cap = document.createElement("div");
+    cap.className = "knob-center-cap";
+    dial.appendChild(cap);
+    dial.addEventListener("mousedown", (event) => startKnobDrag(event, widgetId, index));
+    dial.addEventListener("dblclick", (event) => { event.stopPropagation(); openKnobSettings(widgetId, index); });
+    const value = document.createElement("div");
+    value.className = "knob-readout";
+    value.dataset.role = "knob-readout";
+    const label = document.createElement("div");
+    label.className = "knob-cc-label";
+    label.dataset.role = "knob-label";
+    indicator.style.transform = `rotate(${knobAngle(state.controls[index].raw)}deg)`;
+    value.textContent = formatNumber(mapKnobValue(state.controls[index]));
+    label.textContent = state.labels[index] || `Knob ${index + 1}`;
+    cell.append(dial, value, label);
+    grid.appendChild(cell);
+    updateKnobVisual(widgetId, index);
+  }
+}
 
 const constStates = new Map();
 
@@ -4583,21 +4727,21 @@ function knobAngle(raw) {
   return -135 + (raw / 127) * 270;
 }
 
-function mapKnobValue(state) {
-  const list = parseValueList(state.listText);
+function mapKnobValue(control) {
+  const list = parseValueList(control.listText);
   if (list && list.length >= 2) {
-    const idx = clamp(Math.floor((state.raw * list.length) / 128), 0, list.length - 1);
+    const idx = clamp(Math.floor((control.raw * list.length) / 128), 0, list.length - 1);
     return list[idx];
   }
 
-  const { point1In, point1Out, point2In, point2Out, constraintMin, constraintMax } = state;
+  const { point1In, point1Out, point2In, point2Out, constraintMin, constraintMax } = control;
 
   let value;
   if (point2In === point1In) {
     value = point1Out;
   } else {
     const slope = (point2Out - point1Out) / (point2In - point1In);
-    value = point1Out + (state.raw - point1In) * slope;
+    value = point1Out + (control.raw - point1In) * slope;
   }
 
   if (constraintMin !== null && value < constraintMin) value = constraintMin;
@@ -4606,49 +4750,52 @@ function mapKnobValue(state) {
   return value;
 }
 
-function updateKnobVisual(widgetId) {
+function updateKnobVisual(widgetId, index = 0) {
   const state = knobStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
+  const control = state.controls[index];
+  const cell = el.querySelectorAll(".knob-control")[index];
+  if (!control || !cell) return;
 
-  const indicator = el.querySelector('[data-role="knob-indicator"]');
-  if (indicator) indicator.style.transform = `rotate(${knobAngle(state.raw)}deg)`;
+  const indicator = cell.querySelector('[data-role="knob-indicator"]');
+  if (indicator) indicator.style.transform = `rotate(${knobAngle(control.raw)}deg)`;
 
-  const readout = el.querySelector('[data-role="knob-readout"]');
-  if (readout) readout.textContent = formatNumber(mapKnobValue(state));
+  const readout = cell.querySelector('[data-role="knob-readout"]');
+  if (readout) readout.textContent = formatNumber(mapKnobValue(control));
 
-  const ccLabel = el.querySelector('[data-role="knob-cc-label"]');
-  if (ccLabel) {
-    ccLabel.textContent =
-      state.cc === null ? "CC: –" : `CC ${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
-  }
+  const label = cell.querySelector('[data-role="knob-label"]');
+  if (label) label.textContent = state.labels[index] || `Knob ${index + 1}`;
 }
 
-function setKnobRaw(widgetId, raw) {
+function setKnobRaw(widgetId, raw, index = 0) {
   const state = knobStates.get(widgetId);
-  if (!state) return;
-  state.raw = clamp(Math.round(raw), 0, 127);
-  const mapped = roundFloat(mapKnobValue(state));
+  const control = state?.controls[index];
+  if (!control) return;
+  control.raw = clamp(Math.round(raw), 0, 127);
+  const mapped = roundFloat(mapKnobValue(control));
   audioEngine.setParam(widgetId, "value", mapped);
-  updateKnobVisual(widgetId);
-  propagate(widgetId, "voltage", mapped);
-  sendLiveParamUpdateThrottled(widgetId, { raw: state.raw });
+  updateKnobVisual(widgetId, index);
+  propagate(widgetId, knobPortId(index), mapped);
+  if (index === 0) propagate(widgetId, "voltage", mapped);
+  sendLiveParamUpdateThrottled(widgetId, { knobIndex: index + 1, raw: control.raw });
 }
 
-function startKnobDrag(e, widgetId) {
+function startKnobDrag(e, widgetId, index = 0) {
   e.preventDefault();
   e.stopPropagation();
   const state = knobStates.get(widgetId);
-  if (!state) return;
+  const control = state?.controls[index];
+  if (!control) return;
 
   const startY = e.clientY;
-  const startRaw = state.raw;
+  const startRaw = control.raw;
   let moved = false;
 
   function onMove(ev) {
     const dy = startY - ev.clientY;
     if (Math.abs(dy) > 2) moved = true;
-    setKnobRaw(widgetId, startRaw + dy / 2);
+    setKnobRaw(widgetId, startRaw + dy / 2, index);
   }
 
   function onUp() {
@@ -4665,18 +4812,22 @@ function routeMidiToKnobs(data) {
   if (data.type !== "midi" || data.midiType !== "control_change") return;
 
   if (midiLearnTargetId) {
-    const state = knobStates.get(midiLearnTargetId);
-    if (state) {
+    const state = knobStates.get(midiLearnTargetId.widgetId);
+    const control = state?.controls[midiLearnTargetId.index];
+    if (control) {
       
       
       
       
-      state.cc = data.control;
-      state.channel = data.channel;
-      knobCcDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
-      knobLearnBtn.textContent = "Learn";
-      updateKnobVisual(midiLearnTargetId);
-      sendLiveParamUpdate(midiLearnTargetId, { cc: data.control, channel: data.channel });
+      control.cc = data.control;
+      control.channel = data.channel;
+      const card = knobSettingsGrid.querySelector(`[data-knob-index="${midiLearnTargetId.index}"]`);
+      const ccDisplay = card?.querySelector('[data-knob-field="cc"]');
+      const learnButton = card?.querySelector('[data-role="knob-learn"]');
+      if (ccDisplay) ccDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
+      if (learnButton) learnButton.textContent = "Learn";
+      updateKnobVisual(midiLearnTargetId.widgetId, midiLearnTargetId.index);
+      sendLiveParamUpdate(midiLearnTargetId.widgetId, { knobIndex: midiLearnTargetId.index + 1, cc: data.control, channel: data.channel });
       
       
       
@@ -4689,61 +4840,169 @@ function routeMidiToKnobs(data) {
   }
 
   knobStates.forEach((state, widgetId) => {
-    if (state.cc === data.control && state.channel === data.channel) {
-      setKnobRaw(widgetId, data.value);
-      markDirty();
-    }
+    state.controls.slice(0, state.count).forEach((control, index) => {
+      if (control.cc === data.control && control.channel === data.channel) {
+        setKnobRaw(widgetId, data.value, index);
+        markDirty();
+      }
+    });
   });
 }
 
 const knobSettingsOverlay = document.getElementById("knobSettingsOverlay");
-const knobCcDisplay = document.getElementById("knobCcDisplay");
-const knobLearnBtn = document.getElementById("knobLearnBtn");
-const knobPoint1InInput = document.getElementById("knobPoint1InInput");
-const knobPoint1OutInput = document.getElementById("knobPoint1OutInput");
-const knobPoint2InInput = document.getElementById("knobPoint2InInput");
-const knobPoint2OutInput = document.getElementById("knobPoint2OutInput");
-const knobConstraintMinInput = document.getElementById("knobConstraintMinInput");
-const knobConstraintMaxInput = document.getElementById("knobConstraintMaxInput");
-const knobValueListInput = document.getElementById("knobValueListInput");
-const knobLinearInputs = [
-  knobPoint1InInput,
-  knobPoint1OutInput,
-  knobPoint2InInput,
-  knobPoint2OutInput,
-  knobConstraintMinInput,
-  knobConstraintMaxInput,
-];
+const knobSettingsAdd = document.getElementById("knobSettingsAdd");
+const knobOutputSideInput = document.getElementById("knobOutputSideInput");
+const knobSettingsGrid = document.getElementById("knobSettingsGrid");
 let pendingKnobId = null;
+let pendingKnobIndex = 0;
 
+function createKnobSettingsInput(field, value, { readOnly = false, placeholder = "" } = {}) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.dataset.knobField = field;
+  input.value = value;
+  input.readOnly = readOnly;
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", field);
+  return input;
+}
 
-
-
-function updateKnobFieldsDisabledState() {
-  const list = parseValueList(knobValueListInput.value);
-  const listValid = !!(list && list.length >= 2);
-  knobLinearInputs.forEach((input) => {
+function updateKnobCardDisabledState(card) {
+  const listInput = card.querySelector('[data-knob-field="listText"]');
+  const listValid = !!(listInput && parseValueList(listInput.value)?.length >= 2);
+  card.querySelectorAll('[data-knob-linear]').forEach((input) => {
     input.disabled = listValid;
   });
 }
 
-knobValueListInput.addEventListener("input", updateKnobFieldsDisabledState);
-
-function openKnobSettings(widgetId) {
+function renderKnobSettingsGrid(widgetId) {
   const state = knobStates.get(widgetId);
   if (!state) return;
+  knobSettingsGrid.innerHTML = "";
+  for (let index = 0; index < state.count; index += 1) {
+    const control = state.controls[index];
+    const card = document.createElement("section");
+    card.className = "knob-settings-card";
+    card.dataset.knobIndex = String(index);
+
+    const number = document.createElement("strong");
+    number.className = "knob-settings-number";
+    number.textContent = String(index + 1);
+    card.appendChild(number);
+    card.appendChild(createKnobSettingsInput("label", state.labels[index] ?? ""));
+
+    const cc = document.createElement("div");
+    cc.className = "knob-settings-cc";
+    cc.appendChild(createKnobSettingsInput("cc", control.cc === null ? "" : `${control.cc}${control.channel === null ? "" : ` (Ch ${control.channel + 1})`}`, { readOnly: true, placeholder: "-" }));
+    const learn = document.createElement("button");
+    learn.type = "button";
+    learn.className = "btn-secondary";
+    learn.dataset.role = "knob-learn";
+    learn.textContent = "Learn";
+    learn.addEventListener("click", () => {
+      midiLearnTargetId = { widgetId, index };
+      learn.textContent = "Waiting";
+    });
+    cc.appendChild(learn);
+    card.appendChild(cc);
+
+    card.appendChild(createKnobSettingsInput("listText", control.listText ?? ""));
+    [
+      ["point1In", control.point1In], ["point1Out", control.point1Out],
+      ["point2In", control.point2In], ["point2Out", control.point2Out],
+      ["constraintMin", control.constraintMin === null ? "" : control.constraintMin],
+      ["constraintMax", control.constraintMax === null ? "" : control.constraintMax],
+    ].forEach(([field, value]) => {
+      const input = createKnobSettingsInput(field, value);
+      input.dataset.knobLinear = "true";
+      card.appendChild(input);
+    });
+    const listInput = card.querySelector('[data-knob-field="listText"]');
+    listInput.addEventListener("input", () => updateKnobCardDisabledState(card));
+    updateKnobCardDisabledState(card);
+    const actions = document.createElement("div");
+    actions.className = "knob-settings-actions";
+    [["up", "^", "Move knob left"], ["down", "v", "Move knob right"], ["delete", "x", "Delete knob"]].forEach(([action, text, title]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn-secondary";
+      button.dataset.knobAction = action;
+      button.textContent = text;
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.disabled = (action === "up" && index === 0) || (action === "down" && index === state.count - 1) || (action === "delete" && state.count === 1);
+      button.addEventListener("click", () => editKnobSettingsStructure(widgetId, index, action));
+      actions.appendChild(button);
+    });
+    card.appendChild(actions);
+    knobSettingsGrid.appendChild(card);
+  }
+}
+
+function syncKnobSettingsGrid(widgetId) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  const controls = [];
+  const labels = [];
+  knobSettingsGrid.querySelectorAll("[data-knob-index]").forEach((card) => {
+    const control = state.controls[Number(card.dataset.knobIndex)];
+    const field = (name) => card.querySelector(`[data-knob-field="${name}"]`).value;
+    const numberField = (name, fallback) => {
+      const value = parseFloatFlexible(field(name));
+      return Number.isNaN(value) ? fallback : value;
+    };
+    control.listText = field("listText");
+    control.point1In = numberField("point1In", 0);
+    control.point1Out = numberField("point1Out", 0);
+    control.point2In = numberField("point2In", 127);
+    control.point2Out = numberField("point2Out", CV_MAX_VOLTS);
+    let constraintMin = field("constraintMin").trim() === "" ? null : parseFloatFlexible(field("constraintMin"));
+    let constraintMax = field("constraintMax").trim() === "" ? null : parseFloatFlexible(field("constraintMax"));
+    if (Number.isNaN(constraintMin)) constraintMin = null;
+    if (Number.isNaN(constraintMax)) constraintMax = null;
+    if (constraintMin !== null && constraintMax !== null && constraintMin > constraintMax) [constraintMin, constraintMax] = [constraintMax, constraintMin];
+    control.constraintMin = constraintMin;
+    control.constraintMax = constraintMax;
+    controls.push(control);
+    labels.push(field("label").trim());
+  });
+  state.count = controls.length;
+  state.controls = [...controls, ...Array.from({ length: 16 - controls.length }, createKnobControl)];
+  state.labels = [...labels, ...Array(16 - labels.length).fill("")];
+}
+
+function editKnobSettingsStructure(widgetId, index, action) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  syncKnobSettingsGrid(widgetId);
+  if (action === "add" && state.count < 16) {
+    state.controls[state.count] = createKnobControl();
+    state.labels[state.count] = "";
+    state.count += 1;
+  } else if (action === "delete" && state.count > 1) {
+    state.controls.splice(index, 1);
+    state.controls.push(createKnobControl());
+    state.labels.splice(index, 1);
+    state.labels.push("");
+    state.count -= 1;
+  } else if (action === "up" && index > 0) {
+    [state.controls[index - 1], state.controls[index]] = [state.controls[index], state.controls[index - 1]];
+    [state.labels[index - 1], state.labels[index]] = [state.labels[index], state.labels[index - 1]];
+  } else if (action === "down" && index < state.count - 1) {
+    [state.controls[index], state.controls[index + 1]] = [state.controls[index + 1], state.controls[index]];
+    [state.labels[index], state.labels[index + 1]] = [state.labels[index + 1], state.labels[index]];
+  }
+  renderKnobSettingsGrid(widgetId);
+}
+
+function openKnobSettings(widgetId, index = 0) {
+  const state = knobStates.get(widgetId);
+  if (!state?.controls[index]) return;
   pendingKnobId = widgetId;
-  knobCcDisplay.value =
-    state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
-  knobPoint1InInput.value = state.point1In;
-  knobPoint1OutInput.value = state.point1Out;
-  knobPoint2InInput.value = state.point2In;
-  knobPoint2OutInput.value = state.point2Out;
-  knobConstraintMinInput.value = state.constraintMin === null ? "" : state.constraintMin;
-  knobConstraintMaxInput.value = state.constraintMax === null ? "" : state.constraintMax;
-  knobValueListInput.value = state.listText || "";
-  updateKnobFieldsDisabledState();
-  knobLearnBtn.textContent = "Learn";
+  pendingKnobIndex = index;
+  knobOutputSideInput.value = state.outputSide;
+  renderKnobSettingsGrid(widgetId);
   midiLearnTargetId = null;
   knobSettingsOverlay.classList.remove("hidden");
 }
@@ -4751,8 +5010,8 @@ function openKnobSettings(widgetId) {
 function closeKnobSettings() {
   knobSettingsOverlay.classList.add("hidden");
   pendingKnobId = null;
+  pendingKnobIndex = 0;
   midiLearnTargetId = null;
-  knobLearnBtn.textContent = "Learn";
 }
 
 knobSettingsOverlay.addEventListener("click", (e) => {
@@ -4761,53 +5020,32 @@ knobSettingsOverlay.addEventListener("click", (e) => {
 
 document.getElementById("knobSettingsCancel").addEventListener("click", closeKnobSettings);
 
-knobLearnBtn.addEventListener("click", () => {
-  if (!pendingKnobId) return;
-  midiLearnTargetId = pendingKnobId;
-  knobLearnBtn.textContent = "Waiting for CC…";
+knobSettingsAdd.addEventListener("click", () => {
+  if (pendingKnobId) editKnobSettingsStructure(pendingKnobId, 0, "add");
 });
 
 document.getElementById("knobSettingsSave").addEventListener("click", () => {
   if (!pendingKnobId) return;
   const state = knobStates.get(pendingKnobId);
   if (state) {
-    const p1In = parseFloatFlexible(knobPoint1InInput.value);
-    const p1Out = parseFloatFlexible(knobPoint1OutInput.value);
-    const p2In = parseFloatFlexible(knobPoint2InInput.value);
-    const p2Out = parseFloatFlexible(knobPoint2OutInput.value);
-
-    state.point1In = Number.isNaN(p1In) ? 0 : p1In;
-    state.point1Out = Number.isNaN(p1Out) ? 0 : p1Out;
-    state.point2In = Number.isNaN(p2In) ? 127 : p2In;
-    state.point2Out = Number.isNaN(p2Out) ? CV_MAX_VOLTS : p2Out;
-
-    let cMin = knobConstraintMinInput.value.trim() === "" ? null : parseFloatFlexible(knobConstraintMinInput.value);
-    if (cMin !== null && Number.isNaN(cMin)) cMin = null;
-    let cMax = knobConstraintMaxInput.value.trim() === "" ? null : parseFloatFlexible(knobConstraintMaxInput.value);
-    if (cMax !== null && Number.isNaN(cMax)) cMax = null;
-    if (cMin !== null && cMax !== null && cMin > cMax) {
-      const swap = cMin;
-      cMin = cMax;
-      cMax = swap;
-    }
-
-    state.constraintMin = cMin;
-    state.constraintMax = cMax;
-    state.listText = knobValueListInput.value;
-
-    const mapped = roundFloat(mapKnobValue(state));
-    audioEngine.setParam(pendingKnobId, "value", mapped);
-    propagate(pendingKnobId, "voltage", mapped);
-    updateKnobVisual(pendingKnobId);
-    sendLiveParamUpdate(pendingKnobId, {
-      point1In: state.point1In,
-      point1Out: state.point1Out,
-      point2In: state.point2In,
-      point2Out: state.point2Out,
-      constraintMin: cMin,
-      constraintMax: cMax,
-      valueList: parseValueList(state.listText) || [],
+    syncKnobSettingsGrid(pendingKnobId);
+    state.outputSide = ["top", "bottom", "left", "right"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
+    state.controls.slice(0, state.count).forEach((control, index) => {
+      const mapped = roundFloat(mapKnobValue(control));
+      audioEngine.setParam(pendingKnobId, "value", mapped);
+      propagate(pendingKnobId, knobPortId(index), mapped);
+      if (index === 0) propagate(pendingKnobId, "voltage", mapped);
+      updateKnobVisual(pendingKnobId, index);
+      sendLiveParamUpdate(pendingKnobId, {
+        knobIndex: index + 1, knobCount: state.count, cc: control.cc, channel: control.channel,
+        point1In: control.point1In, point1Out: control.point1Out,
+        point2In: control.point2In, point2Out: control.point2Out,
+        constraintMin: control.constraintMin, constraintMax: control.constraintMax, valueList: parseValueList(control.listText) || [],
+      });
     });
+    renderKnobControls(pendingKnobId);
+    const portsEl = document.getElementById(pendingKnobId)?.querySelector(".widget-ports");
+    if (portsEl) renderKnobPorts(pendingKnobId, portsEl);
     savePresetNow(); 
   }
   closeKnobSettings();
@@ -5645,7 +5883,7 @@ function handleVoicesCapped() {}
 
 
 
-function createPianoKeyboard({ minNote = 21, maxNote = 108, zones = [], onRangeSelect }) {
+function createPianoKeyboard({ minNote = 21, maxNote = 108, zones = [], pressedNotes = new Set(), onRangeSelect }) {
   const el = document.createElement("div");
   el.className = "piano-keyboard";
 
@@ -5678,6 +5916,7 @@ function createPianoKeyboard({ minNote = 21, maxNote = 108, zones = [], onRangeS
     const key = document.createElement("div");
     key.className = black ? "piano-key piano-key-black" : "piano-key piano-key-white";
     key.dataset.note = String(note);
+    key.classList.toggle("piano-key-midi-active", pressedNotes.has(note));
     const zone = zoneFor(note);
     if (zone) {
       key.style.backgroundColor = zone.color;
@@ -5754,6 +5993,29 @@ const midiSplitAddZoneButton = document.getElementById("midiSplitAddZoneButton")
 let pendingMidiSplitId = null;
 let midiSplitEditState = null;
 let midiSplitActiveZone = 0;
+const midiSplitPressedNotes = new Set();
+const midiSplitReleaseTimers = new Map();
+const MIDI_SPLIT_KEY_PREVIEW_MS = 160;
+
+function previewMidiSplitNote(note, noteOn) {
+  if (!Number.isInteger(note) || !pendingMidiSplitId) return;
+  const timer = midiSplitReleaseTimers.get(note);
+  if (timer) clearTimeout(timer);
+  if (noteOn) {
+    midiSplitReleaseTimers.delete(note);
+    midiSplitPressedNotes.add(note);
+  } else {
+    midiSplitReleaseTimers.set(note, setTimeout(() => {
+      midiSplitReleaseTimers.delete(note);
+      midiSplitPressedNotes.delete(note);
+      midiSplitKeyboardContainer.querySelector(`[data-note="${note}"]`)?.classList.remove("piano-key-midi-active");
+    }, MIDI_SPLIT_KEY_PREVIEW_MS));
+  }
+  midiSplitKeyboardContainer.querySelector(`[data-note="${note}"]`)?.classList.toggle(
+    "piano-key-midi-active",
+    midiSplitPressedNotes.has(note)
+  );
+}
 
 function renderMidiSplitEditor() {
   midiSplitAddZoneButton.disabled = midiSplitEditState.zoneCount >= MIDI_SPLIT_MAX_ZONES;
@@ -5793,7 +6055,7 @@ function renderMidiSplitEditor() {
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         midiSplitEditState.zones.splice(z, 1);
-        midiSplitEditState.zones.push({ from: 0, to: 127, octave: 0 }); 
+        midiSplitEditState.zones.push({ from: 127, to: 0, octave: 0 });
         midiSplitEditState.zoneCount -= 1;
         if (midiSplitActiveZone >= midiSplitEditState.zoneCount) {
           midiSplitActiveZone = midiSplitEditState.zoneCount - 1;
@@ -5820,6 +6082,7 @@ function renderMidiSplitEditor() {
   }));
   const keyboard = createPianoKeyboard({
     zones: zonesForKeyboard,
+    pressedNotes: midiSplitPressedNotes,
     onRangeSelect: (from, to) => {
       midiSplitEditState.zones[midiSplitActiveZone].from = from;
       midiSplitEditState.zones[midiSplitActiveZone].to = to;
@@ -5834,6 +6097,7 @@ function openMidiSplitSettings(widgetId) {
   if (!state) return;
   pendingMidiSplitId = widgetId;
   midiSplitEditState = { zoneCount: state.zoneCount, zones: state.zones.map((z) => ({ ...z })) };
+  midiSplitPressedNotes.clear();
   midiSplitActiveZone = 0;
   renderMidiSplitEditor();
   midiSplitSettingsOverlay.classList.remove("hidden");
@@ -5843,6 +6107,9 @@ function closeMidiSplitSettings() {
   midiSplitSettingsOverlay.classList.add("hidden");
   pendingMidiSplitId = null;
   midiSplitEditState = null;
+  midiSplitPressedNotes.clear();
+  midiSplitReleaseTimers.forEach((timer) => clearTimeout(timer));
+  midiSplitReleaseTimers.clear();
 }
 
 midiSplitSettingsOverlay.addEventListener("click", (e) => {
@@ -5853,9 +6120,7 @@ document.getElementById("midiSplitSettingsCancel").addEventListener("click", clo
 
 midiSplitAddZoneButton.addEventListener("click", () => {
   if (!midiSplitEditState || midiSplitEditState.zoneCount >= MIDI_SPLIT_MAX_ZONES) return;
-  
-  
-  
+  midiSplitEditState.zones[midiSplitEditState.zoneCount] = { from: 127, to: 0, octave: 0 };
   midiSplitEditState.zoneCount += 1;
   midiSplitActiveZone = midiSplitEditState.zoneCount - 1;
   renderMidiSplitEditor();
@@ -6774,7 +7039,11 @@ function refreshControlGraph() {
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
   knobStates.forEach((state, id) => {
-    push(id, "voltage", roundFloat(mapKnobValue(state)));
+    state.controls.slice(0, state.count).forEach((control, index) => {
+      const value = roundFloat(mapKnobValue(control));
+      push(id, knobPortId(index), value);
+      if (index === 0) push(id, "voltage", value);
+    });
   });
   buttonStates.forEach((state, id) => push(id, "value", buttonCurrentOutput(state)));
   upDownButtonStates.forEach((state, id) => push(id, "value", upDownButtonCurrentOutput(state)));
@@ -6790,9 +7059,11 @@ function refreshControlGraph() {
     const sourceEl = document.getElementById(connection.from.widgetId);
     const sourceType = sourceEl?.dataset.widgetType;
     let value = null;
-    if (sourceType === "knob" && connection.from.portId === "voltage") {
+    if (sourceType === "knob" && connection.from.portId.startsWith("voltage")) {
       const sourceState = knobStates.get(connection.from.widgetId);
-      if (sourceState) value = mapKnobValue(sourceState);
+      const suffix = connection.from.portId.slice(7);
+      const index = suffix ? Number.parseInt(suffix, 10) - 1 : 0;
+      if (sourceState?.controls[index]) value = mapKnobValue(sourceState.controls[index]);
     } else if (sourceType === "const" && connection.from.portId === "value") {
       value = constStates.get(connection.from.widgetId)?.value ?? null;
     } else if (sourceType === "button" && connection.from.portId === "value") {
@@ -7433,8 +7704,9 @@ function setLedActive(dot, active) {
 
 const clockStates = new Map();
 
-function clockBpm(cvVolts, minBpm, maxBpm) {
-  return minBpm + (cvVolts / CV_MAX_VOLTS) * (maxBpm - minBpm);
+function clockBpm(cvVolts, minBpm, maxBpm, round) {
+  const bpm = minBpm + (cvVolts / CV_MAX_VOLTS) * (maxBpm - minBpm);
+  return round ? Math.round(bpm) : bpm;
 }
 
 function stopClockTimer(widgetId) {
@@ -7468,7 +7740,9 @@ function fireClockPulse(widgetId) {
 
   propagate(widgetId, "pulse", GATE_ON_VOLTS);
   const el = document.getElementById(widgetId);
-  const dot = el ? el.querySelector('[data-role="clock-pulse-dot"]') : null;
+  // Blink the real "Pulse" output port dot itself, not a separate decorative
+  // one - same as every other widget's output LED.
+  const dot = el ? el.querySelector('[data-port-id="pulse"][data-port-dir="out"]') : null;
   setLedActive(dot, true);
 
   if (state.offTimer) clearTimeout(state.offTimer);
@@ -8042,6 +8316,7 @@ const clockSettingsOverlay = document.getElementById("clockSettingsOverlay");
 const clockPulseMsInput = document.getElementById("clockPulseMsInput");
 const clockMinBpmInput = document.getElementById("clockMinBpmInput");
 const clockMaxBpmInput = document.getElementById("clockMaxBpmInput");
+const clockRoundBpmInput = document.getElementById("clockRoundBpmInput");
 let pendingClockId = null;
 
 function openClockSettings(widgetId) {
@@ -8051,6 +8326,7 @@ function openClockSettings(widgetId) {
   clockPulseMsInput.value = state.pulseMs;
   clockMinBpmInput.value = state.minBpm;
   clockMaxBpmInput.value = state.maxBpm;
+  clockRoundBpmInput.checked = state.roundBpm === true;
   clockSettingsOverlay.classList.remove("hidden");
 }
 
@@ -8079,9 +8355,29 @@ document.getElementById("clockSettingsSave").addEventListener("click", () => {
     state.pulseMs = ms;
     state.minBpm = minBpm;
     state.maxBpm = maxBpm;
-    state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm);
+    state.roundBpm = clockRoundBpmInput.checked === true;
+    state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
     restartClockTimer(pendingClockId);
-    markDirty();
+    // Live-push only, no savePresetNow() here - these four fields never
+    // change this widget's ports/topology (unlike e.g. Mixer's inputCount
+    // or Step Arpeggiator's stepCount, whose own settings-Save DOES call
+    // savePresetNow() directly, justifiably: a graph rebuild is already
+    // unavoidable there). A plain parameter change must never force a
+    // rebuild/audio dropout on its own - see markDirty()'s comment. Reaches
+    // the saved preset file next time something actually persists (Save
+    // Preset, or any add/remove elsewhere), same as every other parameter.
+    sendLiveParamUpdateThrottled(pendingClockId, {
+      minBpm: state.minBpm,
+      maxBpm: state.maxBpm,
+      pulseMs: state.pulseMs,
+      // Sent as 0/1, not a JS boolean: Graph::applyLiveParams' generic path
+      // (cJSON_IsNumber -> setFloatFieldByName) only fires for JSON numbers
+      // - a literal true/false would need its own cJSON_IsBool special
+      // case there (see e.g. the Lfo "oneShot"/Filter "bypass" branches),
+      // which nodes::clock::setParam's existing `value >= 0.5f` check
+      // already makes unnecessary.
+      roundBpm: state.roundBpm ? 1 : 0,
+    });
   }
   closeClockSettings();
 });
@@ -8095,6 +8391,142 @@ const hammondStates = new Map();
 const HAMMOND_DEFAULT_DRAWBARS = [10, 10, 10, 0, 0, 0, 0, 0, 0]; // volts, 888 000 000
 const HAMMOND_DEFAULT_RATIOS = [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];   // classic Hammond footages
 const HAMMOND_FOOTAGES = ["16′", "5⅓′", "8′", "4′", "2⅔′", "2′", "1⅗′", "1⅓′", "1′"];
+
+// CV Step-Arpeggiator: 16 pitch-CV knobs are always allocated (0-10V,
+// default 5V/C4 - see nodes/StepArpeggiatorNode.h's StepArpState), only the
+// first stepCount (8 or 16) are ever wired/rendered - shrinking the switch
+// hides step9..16 without discarding their stored values (same pattern as
+// Mixer's fixed 8-slot "gains" array, see renderMixerPorts).
+const stepArpStates = new Map();
+const STEP_ARP_MAX_STEPS = 16;
+// Hardcoded (not CV_MAX_VOLTS / 2): CV_MAX_VOLTS itself is declared much
+// later in this file as a top-level const - fine to forward-reference from
+// inside a function body (evaluated lazily at call time, same pattern
+// clockBpm/pitchCvToNoteName rely on), but NOT as another top-level const
+// initializer, which runs immediately and would hit the temporal dead zone.
+const STEP_ARP_DEFAULT_VOLTS = 5; // 5V = C4, see CvConventions.h
+
+// Nearest chromatic note name for a 1V/octave pitch-CV value (C4 at 5V,
+// matches cv::hzFromPitchCv's anchor - see CvConventions.h). Reuses
+// WAVE_PLAYER_NOTE_NAMES/PITCH_CV_ANCHOR_NOTE/PITCH_CV_VOLTS_PER_OCTAVE
+// declared further down this file - safe to forward-reference from inside a
+// function body (same pattern clockBpm already relies on for CV_MAX_VOLTS).
+function pitchCvToNoteName(volts) {
+  const note = clamp(
+    Math.round(((volts - CV_MAX_VOLTS / 2) / PITCH_CV_VOLTS_PER_OCTAVE) * 12 + PITCH_CV_ANCHOR_NOTE),
+    0,
+    127
+  );
+  const octave = Math.floor(note / 12) - 1;
+  return `${WAVE_PLAYER_NOTE_NAMES[note % 12]}${octave}`;
+}
+
+// Same 1V/octave anchor as pitchCvToNoteName, expressed as "+/-N semitones
+// from the 5V default" instead of an absolute note. Used for a Step
+// Arpeggiator knob whenever its "pitch" input is wired: the note that
+// actually sounds then also depends on that live CV (heldCv = stepCv +
+// pitchVolts, see nodes/StepArpeggiatorNode.h's triggerStep), which an
+// absolute note name here would misrepresent - the relative offset stays
+// meaningful regardless of what Pitch is doing at runtime.
+function pitchCvToSemitoneOffset(volts) {
+  return Math.round(((volts - CV_MAX_VOLTS / 2) / PITCH_CV_VOLTS_PER_OCTAVE) * 12);
+}
+
+// Step count (8/16) and gateOut pulse width are structural/occasional
+// settings, not continuous-drag values - same dblclick-opened-modal +
+// Save-triggers-a-full-resave pattern as Clock's own pulseMs/minBpm/maxBpm
+// (see openClockSettings above) and Mixer's inputCount, rather than the
+// live-WS-paramUpdate path the per-step knobs use.
+const stepArpSettingsOverlay = document.getElementById("stepArpSettingsOverlay");
+const stepArpStepCountInput = document.getElementById("stepArpStepCountInput");
+const stepArpPulseTimeMaxInput = document.getElementById("stepArpPulseTimeMaxInput");
+const stepArpRetriggerGateOutInput = document.getElementById("stepArpRetriggerGateOutInput");
+const stepArpClockMaxBpmInput = document.getElementById("stepArpClockMaxBpmInput");
+const stepArpClockRoundBpmInput = document.getElementById("stepArpClockRoundBpmInput");
+let pendingStepArpId = null;
+
+function openStepArpSettings(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  pendingStepArpId = widgetId;
+  stepArpStepCountInput.value = String(state.stepCount);
+  stepArpPulseTimeMaxInput.value = String(state.pulseTimeMaxSec);
+  stepArpRetriggerGateOutInput.checked = state.retriggerGateOut === true;
+  stepArpClockMaxBpmInput.value = String(state.clockMaxBpm);
+  stepArpClockRoundBpmInput.checked = state.clockRoundBpm === true;
+  stepArpSettingsOverlay.classList.remove("hidden");
+}
+
+function closeStepArpSettings() {
+  stepArpSettingsOverlay.classList.add("hidden");
+  pendingStepArpId = null;
+}
+
+stepArpSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === stepArpSettingsOverlay) closeStepArpSettings();
+});
+
+document.getElementById("stepArpSettingsCancel").addEventListener("click", closeStepArpSettings);
+
+document.getElementById("stepArpSettingsSave").addEventListener("click", () => {
+  if (!pendingStepArpId) return;
+  const state = stepArpStates.get(pendingStepArpId);
+  if (state) {
+    const newCount = stepArpStepCountInput.value === "8" ? 8 : STEP_ARP_MAX_STEPS;
+    let maxSec = parseFloatFlexible(stepArpPulseTimeMaxInput.value);
+    if (Number.isNaN(maxSec) || maxSec <= state.pulseTimeMinSec) maxSec = state.pulseTimeMinSec + 1;
+    const countChanged = newCount !== state.stepCount;
+
+    if (newCount < state.stepCount) {
+      for (let i = newCount + 1; i <= state.stepCount; i += 1) {
+        removeConnectionsForPort(pendingStepArpId, `step${i}`, "in");
+      }
+    }
+    state.stepCount = newCount;
+    // Just the range the "pulseTime" slider's 0-10V covers - does not
+    // itself change the current pulseMs value (same as Delay's own
+    // timeMin/timeMax settings never touching delayTimeMs), only where the
+    // slider knob sits to represent it (see updateStepArpPulseTimeVisual).
+    // pulseTimeMinSec (0V end) is no longer settings-dialog-editable - stays
+    // at its build-time default (0.001s), only the 10V end is exposed.
+    state.pulseTimeMaxSec = maxSec;
+    state.retriggerGateOut = stepArpRetriggerGateOutInput.checked === true;
+    let maxBpm = parseFloatFlexible(stepArpClockMaxBpmInput.value);
+    if (Number.isNaN(maxBpm) || maxBpm <= 0) maxBpm = 120;
+    state.clockMaxBpm = maxBpm;
+    state.clockRoundBpm = stepArpClockRoundBpmInput.checked === true;
+
+    if (countChanged) {
+      // Structural: stepCount changes which "stepN" ports/knobs exist (and,
+      // shrinking, just deleted cables on the hidden ones above) - same
+      // class of change as Mixer's inputCount, a rebuild is unavoidable
+      // either way, so savePresetNow() here costs nothing extra.
+      const el = document.getElementById(pendingStepArpId);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderStepArpPorts(pendingStepArpId, portsEl);
+      drawConnections();
+      savePresetNow();
+    } else {
+      // Pure parameter - live-push, no forced rebuild/dropout (see
+      // markDirty()'s comment). Still reaches the saved preset file next
+      // time something actually persists.
+      updateStepArpVisual(pendingStepArpId);
+      stepArpRestartInternalClock(pendingStepArpId);
+      sendLiveParamUpdateThrottled(pendingStepArpId, {
+        pulseTimeMinSec: state.pulseTimeMinSec,
+        pulseTimeMaxSec: state.pulseTimeMaxSec,
+        // 0/1, not a JS boolean - see Clock's own "roundBpm" live-push for
+        // why (Graph::applyLiveParams' generic path only fires for JSON
+        // numbers; nodes::steparp::setParam's `value >= 0.5f` check already
+        // makes a dedicated cJSON_IsBool special case there unnecessary).
+        retriggerGateOut: state.retriggerGateOut ? 1 : 0,
+        clockMaxBpm: state.clockMaxBpm,
+        clockRoundBpm: state.clockRoundBpm ? 1 : 0,
+      });
+    }
+  }
+  closeStepArpSettings();
+});
 
 function updateOscillatorFreqLabel(widgetId) {
   const state = oscillatorStates.get(widgetId);
@@ -8947,21 +9379,28 @@ function renderMidiSplitPorts(widgetId, portsEl) {
   if (!state) return;
   portsEl.innerHTML = "";
 
+  const appendZonePort = (zoneIndex, portId, label) => {
+    const row = createPortRow(widgetId, { id: portId, label }, "out", "midi-split");
+    row.classList.add("midi-split-zone-output");
+    row.style.setProperty("--midi-split-zone-color", MIDI_SPLIT_ZONE_COLORS[zoneIndex]);
+    portsEl.appendChild(row);
+    return row;
+  };
+
   WIDGET_TYPES["midi-split"].inputs.forEach((port) => {
     portsEl.appendChild(createPortRow(widgetId, port, "in", "midi-split"));
   });
 
   for (let z = 1; z <= state.zoneCount; z += 1) {
-    const midiRow = createPortRow(widgetId, { id: `zone${z}Midi`, label: `Zone ${z} MIDI` }, "out", "midi-split");
+    const midiRow = appendZonePort(z - 1, `zone${z}Midi`, `Zone ${z} MIDI`);
     const dot = document.createElement("span");
-    dot.className = "adsr-gate-dot";
+    dot.className = "adsr-gate-dot midi-split-zone-gate-dot";
     dot.dataset.role = `midi-split-zone${z}-midi-dot`;
     midiRow.insertBefore(dot, midiRow.querySelector(".port-label"));
-    portsEl.appendChild(midiRow);
-    portsEl.appendChild(createPortRow(widgetId, { id: `zone${z}Pitch`, label: `Zone ${z} Pitch` }, "out", "midi-split"));
-    portsEl.appendChild(createPortRow(widgetId, { id: `zone${z}Note`, label: `Zone ${z} Note` }, "out", "midi-split"));
-    portsEl.appendChild(createPortRow(widgetId, { id: `zone${z}Velocity`, label: `Zone ${z} Vel` }, "out", "midi-split"));
-    portsEl.appendChild(createPortRow(widgetId, { id: `zone${z}Gate`, label: `Zone ${z} Gate` }, "out", "midi-split"));
+    appendZonePort(z - 1, `zone${z}Pitch`, `Zone ${z} Pitch`);
+    appendZonePort(z - 1, `zone${z}Note`, `Zone ${z} Note`);
+    appendZonePort(z - 1, `zone${z}Velocity`, `Zone ${z} Vel`);
+    appendZonePort(z - 1, `zone${z}Gate`, `Zone ${z} Gate`);
   }
   layoutPortsGrid(portsEl);
 }
@@ -9546,6 +9985,528 @@ function renderHammondPorts(widgetId, portsEl) {
 
   portsEl.appendChild(createPortRow(widgetId, { id: "value", label: "Value" }, "out", "hammond"));
   layoutPortsGrid(portsEl);
+}
+
+// Builds one clock/gate/pitch/direction/cv/gateOut row without createPortRow's
+// own .port-row-in/-out class (dot + label are reused from it, the row is
+// not) - see renderStepArpPorts's comment for why: the app-wide
+// layoutPortsGrid() pass every widget gets after this function returns
+// unconditionally (a) shoves every .port-row-in to the end of the ports
+// list and (b) absolutely-positions every .port-row-out into a top-right
+// slot sized for the usual "a few inputs, one output" node shape - both
+// wrong for this node's two-column-top / knob-row-bottom layout. Plain rows
+// (this function's own step-arp-io-line class) are invisible to that pass
+// and keep the exact position/order this renderer puts them in, while the
+// CSS mirrors .port-row's own padding/gap/font and .port-row-in/-out's own
+// edge-flush negative-margin dot trick 1:1 so they still look identical to
+// every other widget's port rows.
+const STEP_ARP_DIRECTION_LABELS = { forward: "Forward", backward: "Backward", pingpong: "Ping-Pong", random: "Random" };
+
+function stepArpDirectionLabel(volts) {
+  return STEP_ARP_DIRECTION_LABELS[stepArpDirectionFromCv(volts)];
+}
+
+function buildStepArpIoLine(widgetId, port, direction) {
+  const state = stepArpStates.get(widgetId);
+  const sourceRow = createPortRow(widgetId, port, direction, "step-arpeggiator");
+  const dot = sourceRow.querySelector(".port-dot"); // keeps its startConnectionDrag mousedown handler (output only)
+  const label = sourceRow.querySelector(".port-label");
+  const row = document.createElement("div");
+  row.className = `step-arp-io-line step-arp-io-line-${direction}`;
+  if (direction === "out") {
+    row.appendChild(label);
+    row.appendChild(dot);
+    return row;
+  }
+  row.appendChild(dot);
+  row.appendChild(label);
+
+  // "direction" and "pulseTime" get an inline slider (local knob, same
+  // "wired cable wins outright" convention as the sixteen step knobs) - the
+  // other three fixed inputs (clock/gate/pitch) are cable-only, no local
+  // control, unchanged.
+  if (port.id === "direction" && state) {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(CV_MAX_VOLTS);
+    slider.step = "0.01";
+    slider.value = String(state.directionVolts);
+    slider.dataset.role = "step-arp-direction-slider";
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => setStepArpDirection(widgetId, parseFloat(slider.value)));
+    row.appendChild(slider);
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "port-value";
+    valueSpan.dataset.role = "step-arp-direction-value";
+    valueSpan.textContent = stepArpDirectionLabel(state.directionVolts);
+    row.appendChild(valueSpan);
+  }
+  if (port.id === "pulseTime" && state) {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(CV_MAX_VOLTS);
+    slider.step = "0.01";
+    slider.value = String(rangeToCv(state.pulseMs / 1000, state.pulseTimeMinSec, state.pulseTimeMaxSec, "linear"));
+    slider.dataset.role = "step-arp-pulsetime-slider";
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => setStepArpPulseTime(widgetId, parseFloat(slider.value)));
+    row.appendChild(slider);
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "port-value";
+    valueSpan.dataset.role = "step-arp-pulsetime-value";
+    valueSpan.textContent = formatStepArpPulseTime(widgetId);
+    row.appendChild(valueSpan);
+  }
+  if (port.id === "rate" && state) {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(CV_MAX_VOLTS);
+    slider.step = "0.01";
+    slider.value = String(state.clockCvVolts);
+    slider.dataset.role = "step-arp-rate-slider";
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => setStepArpRate(widgetId, parseFloat(slider.value)));
+    row.appendChild(slider);
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "port-value";
+    valueSpan.dataset.role = "step-arp-rate-value";
+    valueSpan.textContent = `${formatNumber(stepArpRateBpm(widgetId))} BPM`;
+    row.appendChild(valueSpan);
+  }
+  return row;
+}
+
+// Local "direction" slider drag - see buildStepArpIoLine. A genuine cable
+// still wins outright in the firmware (nodes/StepArpeggiatorNode.h's
+// portSample() only ever falls back to this local value when unwired); the
+// disabled styling here (see updateStepArpDirectionVisual) is purely a
+// browser-side "don't bother turning this, it's overridden" cue.
+function setStepArpDirection(widgetId, volts) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  state.directionVolts = clamp(volts, 0, CV_MAX_VOLTS);
+  updateStepArpDirectionVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { direction: state.directionVolts });
+}
+
+// Local "pulseTime" slider drag. state.pulseMs is ALREADY the resolved,
+// real-unit value (matches nodes/StepArpeggiatorNode.h's own local
+// fallback field 1:1) - the slider's own 0-10V raw position is derived from
+// it (rangeToCv) rather than stored, same as this file's existing
+// effectCvStates.
+function setStepArpPulseTime(widgetId, volts) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  const clampedVolts = clamp(volts, 0, CV_MAX_VOLTS);
+  state.pulseMs = cvToRange(clampedVolts, state.pulseTimeMinSec, state.pulseTimeMaxSec, "linear") * 1000;
+  updateStepArpPulseTimeVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { pulseMs: state.pulseMs });
+}
+
+function formatStepArpPulseTime(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return "";
+  return `${Math.round(state.pulseMs)} ms`;
+}
+
+function updateStepArpDirectionVisual(widgetId) {
+  const el = document.getElementById(widgetId);
+  const state = stepArpStates.get(widgetId);
+  if (!el || !state) return;
+  const slider = el.querySelector('[data-role="step-arp-direction-slider"]');
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === "direction" &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  if (slider) {
+    slider.value = String(state.directionVolts);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = el.querySelector('[data-role="step-arp-direction-value"]');
+  if (valueSpan) valueSpan.textContent = stepArpDirectionLabel(state.directionVolts);
+}
+
+function updateStepArpPulseTimeVisual(widgetId) {
+  const el = document.getElementById(widgetId);
+  const state = stepArpStates.get(widgetId);
+  if (!el || !state) return;
+  const volts = rangeToCv(state.pulseMs / 1000, state.pulseTimeMinSec, state.pulseTimeMaxSec, "linear");
+  const slider = el.querySelector('[data-role="step-arp-pulsetime-slider"]');
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === "pulseTime" &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  if (slider) {
+    slider.value = String(volts);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = el.querySelector('[data-role="step-arp-pulsetime-value"]');
+  if (valueSpan) valueSpan.textContent = formatStepArpPulseTime(widgetId);
+}
+
+// Resolved BPM of the internal fallback clock - pure function of state, safe
+// to call before the widget is even in the DOM (see buildStepArpIoLine's
+// initial "rate" row text, same reasoning as formatStepArpPulseTime above).
+function stepArpRateBpm(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return 0;
+  return clockBpm(state.clockCvVolts, 0, state.clockMaxBpm, state.clockRoundBpm);
+}
+
+// Local "rate" slider drag - see buildStepArpIoLine. Same wired-cable-wins
+// convention as direction/pulseTime; restarts the internal clock (below) so
+// a tempo change takes effect immediately instead of waiting for the next
+// tick's own interval to be recomputed.
+function setStepArpRate(widgetId, volts) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  state.clockCvVolts = clamp(volts, 0, CV_MAX_VOLTS);
+  updateStepArpRateVisual(widgetId);
+  stepArpRestartInternalClock(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { clockCvVolts: state.clockCvVolts });
+}
+
+function updateStepArpRateVisual(widgetId) {
+  const el = document.getElementById(widgetId);
+  const state = stepArpStates.get(widgetId);
+  if (!el || !state) return;
+  const slider = el.querySelector('[data-role="step-arp-rate-slider"]');
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === "rate" &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  if (slider) {
+    slider.value = String(state.clockCvVolts);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = el.querySelector('[data-role="step-arp-rate-value"]');
+  if (valueSpan) valueSpan.textContent = `${formatNumber(stepArpRateBpm(widgetId))} BPM`;
+}
+
+// Whether a genuine cable feeds "clock" right now - the internal fallback
+// generator below only ever runs while this is false (plan/user request:
+// "wenn nichts angeschlossen ist am Clockport, dann soll [die eigene Clock]
+// genommen werden").
+function stepArpClockPortWired(widgetId) {
+  return connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "clock");
+}
+
+function stepArpStopInternalClock(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (state && state.clockTickTimer) {
+    clearInterval(state.clockTickTimer);
+    state.clockTickTimer = null;
+  }
+}
+
+// Editor-side preview twin of nodes/StepArpeggiatorNode.h's render() internal-
+// clock branch: a setInterval standing in for that sample-accurate phase
+// accumulator (same simplification Clock's own restartClockTimer already
+// makes for its "pulse" output). Always tears down and rebuilds from
+// scratch rather than adjusting the running interval - restarting IS the
+// resync (its next tick becomes exactly one period from now), which is
+// exactly what a Gate rising edge needs (see deliverToWidget's "gate"
+// branch below) and is harmless everywhere else this gets called from
+// (rate changes, settings-dialog saves, connection changes).
+function stepArpRestartInternalClock(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  stepArpStopInternalClock(widgetId);
+  if (stepArpClockPortWired(widgetId)) return; // external cable always wins
+  const bpm = stepArpRateBpm(widgetId);
+  if (bpm <= 0) return;
+  const intervalMs = 60000 / bpm;
+  state.clockTickTimer = setInterval(() => {
+    const el = document.getElementById(widgetId);
+    if (!el || state.gateVolts < GATE_THRESHOLD_VOLTS) return;
+    stepArpTriggerStep(widgetId, state, el);
+  }, intervalMs);
+}
+
+// CV Step-Arpeggiator: a top two-column strip (clock/gate/pitch/direction on
+// the left, cv/gateOut on the right - both edge-flush like every other
+// widget's ports, see buildStepArpIoLine above) over a dense bottom row of
+// sixteen small round knobs for the "stepN" CV inputs (NOT the usual
+// vertical port-row list - see documentation/cv-step-arpeggiator-plan.md
+// section "Renderer"), with THEIR OWN dots flush against the widget's
+// bottom edge.
+function renderStepArpPorts(widgetId, portsEl) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  const ioRow = document.createElement("div");
+  ioRow.className = "step-arp-io-row";
+
+  const inputsCol = document.createElement("div");
+  inputsCol.className = "step-arp-io-col step-arp-io-col-in";
+  WIDGET_TYPES["step-arpeggiator"].inputs
+    .filter((port) => !port.id.startsWith("step"))
+    .forEach((port) => inputsCol.appendChild(buildStepArpIoLine(widgetId, port, "in")));
+  ioRow.appendChild(inputsCol);
+
+  const outputsCol = document.createElement("div");
+  outputsCol.className = "step-arp-io-col step-arp-io-col-out";
+  WIDGET_TYPES["step-arpeggiator"].outputs.forEach((port) => {
+    outputsCol.appendChild(buildStepArpIoLine(widgetId, port, "out"));
+  });
+  ioRow.appendChild(outputsCol);
+
+  portsEl.appendChild(ioRow);
+
+  const stepsRow = document.createElement("div");
+  stepsRow.className = "step-arp-steps-row";
+  for (let i = 0; i < state.stepCount; i += 1) {
+    const portId = `step${i + 1}`;
+
+    // Reuse createPortRow's own dot (same class/kind computation as every
+    // other input port) rather than hand-rolling a second copy of that
+    // logic - only the dot element itself is kept, the row/label are not.
+    const dot = createPortRow(widgetId, { id: portId, label: `Step ${i + 1}` }, "in", "step-arpeggiator").querySelector(
+      ".port-dot"
+    );
+
+    const knob = document.createElement("div");
+    knob.className = "step-arp-knob";
+    knob.dataset.role = `step-arp-knob-${i + 1}`;
+    knob.title = `Step ${i + 1}`;
+    const indicator = document.createElement("div");
+    indicator.className = "step-arp-knob-indicator";
+    indicator.dataset.role = `step-arp-knob-${i + 1}-indicator`;
+    knob.appendChild(indicator);
+    knob.addEventListener("mousedown", (e) => startStepArpKnobDrag(e, widgetId, i));
+    // Double-click resets this step back to its 5V default - same shortcut
+    // convention as the widget-level dblclick opening settings, just
+    // stopped from bubbling there since this one means something else here.
+    knob.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setStepArpValue(widgetId, i, STEP_ARP_DEFAULT_VOLTS);
+      markDirty();
+    });
+
+    const valueSpan = document.createElement("div");
+    valueSpan.className = "step-arp-value";
+    valueSpan.dataset.role = `step-arp-value-${i + 1}`;
+
+    const noteSpan = document.createElement("div");
+    noteSpan.className = "step-arp-note";
+    noteSpan.dataset.role = `step-arp-note-${i + 1}`;
+
+    const dotRow = document.createElement("div");
+    dotRow.className = "step-arp-dot-row";
+    dotRow.appendChild(dot);
+
+    const cell = document.createElement("div");
+    cell.className = "step-arp-cell";
+    cell.appendChild(knob);
+    cell.appendChild(valueSpan);
+    cell.appendChild(noteSpan);
+    cell.appendChild(dotRow);
+    stepsRow.appendChild(cell);
+  }
+  portsEl.appendChild(stepsRow);
+
+  updateStepArpVisual(widgetId);
+  updateStepArpActiveHighlight(widgetId);
+  stepArpRestartInternalClock(widgetId);
+}
+
+// Same vertical-drag-to-value math as startKnobDrag (main.js), just
+// operating directly in the 0-10V CV domain instead of a 0-127 raw+mapping
+// indirection - these step knobs ARE already the pitch-CV value, no
+// separate output-range mapping is needed.
+function startStepArpKnobDrag(e, widgetId, index) {
+  e.preventDefault();
+  e.stopPropagation();
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  const startY = e.clientY;
+  const startVolts = state.steps[index];
+  let moved = false;
+
+  function onMove(ev) {
+    const dy = startY - ev.clientY;
+    if (Math.abs(dy) > 2) moved = true;
+    setStepArpValue(widgetId, index, startVolts + (dy / 254) * CV_MAX_VOLTS);
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (moved) markDirty();
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+// Local knob drag AND a live cable both land here via deliverToWidget's
+// step-arpeggiator branch - same pattern as Hammond's drawbarN (see
+// renderHammondPorts above).
+function setStepArpValue(widgetId, index, volts) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  const clamped = clamp(volts, 0, CV_MAX_VOLTS);
+  state.steps[index] = clamped;
+  updateStepArpKnobVisual(widgetId, index);
+  sendLiveParamUpdateThrottled(widgetId, { [`step${index + 1}`]: clamped });
+}
+
+function updateStepArpKnobVisual(widgetId, index) {
+  const state = stepArpStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const volts = state.steps[index];
+  const indicator = el.querySelector(`[data-role="step-arp-knob-${index + 1}-indicator"]`);
+  if (indicator) indicator.style.transform = `rotate(${-135 + (volts / CV_MAX_VOLTS) * 270}deg)`;
+  // Unlike the direction/pulseTime local-slider-override checks elsewhere in
+  // this file, "pitch" has no local knob to override - ANY cable here
+  // (regardless of source kind) already changes what actually sounds, so the
+  // display switches on connection alone, not just "audio"-kind ones.
+  const pitchWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pitch");
+  const valueSpan = el.querySelector(`[data-role="step-arp-value-${index + 1}"]`);
+  if (valueSpan) {
+    valueSpan.classList.toggle("hidden", pitchWired);
+    if (!pitchWired) valueSpan.textContent = `${formatNumber(volts)} V`;
+  }
+  const noteSpan = el.querySelector(`[data-role="step-arp-note-${index + 1}"]`);
+  if (noteSpan) {
+    if (pitchWired) {
+      const semitones = pitchCvToSemitoneOffset(volts);
+      noteSpan.textContent = `${semitones > 0 ? "+" : ""}${semitones}`;
+    } else {
+      noteSpan.textContent = pitchCvToNoteName(volts);
+    }
+  }
+  // A wired step port overrides the local knob outright - same disable
+  // convention as Hammond's drawbar sliders (see updateHammondDrawbarVisual).
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === `step${index + 1}` &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  const knob = el.querySelector(`[data-role="step-arp-knob-${index + 1}"]`);
+  if (knob) knob.classList.toggle("step-arp-knob-disabled", audioConnected);
+}
+
+function updateStepArpVisual(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  for (let i = 0; i < state.stepCount; i += 1) {
+    updateStepArpKnobVisual(widgetId, i);
+  }
+  updateStepArpDirectionVisual(widgetId);
+  updateStepArpPulseTimeVisual(widgetId);
+  updateStepArpRateVisual(widgetId);
+}
+
+// Highlights the cell of the step currently held at the "cv" output (see
+// StepArpState::currentStep in nodes/StepArpeggiatorNode.h) - purely a
+// display of stepArpStates' own client-side-simulated position, updated by
+// the "clock"/"gate" branches of deliverToWidget below.
+function updateStepArpActiveHighlight(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  el.querySelectorAll(".step-arp-cell").forEach((cell, index) => {
+    cell.classList.toggle("step-arp-cell-active", index === state.currentStep);
+  });
+}
+
+// direction (0-10V, four fixed bands) - JS mirror of
+// nodes::steparp::directionFromCv() in nodes/StepArpeggiatorNode.h.
+function stepArpDirectionFromCv(volts) {
+  if (volts < 2.5) return "forward";
+  if (volts < 5) return "backward";
+  if (volts < 7.5) return "pingpong";
+  return "random";
+}
+
+// JS mirror of nodes::steparp::nextStepIndex() (same file) - advances
+// state.currentStep (and state.pingPongForward for the Ping-Pong sub-state)
+// to the step that will be held after THIS trigger. Mutates `state`
+// in place, matching the C++ function's reference-parameter shape.
+function stepArpNextIndex(state) {
+  const stepCount = state.stepCount;
+  const current = state.currentStep;
+  if (stepCount <= 1) return 0;
+  switch (stepArpDirectionFromCv(state.directionVolts)) {
+    case "forward": {
+      const next = current + 1;
+      return next >= stepCount ? 0 : next;
+    }
+    case "backward":
+      return current === 0 ? stepCount - 1 : current - 1;
+    case "pingpong":
+      if (state.pingPongForward) {
+        if (current >= stepCount - 1) {
+          state.pingPongForward = false;
+          return current - 1;
+        }
+        return current + 1;
+      }
+      if (current === 0) {
+        state.pingPongForward = true;
+        return current + 1;
+      }
+      return current - 1;
+    case "random":
+    default:
+      return Math.floor(Math.random() * stepCount);
+  }
+}
+
+// Plays state.currentStep (sample-and-holds its CV + starts the gateOut
+// pulse/LED), then advances state.currentStep to the FOLLOWING step - the
+// editor-side mirror of nodes/StepArpeggiatorNode.h's triggerStep(), shared
+// by both trigger sources: a qualifying clock edge, and the Gate's own
+// rising edge (which plays step 1 immediately instead of waiting for the
+// first clock edge afterward).
+function stepArpTriggerStep(widgetId, state, el) {
+  const stepVolts = state.steps[state.currentStep];
+  // "pitch" - when wired, a step's own knob value is a +/-N-semitone offset
+  // from its own 5V center, added on top of the incoming Pitch CV (0
+  // semitones at the knob's 5V default + a 5V Pitch signal must produce
+  // exactly 5V out, not 10V) - see nodes/StepArpeggiatorNode.h's
+  // triggerStep() for the matching firmware math and
+  // pitchCvToSemitoneOffset for the matching knob display.
+  const pitchWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pitch");
+  state.heldCv = clamp(
+    pitchWired ? state.pitchVolts + (stepVolts - CV_MAX_VOLTS / 2) : stepVolts,
+    0,
+    CV_MAX_VOLTS
+  );
+  propagate(widgetId, "cv", state.heldCv);
+  updateStepArpActiveHighlight(widgetId);
+
+  const outDot = el.querySelector('[data-port-id="gateOut"][data-port-dir="out"]');
+  setLedActive(outDot, true);
+  propagate(widgetId, "gateOut", GATE_ON_VOLTS);
+  clearTimeout(state.gateOutTimer);
+  state.gateOutTimer = setTimeout(() => {
+    setLedActive(outDot, false);
+    propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
+  }, state.pulseMs);
+
+  state.currentStep = stepArpNextIndex(state);
 }
 
 function recomputeHammondFreq(widgetId, voiceIndex) {
@@ -10242,12 +11203,88 @@ function createAdsrGraph(widgetId) {
   hold.dataset.role = "adsr-hold";
   svg.appendChild(hold);
 
+  ["peak", "decay-end", "release-end"].forEach((pointId) => {
+    const point = document.createElementNS(svgNs, "circle");
+    point.classList.add("adsr-point");
+    point.dataset.pointId = pointId;
+    point.setAttribute("r", "6");
+    point.setAttribute("tabindex", "0");
+    point.setAttribute("aria-label", pointId.replace("-", " "));
+    svg.appendChild(point);
+  });
+
   const livePoint = document.createElementNS(svgNs, "circle");
   livePoint.classList.add("adsr-live-point");
   livePoint.dataset.role = "adsr-live-point";
   livePoint.setAttribute("r", "4.5");
   livePoint.setAttribute("aria-hidden", "true");
   svg.appendChild(livePoint);
+
+  let drag = null;
+  svg.addEventListener("pointerdown", (event) => {
+    const point = event.target.closest?.(".adsr-point");
+    if (!point || event.button !== 0) return;
+    const state = adsrStates.get(widgetId);
+    if (!state) return;
+    drag = {
+      pointId: point.dataset.pointId,
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      attack: state.attack,
+      decay: state.decay,
+      sustain: state.sustain,
+      release: state.release,
+    };
+    event.preventDefault();
+    event.stopPropagation();
+    svg.setPointerCapture?.(event.pointerId);
+    point.classList.add("dragging");
+  });
+  svg.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const state = adsrStates.get(widgetId);
+    const rect = svg.getBoundingClientRect();
+    if (!state || rect.width <= 0 || rect.height <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const segmentWidth = (ADSR_GRAPH_WIDTH - ADSR_GRAPH_PADDING * 2 - ADSR_GRAPH_HOLD_WIDTH) / 3;
+    const timeDelta = (event.clientX - drag.clientX) * ADSR_GRAPH_WIDTH / (rect.width * segmentWidth);
+    if (drag.pointId === "peak") {
+      deliverToWidget(widgetId, "att", secondsToCv(
+        clamp(drag.attack + timeDelta * state.attackMaxSeconds, 0.001, state.attackMaxSeconds),
+        state.attackMaxSeconds,
+        state.attackCurve
+      ));
+    } else if (drag.pointId === "decay-end") {
+      deliverToWidget(widgetId, "dec", secondsToCv(
+        clamp(drag.decay + timeDelta * state.decayMaxSeconds, 0.001, state.decayMaxSeconds),
+        state.decayMaxSeconds,
+        state.decayCurve
+      ));
+      deliverToWidget(widgetId, "sus", clamp(
+        drag.sustain - ((event.clientY - drag.clientY) * ADSR_GRAPH_HEIGHT) /
+          (rect.height * (ADSR_GRAPH_HEIGHT - ADSR_GRAPH_PADDING * 2)),
+        0,
+        1
+      ) * CV_MAX_VOLTS);
+    } else {
+      deliverToWidget(widgetId, "rel", secondsToCv(
+        clamp(drag.release + timeDelta * state.releaseMaxSeconds, 0.001, state.releaseMaxSeconds),
+        state.releaseMaxSeconds,
+        state.releaseCurve
+      ));
+    }
+  });
+  const stopDrag = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    svg.querySelector(`[data-point-id="${drag.pointId}"]`)?.classList.remove("dragging");
+    if (svg.hasPointerCapture?.(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+    drag = null;
+    event.stopPropagation();
+  };
+  svg.addEventListener("pointerup", stopDrag);
+  svg.addEventListener("pointercancel", stopDrag);
 
   return svg;
 }
@@ -10367,6 +11404,11 @@ function updateAdsrGraph(widgetId) {
   hold?.setAttribute("x2", String(geometry.holdEnd));
   hold?.setAttribute("y1", String(decayEnd.y));
   hold?.setAttribute("y2", String(decayEnd.y));
+  [["peak", peak], ["decay-end", decayEnd], ["release-end", releaseEnd]].forEach(([pointId, point]) => {
+    const circle = svg.querySelector(`[data-point-id="${pointId}"]`);
+    circle?.setAttribute("cx", String(point.x));
+    circle?.setAttribute("cy", String(point.y));
+  });
   updateAdsrLivePoint(widgetId, performance.now(), geometry);
 }
 
@@ -10722,6 +11764,10 @@ function handleCanvasContextMenu(e) {
   const content = clientToContent(e.clientX, e.clientY);
   openWidgetPicker(snap(content.x), snap(content.y), e.clientX, e.clientY);
 }
+
+document.addEventListener("contextmenu", (event) => {
+  if (event.target.closest(".widget-instance")) event.preventDefault();
+});
 
 pages.generator.canvasEl.addEventListener("contextmenu", handleCanvasContextMenu);
 pages.fx.canvasEl.addEventListener("contextmenu", handleCanvasContextMenu);
@@ -11410,6 +12456,17 @@ function drawConnections() {
 
     connectionsLayer.appendChild(path);
   });
+  // Connecting/disconnecting "pitch" flips a step knob's label between an
+  // absolute note name and a relative semitone offset (see
+  // updateStepArpKnobVisual) - refresh right away instead of waiting for
+  // the next value to happen to propagate down that cable. Connecting/
+  // disconnecting "clock" (or "rate") flips whether the internal fallback
+  // clock should be running at all (see stepArpRestartInternalClock) -
+  // same reasoning, refresh right away rather than waiting for a value.
+  stepArpStates.forEach((_, widgetId) => {
+    updateStepArpVisual(widgetId);
+    stepArpRestartInternalClock(widgetId);
+  });
 }
 
 
@@ -11796,8 +12853,16 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     if (state) {
       const num = Number(value);
       state.cvVolts = Number.isNaN(num) ? 0 : clamp(num, 0, CV_MAX_VOLTS);
-      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm);
+      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
       restartClockTimer(widgetId);
+      // restartClockTimer() above only rebuilds this browser tab's own local
+      // preview timer (see fireClockPulse) - matches nodes::clock::setParam's
+      // "cvVolts" field (ParamDispatch.h) so the REAL engine's ClockState
+      // updates live too, same as every other live-drag control here (e.g.
+      // LFO's "rate" case right below). markDirty() alone (the previous only
+      // call here) just schedules a debounced full-preset autosave - too
+      // slow/no-op for "drag the tempo slider, hear it change immediately".
+      sendLiveParamUpdateThrottled(widgetId, { cvVolts: state.cvVolts });
       markDirty();
     }
   }
@@ -12202,6 +13267,87 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       audioEngine.setParam(widgetId, portId, state.drawbars[k - 1]);
       updateHammondDrawbarVisual(widgetId, k);
       sendLiveParamUpdateThrottled(widgetId, { [portId]: state.drawbars[k - 1] });
+    }
+  }
+
+  // Sixteen step CV ports - a live cable lands here exactly like a local
+  // knob drag (see setStepArpValue/startStepArpKnobDrag above); the "wired
+  // wins outright" rule itself is enforced by the disabled-knob styling in
+  // updateStepArpKnobVisual and, authoritatively, by the firmware/audio
+  // engine's own inPorts-over-local-knob precedence - this just keeps the
+  // browser-side display in sync.
+  if (el.dataset.widgetType === "step-arpeggiator" && /^step(1[0-6]|[1-9])$/.test(portId)) {
+    const num = Number(value);
+    if (!Number.isNaN(num)) {
+      setStepArpValue(widgetId, Number(portId.slice(4)) - 1, num);
+    }
+  }
+
+  // clock/gate/pitch/direction - client-side simulation of
+  // nodes/StepArpeggiatorNode.h's render() (see stepArpNextIndex above),
+  // driven by whatever already ticks/propagates these cables in the editor
+  // (typically a Clock widget's own local pulse timer): flashes the
+  // clock/gate input LEDs and the gateOut output LED, highlights the
+  // currently held step, and propagates "cv"/"gateOut" downstream so a
+  // chained widget previews correctly too - same purpose Clock's own
+  // fireClockPulse serves for its "pulse" output.
+  if (el.dataset.widgetType === "step-arpeggiator") {
+    const state = stepArpStates.get(widgetId);
+    if (state && portId === "gate") {
+      const gateOn = Number(value) >= GATE_THRESHOLD_VOLTS;
+      setLedActive(el.querySelector('[data-port-id="gate"][data-port-dir="in"]'), gateOn);
+      if (gateOn && !state.gatePrev) {
+        // Run/Reset rising edge: jump to step 1 and play it immediately
+        // (CV + gateOut pulse + advance to the following step), instead of
+        // waiting for the first clock edge afterward - see
+        // stepArpTriggerStep/nodes/StepArpeggiatorNode.h's triggerStep().
+        state.currentStep = 0;
+        state.pingPongForward = true;
+        // The internal fallback clock always resyncs to Gate too, whether
+        // or not it is actually driving playback right now (see
+        // nodes/StepArpeggiatorNode.h's render() - same rule): its next
+        // tick becomes exactly one period from this exact moment.
+        stepArpRestartInternalClock(widgetId);
+        stepArpTriggerStep(widgetId, state, el);
+      } else if (!gateOn && state.gatePrev) {
+        // Gate falling edge - end any still-running gateOut pulse
+        // immediately, not just on the next rising edge (see
+        // nodes/StepArpeggiatorNode.h's render() - same rule, mirrored here
+        // purely for the editor's own LED/propagate() simulation).
+        clearTimeout(state.gateOutTimer);
+        state.gateOutTimer = null;
+        setLedActive(el.querySelector('[data-port-id="gateOut"][data-port-dir="out"]'), false);
+        propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
+      }
+      state.gateVolts = Number(value) || 0;
+      state.gatePrev = gateOn;
+    } else if (state && portId === "clock") {
+      const clockOn = Number(value) >= GATE_THRESHOLD_VOLTS;
+      setLedActive(el.querySelector('[data-port-id="clock"][data-port-dir="in"]'), clockOn);
+      if (clockOn && !state.clockPrev && state.gateVolts >= GATE_THRESHOLD_VOLTS) {
+        stepArpTriggerStep(widgetId, state, el);
+      }
+      state.clockPrev = clockOn;
+    } else if (state && portId === "pitch") {
+      state.pitchVolts = Number(value) || 0;
+    } else if (state && portId === "direction") {
+      state.directionVolts = Number(value) || 0;
+      updateStepArpDirectionVisual(widgetId);
+    } else if (state && portId === "pulseTime") {
+      // Incoming cable carries raw 0-10V, same as the local slider - keeps
+      // the simulated gateOut LED flash duration (see the "clock" branch
+      // above) accurate even when this port is wired, and refreshes the
+      // (now disabled - see updateStepArpPulseTimeVisual) slider display.
+      state.pulseMs = cvToRange(Number(value) || 0, state.pulseTimeMinSec, state.pulseTimeMaxSec, "linear") * 1000;
+      updateStepArpPulseTimeVisual(widgetId);
+    } else if (state && portId === "rate") {
+      // Incoming cable carries raw 0-10V, same as the local slider - only
+      // actually affects playback while "clock" itself is unwired (see
+      // stepArpRestartInternalClock), but keeps the (then-disabled) slider
+      // display accurate either way.
+      state.clockCvVolts = Number(value) || 0;
+      updateStepArpRateVisual(widgetId);
+      stepArpRestartInternalClock(widgetId);
     }
   }
 
@@ -13195,6 +14341,7 @@ const WIDGET_ENGINES = {
             minBpm: state.minBpm,
             maxBpm: state.maxBpm,
             pulseMs: state.pulseMs,
+            roundBpm: state.roundBpm === true,
           }
         : {};
     },
@@ -13206,7 +14353,8 @@ const WIDGET_ENGINES = {
       state.minBpm = params.minBpm ?? 0;
       state.maxBpm = params.maxBpm ?? 240;
       state.pulseMs = params.pulseMs ?? 100;
-      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm);
+      state.roundBpm = params.roundBpm === true;
+      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
       restartClockTimer(id);
     },
   },
@@ -13643,6 +14791,52 @@ const WIDGET_ENGINES = {
       applyDxEnvelopeCollapsed(id);
     },
   },
+  "step-arpeggiator": {
+    getParams: (id) => {
+      const state = stepArpStates.get(id);
+      return state
+        ? {
+            steps: [...state.steps],
+            stepCount: state.stepCount,
+            pulseMs: state.pulseMs,
+            pulseTimeMinSec: state.pulseTimeMinSec,
+            pulseTimeMaxSec: state.pulseTimeMaxSec,
+            direction: state.directionVolts,
+            retriggerGateOut: state.retriggerGateOut === true,
+            clockCvVolts: state.clockCvVolts,
+            clockMaxBpm: state.clockMaxBpm,
+            clockRoundBpm: state.clockRoundBpm === true,
+          }
+        : {};
+    },
+    applyParams: (id, params) => {
+      const state = stepArpStates.get(id);
+      if (!state || !params) return;
+      state.steps =
+        Array.isArray(params.steps) && params.steps.length === STEP_ARP_MAX_STEPS
+          ? params.steps.map((v) => clamp(Number(v) || 0, 0, CV_MAX_VOLTS))
+          : new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS);
+      state.stepCount = Number(params.stepCount) <= 8 ? 8 : STEP_ARP_MAX_STEPS;
+      const pulseMs = Number(params.pulseMs);
+      state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? pulseMs : 10;
+      const minSec = Number(params.pulseTimeMinSec);
+      const maxSec = Number(params.pulseTimeMaxSec);
+      state.pulseTimeMinSec = Number.isFinite(minSec) && minSec >= 0 ? minSec : 0.001;
+      state.pulseTimeMaxSec = Number.isFinite(maxSec) && maxSec > state.pulseTimeMinSec ? maxSec : Math.max(2, state.pulseTimeMinSec + 1);
+      state.directionVolts = clamp(Number(params.direction) || 0, 0, CV_MAX_VOLTS);
+      state.retriggerGateOut = params.retriggerGateOut === true;
+      const cvVolts = Number(params.clockCvVolts);
+      state.clockCvVolts = clamp(Number.isFinite(cvVolts) ? cvVolts : 0, 0, CV_MAX_VOLTS);
+      const maxBpm = Number(params.clockMaxBpm);
+      state.clockMaxBpm = Number.isFinite(maxBpm) && maxBpm > 0 ? maxBpm : 120;
+      state.clockRoundBpm = params.clockRoundBpm === true;
+      const el = document.getElementById(id);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderStepArpPorts(id, portsEl);
+      updateStepArpVisual(id);
+      stepArpRestartInternalClock(id);
+    },
+  },
   const: {
     getParams: (id) => {
       const state = constStates.get(id);
@@ -13850,6 +15044,28 @@ function handleNewPreset() {
 
 
 
+// Generic "a parameter changed" signal used by every widget's own state-
+// mutation code (knob/button/switch drags, port-value edits, annotation
+// edits, canvas moves, ...) - deliberately a no-op, NOT an autosave trigger.
+// savePresetNow() sends the whole preset to the firmware, which reparses it
+// and rebuilds the audio graph from scratch (see GraphBuilder) - audible as
+// a brief dropout. A parameter tweak must never cause that: it already
+// reaches the RUNNING engine live via sendLiveParamUpdateThrottled()
+// (WS "paramUpdate", patches the field on the live NodeInstance in place,
+// no rebuild) wherever a call site needs that. Only two things persist to
+// the saved preset file: an explicit Save Preset action, and a structural
+// graph edit (add/remove widget, add/remove connection - see e.g.
+// removeWidget's caller, the connection-drag completion handler, and
+// connection deletion, all of which call savePresetNow() directly, not
+// through here). Whenever one of those DOES fire, it serializes each
+// widget's current live state anyway (see getWidgetParams/serializePreset),
+// so no parameter change is ever actually lost - it just rides along with
+// the next real save instead of forcing one of its own. A brief stub
+// history: this used to be a genuine no-op (`{}`) by omission, not design;
+// a later attempt turned it into a debounced savePresetNow() (matching
+// scheduleAnnotationSave's pattern) to fix call sites that had NO other
+// persistence path - that reintroduced exactly the audio-dropout-on-tweak
+// problem this comment now documents, so it was reverted back to a no-op.
 function markDirty() {}
 
 

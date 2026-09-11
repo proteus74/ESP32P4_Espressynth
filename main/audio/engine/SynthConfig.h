@@ -25,10 +25,13 @@ constexpr size_t kLinkBusCount = 8;
 // is the correct worst-case margin, not SYNTH_VOICE_COUNT-scaled like the
 // preset connections above.
 constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkBusCount + kMaxWidgets;
-// Multiplexer has 16 audio inputs plus one control input (select) = 17 slots.
-// Keep one bit per slot in NodeInstance's connection masks.
-constexpr size_t kMaxAudioInPorts = 17;
+// CV Step-Arpeggiator has 6 fixed CV inputs (clock/gate/pitch/direction/
+// pulseTime/rate) plus 16 per-step CV inputs = 22 slots - the current widest
+// node type (previously Multiplexer's 16 audio inputs + 1 control input =
+// 17). Keep one bit per slot in NodeInstance's connection masks.
+constexpr size_t kMaxAudioInPorts = 22;
 constexpr size_t kValueListMax = 16;   // Knob/Button "value list" mode entry cap
+constexpr size_t kKnobControlMax = 16;
 constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 

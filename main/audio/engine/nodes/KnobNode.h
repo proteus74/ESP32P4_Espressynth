@@ -20,7 +20,7 @@
 namespace nodes::knob
 {
 
-struct KnobState
+struct KnobControl
 {
     int16_t cc = -1;      // -1 = unlearned (JS: cc === null)
     int8_t channel = -1;  // -1 = unlearned; 0-based MIDI channel (JS: channel === null)
@@ -67,33 +67,45 @@ struct KnobState
     }
 };
 
+struct KnobState
+{
+    uint8_t count = 1;
+    KnobControl controls[synth::kKnobControlMax];
+};
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = inst.knob->currentValue;
+        inst.outL[i] = inst.knob->controls[0].currentValue;
     }
 }
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.knob->cc = p.knobCc;
-    inst.knob->channel = p.knobChannel;
-    inst.knob->point1In = p.point1In;
-    inst.knob->point1Out = p.point1Out;
-    inst.knob->point2In = p.point2In;
-    inst.knob->point2Out = p.point2Out;
-    inst.knob->hasMin = p.hasConstraintMin;
-    inst.knob->minVal = p.constraintMin;
-    inst.knob->hasMax = p.hasConstraintMax;
-    inst.knob->maxVal = p.constraintMax;
-    inst.knob->raw = p.knobRaw;
-    inst.knob->valueListCount = p.valueListCount;
-    for (uint8_t i = 0; i < p.valueListCount && i < synth::kValueListMax; ++i)
+    inst.knob->count = p.knobCount < 1 ? 1 : (p.knobCount > synth::kKnobControlMax ? synth::kKnobControlMax : p.knobCount);
+    for (uint8_t controlIndex = 0; controlIndex < inst.knob->count; ++controlIndex)
     {
-        inst.knob->valueList[i] = p.valueList[i];
+        KnobControl &control = inst.knob->controls[controlIndex];
+        const WidgetParams::KnobControlParams &source = p.knobs[controlIndex];
+        control.cc = source.cc;
+        control.channel = source.channel;
+        control.point1In = source.point1In;
+        control.point1Out = source.point1Out;
+        control.point2In = source.point2In;
+        control.point2Out = source.point2Out;
+        control.hasMin = source.hasConstraintMin;
+        control.minVal = source.constraintMin;
+        control.hasMax = source.hasConstraintMax;
+        control.maxVal = source.constraintMax;
+        control.raw = source.raw;
+        control.valueListCount = source.valueListCount;
+        for (uint8_t i = 0; i < source.valueListCount && i < synth::kValueListMax; ++i)
+        {
+            control.valueList[i] = source.valueList[i];
+        }
+        control.currentValue = control.mappedValue();
     }
-    inst.knob->currentValue = inst.knob->mappedValue();
 }
 
 inline void destroy(NodeInstance &inst)
@@ -105,40 +117,45 @@ inline void destroy(NodeInstance &inst)
     }
 }
 
-inline bool setParam(NodeInstance &inst, const char *name, float value)
+inline bool setParam(NodeInstance &inst, const char *name, float value, uint8_t controlIndex = 0)
 {
-    if (name == nullptr)
+    if (name == nullptr || controlIndex >= inst.knob->count)
     {
         return false;
     }
     if (strcmp(name, "raw") == 0)
     {
-        inst.knob->raw = value;
-        inst.knob->currentValue = inst.knob->mappedValue();
+        KnobControl &control = inst.knob->controls[controlIndex];
+        control.raw = value;
+        control.currentValue = control.mappedValue();
         return true;
     }
     if (strcmp(name, "point1In") == 0)
     {
-        inst.knob->point1In = value;
-        inst.knob->currentValue = inst.knob->mappedValue();
+        KnobControl &control = inst.knob->controls[controlIndex];
+        control.point1In = value;
+        control.currentValue = control.mappedValue();
         return true;
     }
     if (strcmp(name, "point1Out") == 0)
     {
-        inst.knob->point1Out = value;
-        inst.knob->currentValue = inst.knob->mappedValue();
+        KnobControl &control = inst.knob->controls[controlIndex];
+        control.point1Out = value;
+        control.currentValue = control.mappedValue();
         return true;
     }
     if (strcmp(name, "point2In") == 0)
     {
-        inst.knob->point2In = value;
-        inst.knob->currentValue = inst.knob->mappedValue();
+        KnobControl &control = inst.knob->controls[controlIndex];
+        control.point2In = value;
+        control.currentValue = control.mappedValue();
         return true;
     }
     if (strcmp(name, "point2Out") == 0)
     {
-        inst.knob->point2Out = value;
-        inst.knob->currentValue = inst.knob->mappedValue();
+        KnobControl &control = inst.knob->controls[controlIndex];
+        control.point2Out = value;
+        control.currentValue = control.mappedValue();
         return true;
     }
     return false;
@@ -146,6 +163,8 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
+    const int count = presetparser::getInt(p, "knobCount", 1);
+    out.knobCount = static_cast<uint8_t>(count < 1 ? 1 : (count > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : count));
     cJSON *cc = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "cc") : nullptr;
     out.knobCc = cJSON_IsNumber(cc) ? static_cast<int16_t>(cc->valueint) : -1;
     cJSON *ch = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "channel") : nullptr;
@@ -162,8 +181,55 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.hasConstraintMax = cJSON_IsNumber(cMax);
     out.constraintMax = out.hasConstraintMax ? static_cast<float>(cMax->valuedouble) : 0.0f;
     out.valueListCount = presetparser::getFloatArray(p, "valueList", out.valueList, static_cast<uint8_t>(synth::kValueListMax));
+
+    // Old presets carry one flat control. Seed control one from those fields
+    // before optionally replacing all controls with the new array schema.
+    WidgetParams::KnobControlParams &legacy = out.knobs[0];
+    legacy.cc = out.knobCc;
+    legacy.channel = out.knobChannel;
+    legacy.raw = out.knobRaw;
+    legacy.point1In = out.point1In;
+    legacy.point1Out = out.point1Out;
+    legacy.point2In = out.point2In;
+    legacy.point2Out = out.point2Out;
+    legacy.hasConstraintMin = out.hasConstraintMin;
+    legacy.constraintMin = out.constraintMin;
+    legacy.hasConstraintMax = out.hasConstraintMax;
+    legacy.constraintMax = out.constraintMax;
+    legacy.valueListCount = out.valueListCount;
+    for (uint8_t i = 0; i < out.valueListCount; ++i) legacy.valueList[i] = out.valueList[i];
+
+    cJSON *controls = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "knobs") : nullptr;
+    if (cJSON_IsArray(controls))
+    {
+        const int arrayCount = cJSON_GetArraySize(controls);
+        out.knobCount = static_cast<uint8_t>(arrayCount < 1 ? 1 : (arrayCount > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : arrayCount));
+        for (uint8_t controlIndex = 0; controlIndex < out.knobCount; ++controlIndex)
+        {
+            cJSON *item = cJSON_GetArrayItem(controls, controlIndex);
+            if (!cJSON_IsObject(item)) continue;
+            WidgetParams::KnobControlParams &control = out.knobs[controlIndex];
+            cJSON *itemCc = cJSON_GetObjectItemCaseSensitive(item, "cc");
+            cJSON *itemChannel = cJSON_GetObjectItemCaseSensitive(item, "channel");
+            cJSON *itemMin = cJSON_GetObjectItemCaseSensitive(item, "constraintMin");
+            cJSON *itemMax = cJSON_GetObjectItemCaseSensitive(item, "constraintMax");
+            control.cc = cJSON_IsNumber(itemCc) ? static_cast<int16_t>(itemCc->valueint) : -1;
+            control.channel = cJSON_IsNumber(itemChannel) ? static_cast<int8_t>(itemChannel->valueint) : -1;
+            control.raw = presetparser::getFloat(item, "raw", 0.0f);
+            control.point1In = presetparser::getFloat(item, "point1In", 0.0f);
+            control.point1Out = presetparser::getFloat(item, "point1Out", 0.0f);
+            control.point2In = presetparser::getFloat(item, "point2In", 127.0f);
+            control.point2Out = presetparser::getFloat(item, "point2Out", 10.0f);
+            control.hasConstraintMin = cJSON_IsNumber(itemMin);
+            control.constraintMin = control.hasConstraintMin ? static_cast<float>(itemMin->valuedouble) : 0.0f;
+            control.hasConstraintMax = cJSON_IsNumber(itemMax);
+            control.constraintMax = control.hasConstraintMax ? static_cast<float>(itemMax->valuedouble) : 0.0f;
+            control.valueListCount = presetparser::getFloatArray(item, "valueList", control.valueList, static_cast<uint8_t>(synth::kValueListMax));
+        }
+    }
 }
 
 } // namespace nodes::knob
 
 using nodes::knob::KnobState;
+using nodes::knob::KnobControl;

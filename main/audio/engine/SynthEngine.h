@@ -343,11 +343,11 @@ private:
             const char *label = widget.label[0] != '\0' ? widget.label : widget.id;
 
             if (widget.type == NodeType::Knob && instance.knob != nullptr &&
-                instance.knob->cc >= 0 && static_cast<uint8_t>(instance.knob->cc) == event.data1 &&
-                instance.knob->channel >= 0 && static_cast<uint8_t>(instance.knob->channel) == channel)
+                instance.knob->controls[0].cc >= 0 && static_cast<uint8_t>(instance.knob->controls[0].cc) == event.data1 &&
+                instance.knob->controls[0].channel >= 0 && static_cast<uint8_t>(instance.knob->controls[0].channel) == channel)
             {
                 publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, 0, channel,
-                                           event.data1, event.data2, instance.knob->currentValue);
+                                           event.data1, event.data2, instance.knob->controls[0].currentValue);
             }
             else if (widget.type == NodeType::Button && instance.button != nullptr &&
                      instance.button->cc >= 0 && static_cast<uint8_t>(instance.button->cc) == event.data1 &&
