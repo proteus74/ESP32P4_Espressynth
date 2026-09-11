@@ -183,6 +183,12 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = inst.fmOsc;
     constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
+    // Cleared unconditionally up front, same reasoning as AdsrNode.h's
+    // outIsRamp reset - a downstream Constant-aware consumer (see
+    // NodeInstance.h's constantPortMask) must never read a stale true left
+    // over from a previous block that DID take one of the silent-output
+    // fast paths below.
+    inst.outIsConstant = false;
 
     // pitchCv (port 1) / tune (port 2): identical block-constant detection
     // to nodes::oscillator::render() - see its comment for the full
@@ -254,6 +260,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
     {
         memset(inst.outL, 0, frames * sizeof(float));
+        inst.outIsConstant = true;
+        inst.outConstantValue = 0.0f;
         ++enginestats::current.fmSilentSkipped;
         return;
     }
@@ -365,6 +373,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 s.gainSmooth.process(gainTarget);
         }
         memset(inst.outL, 0, frames * sizeof(float));
+        inst.outIsConstant = true;
+        inst.outConstantValue = 0.0f;
         return;
     }
 

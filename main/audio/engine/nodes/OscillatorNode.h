@@ -155,6 +155,11 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // live value. Only a real DSP edge (e.g. an LFO/Oscillator wired
     // directly for vibrato/FM) needs the portSample() read here.
     constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
+    // Cleared unconditionally up front, same reasoning as AdsrNode.h's
+    // outIsRamp reset - a downstream Constant-aware consumer (see
+    // NodeInstance.h's constantPortMask) must never read a stale true left
+    // over from a previous block that DID take the silent-skip path below.
+    inst.outIsConstant = false;
     const bool pitchAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     const bool pitchControlRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     const bool pitchControlFed = controlPortConnected(inst, 1);
@@ -214,6 +219,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
     {
         memset(inst.outL, 0, frames * sizeof(float));
+        inst.outIsConstant = true;
+        inst.outConstantValue = 0.0f;
         ++enginestats::current.oscSilentSkipped;
         return;
     }

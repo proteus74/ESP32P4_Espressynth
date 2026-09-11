@@ -183,6 +183,24 @@ struct NodeInstance
     // fast path in a rare case.
     static constexpr uint8_t kMaxRampedPorts = 2;
     RampDescriptor rampDesc[kMaxRampedPorts] = {};
+
+    // Input side of outIsConstant/outConstantValue above: which audio-input
+    // ports had their whole accumulated block tagged constant this block by
+    // Graph::renderBlock's edge-summing pass (see its view-port tag-copy
+    // site - same eligibility as rampPortMask above: exactly one unscaled,
+    // non-monitor-tap edge from an already-tagged-constant producer). Same
+    // small fixed cap and same "falls back to the always-correct
+    // audioPortConstantForBlock scan when unset or overflowed, never a
+    // correctness risk" contract as rampPortMask/rampDesc - see
+    // noderender::audioPortConstantForBlock below.
+    synth::PortMask constantPortMask = 0;
+    struct ConstDescriptor
+    {
+        uint8_t port = 0xFF;
+        float value = 0.0f;
+    };
+    static constexpr uint8_t kMaxConstantPorts = 2;
+    ConstDescriptor constDesc[kMaxConstantPorts] = {};
     // Output side: does THIS instance's own outL currently also happen to
     // be a whole-block linear ramp (set only by AdsrNode.h's render() for
     // now). outL itself is ALWAYS still fully materialized regardless -
@@ -194,6 +212,19 @@ struct NodeInstance
         float start = 0.0f;
         float inc = 0.0f;
     } outRamp;
+
+    // Same idea as outIsRamp/outRamp above, for the other common per-block
+    // output shape: one repeated value for the whole block (fm-plan.md
+    // section 3, P3 "Graph-weite Konstanz-Propagierung"). Set by a producer
+    // that already knows this for free - AdsrNode.h's isHolding() fast path
+    // (sustain plateau or fully idle), Oscillator's/FmOscillatorNode's
+    // memset-0 silent-skip fast paths - never inferred by scanning outL
+    // here. outL itself is ALWAYS still fully materialized regardless -
+    // this is purely additional metadata a constant-aware consumer may use
+    // instead of re-deriving the same fact via audioPortConstantForBlock's
+    // per-sample scan (see that function below).
+    bool outIsConstant = false;
+    float outConstantValue = 0.0f;
 
     OscillatorState osc;
     FmOscillatorState fmOsc;
@@ -328,6 +359,27 @@ inline bool audioPortConstantForBlock(const NodeInstance &inst, int port, size_t
     {
         value = inst.controlValue[port];
         return true;
+    }
+
+    // Fast path (fm-plan.md section 3, P3): a producer already told us, via
+    // Graph::renderBlock's edge tag-copy, that this port's whole
+    // accumulated buffer is one repeated value this block - skip the
+    // O(frames) rescan below entirely instead of re-discovering the same
+    // fact from scratch every block (the exact "vermeidbare FM-lokale
+    // Scans" the plan calls out). Only ever set when this port had exactly
+    // one eligible edge (see NodeInstance.h's constantPortMask comment), so
+    // this can never be stale from a second, non-constant edge summed in
+    // afterward - falls through to the ordinary scan whenever unset.
+    if ((inst.constantPortMask & synth::portBit(port)) != 0)
+    {
+        for (uint8_t k = 0; k < NodeInstance::kMaxConstantPorts; ++k)
+        {
+            if (inst.constDesc[k].port == static_cast<uint8_t>(port))
+            {
+                value = inst.constDesc[k].value;
+                return true;
+            }
+        }
     }
 
     value = samples[0];

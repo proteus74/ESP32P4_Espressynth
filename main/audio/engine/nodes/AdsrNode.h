@@ -87,17 +87,26 @@ inline void render(NodeInstance &inst, size_t frames)
     // recomputed every sample (plan section 5, ADSR row: "Velocity*10
     // einmal vorberechnen").
     const float velocityScale = s.velocity * cv::kMaxVolts;
-    // Cleared unconditionally up front so a Ramp-aware downstream consumer
-    // (see NodeInstance.h's rampPortMask) never reads a stale true from a
-    // previous block, regardless of which branch below actually runs.
+    // Cleared unconditionally up front so a Ramp-aware/Constant-aware
+    // downstream consumer (see NodeInstance.h's rampPortMask/
+    // constantPortMask) never reads a stale true from a previous block,
+    // regardless of which branch below actually runs.
     inst.outIsRamp = false;
+    inst.outIsConstant = false;
     if (s.ramp.isHolding())
     {
         // Sustain plateau or fully idle - process() would just keep
         // returning the same current() value sample after sample. Compute
         // it once and fill the block directly (plan section 5: "Sustain
-        // und Idle als konstante Ausgänge").
+        // und Idle als konstante Ausgänge"). Tag the output too (fm-
+        // plan.md section 3, P3) - this is by far the most common producer
+        // of a genuinely block-constant signal in the whole engine (every
+        // held note's sustain plateau, every idle voice), so a downstream
+        // consumer's own audioPortConstantForBlock() check can skip its
+        // rescan entirely instead of re-discovering this same fact.
         const float held = s.ramp.current() * velocityScale;
+        inst.outIsConstant = true;
+        inst.outConstantValue = held;
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = held;

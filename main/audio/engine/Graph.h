@@ -599,6 +599,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
         }
         inst.controlRampPortMask = 0;
         inst.rampPortMask = 0;
+        inst.constantPortMask = 0;
         for (int p = 0; p < inst.audioInPortCount; ++p)
         {
             if (inst.inPorts[p] == nullptr)
@@ -823,6 +824,22 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
                     {
                         dst.rampDesc[slot] = {edge.toPort, src.outRamp.start, src.outRamp.inc};
                         dst.rampPortMask |= synth::portBit(edge.toPort);
+                    }
+                }
+                // Same tag-copy, for "src's output is one repeated value
+                // this block" instead of "src's output is a ramp" - see
+                // NodeInstance.h's constantPortMask comment (fm-plan.md
+                // section 3, P3). Same safety argument as the ramp copy
+                // above: view-eligibility already proved this is the sole
+                // edge into this port, so no second edge can invalidate
+                // this tag later in this same loop.
+                else if (src.outIsConstant)
+                {
+                    const uint8_t slot = static_cast<uint8_t>(__builtin_popcount(dst.constantPortMask));
+                    if (slot < NodeInstance::kMaxConstantPorts)
+                    {
+                        dst.constDesc[slot] = {edge.toPort, src.outConstantValue};
+                        dst.constantPortMask |= synth::portBit(edge.toPort);
                     }
                 }
                 continue;
