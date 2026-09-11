@@ -585,6 +585,28 @@ public:
         }
     }
 
+    // Advances phase_ by phaseIncrement for `frames` samples without
+    // computing any waveform sample - same per-sample stepping/wrap as
+    // processWithIncrementT<W>() above (a bulk `phase_ += frames *
+    // phaseIncrement` is NOT bit-identical under float rounding once frames
+    // gets large). For a caller that already knows this block's audible
+    // output is silence regardless (see FmOscillatorNode.h's P1 "stumme
+    // Modulatoren" fast path, documentation/fm-plan.md section 3) but still
+    // needs phase_ to land exactly where the normal per-sample loop would,
+    // so the next audible block (e.g. right after a gate-on attack) picks
+    // up mid-cycle instead of glitching/restarting.
+    IRAM_ATTR inline void advancePhaseOnly(float phaseIncrement, size_t frames)
+    {
+        for (size_t i = 0; i < frames; ++i)
+        {
+            phase_ += phaseIncrement;
+            if (phase_ >= 1.0f)
+                phase_ -= floorf(phase_);
+            else if (phase_ < 0.0f)
+                phase_ -= floorf(phase_);
+        }
+    }
+
     // sampleRate is in practice ALWAYS the same value (kSampleRate, fixed
     // 48000 - see all callers in NodeInstance.cpp) - cache the reciprocal
     // instead of dividing anew each time. The comparison is always false

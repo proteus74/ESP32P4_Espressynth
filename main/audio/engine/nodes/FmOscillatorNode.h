@@ -8,6 +8,7 @@
 #include "esp_attr.h"
 
 #include "../CvConventions.h"
+#include "../EngineStats.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -105,6 +106,35 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
     }
 }
 
+// P2 (documentation/fm-plan.md section 3, "Den haeufigsten hoerbaren Pfad
+// gezielt vereinfachen"): disassembly of the built firmware showed the two
+// audible carriers in a 4-op FM preset (fmActive/feedbackActive both false
+// once their modulator's output is silence-zeroed by the P1 path above)
+// spend most of their per-sample cost re-evaluating the ampConstantForBlock
+// and gainConverged/gainFed ternaries in renderFastLoop below with a branch
+// on EVERY sample, even though every one of those three flags is
+// loop-invariant for the whole block - GCC does not hoist them out past the
+// `FastLoopCtx &c` reference (the OnePoleLowpass::process() call reachable
+// from the untaken ternary branch conservatively blocks that). When all
+// three flags hold this way, `amp`/`gainMul` equal c.ampConstantValue/
+// c.gainTarget on every single iteration regardless - reading those two
+// once before the loop is NOT a float reorder (still `sample * amp *
+// gainMul * kAudioPeakVolts`, same three multiplies, same left-to-right
+// order the original ternary's taken branch already produced every time -
+// see plan's own rounding caveat on why order must not change), just
+// skipping their redundant per-sample recomputation.
+template <WaveType W>
+IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
+{
+    const float amp = c.ampConstantValue;
+    const float gainMul = c.gainTarget;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+    }
+}
+
 // FM's normal case has block-constant carrier pitch but an audio-rate
 // modulator. Keep that modulation in the fast loop: Hz conversion and phase
 // increment happen once per block, waveform dispatch once below, while only
@@ -138,6 +168,8 @@ IRAM_ATTR inline void renderSelectedFastLoop(FastLoopCtx &c, size_t frames, bool
 {
     if (fmActive || feedbackActive)
         renderModulatedLoop<W>(c, frames);
+    else if (c.ampConstantForBlock && c.gainConverged && !c.gainFed)
+        renderConstFastLoop<W>(c, frames);
     else
     {
         renderFastLoop<W>(c, frames);
@@ -167,6 +199,13 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     float constantTuneVolts = s.tuneVolts;
     const bool tuneAudioConstant = tuneAudioFed && audioPortConstantForBlock(inst, 2, frames, constantTuneVolts);
     const bool tuneNeedsAudioRate = tuneAudioFed && !tuneAudioConstant;
+    if (pitchNeedsAudioRate) ++enginestats::current.fmPitchAudioRate;
+    else ++enginestats::current.fmPitchConstant;
+    if (tuneAudioFed)
+    {
+        if (tuneNeedsAudioRate) ++enginestats::current.fmTuneAudioRate;
+        else ++enginestats::current.fmTuneConstant;
+    }
 
     // fmIn changes phase per sample, but does not make carrier pitch
     // audio-rate. Keeping those concerns separate lets the common
@@ -204,6 +243,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float feedbackAmount = cv::vcaGain(feedbackCv, false) * kSelfFeedbackMaxPhaseDeviation;
     const bool feedbackActive = feedbackAmount != 0.0f && phaseModulatable;
     const bool modulationActive = fmActive || feedbackActive;
+    if (fmActive) ++enginestats::current.fmModActive;
+    if (feedbackActive) ++enginestats::current.fmFeedbackActive;
 
     // "gain" (port 4): identical to Oscillator's - real audio-rate port,
     // per-sample-smoothed only in the unwired case.
@@ -213,6 +254,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
     {
         memset(inst.outL, 0, frames * sizeof(float));
+        ++enginestats::current.fmSilentSkipped;
         return;
     }
     constexpr float kGainConvergeEps = 1e-4f;
@@ -220,6 +262,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     if (gainConverged)
     {
         s.gainSmooth.snapTo(gainTarget);
+        ++enginestats::current.fmGainConverged;
     }
 
     const float *ampBuf = inst.inPorts[0];
@@ -235,6 +278,15 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     float constantAmpCv = ampScalar;
     const bool ampConstantForBlock = audioPortConstantForBlock(inst, 0, frames, constantAmpCv);
     const float ampConstantValue = baseAmp + cv::vcaGain(constantAmpCv, false);
+    if (ampBuf != nullptr)
+    {
+        if (ampConstantForBlock)
+        {
+            ++enginestats::current.fmAmpConstant;
+            if (fabsf(ampConstantValue) <= kSilentGain) ++enginestats::current.fmAmpConstantZero;
+        }
+        else ++enginestats::current.fmAmpAudioRate;
+    }
 
     if (needsAudioRatePitch)
     {
@@ -284,6 +336,38 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 
     const float hz = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts));
     const float phaseIncrement = hz / kSampleRate;
+
+    // P1 (documentation/fm-plan.md section 3, "Stumme Modulatoren billiger
+    // weiterführen"): a modulator sitting on its Sustain-0 ADSR plateau (the
+    // two-modulator/two-carrier FM preset's common case after decay) has
+    // ampConstantForBlock==true and ampConstantValue==0.0f here - every
+    // sample the full loop below would compute is multiplied by that exact
+    // 0 anyway (amp is the FIRST factor in `sample * amp * gainMul * ...`).
+    // Skip the waveform synthesis outright and only keep the two pieces of
+    // state a later, audible block still depends on: the phase accumulator
+    // (advancePhaseOnly, so the next gate-on attack picks up mid-cycle
+    // instead of glitching/restarting - phase must NEVER freeze) and the
+    // gain smoother (so it keeps ramping toward gainTarget instead of
+    // stalling silently). Self feedback still needs the real per-sample
+    // carrier value even while inaudible (renderModulatedLoop's `previous`
+    // chases the true waveform), so feedbackActive excludes this path.
+    // External FM does NOT need to be excluded: fmIn only perturbs the READ
+    // phase offset each sample, never phase_ itself (see PhaseOsc's
+    // comment), so it has no bearing on what advancePhaseOnly must do here.
+    // Noise/PinkNoise are excluded via phaseModulatable (no phase_ to
+    // advance meaningfully for them, see plan section 2 point 7).
+    if (phaseModulatable && !feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f)
+    {
+        s.phaseGen.advancePhaseOnly(phaseIncrement, frames);
+        if (!gainFed && !gainConverged)
+        {
+            for (size_t i = 0; i < frames; ++i)
+                s.gainSmooth.process(gainTarget);
+        }
+        memset(inst.outL, 0, frames * sizeof(float));
+        return;
+    }
+
     FastLoopCtx ctx{&inst,           &s.phaseGen,        &s.gainSmooth, ampBuf,
                     gainBuf,         fmInBuf,            ampScalar,     baseAmp,
                     ampConstantValue, gainTarget,        phaseIncrement, phaseOffsetScale,

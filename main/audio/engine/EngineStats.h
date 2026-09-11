@@ -40,6 +40,27 @@ struct BlockCounters
     // block, so the per-sample OnePoleLowpass::process() call was skipped.
     uint32_t oscGainConverged = 0;
 
+    // Same fields as above, mirrored for nodes::fmoscillator::render() (see
+    // fm-plan.md section "Vorschlag für P0: FM-Zähler") - identical
+    // reasoning, just for the FM operator's pitch/tune/amp/gain fast paths.
+    uint32_t fmPitchConstant = 0;
+    uint32_t fmPitchAudioRate = 0;
+    uint32_t fmTuneConstant = 0;
+    uint32_t fmTuneAudioRate = 0;
+    uint32_t fmAmpConstant = 0;
+    uint32_t fmAmpAudioRate = 0;
+    // Diagnostic-only subset of fmAmpConstant: how often the constant block
+    // amplitude was already ~0 (kSilentGain tolerance) - i.e. how often a
+    // modulator sitting past its ADSR decay (Sustain 0) would qualify for
+    // P1's silent-modulator fast path, without P1 itself existing yet.
+    uint32_t fmAmpConstantZero = 0;
+    uint32_t fmSilentSkipped = 0;
+    uint32_t fmGainConverged = 0;
+    // How many FM instances had an active audio-rate phase modulator
+    // (fmActive) resp. active self feedback (feedbackActive) this block.
+    uint32_t fmModActive = 0;
+    uint32_t fmFeedbackActive = 0;
+
     // Graph::renderBlock instance bookkeeping: total voice instances that
     // exist in the live graph, how many were actually rendered
     // (processNodeBlock called) this block, and how many of those were

@@ -91,13 +91,22 @@ inline void log_p0_baseline_tick() {
     ESP_LOGI(kTag,
              "P0 baseline: phases activity=%.2f%% render=%.2f%% output=%.2f%% | osc pitch "
              "const/audioRate=%lu/%lu tune const/audioRate=%lu/%lu amp const/audioRate=%lu/%lu "
-             "silentSkip=%lu gainConverged=%lu | instances total/rendered/idleForced=%lu/%lu/%lu",
+             "silentSkip=%lu gainConverged=%lu | fm pitch const/audioRate=%lu/%lu tune "
+             "const/audioRate=%lu/%lu amp const/audioRate=%lu/%lu ampConstZero=%lu silentSkip=%lu "
+             "gainConverged=%lu modActive=%lu feedbackActive=%lu | instances "
+             "total/rendered/idleForced=%lu/%lu/%lu",
              static_cast<double>(phases.activityPercent), static_cast<double>(phases.renderPercent),
              static_cast<double>(phases.outputPercent), static_cast<unsigned long>(stats.oscPitchConstant),
              static_cast<unsigned long>(stats.oscPitchAudioRate), static_cast<unsigned long>(stats.oscTuneConstant),
              static_cast<unsigned long>(stats.oscTuneAudioRate), static_cast<unsigned long>(stats.oscAmpConstant),
              static_cast<unsigned long>(stats.oscAmpAudioRate), static_cast<unsigned long>(stats.oscSilentSkipped),
-             static_cast<unsigned long>(stats.oscGainConverged), static_cast<unsigned long>(stats.instancesTotal),
+             static_cast<unsigned long>(stats.oscGainConverged), static_cast<unsigned long>(stats.fmPitchConstant),
+             static_cast<unsigned long>(stats.fmPitchAudioRate), static_cast<unsigned long>(stats.fmTuneConstant),
+             static_cast<unsigned long>(stats.fmTuneAudioRate), static_cast<unsigned long>(stats.fmAmpConstant),
+             static_cast<unsigned long>(stats.fmAmpAudioRate), static_cast<unsigned long>(stats.fmAmpConstantZero),
+             static_cast<unsigned long>(stats.fmSilentSkipped), static_cast<unsigned long>(stats.fmGainConverged),
+             static_cast<unsigned long>(stats.fmModActive), static_cast<unsigned long>(stats.fmFeedbackActive),
+             static_cast<unsigned long>(stats.instancesTotal),
              static_cast<unsigned long>(stats.instancesRendered),
              static_cast<unsigned long>(stats.instancesRenderedWhileIdle));
 
