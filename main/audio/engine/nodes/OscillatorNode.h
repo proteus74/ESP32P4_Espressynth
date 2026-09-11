@@ -74,6 +74,15 @@ struct FastLoopCtx
     bool gainFed;
     bool gainConverged;
     bool ampConstantForBlock;
+    // Set only when amplitude (port 0) is not block-constant but IS a
+    // whole-block linear ramp tagged by the producer (ADSR mid attack/
+    // decay - see NodeInstance.h's rampPortMask/RampDescriptor). Mirrors
+    // FmOscillatorNode.h's identical fast path (fm-plan.md section 3, P2) -
+    // same technique, applied here since Oscillator shares the exact same
+    // per-sample amp/gain-selection cost.
+    bool hasAmpRamp;
+    float ampRampStart;
+    float ampRampStep;
 };
 
 // The actual per-sample loop, one shared definition specialized per
@@ -92,6 +101,46 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
                                          : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
         const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+    }
+}
+
+// P2 (documentation/fm-plan.md section 3, applied here identically to
+// FmOscillatorNode.h's renderConstFastLoop): when amp is block-constant
+// AND gain is converged/unfed, both ternaries in renderFastLoop above
+// resolve to the same value every sample regardless - GCC does not hoist
+// that past the `FastLoopCtx &c` reference (OnePoleLowpass::process() on
+// the untaken branch blocks it). Reading them once here is not a float
+// reorder (same three multiplies, same order), just skipping the
+// redundant per-sample branch/recomputation - see FmOscillatorNode.h's
+// disassembly-verified writeup for the full reasoning.
+template <WaveType W>
+IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
+{
+    const float amp = c.ampConstantValue;
+    const float gainMul = c.gainTarget;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+    }
+}
+
+// Companion fast path for the other common non-silent case: amp actively
+// ramping (ADSR attack/decay) as a tagged whole-block linear ramp rather
+// than block-constant - see FastLoopCtx::hasAmpRamp and
+// FmOscillatorNode.h's identical renderRampAmpFastLoop. Same accepted
+// non-bit-identical trade-off already used project-wide by every other
+// ramp-tag consumer (GainNode.h/DetuneNode.h/ArithmeticNodes.h).
+template <WaveType W>
+IRAM_ATTR inline void renderRampAmpFastLoop(FastLoopCtx &c, size_t frames)
+{
+    const float gainMul = c.gainTarget;
+    float amp = c.ampRampStart;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        amp += c.ampRampStep;
     }
 }
 
@@ -118,6 +167,10 @@ IRAM_ATTR inline void renderSelectedFastLoop(FastLoopCtx &c, size_t frames, bool
 {
     if (feedbackActive)
         renderFeedbackLoop<W>(c, frames);
+    else if (c.ampConstantForBlock && c.gainConverged && !c.gainFed)
+        renderConstFastLoop<W>(c, frames);
+    else if (c.hasAmpRamp && c.gainConverged && !c.gainFed)
+        renderRampAmpFastLoop<W>(c, frames);
     else
         renderFastLoop<W>(c, frames);
 }
@@ -301,6 +354,14 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // advance() would otherwise redo this same `hz * invSampleRate` multiply
     // on every sample even though hz is constant for the entire block here.
     const float phaseIncrement = hz / kSampleRate;
+    // P2 (fm-plan.md section 3): amplitude actively ramping (ADSR attack/
+    // decay) rather than block-constant - if tagged a whole-block linear
+    // ramp (see NodeInstance.h's rampPortMask), fold baseAmp/kInvMaxVolts
+    // in once here instead of per sample - see renderRampAmpFastLoop above.
+    const NodeInstance::RampDescriptor *ampRamp = ampConstantForBlock ? nullptr : rampForPort(inst, 0);
+    const bool hasAmpRamp = ampRamp != nullptr;
+    const float ampRampStart = hasAmpRamp ? baseAmp + ampRamp->start * cv::kInvMaxVolts : 0.0f;
+    const float ampRampStep = hasAmpRamp ? ampRamp->inc * cv::kInvMaxVolts : 0.0f;
     // Waveform dispatch happens exactly once here, for the whole block -
     // not once per sample the way PhaseOsc::process()'s internal `switch`
     // would (plan section 3, P1 item 3). See renderFastLoop()/FastLoopCtx
@@ -308,7 +369,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     FastLoopCtx ctx{&inst,          &s.phaseGen,      &s.gainSmooth, ampBuf,
                     gainBuf,        ampScalar,        baseAmp,       ampConstantValue,
                     gainTarget,     phaseIncrement,   feedbackAmount, &s.feedbackSample,
-                    gainFed,        gainConverged,    ampConstantForBlock};
+                    gainFed,        gainConverged,    ampConstantForBlock,
+                    hasAmpRamp,     ampRampStart,     ampRampStep};
     switch (wave)
     {
     case WaveType::Sine:
