@@ -376,14 +376,21 @@ inline int audioInIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::Adsr:
         // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate
-        // ports (see isControlOnlyInput). "velocity" remains a pure
-        // ControlRoute (MidiVelocity), needs no audioInIndex. "gate" (index
-        // 4) is ALSO a real, control-only audio-rate port - unlike
-        // velocity, a non-MIDI source (e.g. a CV Step-Arpeggiator's
-        // "gateOut") must be able to retrigger this envelope directly, same
-        // as WavePlayer's own "gate" port; NodeInstance.cpp's Adsr case
-        // still honors the MIDI-derived ControlRoute gate path unchanged
-        // whenever nothing is wired here (see AdsrNode.h's gateFed check).
+        // ports (see isControlOnlyInput). "gate" (index 4) is ALSO a real,
+        // control-only audio-rate port - a non-MIDI source (e.g. a CV
+        // Step-Arpeggiator's "gateOut") must be able to retrigger this
+        // envelope directly, same as WavePlayer's own "gate" port;
+        // NodeInstance.cpp's Adsr case still honors the MIDI-derived
+        // ControlRoute gate path unchanged whenever nothing is wired here
+        // (see AdsrNode.h's gateFed check). "velocity" (index 5) is the
+        // same pattern: wiring any real audio-rate source (e.g. a
+        // Multiplexer, so a CV can pick between two preset velocities) now
+        // overrides once per block; the MIDI-derived ControlRoute delivery
+        // (Graph.h's MidiVelocity case) and the Knob/Button/Const paramName
+        // path (AdsrNode.h::setParam) remain exactly as before whenever
+        // this port isn't wired (see AdsrNode.h's velFed check) - without a
+        // port index here, only that narrow set of source types could ever
+        // reach velocity at all.
         if (is(portName, "att"))
             return 0;
         if (is(portName, "dec"))
@@ -394,6 +401,8 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 3;
         if (is(portName, "gate"))
             return 4;
+        if (is(portName, "velocity"))
+            return 5;
         return -1;
     case NodeType::DxEnvelope:
         // level1-4/time1-4 (0-7) are real, but control-only audio-rate
@@ -686,7 +695,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Clock:
         return 2; // "tempo"+"sync" (CV)
     case NodeType::Adsr:
-        return 5; // "att"+"dec"+"sus"+"rel"+"gate" (CV)
+        return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
         return 9; // four level plus four time CV inputs, plus "gate" (CV)
     case NodeType::StepArpeggiator:
@@ -804,7 +813,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Multiplexer:
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::Adsr:
-        return true; // "att"/"dec"/"sus"/"rel"/"gate" - all five
+        return true; // "att"/"dec"/"sus"/"rel"/"gate"/"velocity" - all six
     case NodeType::DxEnvelope:
         return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:

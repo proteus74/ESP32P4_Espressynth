@@ -96,6 +96,20 @@ inline void render(NodeInstance &inst, size_t frames)
             s.gatePrev = gateNow;
         }
     }
+    // "velocity" (Port-Index 5, real but control-only audio-rate port, see
+    // PortTables.h) - lets any real audio-rate source (e.g. a Multiplexer,
+    // so a CV can pick between two preset velocity levels) reach this
+    // envelope, not just the narrow Knob/Button/Const/MIDI paramName path
+    // setParam("velocity", ...) already covers. Read once per block, same
+    // reasoning as att/dec/sus/rel/gate above. Only consulted when actually
+    // wired - whatever setParam()/the MIDI-derived ControlRoute
+    // (Graph.h's MidiVelocity case) last set s.velocity to remains in
+    // effect for every ADSR that has no cable on this port, unchanged.
+    const bool velFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+    if (velFed)
+    {
+        s.velocity = clampf(portSample(inst, 5, 0) * cv::kInvMaxVolts, 0.0f, 1.0f);
+    }
     // "out" is 0-10V CV like every other CV-carrying port (see
     // CvConventions.h) - the envelope itself (0..1 internally, via
     // RampScheduler) times velocity times kMaxVolts. Consistent with
@@ -196,7 +210,20 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     }
     if (strcmp(name, "velocity") == 0)
     {
-        inst.adsr->velocity = value;
+        // "velocity" arrives here as a 0-10V CV (any ControlRoute source,
+        // e.g. a Knob - see GraphBuilder.h) or as an already-normalized
+        // 0-1 straight from a MIDI note-on (Graph.h's MidiVelocity path,
+        // which sets inst.adsr->velocity directly and never goes through
+        // setParam). Normalize + clamp here so a CV source above 1V can't
+        // push render()'s velocityScale (= velocity * kMaxVolts) past the
+        // envelope's real 0-10V output range - same fix as DxEnvelopeNode.h's
+        // identical "velocity" case.
+        float normalized = value * cv::kInvMaxVolts;
+        if (normalized < 0.0f)
+            normalized = 0.0f;
+        if (normalized > 1.0f)
+            normalized = 1.0f;
+        inst.adsr->velocity = normalized;
         return true;
     }
     if (strcmp(name, "attackMaxSeconds") == 0)

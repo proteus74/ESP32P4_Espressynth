@@ -320,11 +320,11 @@ bleScanButton.addEventListener("click", async () => {
 
 const audioStartBtn = document.getElementById("audioStartBtn");
 audioStartBtn.addEventListener("click", () => {
-  
-  
-  
-  
-  
+
+
+
+
+
   if (!audioEngine.isRunning()) audioEngine.resume();
   const muted = !audioEngine.isMasterMuted();
   audioEngine.setMasterMuted(muted);
@@ -332,6 +332,24 @@ audioStartBtn.addEventListener("click", () => {
   audioStartBtn.classList.toggle("active", !muted);
   audioStartBtn.title = muted ? "Start audio" : "Mute audio";
 });
+
+// Browsers refuse to run an AudioContext until a real user gesture happens
+// on the page (autoplay policy) - can't be forced from page-load code alone.
+// Without this, every local-preview reading that depends on the WebAudio
+// graph actually running (Debug/Voltmeter, tickDebugVoltmeterAudioSources)
+// silently stays at 0 until someone happens to click audioStartBtn
+// specifically. Resume on the page's first click/touch/keypress ANYWHERE
+// instead - still a genuine gesture (satisfies the policy), just not tied to
+// that one small icon. Deliberately does NOT touch mute state - this only
+// gets the context calculating again, it must not make the browser start
+// playing audible sound out of nowhere.
+function resumeAudioContextOnFirstGesture() {
+  if (!audioEngine.isRunning()) audioEngine.resume();
+  document.removeEventListener("pointerdown", resumeAudioContextOnFirstGesture);
+  document.removeEventListener("keydown", resumeAudioContextOnFirstGesture);
+}
+document.addEventListener("pointerdown", resumeAudioContextOnFirstGesture);
+document.addEventListener("keydown", resumeAudioContextOnFirstGesture);
 
 
 
@@ -4197,6 +4215,14 @@ function knobPortId(index) {
   return `voltage${index + 1}`;
 }
 
+// audioEngine.setParam paramName for one control's ConstantSourceNode (see
+// audio-engine.js's "knob" build case) - "value" (index 0, unsuffixed) stays
+// backward compatible with callers that predate multi-knob, "value2".."valueN"
+// address the rest.
+function knobValueParamName(index) {
+  return index === 0 ? "value" : `value${index + 1}`;
+}
+
 function renderKnobPorts(widgetId, portsEl) {
   const state = knobStates.get(widgetId);
   if (!state) return;
@@ -4234,7 +4260,15 @@ function renderKnobControls(widgetId, gridElement = null) {
     cap.className = "knob-center-cap";
     dial.appendChild(cap);
     dial.addEventListener("mousedown", (event) => startKnobDrag(event, widgetId, index));
-    dial.addEventListener("dblclick", (event) => { event.stopPropagation(); openKnobSettings(widgetId, index); });
+    // Double-click resets this knob to its center position (raw 63.5, the
+    // middle of the 0-127 MIDI-CC range) - widget settings stay reachable
+    // via the widget-level dblclick handler elsewhere on the widget body.
+    dial.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setKnobRaw(widgetId, 63.5, index);
+      markDirty();
+    });
     const value = document.createElement("div");
     value.className = "knob-readout";
     value.dataset.role = "knob-readout";
@@ -4774,7 +4808,7 @@ function setKnobRaw(widgetId, raw, index = 0) {
   if (!control) return;
   control.raw = clamp(Math.round(raw), 0, 127);
   const mapped = roundFloat(mapKnobValue(control));
-  audioEngine.setParam(widgetId, "value", mapped);
+  audioEngine.setParam(widgetId, knobValueParamName(index), mapped);
   updateKnobVisual(widgetId, index);
   propagate(widgetId, knobPortId(index), mapped);
   if (index === 0) propagate(widgetId, "voltage", mapped);
@@ -5032,7 +5066,7 @@ document.getElementById("knobSettingsSave").addEventListener("click", () => {
     state.outputSide = ["top", "bottom", "left", "right"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
     state.controls.slice(0, state.count).forEach((control, index) => {
       const mapped = roundFloat(mapKnobValue(control));
-      audioEngine.setParam(pendingKnobId, "value", mapped);
+      audioEngine.setParam(pendingKnobId, knobValueParamName(index), mapped);
       propagate(pendingKnobId, knobPortId(index), mapped);
       if (index === 0) propagate(pendingKnobId, "voltage", mapped);
       updateKnobVisual(pendingKnobId, index);
@@ -5072,9 +5106,16 @@ function publishButtonValue(widgetId) {
   audioEngine.setParam(widgetId, "value", output);
   updateButtonVisual(widgetId);
   propagate(widgetId, "value", output);
+  // wasAbove as 0/1, not a JS boolean: ButtonNode.h::setParam takes a plain
+  // float ("value != 0.0f"), and Graph::applyLiveParams only dispatches a
+  // key into setFloatFieldByName when cJSON_IsNumber() is true - a JSON
+  // `true`/`false` literal fails that check and gets silently dropped, so
+  // clicking this button never actually updated the firmware's live graph
+  // (a connected target - e.g. a Multiplexer's "select" - stayed stuck on
+  // whatever wasAbove was at the last full preset rebuild).
   sendLiveParamUpdate(widgetId, {
     listIndex: state.listIndex,
-    wasAbove: state.wasAbove,
+    wasAbove: state.wasAbove ? 1 : 0,
   });
 }
 
@@ -7199,9 +7240,9 @@ function refreshVoiceGroups() {
     connections
       .filter((c) => c.from.widgetId === widgetId || c.to.widgetId === widgetId)
       .forEach((c) => {
-        const fromKind = getPortKind(c.from.widgetId, c.from.portId, "out");
+        // toKind alone - see the interactive-drag connect site's comment.
         const toKind = getPortKind(c.to.widgetId, c.to.portId, "in");
-        if (fromKind === "audio" && toKind === "audio") {
+        if (toKind === "audio") {
           audioEngine.connect(c.from.widgetId, c.from.portId, c.to.widgetId, c.to.portId);
         }
       });
@@ -12007,9 +12048,9 @@ function confirmPendingPaste(pos, minX, minY) {
       to: { widgetId: toId, portId: c.to.portId },
       color: getConnectionColorForOutput(fromId, c.from.portId),
     });
-    const fromKind = getPortKind(fromId, c.from.portId, "out");
+    // toKind alone - see the interactive-drag connect site's comment.
     const toKind = getPortKind(toId, c.to.portId, "in");
-    if (fromKind === "audio" && toKind === "audio") {
+    if (toKind === "audio") {
       audioEngine.connect(fromId, c.from.portId, toId, c.to.portId);
     }
   });
@@ -12321,6 +12362,24 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
       ]);
     }
 
+    // Widgets stacked with a real vertical gap between them (e.g. a Knob
+    // widget's row of top-edge outputs feeding a Step Arpeggiator's row of
+    // bottom-edge step inputs directly above it): route straight through
+    // that gap at each port's own X. Mirrors the free-corridor case above -
+    // without this, every parallel connection between the same widget pair
+    // shares the same widget-bounds-based jog X/Y below and collapses onto
+    // one visually identical line instead of fanning out per port.
+    const gapBelow = toBounds.top - fromBounds.bottom;
+    const gapAbove = fromBounds.top - toBounds.bottom;
+    if (gapBelow >= clearance * 2) {
+      const middleY = fromBounds.bottom + gapBelow / 2;
+      return roundedOrthogonalPath([p1, { x: p1.x, y: middleY }, { x: p2.x, y: middleY }, p2]);
+    }
+    if (gapAbove >= clearance * 2) {
+      const middleY = toBounds.bottom + gapAbove / 2;
+      return roundedOrthogonalPath([p1, { x: p1.x, y: middleY }, { x: p2.x, y: middleY }, p2]);
+    }
+
     const targetBelowSource = p2.y >= p1.y;
     let routeY = targetBelowSource ? fromBounds.bottom + clearance : fromBounds.top - clearance;
 
@@ -12559,9 +12618,13 @@ function removeConnectionsForWidget(widgetId) {
 }
 
 function disconnectIfAudio(conn) {
-  const fromKind = getPortKind(conn.from.widgetId, conn.from.portId, "out");
+  // toKind alone - mirrors the relaxed connect() gate below (see its
+  // comment): a control-only source can still be wired into an audio-shaped
+  // destination, so its removal needs the matching real disconnect too.
+  // audioEngine.disconnect() no-ops safely (try/catch) when nothing was
+  // actually wired.
   const toKind = getPortKind(conn.to.widgetId, conn.to.portId, "in");
-  if (fromKind === "audio" && toKind === "audio") {
+  if (toKind === "audio") {
     audioEngine.disconnect(conn.from.widgetId, conn.from.portId, conn.to.widgetId, conn.to.portId);
   }
 }
@@ -12646,8 +12709,16 @@ function startConnectionDrag(e, fromDot) {
         color: getConnectionColorForOutput(fromWidgetId, fromPortId),
       });
 
-      const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
-      if (fromKind === "audio" && toKind === "audio") {
+      // toKind alone, not fromKind too: a control-only source (Knob, Const,
+      // ...) can still own a real WebAudio node (see audio-engine.js's
+      // _resolveOutputFromEntry) and needs wiring into an audio-shaped
+      // destination like a Multiplexer/Mixer "inN" - otherwise a Debug/
+      // Voltmeter reading that destination's output stays stuck at 0
+      // (tickDebugVoltmeterAudioSources samples the real WebAudio graph, not
+      // the discrete propagate() path). Harmless when the source has no such
+      // node: audioEngine.connect()'s _resolveScaledOutput resolves to null
+      // and the connect is silently skipped, same as before.
+      if (toKind === "audio") {
         audioEngine.connect(fromWidgetId, fromPortId, toWidgetId, toPortId);
       }
 
@@ -14178,16 +14249,99 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = knobStates.get(id);
       if (!state) return {};
-      
-      
-      return { ...state, valueList: parseValueList(state.listText) || [] };
+      // Mirrors what the firmware parser actually reads (KnobNode.h::
+      // parsePreset: "knobCount" + a "knobs" array of {cc, channel, raw,
+      // point1In, ...}) - the previous `{...state}` spread here saved the
+      // browser's own internal shape (count/controls/labels/outputSide)
+      // instead. The firmware side never recognized those field names, so
+      // every full preset save+reload silently fell back to knobCount=1,
+      // dropping the ControlRoute for every control past the first - a
+      // second/third knob wired to anything would just never update its
+      // target after a reconnect (which always triggers a reload). The
+      // browser's own round-trip still worked despite this (it reads back
+      // its own field names fine), which is why the bug stayed hidden.
+      // "outputSide"/"labels" are UI-only and firmware just ignores them.
+      const count = state.count;
+      const knobs = state.controls.slice(0, count).map((control) => ({
+        cc: control.cc,
+        channel: control.channel,
+        raw: control.raw,
+        point1In: control.point1In,
+        point1Out: control.point1Out,
+        point2In: control.point2In,
+        point2Out: control.point2Out,
+        constraintMin: control.constraintMin,
+        constraintMax: control.constraintMax,
+        valueList: parseValueList(control.listText) || [],
+      }));
+      return {
+        knobCount: count,
+        outputSide: state.outputSide,
+        labels: state.labels.slice(0, count),
+        knobs,
+      };
     },
     applyParams: (id, params) => {
       const state = knobStates.get(id);
-      if (state && params) {
-        Object.assign(state, params);
-        audioEngine.setParam(id, "value", mapKnobValue(state));
-        updateKnobVisual(id);
+      if (!state || !params) return;
+      // Three possible shapes, newest first: this engine's own current
+      // "knobs" array (see getParams above); the pre-fix browser-only
+      // "controls" array (still on-disk in any preset saved before this
+      // fix - read it back rather than silently losing that knob's setup);
+      // firmware's oldest flat single-knob shape (top-level cc/raw/... with
+      // no array), same as KnobNode.h::parsePreset's own legacy fallback.
+      const newFormat = Array.isArray(params.knobs) ? params.knobs : null;
+      const oldFormat = !newFormat && Array.isArray(params.controls) ? params.controls : null;
+      const sourceList = newFormat || oldFormat;
+      const count = clamp(
+        Math.round(Number(params.knobCount ?? params.count ?? (sourceList ? sourceList.length : 1)) || 1),
+        1,
+        16
+      );
+      state.count = count;
+      if (typeof params.outputSide === "string") state.outputSide = params.outputSide;
+      if (Array.isArray(params.labels)) {
+        params.labels.forEach((label, index) => {
+          if (index < 16) state.labels[index] = typeof label === "string" ? label : "";
+        });
+      }
+      if (sourceList) {
+        sourceList.forEach((raw, index) => {
+          if (index >= 16 || !raw) return;
+          const control = state.controls[index];
+          control.cc = typeof raw.cc === "number" ? raw.cc : null;
+          control.channel = typeof raw.channel === "number" ? raw.channel : null;
+          control.raw = typeof raw.raw === "number" ? raw.raw : 0;
+          control.point1In = typeof raw.point1In === "number" ? raw.point1In : 0;
+          control.point1Out = typeof raw.point1Out === "number" ? raw.point1Out : 0;
+          control.point2In = typeof raw.point2In === "number" ? raw.point2In : 127;
+          control.point2Out = typeof raw.point2Out === "number" ? raw.point2Out : CV_MAX_VOLTS;
+          control.constraintMin = typeof raw.constraintMin === "number" ? raw.constraintMin : null;
+          control.constraintMax = typeof raw.constraintMax === "number" ? raw.constraintMax : null;
+          control.listText = Array.isArray(raw.valueList) && raw.valueList.length
+            ? raw.valueList.join(", ")
+            : (typeof raw.listText === "string" ? raw.listText : "");
+        });
+      } else {
+        const control = state.controls[0];
+        if (typeof params.cc === "number") control.cc = params.cc;
+        if (typeof params.channel === "number") control.channel = params.channel;
+        if (typeof params.raw === "number") control.raw = params.raw;
+        if (typeof params.point1In === "number") control.point1In = params.point1In;
+        if (typeof params.point1Out === "number") control.point1Out = params.point1Out;
+        if (typeof params.point2In === "number") control.point2In = params.point2In;
+        if (typeof params.point2Out === "number") control.point2Out = params.point2Out;
+        if (typeof params.constraintMin === "number") control.constraintMin = params.constraintMin;
+        if (typeof params.constraintMax === "number") control.constraintMax = params.constraintMax;
+        if (Array.isArray(params.valueList)) control.listText = params.valueList.join(", ");
+      }
+      renderKnobControls(id);
+      const portsEl = document.getElementById(id)?.querySelector(".widget-ports");
+      if (portsEl) renderKnobPorts(id, portsEl);
+      for (let index = 0; index < count; index += 1) {
+        const mapped = roundFloat(mapKnobValue(state.controls[index]));
+        audioEngine.setParam(id, knobValueParamName(index), mapped);
+        updateKnobVisual(id, index);
       }
     },
   },
@@ -15451,9 +15605,9 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   });
 
   connections.forEach((c) => {
-    const fromKind = getPortKind(c.from.widgetId, c.from.portId, "out");
+    // toKind alone - see the interactive-drag connect site's comment.
     const toKind = getPortKind(c.to.widgetId, c.to.portId, "in");
-    if (fromKind === "audio" && toKind === "audio") {
+    if (toKind === "audio") {
       audioEngine.connect(c.from.widgetId, c.from.portId, c.to.widgetId, c.to.portId);
     }
   });

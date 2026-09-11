@@ -1152,19 +1152,21 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     for (uint16_t r = 0; r < g->controlRouteCount; ++r)
     {
         const ControlRoute &route = g->controlRoutes[r];
-        if (route.targetPort < 0 && route.kind != ControlRoute::Kind::Const)
-        {
-            continue;
-        }
         const WidgetSlot &targetWidget = g->widgets[route.targetWidget];
         float initial = 0.0f;
         if (route.kind == ControlRoute::Kind::Knob)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[0].currentValue;
+            // route.side is the knob's control index (see GraphBuilder's
+            // knob-connection branch above) - controls[0] here would seed
+            // every non-first knob's route from the wrong control, leaving
+            // its target stuck on knob 1's value until that specific knob is
+            // next turned live (Graph::applyLiveParams does use route.side
+            // correctly - only this initial build-time seed didn't).
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[route.side].currentValue;
         }
         else if (route.kind == ControlRoute::Kind::KnobCc)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[0].raw;
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].knob->controls[route.side].raw;
         }
         else if (route.kind == ControlRoute::Kind::Button)
         {
@@ -1180,21 +1182,34 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         }
         else
         {
+            // MidiFrequency/Gate/Velocity etc. - no note is playing yet at
+            // build time, so 0 (silence/gate-off) is already correct.
             continue;
         }
         for (uint16_t v = 0; v < targetWidget.instanceCount; ++v)
         {
             NodeInstance &target = g->instances[targetWidget.instanceBase + v];
             float targetValue = initial;
-            if (route.kind == ControlRoute::Kind::Const)
+            if (target.type == NodeType::Lfo && strcmp(route.paramName, "rate") == 0 &&
+                route.kind != ControlRoute::Kind::KnobCc)
             {
-                if (target.type == NodeType::Lfo && strcmp(route.paramName, "rate") == 0)
-                {
-                    targetValue = std::fmax(0.0f, std::fmin(cv::kMaxVolts, targetValue)) *
-                                  target.lfo.maxRateHz / cv::kMaxVolts;
-                }
-                setFloatFieldByName(target, target.type, route.paramName, targetValue);
+                targetValue = std::fmax(0.0f, std::fmin(cv::kMaxVolts, targetValue)) *
+                              target.lfo.maxRateHz / cv::kMaxVolts;
             }
+            // Call for every route, not just Const: a route whose target has
+            // no port index (e.g. Knob -> Adsr's "velocity", a named field
+            // with no audioInIndex - see PortTables.h) previously got no
+            // build-time seed at all and just sat at its struct default
+            // until the next live drag happened to land on the graph
+            // generation that already has this route - if a reconnect and a
+            // drag race (reconnect queues an async graph rebuild, see
+            // SynthEngine.h's request_current_preset/loaderTaskLoop; a drag
+            // right after can still apply to the old, about-to-be-replaced
+            // graph), the drag's value is lost and the field never updates.
+            // Mirrors pushControlRouteValue's same unconditional call
+            // (Graph.h) for the live-update path - harmless no-op here when
+            // the target type doesn't recognize this field name.
+            setFloatFieldByName(target, target.type, route.paramName, targetValue);
             if (route.targetPort >= 0)
             {
                 target.controlValue[route.targetPort] = targetValue;

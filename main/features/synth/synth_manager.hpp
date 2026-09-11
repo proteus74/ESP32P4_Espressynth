@@ -29,6 +29,14 @@
     #include "features/usb/device/usb_device_audio.hpp"
 #endif
 
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    #include "features/usb/host/usb_midi_host.hpp"
+#endif
+
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    #include "features/ble/ble_midi_host.hpp"
+#endif
+
 // Adapter layer wiring the ported node-graph synth engine (audio/engine/SynthEngine.h) into
 // this project's codec managers, USB Audio device, and MIDI transports. The engine itself is
 // transport-agnostic (drives esp_codec_dev for the primary/ES8311 sink and a raw I2S TX handle
@@ -206,6 +214,34 @@ void tap_mix(float *blockL, float *blockR, size_t frames) {
 } // namespace
 #endif // CONFIG_APP_ENABLE_USB_DEVICE && CONFIG_USB_DEV_ENABLE_UAC2
 
+#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)) || \
+    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST))
+namespace {
+// MidiCcOut sink (see SynthEngine::setMidiCcOutCallback): mirrors a MIDI-learned Knob's value
+// out to every connected MIDI transport. Best-effort - a controller that doesn't support or
+// want CC feedback just ignores the message, same as any other MIDI receiver; a transport that
+// isn't connected right now silently drops it (Feature::MIDI::send()/BLE MIDI::send()'s own
+// not-connected checks).
+void send_midi_cc_out(uint8_t channel, uint8_t cc, uint8_t value7bit) {
+    const uint8_t message[3] = {
+        static_cast<uint8_t>(0xB0 | (channel & 0x0F)),
+        static_cast<uint8_t>(cc & 0x7F),
+        static_cast<uint8_t>(value7bit & 0x7F),
+    };
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    Feature::MIDI::send(message, sizeof(message));
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    for (const auto &conn : Feature::BLE::midi_connections) {
+        if (conn.conn_handle != 0xffff && conn.chr_handle != 0) {
+            Feature::BLE::MIDI::send(conn.conn_handle, message, sizeof(message));
+        }
+    }
+#endif
+}
+} // namespace
+#endif // USB-host MIDI or BLE MIDI host enabled
+
 /**
  * @brief Converts a {status, data1, data2} MIDI message - the shape shared by every transport
  *        in this project (Feature::MIDI::Event, Feature::USBDevice::MIDI::Event,
@@ -354,6 +390,11 @@ inline esp_err_t init() {
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     s_engine.setUsbAudioTap(&tap_submit, &tap_mix);
+#endif
+
+#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)) || \
+    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST))
+    s_engine.setMidiCcOutCallback(&send_midi_cc_out);
 #endif
 
     s_engine.begin(codec, secondaryI2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);

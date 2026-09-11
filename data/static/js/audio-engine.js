@@ -1678,13 +1678,30 @@ export class AudioEngine {
         };
       }
       case "const":
-      case "knob":
       case "button":
       case "up-down-button": {
         const constant = ctx.createConstantSource();
         constant.offset.value = params.value ?? 0;
         constant.start();
         return { type, constant };
+      }
+      case "knob": {
+        // One ConstantSourceNode per control (fixed 16, like Multiplexer/
+        // Mixer elsewhere in this file - unused ones just stay silent at 0),
+        // instead of the single shared node const/button/up-down-button use
+        // above - a multi-knob widget's "voltageN" outputs (see main.js's
+        // knobPortId) need to be independently wireable into an audio-rate
+        // destination (e.g. a Multiplexer input), not all collapse onto one
+        // node. `constant` stays an alias for control 0, for any code still
+        // reading it directly.
+        const constants = [];
+        for (let i = 0; i < 16; i += 1) {
+          const c = ctx.createConstantSource();
+          c.offset.value = i === 0 ? (params.value ?? 0) : 0;
+          c.start();
+          constants.push(c);
+        }
+        return { type, constant: constants[0], constants };
       }
       case "switch": {
         
@@ -2865,7 +2882,15 @@ export class AudioEngine {
       }
       if (entry.reciprocal) entry.reciprocal.disconnect();
       if (entry.outGain) entry.outGain.disconnect();
-      if (entry.constant) {
+      if (entry.constants) {
+        // "knob" entries own 16 ConstantSourceNodes (see _buildNode's "knob"
+        // case) - entry.constant is only an alias for constants[0], stop
+        // that array instead of double-freeing the same node twice.
+        entry.constants.forEach((c) => {
+          c.stop();
+          c.disconnect();
+        });
+      } else if (entry.constant) {
         entry.constant.stop();
         entry.constant.disconnect();
       }
@@ -3548,11 +3573,23 @@ export class AudioEngine {
         break;
       }
       case "const":
-      case "knob":
       case "button":
       case "up-down-button":
         if (paramName === "value") applyRamp(entry.constant.offset);
         break;
+      case "knob": {
+        // "value" (index 0) or "value2".."value16" (see main.js's
+        // knobValueParamName) - each control owns its own ConstantSourceNode
+        // (see _buildNode's "knob" case), unlike const/button/up-down-button
+        // above which only ever have one.
+        const match = /^value(\d*)$/.exec(paramName);
+        if (match) {
+          const index = match[1] ? Number(match[1]) - 1 : 0;
+          const node = entry.constants?.[index];
+          if (node) applyRampValue(node.offset, value);
+        }
+        break;
+      }
       case "switch":
         if (paramName === "selectIn2") {
           applyRampValue(entry.gain1.gain, value ? 0 : 1);
@@ -3793,6 +3830,17 @@ export class AudioEngine {
     
     
     if (entry.type === "const" && port === "audio") return entry.constant;
+    if (entry.type === "knob") {
+      // "voltage" (bare, index-0 alias) or "voltage1".."voltage16" (see
+      // main.js's knobPortId) - each maps to its own ConstantSourceNode (see
+      // _buildNode's "knob" case) so a knob can feed an audio-rate
+      // destination (e.g. a Multiplexer input) like any other source.
+      const match = /^voltage(\d*)$/.exec(port);
+      if (match) {
+        const index = match[1] ? Number(match[1]) - 1 : 0;
+        return entry.constants?.[index] || null;
+      }
+    }
     if (entry.type === "gain" && port === "out") return entry.gainNode;
     if (entry.type === "linked-output" && port === "out") return entry.gainNode;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {

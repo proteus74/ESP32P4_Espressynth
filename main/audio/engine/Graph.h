@@ -61,6 +61,22 @@ struct WidgetSlot
     uint16_t outgoingEdgeCount = 0;
 };
 
+// Optional out-param for Graph::applyLiveParams: reports the Knob control
+// a live (browser) update touched, when it's MIDI-learned - lets the caller
+// (SynthEngine's applyLiveParamMessage) mirror it to the on-device activity
+// display too, the same overlay a real incoming CC message already lights
+// up (see SynthEngine::publishMidiControlActivity). Left default-constructed
+// (changed == false) for every other kind of update.
+struct KnobLiveChangeInfo
+{
+    bool changed = false;
+    const char *label = nullptr;
+    uint8_t channel = 0;
+    uint8_t cc = 0;
+    uint8_t raw = 0;
+    float value = 0.0f;
+};
+
 struct Edge
 {
     uint16_t fromInstance = 0;
@@ -167,7 +183,16 @@ public:
     // reallocating any buffers - just field writes, matching what a full
     // rebuild would set for these same keys. Unknown widgetId or unknown
     // keys within `paramsObj` are silently ignored (logged at debug level).
-    void applyLiveParams(const char *widgetId, cJSON *paramsObj);
+    // midiCcOut (optional, see SynthEngine::MidiCcOut): fires once if this
+    // update touched a MIDI-learned Knob control, mirroring the new value
+    // back out to the hardware that owns that CC (so its LED ring/motorized
+    // fader follows a change made from the browser instead of that knob).
+    // outActivity (optional): filled in under the same condition, for the
+    // caller to also light up the on-device activity display (see
+    // KnobLiveChangeInfo).
+    void applyLiveParams(const char *widgetId, cJSON *paramsObj,
+                         void (*midiCcOut)(uint8_t channel, uint8_t cc, uint8_t value7bit) = nullptr,
+                         KnobLiveChangeInfo *outActivity = nullptr);
 
     // Releases every instance's heap buffers (input port buffers, DelayLine
     // ring buffers) and the instance array itself. Call once before
@@ -1246,7 +1271,9 @@ inline uint8_t applyFloatArrayItem(cJSON *item, float *out, uint8_t maxCount)
 }
 } // namespace
 
-inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
+inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
+                                   void (*midiCcOut)(uint8_t channel, uint8_t cc, uint8_t value7bit),
+                                   KnobLiveChangeInfo *outActivity)
 {
     if (widgetId == nullptr || paramsObj == nullptr)
     {
@@ -1868,10 +1895,39 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
     // during the drag).
     if (slot.type == NodeType::Knob)
     {
+        const KnobControl &control = instances[slot.instanceBase].knob->controls[knobControlIndex];
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Knob,
-                               instances[slot.instanceBase].knob->controls[knobControlIndex].currentValue, knobControlIndex);
+                               control.currentValue, knobControlIndex);
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::KnobCc,
-                               instances[slot.instanceBase].knob->controls[knobControlIndex].raw, knobControlIndex);
+                               control.raw, knobControlIndex);
+        // Mirror this control's new value back to whatever hardware CC it's
+        // learned to (see SynthEngine::MidiCcOut) - a change made from the
+        // browser should still move that controller's LED ring/motorized
+        // fader, not just the on-screen knob. Same condition also lights up
+        // the on-device activity display (outActivity) - a physical CC
+        // message already does that (see SynthEngine::
+        // publishMidiControlActivity), a browser-driven change previously
+        // didn't.
+        if ((midiCcOut != nullptr || outActivity != nullptr) && control.cc >= 0 && control.channel >= 0)
+        {
+            const float rawClamped = control.raw < 0.0f ? 0.0f : (control.raw > 127.0f ? 127.0f : control.raw);
+            const uint8_t channel8 = static_cast<uint8_t>(control.channel);
+            const uint8_t cc8 = static_cast<uint8_t>(control.cc);
+            const uint8_t raw8 = static_cast<uint8_t>(rawClamped + 0.5f);
+            if (midiCcOut != nullptr)
+            {
+                midiCcOut(channel8, cc8, raw8);
+            }
+            if (outActivity != nullptr)
+            {
+                outActivity->changed = true;
+                outActivity->label = slot.label[0] != '\0' ? slot.label : slot.id;
+                outActivity->channel = channel8;
+                outActivity->cc = cc8;
+                outActivity->raw = raw8;
+                outActivity->value = control.currentValue;
+            }
+        }
     }
     else if (slot.type == NodeType::Button)
     {

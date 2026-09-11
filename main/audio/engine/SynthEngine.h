@@ -290,6 +290,28 @@ public:
         mixHostIn_ = mixHostIn;
     }
 
+    // Optional MIDI-CC-out sink: fires whenever a MIDI-learned Knob's value
+    // changes so a controller with LED rings/motorized faders can mirror it
+    // back (e.g. a preset loaded with different values than the hardware is
+    // currently showing). Same "plain function pointer" reasoning as
+    // TapSubmit/TapMix above - synth_manager.hpp sets this to a wrapper that
+    // reaches into the USB-host/BLE MIDI transports, the engine itself stays
+    // unaware of which transport(s) are even active.
+    using MidiCcOut = void (*)(uint8_t channel, uint8_t cc, uint8_t value7bit);
+    void setMidiCcOutCallback(MidiCcOut cb) { midiCcOut_ = cb; }
+    MidiCcOut midiCcOutCallback() const { return midiCcOut_; }
+
+    // Public entry point for a live (browser-driven) Knob change to also
+    // light up the on-device activity overlay - the same one a real
+    // incoming MIDI CC message already lights up (see
+    // publishMidiControlActivity, private below). Called from
+    // applyLiveParamMessage with the KnobLiveChangeInfo Graph::
+    // applyLiveParams reports back.
+    void publishKnobActivityFromUi(const char *label, uint8_t channel, uint8_t cc, uint8_t raw, float value)
+    {
+        publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, 0, channel, cc, raw, value);
+    }
+
     // Per-sink output routing. The master stream (graph's AudioOut) is
     // weighted per output target (USB-mic-IN, ES8311, WM8960) individually
     // via gain/mute. Only read/written on the render task (ws "paramUpdate"
@@ -319,6 +341,39 @@ private:
                                     std::memory_order_release);
     }
 
+    // Mirrors every MIDI-learned Knob's current value back out to a
+    // connected controller (see setMidiCcOutCallback) - called once right
+    // after a preset finishes loading, so a controller with LED rings/
+    // motorized faders shows what the just-loaded preset actually set,
+    // not whatever position it was left at before the reload.
+    void publishLearnedKnobsToMidiOut()
+    {
+        if (midiCcOut_ == nullptr || liveGraph_ == nullptr)
+        {
+            return;
+        }
+        for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w)
+        {
+            const WidgetSlot &widget = liveGraph_->widgets[w];
+            if (widget.type != NodeType::Knob)
+            {
+                continue;
+            }
+            const KnobState &knob = *liveGraph_->instances[widget.instanceBase].knob;
+            for (uint8_t i = 0; i < knob.count; ++i)
+            {
+                const KnobControl &control = knob.controls[i];
+                if (control.cc < 0 || control.channel < 0)
+                {
+                    continue;
+                }
+                const float raw = control.raw < 0.0f ? 0.0f : (control.raw > 127.0f ? 127.0f : control.raw);
+                midiCcOut_(static_cast<uint8_t>(control.channel), static_cast<uint8_t>(control.cc),
+                           static_cast<uint8_t>(raw + 0.5f));
+            }
+        }
+    }
+
     void setCurrentPresetNameFromPath(const char *path)
     {
         currentPresetName_[0] = '\0';
@@ -342,12 +397,23 @@ private:
             NodeInstance &instance = liveGraph_->instances[widget.instanceBase];
             const char *label = widget.label[0] != '\0' ? widget.label : widget.id;
 
-            if (widget.type == NodeType::Knob && instance.knob != nullptr &&
-                instance.knob->controls[0].cc >= 0 && static_cast<uint8_t>(instance.knob->controls[0].cc) == event.data1 &&
-                instance.knob->controls[0].channel >= 0 && static_cast<uint8_t>(instance.knob->controls[0].channel) == channel)
+            if (widget.type == NodeType::Knob && instance.knob != nullptr)
             {
-                publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, 0, channel,
-                                           event.data1, event.data2, instance.knob->controls[0].currentValue);
+                // A Knob widget can bundle several physical controls (see
+                // KnobNode.h's count/controls[]) - check every control's
+                // (cc, channel) pair, not just the first, or turning any
+                // pot but the first would never light up the activity panel.
+                for (uint8_t controlIndex = 0; controlIndex < instance.knob->count; ++controlIndex)
+                {
+                    KnobControl &control = instance.knob->controls[controlIndex];
+                    if (control.cc >= 0 && static_cast<uint8_t>(control.cc) == event.data1 &&
+                        control.channel >= 0 && static_cast<uint8_t>(control.channel) == channel)
+                    {
+                        publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, controlIndex, channel,
+                                                   event.data1, event.data2, control.currentValue);
+                        break;
+                    }
+                }
             }
             else if (widget.type == NodeType::Button && instance.button != nullptr &&
                      instance.button->cc >= 0 && static_cast<uint8_t>(instance.button->cc) == event.data1 &&
@@ -449,6 +515,7 @@ private:
 
     TapSubmit submitOut_ = nullptr;
     TapMix mixHostIn_ = nullptr;
+    MidiCcOut midiCcOut_ = nullptr;
 
     SinkParams sink_[3];
 
@@ -638,7 +705,13 @@ void applyLiveParamMessage(SynthEngine &engine, Graph &graph, const char *json)
     {
         if (!engine.applyOutputParam(widgetId->valuestring, params))
         {
-            graph.applyLiveParams(widgetId->valuestring, params);
+            KnobLiveChangeInfo activity;
+            graph.applyLiveParams(widgetId->valuestring, params, engine.midiCcOutCallback(), &activity);
+            if (activity.changed)
+            {
+                engine.publishKnobActivityFromUi(activity.label, activity.channel, activity.cc, activity.raw,
+                                                 activity.value);
+            }
         }
     }
     cJSON_Delete(root);
@@ -1206,6 +1279,7 @@ inline void SynthEngine::taskLoop()
             liveGraph_ = pendingGraph_;
             pendingGraph_ = nullptr;
             publishMidiVoiceUsage();
+            publishLearnedKnobsToMidiOut();
             // A preset save/reload is a full runtime reset. Drop queued MIDI
             // and stale live-param messages, same cleanup effect as Panic.
             if (midiEventQueue_ != nullptr)
