@@ -58,6 +58,7 @@ enum class NodeType : uint8_t
     LinkedInput,
     LinkedOutput,
     FmOscillator,
+    DxEnvelope,
     Unknown,
 };
 
@@ -123,6 +124,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Detune;
     if (strcmp(typeStr, "adsr") == 0)
         return NodeType::Adsr;
+    if (strcmp(typeStr, "dx-envelope") == 0)
+        return NodeType::DxEnvelope;
     if (strcmp(typeStr, "filter") == 0)
         return NodeType::Filter;
     if (strcmp(typeStr, "esp-eq") == 0)

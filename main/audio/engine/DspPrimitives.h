@@ -66,6 +66,35 @@ IRAM_ATTR inline float sineLookup(float phase)
     return sineLutTable[i0] + (sineLutTable[i1] - sineLutTable[i0]) * frac;
 }
 
+// EXPERIMENTAL (not yet committed - user-requested try of the "Integer
+// phase" idea documentation/fm-plan.md section 3/P3 explicitly deferred
+// out of the first correction round; needs a listening test before it's
+// kept). Integer-phase counterpart of sineLookup() above for PhaseOsc's
+// internal uint32_t phase domain (see below): phaseInt is a 32-bit
+// fixed-point fraction of one cycle (0 = phase 0.0, 2^32 wraps back to 0.0
+// exactly via plain unsigned overflow - no floorf/branch needed to keep it
+// in range, unlike the float phase_ this replaces). The table index is the
+// top kSineLutBits bits - a pure right-shift, always exactly in
+// [0, kSineLutSize) on its own, no clamp/bounds-check needed either, unlike
+// sineLookup()'s float multiply+cast+clamp above (which stays untouched -
+// this is a new, additional function, not a replacement; sinCosW0() below
+// still calls the float version directly with its own, unrelated phase
+// domain).
+constexpr int constexprLog2(size_t n) { return n <= 1 ? 0 : 1 + constexprLog2(n >> 1); }
+constexpr int kSineLutBits = constexprLog2(synth::kSineLutSize);
+static_assert(size_t(1) << kSineLutBits == synth::kSineLutSize,
+              "kSineLutSize must be a power of two for integer-phase LUT indexing");
+constexpr int kSineLutFracBits = 32 - kSineLutBits;
+constexpr float kSineLutFracScale = 1.0f / static_cast<float>(1u << kSineLutFracBits);
+
+IRAM_ATTR inline float sineLookupInt(uint32_t phaseInt)
+{
+    const uint32_t i0 = phaseInt >> kSineLutFracBits;
+    const uint32_t i1 = (i0 + 1) & (synth::kSineLutSize - 1);
+    const float frac = static_cast<float>(phaseInt & ((1u << kSineLutFracBits) - 1)) * kSineLutFracScale;
+    return sineLutTable[i0] + (sineLutTable[i1] - sineLutTable[i0]) * frac;
+}
+
 // Exponential VCA/envelope curve (10^v-1)/9 for v in [0,1] - see cv::vcaGain
 // (CvConventions.h). Same LUT+lerp technique as sineLookup above, avoids a
 // per-sample powf() on Gain's audio-rate "amount" path when the widget's
@@ -427,16 +456,25 @@ private:
 
 // Phase-accumulator oscillator (sine/square/triangle/sawtooth/white and pink noise).
 // Non-band-limited by design (accepted known limitation, see plan).
+//
+// EXPERIMENTAL: phase_ is a uint32_t fixed-point fraction of one cycle
+// (0 = phase 0.0, wraps back to 0.0 via plain unsigned overflow at 2^32 -
+// documentation/fm-plan.md section 3/P3's "Integerphase" idea, explicitly
+// deferred out of the first correction round there, now tried on user
+// request). Was float phase_ in [0,1), wrapped via floorf every advance.
+// Needs a listening test before being kept - not yet committed.
 class PhaseOsc
 {
 public:
-    // phaseOffset (0..1, wraps) is added on top of the running phase_ at
-    // read time only - never folded into phase_ itself, so resetPhase()
-    // still means "start of cycle" and a caller can re-evaluate at a
-    // different offset every call (see NodeInstance.cpp's Lfo case, where
-    // this is how the "phase" param takes effect immediately, including
-    // right after a sync edge, without any special-casing in resetPhase()).
-    IRAM_ATTR float process(WaveType wave, float freqHz, float sampleRate, float phaseOffset = 0.0f)
+    // phaseOffset (in cycles, wraps, any sign/magnitude) is added on top of
+    // the running phase_ at read time only - never folded into phase_
+    // itself, so resetPhase() still means "start of cycle" and a caller can
+    // re-evaluate at a different offset every call (see NodeInstance.cpp's
+    // Lfo case, where this is how the "phase" param takes effect
+    // immediately, including right after a sync edge, without any special-
+    // casing in resetPhase()).
+    IRAM_ATTR float process(WaveType wave, float freqHz, float sampleRate, float phaseOffset = 0.0f,
+                             uint32_t dutyThresholdInt = 0x80000000u)
     {
         if (wave == WaveType::Noise)
         {
@@ -446,48 +484,19 @@ public:
         {
             return nextPinkNoise();
         }
-        const float sample = currentSample(wave, phaseOffset);
+        const float sample = currentSample(wave, phaseOffset, dutyThresholdInt);
         advance(freqHz, sampleRate);
         return sample;
     }
 
-    IRAM_ATTR float currentSample(WaveType wave, float phaseOffset = 0.0f) const
+    // dutyThresholdInt only affects WaveType::Square (see sampleAt() below) -
+    // default 0x80000000 is the classic 50% square, unchanged for every
+    // existing caller that doesn't pass anything (Oscillator, Lfo, every
+    // FM-operator instance that hasn't set a custom duty cycle).
+    IRAM_ATTR float currentSample(WaveType wave, float phaseOffset = 0.0f, uint32_t dutyThresholdInt = 0x80000000u) const
     {
-        float p = phase_ + phaseOffset;
-        if (p < 0.0f || p >= 1.0f)
-            p -= floorf(p);
-
-        float sample;
-        switch (wave)
-        {
-        case WaveType::Sine:
-            sample = dsp::sineLookup(p);
-            break;
-        case WaveType::Square:
-            sample = p < 0.5f ? 1.0f : -1.0f;
-            break;
-        case WaveType::Triangle:
-        {
-            // Must mirror main.js's lfoWaveValue() triangle formula exactly
-            // (4*|phase - Math.floor(phase+0.5)| - 1, phase=0 -> minimum -1,
-            // peak +1 at phase=0.5) - the old formula 4*|p-0.5|-1 was phase-
-            // shifted by half a period (phase=0 -> +1 instead of -1), so e.g.
-            // at the Gain/VCA a rising CV (per main.js/Voltmeter) actually
-            // meant falling loudness and vice versa.
-            const float nearest = p < 0.5f ? 0.0f : 1.0f;
-            sample = 4.0f * fabsf(p - nearest) - 1.0f;
-            break;
-        }
-        case WaveType::Sawtooth:
-            sample = 2.0f * p - 1.0f;
-            break;
-        case WaveType::Noise:
-        case WaveType::PinkNoise:
-        default:
-            sample = 0.0f;
-            break;
-        }
-        return sample;
+        const uint32_t p = phaseOffset != 0.0f ? phase_ + toPhaseInt(phaseOffset) : phase_;
+        return sampleAt(wave, p, dutyThresholdInt);
     }
 
     // Same as process(), but for a block where the caller has already
@@ -497,8 +506,13 @@ public:
     // (documentation/native-synth-optimization-plan-2026-09-09.md, P1 item
     // 2: "phaseIncrement = hz / sampleRate einmal vorberechnen"). Advances by
     // that precomputed increment directly - one add instead of advance()'s
-    // multiply-then-add per sample.
-    IRAM_ATTR float processWithIncrement(WaveType wave, float phaseIncrement, float phaseOffset = 0.0f)
+    // multiply-then-add per sample. Still takes phaseIncrement as float and
+    // converts every call (toPhaseInt's fmodf-based reduction) - unlike
+    // processWithIncrementT below, this is on the "needsAudioRate" slow path
+    // where the caller already recomputes hz fresh every sample anyway, so
+    // one more per-sample conversion here is not a new cost class.
+    IRAM_ATTR float processWithIncrement(WaveType wave, float phaseIncrement, float phaseOffset = 0.0f,
+                                          uint32_t dutyThresholdInt = 0x80000000u)
     {
         if (wave == WaveType::Noise)
         {
@@ -508,16 +522,8 @@ public:
         {
             return nextPinkNoise();
         }
-        const float sample = currentSample(wave, phaseOffset);
-        phase_ += phaseIncrement;
-        if (phase_ >= 1.0f)
-        {
-            phase_ -= floorf(phase_);
-        }
-        else if (phase_ < 0.0f)
-        {
-            phase_ -= floorf(phase_);
-        }
+        const float sample = currentSample(wave, phaseOffset, dutyThresholdInt);
+        phase_ += toPhaseInt(phaseIncrement);
         return sample;
     }
 
@@ -534,8 +540,17 @@ public:
     // innerhalb der Sample-Schleife"). One shared definition, not six
     // hand-duplicated copies - the compiler generates the six
     // specializations from this single template.
+    //
+    // phaseIncrementInt is pre-converted to this class's internal 32-bit
+    // domain by the CALLER (via toPhaseInt(), once per block - see
+    // FmOscillatorNode.h/OscillatorNode.h's render()), not per sample here -
+    // this is called once per SAMPLE with an unchanging increment across
+    // the whole block, so redoing toPhaseInt()'s fmodf-based reduction on
+    // every call would pay that cost right back on the hot path this and
+    // P2 exist to avoid.
     template <WaveType W, bool UsePhaseOffset = false>
-    IRAM_ATTR float processWithIncrementT(float phaseIncrement, float phaseOffset = 0.0f)
+    IRAM_ATTR float processWithIncrementT(uint32_t phaseIncrementInt, float phaseOffset = 0.0f,
+                                           uint32_t dutyThresholdInt = 0x80000000u)
     {
         if constexpr (W == WaveType::Noise)
         {
@@ -547,64 +562,33 @@ public:
         }
         else
         {
-            float p = phase_;
+            uint32_t p = phase_;
             if constexpr (UsePhaseOffset)
             {
-                p += phaseOffset;
+                p += toPhaseInt(phaseOffset);
             }
-            if (p < 0.0f || p >= 1.0f)
-                p -= floorf(p);
-            float sample;
-            if constexpr (W == WaveType::Sine)
-            {
-                sample = dsp::sineLookup(p);
-            }
-            else if constexpr (W == WaveType::Square)
-            {
-                sample = p < 0.5f ? 1.0f : -1.0f;
-            }
-            else if constexpr (W == WaveType::Triangle)
-            {
-                const float nearest = p < 0.5f ? 0.0f : 1.0f;
-                sample = 4.0f * fabsf(p - nearest) - 1.0f;
-            }
-            else // Sawtooth
-            {
-                sample = 2.0f * p - 1.0f;
-            }
-            phase_ += phaseIncrement;
-            if (phase_ >= 1.0f)
-            {
-                phase_ -= floorf(phase_);
-            }
-            else if (phase_ < 0.0f)
-            {
-                phase_ -= floorf(phase_);
-            }
+            const float sample = sampleAtT<W>(p, dutyThresholdInt);
+            phase_ += phaseIncrementInt;
             return sample;
         }
     }
 
-    // Advances phase_ by phaseIncrement for `frames` samples without
-    // computing any waveform sample - same per-sample stepping/wrap as
-    // processWithIncrementT<W>() above (a bulk `phase_ += frames *
-    // phaseIncrement` is NOT bit-identical under float rounding once frames
-    // gets large). For a caller that already knows this block's audible
+    // Advances phase_ by phaseIncrementInt for `frames` samples without
+    // computing any waveform sample. Unlike the float phase_ this replaces
+    // (where a bulk `phase_ += frames * phaseIncrement` was NOT bit-
+    // identical to `frames` individual additions under float rounding),
+    // unsigned 32-bit addition is exactly associative/modular - one bulk
+    // step is bit-EXACT here, no per-sample loop needed to match what
+    // `frames` individual `phase_ += phaseIncrementInt` calls would have
+    // produced. For a caller that already knows this block's audible
     // output is silence regardless (see FmOscillatorNode.h's P1 "stumme
     // Modulatoren" fast path, documentation/fm-plan.md section 3) but still
     // needs phase_ to land exactly where the normal per-sample loop would,
     // so the next audible block (e.g. right after a gate-on attack) picks
     // up mid-cycle instead of glitching/restarting.
-    IRAM_ATTR inline void advancePhaseOnly(float phaseIncrement, size_t frames)
+    IRAM_ATTR inline void advancePhaseOnly(uint32_t phaseIncrementInt, size_t frames)
     {
-        for (size_t i = 0; i < frames; ++i)
-        {
-            phase_ += phaseIncrement;
-            if (phase_ >= 1.0f)
-                phase_ -= floorf(phase_);
-            else if (phase_ < 0.0f)
-                phase_ -= floorf(phase_);
-        }
+        phase_ += phaseIncrementInt * static_cast<uint32_t>(frames);
     }
 
     // sampleRate is in practice ALWAYS the same value (kSampleRate, fixed
@@ -619,25 +603,100 @@ public:
             lastSampleRate_ = sampleRate;
             invSampleRate_ = 1.0f / sampleRate;
         }
-        phase_ += freqHz * static_cast<float>(samples) * invSampleRate_;
-        if (phase_ >= 1.0f)
-        {
-            phase_ -= floorf(phase_);
-        }
-        else if (phase_ < 0.0f)
-        {
-            phase_ -= floorf(phase_); // keep well-defined for pathological negative freq
-        }
+        phase_ += toPhaseInt(freqHz * invSampleRate_) * static_cast<uint32_t>(samples);
     }
 
-    void resetPhase() { phase_ = 0.0f; }
+    void resetPhase() { phase_ = 0u; }
+
+    // Converts a phase value/increment/offset (in cycles - any sign or
+    // magnitude; FM's phaseOffset can span several cycles, see
+    // FmOscillatorNode.h's kFmIndexMaxPhaseDeviation) into this class's
+    // internal 32-bit fixed-point domain (2^32 = one full cycle, wraps via
+    // plain unsigned overflow). fmodf reduces to a safe sub-1-cycle range
+    // FIRST: RV32 has no single hardware instruction for float->uint32
+    // across the full [0, 2^32) range, and scaling an unreduced value by
+    // 2^32 before converting would overflow int32_t for anything
+    // approaching a full cycle - the reduction has to happen before the
+    // scale, not after.
+    IRAM_ATTR static uint32_t toPhaseInt(float cycles)
+    {
+        float wrapped = fmodf(cycles, 1.0f);
+        if (wrapped < 0.0f)
+        {
+            wrapped += 1.0f;
+        }
+        return static_cast<uint32_t>(wrapped * kPhaseIntScale);
+    }
 
 private:
+    // 2^32, exact in float (kPhaseIntScale) - the forward (cycles->int)
+    // scale for toPhaseInt() above. Deliberately NOT the same constant as
+    // kInvUint32Max below (1/(2^32-1)) - that one is the REVERSE (int-
+    // >[0,1)-ish float) direction used by sampleAt()/sampleAtT() and the
+    // pre-existing nextNoise(), where the 1-ULP difference from a true
+    // 1/2^32 has always been negligible and isn't worth a second constant.
+    static constexpr float kPhaseIntScale = 4294967296.0f;
+
     // Reciprocal instead of division - 4294967295.0f (UINT32_MAX) is a
     // compile-time literal, but without -ffast-math the compiler does not fold
     // it into a multiplication by itself (see CvConventions.h's
     // kInvMaxVolts comment for the same reason).
     static constexpr float kInvUint32Max = 1.0f / 4294967295.0f;
+
+    // dutyThresholdInt (Square only): p < dutyThresholdInt is the "high"
+    // (+1) portion of the cycle - 0x80000000 (phase 0.5) is the classic 50%
+    // square every other waveform/caller keeps using via the default param
+    // above. FM operator's "Duty Cycle" control (PortTables.h port 8, see
+    // FmOscillatorNode.h) is the only current source of a non-default value.
+    static IRAM_ATTR float sampleAt(WaveType wave, uint32_t p, uint32_t dutyThresholdInt = 0x80000000u)
+    {
+        switch (wave)
+        {
+        case WaveType::Sine:
+            return dsp::sineLookupInt(p);
+        case WaveType::Square:
+            return p < dutyThresholdInt ? 1.0f : -1.0f;
+        case WaveType::Triangle:
+        {
+            // Must mirror main.js's lfoWaveValue() triangle formula exactly
+            // (4*|phase - Math.floor(phase+0.5)| - 1, phase=0 -> minimum -1,
+            // peak +1 at phase=0.5) - see the float version's comment for
+            // why (the old formula was phase-shifted by half a period).
+            const float pf = static_cast<float>(p) * kInvUint32Max;
+            const float nearest = pf < 0.5f ? 0.0f : 1.0f;
+            return 4.0f * fabsf(pf - nearest) - 1.0f;
+        }
+        case WaveType::Sawtooth:
+            return 2.0f * (static_cast<float>(p) * kInvUint32Max) - 1.0f;
+        case WaveType::Noise:
+        case WaveType::PinkNoise:
+        default:
+            return 0.0f;
+        }
+    }
+
+    template <WaveType W>
+    static IRAM_ATTR float sampleAtT(uint32_t p, uint32_t dutyThresholdInt = 0x80000000u)
+    {
+        if constexpr (W == WaveType::Sine)
+        {
+            return dsp::sineLookupInt(p);
+        }
+        else if constexpr (W == WaveType::Square)
+        {
+            return p < dutyThresholdInt ? 1.0f : -1.0f;
+        }
+        else if constexpr (W == WaveType::Triangle)
+        {
+            const float pf = static_cast<float>(p) * kInvUint32Max;
+            const float nearest = pf < 0.5f ? 0.0f : 1.0f;
+            return 4.0f * fabsf(pf - nearest) - 1.0f;
+        }
+        else // Sawtooth
+        {
+            return 2.0f * (static_cast<float>(p) * kInvUint32Max) - 1.0f;
+        }
+    }
 
     float nextNoise()
     {
@@ -665,7 +724,7 @@ private:
         return pink;
     }
 
-    float phase_ = 0.0f;
+    uint32_t phase_ = 0u;
     uint32_t noiseState_ = 0x12345678u;
     float pinkB0_ = 0.0f;
     float pinkB1_ = 0.0f;

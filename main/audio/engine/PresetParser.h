@@ -31,6 +31,9 @@ struct WidgetParams
     // WaveGen/FM-operator internal one-sample feedback, 0-10V. Shared field
     // because both oscillator types expose the same "feedback" parameter.
     float oscillatorFeedback = 0.0f;
+    // fm-oscillator only - FmOscillatorState::dutyCycleCv (0-10V, 5V =
+    // classic 50% square, only audible when waveType==Square).
+    float dutyCycle = 5.0f;
     // lfo - amplitude is 0-10V peak swing (see LfoState); zeroPointFixed
     // selects fixed (zeroPoint) vs auto (amplitude/2) center; oneShot plays
     // one cycle per sync edge then freezes (see NodeInstance's Lfo case).
@@ -58,6 +61,13 @@ struct WidgetParams
     float attack = 0.1f, decay = 0.1f, sustain = 0.7f, release = 0.2f;
     float attackMaxSeconds = 4.0f, decayMaxSeconds = 4.0f, releaseMaxSeconds = 4.0f;
     bool attackLog = false, decayLog = false, releaseLog = false;
+    // dx-envelope - four target levels in the 0-10V CV domain and four
+    // segment durations. Gate-on runs L1/T1 -> L2/T2 -> L3/T3 and holds;
+    // gate-off runs from the current level to L4 over T4.
+    float dxLevel[4] = {10.0f, 8.0f, 7.0f, 0.0f};
+    float dxTime[4] = {0.1f, 0.25f, 0.4f, 0.6f};
+    float dxTimeMaxSeconds[4] = {4.0f, 4.0f, 4.0f, 4.0f};
+    bool dxTimeLog[4] = {false, false, false, false};
     // filter - "cutoff"/"resonance" are raw 0-10V CV (see CvConventions.h),
     // mapped to Hz/Q via the min/max/log fields below at DSP time.
     FilterKind filterType = FilterKind::LowPass;

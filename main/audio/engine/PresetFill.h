@@ -21,6 +21,7 @@
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
+#include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
@@ -80,6 +81,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Adsr:
         nodes::adsr::parsePreset(p, out);
+        break;
+    case NodeType::DxEnvelope:
+        nodes::dxenvelope::parsePreset(p, out);
         break;
     case NodeType::Filter:
         nodes::filter::parsePreset(p, out);

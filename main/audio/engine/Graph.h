@@ -31,6 +31,7 @@
 #include "nodes/ChorusNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/DelayNode.h"
+#include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -367,6 +368,11 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 target.adsr->ramp.gate(noteOn);
                 target.adsr->gatePrev = noteOn;
             }
+            else if (target.type == NodeType::DxEnvelope)
+            {
+                noteOn ? target.dxEnvelope->scheduler.gateOn() : target.dxEnvelope->scheduler.gateOff();
+                target.dxEnvelope->gatePrev = noteOn;
+            }
             else if (target.type == NodeType::WavePlayer)
             {
                 // Event-driven, not edge-detected (unlike NodeRender.h's own
@@ -472,6 +478,10 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
             {
                 target.adsr->velocity = velGain;
             }
+            else if (target.type == NodeType::DxEnvelope)
+            {
+                target.dxEnvelope->velocity = velGain;
+            }
             if (route.targetPort >= 0)
             {
                 target.controlValue[route.targetPort] = velGain * cv::kMaxVolts;
@@ -554,31 +564,35 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     const int64_t phaseActivityStartUs = esp_timer_get_time();
 
     // Voice skipping: a voice v counts as active as long as any connected
-    // ADSR of that voice has not truly reached 0 yet. An unconnected ADSR
-    // must not silence the rest of the signal path. If there is no connected
-    // ADSR, all voices stay active (current behavior for graphs without an
-    // envelope).
+    // envelope of that voice has not truly reached 0 yet. An unconnected
+    // envelope must not silence the rest of the signal path. If there is no
+    // connected envelope, all voices stay active.
     for (bool &a : voiceStillSounding)
     {
         a = false;
     }
-    bool hasAdsr = false;
+    bool hasEnvelope = false;
     for (uint16_t w = 0; w < widgetCount; ++w)
     {
-        if (widgets[w].type != NodeType::Adsr || widgets[w].outgoingEdgeCount == 0)
+        if ((widgets[w].type != NodeType::Adsr && widgets[w].type != NodeType::DxEnvelope) ||
+            widgets[w].outgoingEdgeCount == 0)
         {
             continue;
         }
-        hasAdsr = true;
+        hasEnvelope = true;
         for (uint16_t v = 0; v < widgets[w].instanceCount; ++v)
         {
-            if (!instances[widgets[w].instanceBase + v].adsr->ramp.isIdle())
+            NodeInstance &envelope = instances[widgets[w].instanceBase + v];
+            const bool idle = widgets[w].type == NodeType::Adsr
+                ? envelope.adsr->ramp.isIdle()
+                : envelope.dxEnvelope->scheduler.isIdle();
+            if (!idle)
             {
                 voiceStillSounding[v] = true;
             }
         }
     }
-    if (!hasAdsr)
+    if (!hasEnvelope)
     {
         for (bool &a : voiceStillSounding)
         {
@@ -1393,6 +1407,16 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj)
                 instances[slot.instanceBase + v].adsr->releaseLog = log;
             }
         }
+        else if (slot.type == NodeType::DxEnvelope && strncmp(key, "time", 4) == 0 &&
+                 key[4] >= '1' && key[4] <= '4' && strcmp(key + 5, "Curve") == 0 && cJSON_IsString(item))
+        {
+            const bool log = strcmp(item->valuestring, "log") == 0;
+            const int index = key[4] - '1';
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].dxEnvelope->timeLog[index] = log;
+            }
+        }
         else if (slot.type == NodeType::Delay &&
                  (strcmp(key, "timeCurve") == 0 || strcmp(key, "feedbackCurve") == 0 || strcmp(key, "mixCurve") == 0) &&
                  cJSON_IsString(item))
@@ -1930,6 +1954,9 @@ inline void Graph::destroy()
             break;
         case NodeType::Adsr:
             nodes::adsr::destroy(inst);
+            break;
+        case NodeType::DxEnvelope:
+            nodes::dxenvelope::destroy(inst);
             break;
         case NodeType::Filter:
             nodes::filter::destroy(inst);

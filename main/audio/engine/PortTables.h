@@ -112,6 +112,12 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 6;
         if (is(portName, "feedback"))
             return 7;
+        // "dutyCycle" - control-only CV, like "fmIndex"/"feedback" above.
+        // Only affects WaveType::Square (see PhaseOsc::sampleAt's
+        // dutyThresholdInt in DspPrimitives.h) - harmless no-op for every
+        // other waveform.
+        if (is(portName, "dutyCycle"))
+            return 8;
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -373,6 +379,16 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "rel"))
             return 3;
         return -1;
+    case NodeType::DxEnvelope:
+        if (is(portName, "level1")) return 0;
+        if (is(portName, "level2")) return 1;
+        if (is(portName, "level3")) return 2;
+        if (is(portName, "level4")) return 3;
+        if (is(portName, "time1")) return 4;
+        if (is(portName, "time2")) return 5;
+        if (is(portName, "time3")) return 6;
+        if (is(portName, "time4")) return 7;
+        return -1;
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
@@ -427,6 +443,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Switch:
         return is(portName, "value") ? 0 : -1;
     case NodeType::Adsr:
+        return is(portName, "out") ? 0 : -1;
+    case NodeType::DxEnvelope:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Filter:
     case NodeType::CurtisFilter:
@@ -526,7 +544,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Oscillator:
         return 6; // existing five inputs + internal-feedback depth (CV)
     case NodeType::FmOscillator:
-        return 8; // Oscillator's first five + "fmIn" + "fmIndex" + feedback
+        return 9; // Oscillator's first five + "fmIn" + "fmIndex" + feedback + "dutyCycle"
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
@@ -601,6 +619,8 @@ inline int audioInPortCount(NodeType type)
         return 1; // "tempo" (CV)
     case NodeType::Adsr:
         return 4; // "att"+"dec"+"sus"+"rel" (CV)
+    case NodeType::DxEnvelope:
+        return 8; // four level plus four time CV inputs
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
@@ -690,10 +710,11 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Oscillator:
         return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5; // pitch/tune/waveform/feedback
     case NodeType::FmOscillator:
-        // "pitchCv"(1)+"tune"(2)+"waveform"(3)+"fmIndex"(6) - "amplitude"(0),
-        // "gain"(4) AND "fmIn"(5) stay genuinely audio-rate; "fmIn" being
-        // read per-sample is the entire point of this node.
-        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7;
+        // "pitchCv"(1)+"tune"(2)+"waveform"(3)+"fmIndex"(6)+"feedback"(7)+
+        // "dutyCycle"(8) - "amplitude"(0), "gain"(4) AND "fmIn"(5) stay
+        // genuinely audio-rate; "fmIn" being read per-sample is the entire
+        // point of this node.
+        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7 || portIdx == 8;
     case NodeType::Hammond:
         // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
         // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars
@@ -714,6 +735,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel" - all four
+    case NodeType::DxEnvelope:
+        return true; // four level and four time inputs, all block-rate
     case NodeType::Lfo:
         return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "sync"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
     case NodeType::WavePlayer:

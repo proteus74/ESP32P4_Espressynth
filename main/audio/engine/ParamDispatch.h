@@ -18,6 +18,7 @@
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
+#include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/FmOscillatorNode.h"
@@ -164,6 +165,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Adsr:
         return nodes::adsr::setParam(inst, name, value);
+
+    case NodeType::DxEnvelope:
+        return nodes::dxenvelope::setParam(inst, name, value);
 
     case NodeType::AudioOut:
     case NodeType::UsbOut:

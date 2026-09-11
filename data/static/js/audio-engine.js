@@ -1460,6 +1460,9 @@ export class AudioEngine {
           feedbackCvScale,
           feedback: params.feedback ?? 0,
           feedbackCvActive: false,
+          // No audible effect in this preview (see the setParam "dutyCycle"
+          // case's comment) - tracked only so getParam/state round-trips.
+          dutyCycle: params.dutyCycle ?? CV_MAX_VOLTS / 2,
         };
       }
       case "hammond": {
@@ -2223,6 +2226,40 @@ export class AudioEngine {
           release: params.release ?? 0.2,
           // ctx.currentTime the release ramp finishes at, or null while
           // held/never released - see isVoiceStillSounding().
+          releaseEndsAt: null,
+        };
+      }
+      case "dx-envelope": {
+        const constant = ctx.createConstantSource();
+        constant.offset.value = 1;
+        constant.start();
+        const envGain = ctx.createGain();
+        envGain.gain.value = clampRange((params.level4 ?? 0) / CV_MAX_VOLTS, 0, 1);
+        constant.connect(envGain);
+        const velocityGain = ctx.createGain();
+        velocityGain.gain.value = 1;
+        envGain.connect(velocityGain);
+        const cvOut = ctx.createGain();
+        cvOut.gain.value = CV_MAX_VOLTS;
+        velocityGain.connect(cvOut);
+        const output = ctx.createGain();
+        output.gain.value = 1;
+        cvOut.connect(output);
+        return {
+          type,
+          constant,
+          envGain,
+          velocityGain,
+          cvOut,
+          output,
+          level1: clampRange(params.level1 ?? 10, 0, CV_MAX_VOLTS),
+          level2: clampRange(params.level2 ?? 8, 0, CV_MAX_VOLTS),
+          level3: clampRange(params.level3 ?? 7, 0, CV_MAX_VOLTS),
+          level4: clampRange(params.level4 ?? 0, 0, CV_MAX_VOLTS),
+          time1: Math.max(params.time1 ?? 0.1, 0.001),
+          time2: Math.max(params.time2 ?? 0.25, 0.001),
+          time3: Math.max(params.time3 ?? 0.4, 0.001),
+          time4: Math.max(params.time4 ?? 0.6, 0.001),
           releaseEndsAt: null,
         };
       }
@@ -3176,6 +3213,16 @@ export class AudioEngine {
           if (!entry.feedbackCvActive) {
             applyRampValue(entry.feedbackGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION);
           }
+        } else if (paramName === "dutyCycle") {
+          // State tracked for preset round-tripping only - no audible
+          // effect here. The native WebAudio OscillatorNode's "square" type
+          // (see the "fm-oscillator" _buildNode case above) is a fixed 50%
+          // pulse with no pulse-width control; reproducing the firmware's
+          // exact variable-duty square would need a custom PeriodicWave or
+          // AudioWorklet. Same "preview approximates, hardware is
+          // authoritative" precedent already documented for FM_INDEX_MAX_HZ_
+          // DEVIATION/SELF_FEEDBACK_MAX_HZ_DEVIATION above.
+          entry.dutyCycle = value;
         }
         break;
       case "hammond": {
@@ -3425,6 +3472,31 @@ export class AudioEngine {
           } else {
             entry.releaseEndsAt = now + entry.release;
             g.linearRampToValueAtTime(0, now + entry.release);
+          }
+        }
+        break;
+      case "dx-envelope":
+        if (/^level[1-4]$/.test(paramName)) {
+          entry[paramName] = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+        } else if (/^time[1-4]$/.test(paramName)) {
+          entry[paramName] = Math.max(Number(value) || 0, 0.001);
+        } else if (paramName === "velocity") {
+          entry.velocityGain.gain.value = clampRange(value / CV_MAX_VOLTS, 0, 1);
+        } else if (paramName === "gate") {
+          const gain = entry.envGain.gain;
+          gain.cancelScheduledValues(now);
+          gain.setValueAtTime(gain.value, now);
+          if (value > GATE_THRESHOLD_VOLTS) {
+            let segmentEnd = now + entry.time1;
+            gain.linearRampToValueAtTime(entry.level1 / CV_MAX_VOLTS, segmentEnd);
+            segmentEnd += entry.time2;
+            gain.linearRampToValueAtTime(entry.level2 / CV_MAX_VOLTS, segmentEnd);
+            segmentEnd += entry.time3;
+            gain.linearRampToValueAtTime(entry.level3 / CV_MAX_VOLTS, segmentEnd);
+            entry.releaseEndsAt = null;
+          } else {
+            gain.linearRampToValueAtTime(entry.level4 / CV_MAX_VOLTS, now + entry.time4);
+            entry.releaseEndsAt = entry.level4 > 0 ? Number.POSITIVE_INFINITY : now + entry.time4;
           }
         }
         break;
@@ -3703,7 +3775,7 @@ export class AudioEngine {
     if (!this.ctx) return false;
     const now = this.ctx.currentTime;
     for (const wrapper of this.nodes.values()) {
-      if (!wrapper.voiced || wrapper.type !== "adsr") continue;
+      if (!wrapper.voiced || (wrapper.type !== "adsr" && wrapper.type !== "dx-envelope")) continue;
       const entry = wrapper.instances[voiceIndex];
       if (entry && entry.releaseEndsAt !== null && entry.releaseEndsAt > now) return true;
     }
@@ -3738,6 +3810,7 @@ export class AudioEngine {
     if (entry.type === "detune" && port === "f1") return entry.f1;
     if (entry.type === "detune" && port === "f2") return entry.f2;
     if (entry.type === "adsr" && port === "out") return entry.output;
+    if (entry.type === "dx-envelope" && port === "out") return entry.output;
     if (entry.type === "chorus" && port === "left") return entry.delayL;
     if (entry.type === "chorus" && port === "right") return entry.delayR;
     if (entry.type === "delay" || entry.type === "reverb" || entry.type === "reverb-light") {

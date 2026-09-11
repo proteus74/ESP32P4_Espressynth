@@ -68,7 +68,9 @@ struct FastLoopCtx
     float baseAmp;
     float ampConstantValue;
     float gainTarget;
-    float phaseIncrement;
+    // EXPERIMENTAL: pre-converted to PhaseOsc's internal 32-bit fixed-point
+    // domain (PhaseOsc::toPhaseInt(), once per block) - see DspPrimitives.h.
+    uint32_t phaseIncrementInt;
     float feedbackAmount;
     float *feedbackSample;
     bool gainFed;
@@ -99,7 +101,7 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
                                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
         const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
                                          : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
-        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt);
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
 }
@@ -120,7 +122,7 @@ IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
     const float gainMul = c.gainTarget;
     for (size_t i = 0; i < frames; ++i)
     {
-        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt);
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
 }
@@ -138,7 +140,7 @@ IRAM_ATTR inline void renderRampAmpFastLoop(FastLoopCtx &c, size_t frames)
     float amp = c.ampRampStart;
     for (size_t i = 0; i < frames; ++i)
     {
-        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrement);
+        const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt);
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
         amp += c.ampRampStep;
     }
@@ -155,7 +157,7 @@ IRAM_ATTR inline void renderFeedbackLoop(FastLoopCtx &c, size_t frames)
         const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
                                          : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
         const float sample =
-            c.phaseGen->processWithIncrementT<W, true>(c.phaseIncrement, previous * c.feedbackAmount);
+            c.phaseGen->processWithIncrementT<W, true>(c.phaseIncrementInt, previous * c.feedbackAmount);
         previous = sample;
         c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
     }
@@ -354,6 +356,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // advance() would otherwise redo this same `hz * invSampleRate` multiply
     // on every sample even though hz is constant for the entire block here.
     const float phaseIncrement = hz / kSampleRate;
+    const uint32_t phaseIncrementInt = PhaseOsc::toPhaseInt(phaseIncrement);
     // P2 (fm-plan.md section 3): amplitude actively ramping (ADSR attack/
     // decay) rather than block-constant - if tagged a whole-block linear
     // ramp (see NodeInstance.h's rampPortMask), fold baseAmp/kInvMaxVolts
@@ -368,7 +371,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // above.
     FastLoopCtx ctx{&inst,          &s.phaseGen,      &s.gainSmooth, ampBuf,
                     gainBuf,        ampScalar,        baseAmp,       ampConstantValue,
-                    gainTarget,     phaseIncrement,   feedbackAmount, &s.feedbackSample,
+                    gainTarget,     phaseIncrementInt, feedbackAmount, &s.feedbackSample,
                     gainFed,        gainConverged,    ampConstantForBlock,
                     hasAmpRamp,     ampRampStart,     ampRampStep};
     switch (wave)

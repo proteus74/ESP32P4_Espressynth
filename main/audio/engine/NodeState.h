@@ -69,6 +69,12 @@ struct FmOscillatorState
     float fmIndexCv = 0.0f;
     float feedbackCv = 0.0f;
     float feedbackSample = 0.0f;
+    // "dutyCycle" (Port-Index 8, control-only CV, see PortTables.h) - 0-10V,
+    // 5V (center, same default convention as tuneVolts) = classic 50%
+    // square, only audible when wave==Square (see PhaseOsc::sampleAt's
+    // dutyThresholdInt in DspPrimitives.h). Read once per block, same
+    // un-smoothed substitution pattern as fmIndexCv above.
+    float dutyCycleCv = 5.0f;
 };
 
 struct LfoState

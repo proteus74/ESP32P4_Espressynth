@@ -26,6 +26,7 @@
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
+#include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
@@ -460,6 +461,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::Adsr:
         nodes::adsr::build(inst, p);
         break;
+    case NodeType::DxEnvelope:
+        nodes::dxenvelope::build(inst, p);
+        break;
     case NodeType::Filter:
         nodes::filter::build(inst, p);
         break;
@@ -766,6 +770,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             case NodeType::Adsr:
                 inst.adsr = allocateNodeState<AdsrState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.adsr == nullptr);
+                break;
+            case NodeType::DxEnvelope:
+                inst.dxEnvelope = allocateNodeState<DxEnvelopeState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.dxEnvelope == nullptr);
                 break;
             case NodeType::Filter:
                 inst.filter = allocateNodeState<FilterState>(outputPsramFallbacks);

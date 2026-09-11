@@ -671,7 +671,7 @@ const WIDGET_TYPES = {
       { id: "waveform", label: "Waveform" },
       { id: "gate", label: "Gate" },
       { id: "gain", label: "Gain" },
-      { id: "feedback", label: "Self FB" },
+      { id: "feedback", label: "Feedback (Self FB)" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -684,14 +684,18 @@ const WIDGET_TYPES = {
     // self-feedback state, matching WaveGen.
     inputs: [
       { id: "fmIn", label: "FM In" },
-      { id: "fmIndex", label: "FM Index" },
+      { id: "fmIndex", label: "FM Ratio" },
       { id: "pitchCv", label: "Pitch" },
       { id: "tune", label: "Tune" },
       { id: "amplitude", label: "Amplitude" },
       { id: "waveform", label: "Waveform" },
       { id: "gate", label: "Gate" },
       { id: "gain", label: "Gain" },
-      { id: "feedback", label: "Self FB" },
+      { id: "feedback", label: "Feedback (Self)" },
+      // Square-only (see updateFmOscillatorDutyCycleVisual - row stays
+      // hidden unless waveType==="square"). 0-10V CV, 5V = classic 50%
+      // square, matches FmOscillatorState::dutyCycleCv's default.
+      { id: "dutyCycle", label: "Duty Cycle" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -871,6 +875,23 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "dx-envelope": {
+    label: "DX Envelope",
+    icon: "⌁",
+    inputs: [
+      { id: "gate", label: "Gate" },
+      { id: "velocity", label: "Velocity" },
+      { id: "level1", label: "Level 1" },
+      { id: "time1", label: "Time 1" },
+      { id: "level2", label: "Level 2" },
+      { id: "time2", label: "Time 2" },
+      { id: "level3", label: "Level 3" },
+      { id: "time3", label: "Time 3" },
+      { id: "level4", label: "Level 4" },
+      { id: "time4", label: "Time 4" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   const: {
     label: "Const",
     icon: "🔢",
@@ -1024,7 +1045,7 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player"] },
-  { label: "Modulator", types: ["lfo", "adsr", "detune", "clock"] },
+  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
@@ -1043,7 +1064,7 @@ const AUDIO_PORTS = {
   
   
   oscillator: { in: ["amplitude", "gain", "pitchCv", "tune", "feedback"], out: ["value"] },
-  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback"], out: ["value"] },
+  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback", "dutyCycle"], out: ["value"] },
   // All 13 are real audio-rate ports here (unlike Mixer's control-only
   // "gainN") - each of the 9 drawbar levels is independently CV-connectable.
   hammond: {
@@ -1109,6 +1130,7 @@ const AUDIO_PORTS = {
   
   
   adsr: { out: ["out"] },
+  "dx-envelope": { out: ["out"] },
   chorus: { in: ["in"], out: ["left", "right"] },
   
   
@@ -1251,7 +1273,7 @@ const LFO_POLARITY_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "const",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "const",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
@@ -1671,6 +1693,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "dx-envelope") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input, .dx-envelope-graph")) return;
+      e.stopPropagation();
+      openDxEnvelopeSettings(id);
+    });
+  }
+
   if (type === "filter" || type === "curtis-filter") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -1885,6 +1915,7 @@ function createWidget(type, label, x, y, forcedId) {
       gain: CV_MAX_VOLTS,
       fmIndex: 0,
       feedback: 0,
+      dutyCycle: center,
     };
     fmOscillatorStates.set(id, fmOscState);
     audioEngine.createNode(id, "fm-oscillator", {
@@ -1895,6 +1926,7 @@ function createWidget(type, label, x, y, forcedId) {
       tuneVolts: fmOscState.tuneVolts,
       fmIndex: fmOscState.fmIndex,
       feedback: fmOscState.feedback,
+      dutyCycle: fmOscState.dutyCycle,
     });
 
     const body = document.createElement("div");
@@ -2240,9 +2272,66 @@ function createWidget(type, label, x, y, forcedId) {
       decayCurve: "linear",
       releaseMaxSeconds: MAX_ENVELOPE_SECONDS,
       releaseCurve: "linear",
+      livePhase: "idle",
+      liveLevel: 0,
+      liveSegmentStartedAt: 0,
+      liveSegmentStartLevel: 0,
+      liveGate: false,
+      liveVoiceIndex: null,
+      graphCollapsed: false,
     };
     adsrStates.set(id, { ...adsrDefaults });
     audioEngine.createNode(id, "adsr", { ...adsrDefaults });
+
+    const collapseBtn = document.createElement("button");
+    collapseBtn.type = "button";
+    collapseBtn.className = "adsr-collapse-toggle";
+    collapseBtn.dataset.role = "adsr-collapse-toggle";
+    collapseBtn.title = "Toggle envelope graph";
+    collapseBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const state = adsrStates.get(id);
+      if (!state) return;
+      state.graphCollapsed = !state.graphCollapsed;
+      applyAdsrCollapsed(id);
+      savePresetNow();
+    });
+    const closeBtn = header.querySelector(".widget-instance-close");
+    if (closeBtn) header.insertBefore(collapseBtn, closeBtn);
+    else header.appendChild(collapseBtn);
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body adsr-body";
+    body.appendChild(createAdsrGraph(id));
+    el.appendChild(body);
+    applyAdsrCollapsed(id);
+  }
+
+  if (type === "dx-envelope") {
+    const state = createDxEnvelopeDefaults();
+    dxEnvelopeStates.set(id, state);
+    audioEngine.createNode(id, "dx-envelope", { ...state });
+
+    const collapseBtn = document.createElement("button");
+    collapseBtn.type = "button";
+    collapseBtn.className = "dx-envelope-collapse-toggle";
+    collapseBtn.dataset.role = "dx-envelope-collapse-toggle";
+    collapseBtn.title = "Toggle envelope graph";
+    collapseBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.graphCollapsed = !state.graphCollapsed;
+      applyDxEnvelopeCollapsed(id);
+      savePresetNow();
+    });
+    const closeBtn = header.querySelector(".widget-instance-close");
+    if (closeBtn) header.insertBefore(collapseBtn, closeBtn);
+    else header.appendChild(collapseBtn);
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body dx-envelope-body";
+    body.appendChild(createDxEnvelopeGraph(id));
+    el.appendChild(body);
+    applyDxEnvelopeCollapsed(id);
   }
 
   if (type === "chorus") {
@@ -2947,6 +3036,27 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatAdsrValue(adsrState, port.id);
         row.appendChild(valueSpan);
       }
+      if (type === "dx-envelope" && /^(level|time)[1-4]$/.test(port.id)) {
+        const state = dxEnvelopeStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(dxEnvelopeSliderVolts(state, port.id));
+        slider.dataset.role = `dx-envelope-slider-${port.id}`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `dx-envelope-value-${port.id}`;
+        valueSpan.textContent = formatDxEnvelopeValue(state, port.id);
+        row.appendChild(valueSpan);
+      }
       if (type === "clock" && port.id === "tempo") {
         const state = clockStates.get(id);
 
@@ -3436,6 +3546,44 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatNumber(fmOscState.feedback);
         row.appendChild(valueSpan);
       }
+      if (type === "fm-oscillator" && port.id === "dutyCycle") {
+        const fmOscState = fmOscillatorStates.get(id);
+        // Only audible for WaveType::Square (see DspPrimitives.h's
+        // PhaseOsc::sampleAt) - row always stays visible (unlike the "row
+        // hidden for other waveforms" first attempt), just disabled for
+        // every other waveform, toggled live in setFmOscillatorWaveType via
+        // updateFmOscillatorDutyCycleVisual(). The "disabled" class (see
+        // style.css, same one the mono/stereo mixer row toggle already
+        // uses) dims label+slider+value together and is the only thing
+        // that visually greys the row out - slider.disabled alone blocks
+        // dragging but a custom-styled range input ignores the browser's
+        // own disabled look entirely (appearance: none).
+        const dutyDisabled = fmOscState.waveType !== "square";
+        row.dataset.role = "fm-oscillator-dutycycle-row";
+        row.classList.toggle("disabled", dutyDisabled);
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fmOscState.dutyCycle);
+        slider.disabled = dutyDisabled;
+        slider.dataset.role = "fm-oscillator-dutycycle-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "dutyCycle", parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "fm-oscillator-dutycycle-value";
+        valueSpan.textContent = formatNumber(fmOscState.dutyCycle);
+        row.appendChild(valueSpan);
+      }
       if (type === "detune" && port.id === "amount") {
         const detuneState = detuneStates.get(id);
         const initialCents = Math.round(detuneAmountToCents(detuneState.amount) / DETUNE_CENTS_STEP) * DETUNE_CENTS_STEP;
@@ -3656,6 +3804,8 @@ function createWidget(type, label, x, y, forcedId) {
     requestAnimationFrame(() => updateMultiplexerRouting(id));
   }
   if (type === "midi-in") updateMidiInControls(id);
+  if (type === "adsr") updateAdsrSliders(id);
+  if (type === "dx-envelope") updateDxEnvelopeVisuals(id);
   savePresetNow(); 
   return el;
 }
@@ -3698,6 +3848,7 @@ function removeWidget(id, force = false) {
   mixerStates.delete(id);
   multiplexerStates.delete(id);
   adsrStates.delete(id);
+  dxEnvelopeStates.delete(id);
   constStates.delete(id);
   voltmeterStates.delete(id);
   audioMonitorStates.delete(id);
@@ -3726,6 +3877,7 @@ function removeWidget(id, force = false) {
   if (pendingAdderId === id) pendingAdderId = null;
   if (pendingClockId === id) pendingClockId = null;
   if (pendingMixerId === id) pendingMixerId = null;
+  if (pendingDxEnvelopeId === id) pendingDxEnvelopeId = null;
   if (pendingWavePlayerId === id) pendingWavePlayerId = null;
   if (pendingLinkedInputId === id) pendingLinkedInputId = null;
   if (pendingLinkedOutputId === id) pendingLinkedOutputId = null;
@@ -6588,6 +6740,7 @@ function refreshAllDualModeWidgets() {
     updateFmOscillatorTuneVisual(id);
     updateFmOscillatorIndexVisual(id);
     updateFmOscillatorFeedbackVisual(id);
+    updateFmOscillatorDutyCycleVisual(id);
   });
   hammondStates.forEach((_, id) => {
     if (!connections.some((c) => c.to.widgetId === id && c.to.portId === "amplitude")) {
@@ -8169,12 +8322,36 @@ function updateFmOscillatorWaveButtons(widgetId) {
   });
 }
 
+// "Duty Cycle" only shapes WaveType::Square (see DspPrimitives.h's
+// PhaseOsc::sampleAt) - stays visible for every waveform (unlike the
+// hidden-row first attempt), just disabled (greyed out, non-interactive)
+// whenever it wouldn't currently have an audible effect: a non-square
+// waveform, or a cable already driving the port. Called whenever waveType
+// changes (setFmOscillatorWaveType) and everywhere else the other
+// fm-oscillator sliders get resynced (connection changes, preset load).
+function updateFmOscillatorDutyCycleVisual(widgetId) {
+  const state = fmOscillatorStates.get(widgetId);
+  if (!state) return;
+  const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "dutyCycle");
+  const dutyDisabled = connected || state.waveType !== "square";
+  const row = document.querySelector(`#${widgetId} [data-role="fm-oscillator-dutycycle-row"]`);
+  if (row) row.classList.toggle("disabled", dutyDisabled);
+  const slider = document.querySelector(`#${widgetId} [data-role="fm-oscillator-dutycycle-slider"]`);
+  if (slider) {
+    slider.value = String(state.dutyCycle);
+    slider.disabled = dutyDisabled;
+  }
+  const valueSpan = document.querySelector(`#${widgetId} [data-role="fm-oscillator-dutycycle-value"]`);
+  if (valueSpan) valueSpan.textContent = formatNumber(state.dutyCycle);
+}
+
 function setFmOscillatorWaveType(widgetId, waveType) {
   const state = fmOscillatorStates.get(widgetId);
   if (!state) return;
   state.waveType = waveType;
   audioEngine.setParam(widgetId, "waveType", waveType);
   updateFmOscillatorWaveButtons(widgetId);
+  updateFmOscillatorDutyCycleVisual(widgetId);
   sendLiveParamUpdate(widgetId, { waveType });
 }
 
@@ -9633,8 +9810,579 @@ document.getElementById("multiplexerSettingsSave").addEventListener("click", () 
 
 const adsrStates = new Map();
 const MAX_ENVELOPE_SECONDS = 4;
+const ADSR_GRAPH_WIDTH = 240;
+const ADSR_GRAPH_HEIGHT = 96;
+const ADSR_GRAPH_PADDING = 10;
+const ADSR_GRAPH_HOLD_WIDTH = 18;
+
+const dxEnvelopeStates = new Map();
+const DX_ENVELOPE_WIDTH = 240;
+const DX_ENVELOPE_HEIGHT = 116;
+const DX_ENVELOPE_PADDING = 10;
+const DX_ENVELOPE_HOLD_WIDTH = 18;
+
+function createDxEnvelopeDefaults() {
+  return {
+    level1: 10,
+    level2: 8,
+    level3: 7,
+    level4: 0,
+    time1: 0.1,
+    time2: 0.25,
+    time3: 0.4,
+    time4: 0.6,
+    time1MaxSeconds: MAX_ENVELOPE_SECONDS,
+    time2MaxSeconds: MAX_ENVELOPE_SECONDS,
+    time3MaxSeconds: MAX_ENVELOPE_SECONDS,
+    time4MaxSeconds: MAX_ENVELOPE_SECONDS,
+    time1Curve: "linear",
+    time2Curve: "linear",
+    time3Curve: "linear",
+    time4Curve: "linear",
+    livePhase: "idle",
+    liveLevel: 0,
+    liveSegment: 0,
+    liveSegmentStartedAt: 0,
+    liveSegmentStartLevel: 0,
+    liveGate: false,
+    liveVoiceIndex: null,
+    graphCollapsed: false,
+  };
+}
+
+function dxEnvelopeSliderVolts(state, paramName) {
+  if (!state) return 0;
+  if (paramName.startsWith("level")) return state[paramName];
+  return secondsToCv(state[paramName], state[`${paramName}MaxSeconds`], state[`${paramName}Curve`]);
+}
+
+function formatDxEnvelopeValue(state, paramName) {
+  if (!state) return "–";
+  const unit = paramName.startsWith("level") ? "V" : "s";
+  return `${formatNumber(state[paramName])} ${unit}`;
+}
+
+function dxEnvelopeGraphGeometry(state) {
+  const plotWidth = DX_ENVELOPE_WIDTH - DX_ENVELOPE_PADDING * 2 - DX_ENVELOPE_HOLD_WIDTH;
+  const segmentWidth = plotWidth / 4;
+  const x = [DX_ENVELOPE_PADDING];
+  for (let i = 1; i <= 3; i += 1) {
+    const ratio = clamp(state[`time${i}`] / state[`time${i}MaxSeconds`], 0, 1);
+    x.push(x[x.length - 1] + ratio * segmentWidth);
+  }
+  const releaseStart = x[3] + DX_ENVELOPE_HOLD_WIDTH;
+  const releaseRatio = clamp(state.time4 / state.time4MaxSeconds, 0, 1);
+  x.push(releaseStart + releaseRatio * segmentWidth);
+  const yForLevel = (level) => DX_ENVELOPE_HEIGHT - DX_ENVELOPE_PADDING -
+    clamp(level / CV_MAX_VOLTS, 0, 1) * (DX_ENVELOPE_HEIGHT - DX_ENVELOPE_PADDING * 2);
+  return {
+    segmentWidth,
+    releaseStart,
+    points: [
+      { x: x[0], y: yForLevel(state.level4) },
+      { x: x[1], y: yForLevel(state.level1) },
+      { x: x[2], y: yForLevel(state.level2) },
+      { x: x[3], y: yForLevel(state.level3) },
+      { x: x[4], y: yForLevel(state.level4) },
+    ],
+  };
+}
+
+function createDxEnvelopeGraph(widgetId) {
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.classList.add("dx-envelope-graph");
+  svg.dataset.role = "dx-envelope-graph";
+  svg.setAttribute("viewBox", `0 0 ${DX_ENVELOPE_WIDTH} ${DX_ENVELOPE_HEIGHT}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "DX envelope curve");
+
+  [0.25, 0.5, 0.75].forEach((ratio) => {
+    const line = document.createElementNS(svgNs, "line");
+    line.classList.add("dx-envelope-grid-line");
+    const y = DX_ENVELOPE_PADDING + ratio * (DX_ENVELOPE_HEIGHT - DX_ENVELOPE_PADDING * 2);
+    line.setAttribute("x1", String(DX_ENVELOPE_PADDING));
+    line.setAttribute("x2", String(DX_ENVELOPE_WIDTH - DX_ENVELOPE_PADDING));
+    line.setAttribute("y1", String(y));
+    line.setAttribute("y2", String(y));
+    svg.appendChild(line);
+  });
+
+  const path = document.createElementNS(svgNs, "path");
+  path.classList.add("dx-envelope-curve");
+  path.dataset.role = "dx-envelope-curve";
+  svg.appendChild(path);
+
+  const hold = document.createElementNS(svgNs, "line");
+  hold.classList.add("dx-envelope-hold");
+  hold.dataset.role = "dx-envelope-hold";
+  svg.appendChild(hold);
+
+  for (let i = 1; i <= 4; i += 1) {
+    const point = document.createElementNS(svgNs, "circle");
+    point.classList.add("dx-envelope-point");
+    point.dataset.pointIndex = String(i);
+    point.setAttribute("r", "6");
+    point.setAttribute("tabindex", "0");
+    point.setAttribute("aria-label", `Level ${i}, Time ${i}`);
+    svg.appendChild(point);
+  }
+
+  const livePoint = document.createElementNS(svgNs, "circle");
+  livePoint.classList.add("dx-envelope-live-point");
+  livePoint.dataset.role = "dx-envelope-live-point";
+  livePoint.setAttribute("r", "4.5");
+  livePoint.setAttribute("aria-hidden", "true");
+  svg.appendChild(livePoint);
+
+  let drag = null;
+  svg.addEventListener("pointerdown", (event) => {
+    const point = event.target.closest?.(".dx-envelope-point");
+    if (!point || event.button !== 0) return;
+    const state = dxEnvelopeStates.get(widgetId);
+    if (!state) return;
+    const index = Number(point.dataset.pointIndex);
+    drag = {
+      index,
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      level: state[`level${index}`],
+      time: state[`time${index}`],
+    };
+    event.preventDefault();
+    event.stopPropagation();
+    svg.setPointerCapture?.(event.pointerId);
+    point.classList.add("dragging");
+  });
+  svg.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const state = dxEnvelopeStates.get(widgetId);
+    const rect = svg.getBoundingClientRect();
+    if (!state || rect.width <= 0 || rect.height <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const graph = dxEnvelopeGraphGeometry(state);
+    const maxSeconds = state[`time${drag.index}MaxSeconds`];
+    const level = clamp(
+      drag.level - ((event.clientY - drag.clientY) * DX_ENVELOPE_HEIGHT * CV_MAX_VOLTS) /
+        (rect.height * (DX_ENVELOPE_HEIGHT - DX_ENVELOPE_PADDING * 2)),
+      0,
+      CV_MAX_VOLTS
+    );
+    const time = clamp(
+      drag.time + ((event.clientX - drag.clientX) * DX_ENVELOPE_WIDTH * maxSeconds) /
+        (rect.width * graph.segmentWidth),
+      0.001,
+      maxSeconds
+    );
+    deliverToWidget(widgetId, `level${drag.index}`, level);
+    deliverToWidget(widgetId, `time${drag.index}`,
+      secondsToCv(time, maxSeconds, state[`time${drag.index}Curve`]));
+  });
+  const stopDrag = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    svg.querySelector(`[data-point-index="${drag.index}"]`)?.classList.remove("dragging");
+    if (svg.hasPointerCapture?.(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+    drag = null;
+    event.stopPropagation();
+  };
+  svg.addEventListener("pointerup", stopDrag);
+  svg.addEventListener("pointercancel", stopDrag);
+  return svg;
+}
+
+function dxEnvelopeLivePosition(state, geometry, now = performance.now()) {
+  const [start, point1, point2, point3, point4] = geometry.points;
+  if (state.livePhase === "idle") return start;
+  if (state.livePhase === "sustain") return point3;
+
+  const segment = state.livePhase === "release" ? 4 : state.liveSegment;
+  const durationMs = Math.max(1, state[`time${segment}`] * 1000);
+  const progress = clamp((now - state.liveSegmentStartedAt) / durationMs, 0, 1);
+  let from;
+  let to;
+  if (segment === 1) {
+    from = start;
+    to = point1;
+  } else if (segment === 2) {
+    from = point1;
+    to = point2;
+  } else if (segment === 3) {
+    from = point2;
+    to = point3;
+  } else {
+    from = { x: geometry.releaseStart, y: point3.y };
+    to = point4;
+  }
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+function advanceDxEnvelopeLiveState(state, now = performance.now()) {
+  if (state.livePhase === "attack") {
+    while (state.liveSegment <= 3) {
+      const durationMs = Math.max(1, state[`time${state.liveSegment}`] * 1000);
+      if (now < state.liveSegmentStartedAt + durationMs) break;
+      state.liveSegmentStartedAt += durationMs;
+      state.liveSegmentStartLevel = state[`level${state.liveSegment}`];
+      state.liveLevel = state.liveSegmentStartLevel;
+      state.liveSegment += 1;
+    }
+    if (state.liveSegment > 3) {
+      state.livePhase = "sustain";
+      state.liveLevel = state.level3;
+    }
+  } else if (state.livePhase === "release") {
+    const durationMs = Math.max(1, state.time4 * 1000);
+    if (now >= state.liveSegmentStartedAt + durationMs) {
+      state.livePhase = "idle";
+      state.liveLevel = state.level4;
+    }
+  }
+}
+
+function currentDxEnvelopeLiveLevel(state, now = performance.now()) {
+  advanceDxEnvelopeLiveState(state, now);
+  if (state.livePhase === "idle") return state.level4;
+  if (state.livePhase === "sustain") return state.level3;
+  const target = state.livePhase === "release" ? state.level4 : state[`level${state.liveSegment}`];
+  const duration = state.livePhase === "release" ? state.time4 : state[`time${state.liveSegment}`];
+  const progress = clamp((now - state.liveSegmentStartedAt) / Math.max(0.001, duration * 1000), 0, 1);
+  return state.liveSegmentStartLevel + (target - state.liveSegmentStartLevel) * progress;
+}
+
+function setDxEnvelopeGate(state, gateOn, now = performance.now()) {
+  const currentLevel = currentDxEnvelopeLiveLevel(state, now);
+  state.liveLevel = currentLevel;
+  state.liveSegmentStartLevel = currentLevel;
+  state.liveSegmentStartedAt = now;
+  if (gateOn) {
+    state.livePhase = "attack";
+    state.liveSegment = 1;
+  } else {
+    state.livePhase = "release";
+    state.liveSegment = 4;
+  }
+}
+
+function applyDxEnvelopeCollapsed(widgetId) {
+  const state = dxEnvelopeStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const collapsed = !!state.graphCollapsed;
+  el.querySelector(".dx-envelope-body")?.classList.toggle("collapsed", collapsed);
+  const toggleBtn = el.querySelector('[data-role="dx-envelope-collapse-toggle"]');
+  if (toggleBtn) {
+    toggleBtn.textContent = collapsed ? "▸" : "▾";
+    toggleBtn.setAttribute("aria-label", collapsed ? "Expand envelope graph" : "Collapse envelope graph");
+    toggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+}
+
+function updateDxEnvelopeVisuals(widgetId) {
+  const state = dxEnvelopeStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  for (let i = 1; i <= 4; i += 1) {
+    [`level${i}`, `time${i}`].forEach((paramName) => {
+      const slider = el.querySelector(`[data-role="dx-envelope-slider-${paramName}"]`);
+      if (slider) slider.value = String(dxEnvelopeSliderVolts(state, paramName));
+      const value = el.querySelector(`[data-role="dx-envelope-value-${paramName}"]`);
+      if (value) value.textContent = formatDxEnvelopeValue(state, paramName);
+    });
+  }
+
+  const svg = el.querySelector('[data-role="dx-envelope-graph"]');
+  if (!svg) return;
+  const geometry = dxEnvelopeGraphGeometry(state);
+  const [start, point1, point2, point3, point4] = geometry.points;
+  svg.querySelector('[data-role="dx-envelope-curve"]')?.setAttribute(
+    "d",
+    `M ${start.x} ${start.y} L ${point1.x} ${point1.y} L ${point2.x} ${point2.y} ` +
+      `L ${point3.x} ${point3.y} L ${geometry.releaseStart} ${point3.y} L ${point4.x} ${point4.y}`
+  );
+  const hold = svg.querySelector('[data-role="dx-envelope-hold"]');
+  hold?.setAttribute("x1", String(point3.x));
+  hold?.setAttribute("x2", String(geometry.releaseStart));
+  hold?.setAttribute("y1", String(point3.y));
+  hold?.setAttribute("y2", String(point3.y));
+  [point1, point2, point3, point4].forEach((point, index) => {
+    const circle = svg.querySelector(`[data-point-index="${index + 1}"]`);
+    circle?.setAttribute("cx", String(point.x));
+    circle?.setAttribute("cy", String(point.y));
+  });
+  updateDxEnvelopeLivePoint(widgetId, performance.now(), geometry);
+}
+
+function updateDxEnvelopeLivePoint(widgetId, now = performance.now(), geometry = null) {
+  const state = dxEnvelopeStates.get(widgetId);
+  const svg = document.getElementById(widgetId)?.querySelector('[data-role="dx-envelope-graph"]');
+  if (!state || !svg) return;
+  const livePosition = dxEnvelopeLivePosition(state, geometry || dxEnvelopeGraphGeometry(state), now);
+  const livePoint = svg.querySelector('[data-role="dx-envelope-live-point"]');
+  livePoint?.setAttribute("cx", String(livePosition.x));
+  livePoint?.setAttribute("cy", String(livePosition.y));
+}
+
+function tickDxEnvelopeLivePoints(now) {
+  dxEnvelopeStates.forEach((state, widgetId) => {
+    const wasActive = state.livePhase !== "idle";
+    advanceDxEnvelopeLiveState(state, now);
+    if (wasActive && state.livePhase === "idle") {
+      updateDxEnvelopeVisuals(widgetId);
+    } else if (wasActive || state.livePhase !== "idle" || state.level4 > 0) {
+      updateDxEnvelopeLivePoint(widgetId, now);
+    }
+  });
+  requestAnimationFrame(tickDxEnvelopeLivePoints);
+}
+requestAnimationFrame(tickDxEnvelopeLivePoints);
+
+const dxEnvelopeSettingsOverlay = document.getElementById("dxEnvelopeSettingsOverlay");
+let pendingDxEnvelopeId = null;
+
+function openDxEnvelopeSettings(widgetId) {
+  const state = dxEnvelopeStates.get(widgetId);
+  if (!state) return;
+  pendingDxEnvelopeId = widgetId;
+  for (let i = 1; i <= 4; i += 1) {
+    document.getElementById(`dxEnvelopeTime${i}MaxInput`).value = state[`time${i}MaxSeconds`];
+    document.getElementById(`dxEnvelopeTime${i}CurveSelect`).value = state[`time${i}Curve`];
+  }
+  dxEnvelopeSettingsOverlay.classList.remove("hidden");
+}
+
+function closeDxEnvelopeSettings() {
+  dxEnvelopeSettingsOverlay.classList.add("hidden");
+  pendingDxEnvelopeId = null;
+}
+
+dxEnvelopeSettingsOverlay.addEventListener("click", (event) => {
+  if (event.target === dxEnvelopeSettingsOverlay) closeDxEnvelopeSettings();
+});
+document.getElementById("dxEnvelopeSettingsCancel").addEventListener("click", closeDxEnvelopeSettings);
+document.getElementById("dxEnvelopeSettingsSave").addEventListener("click", () => {
+  const state = dxEnvelopeStates.get(pendingDxEnvelopeId);
+  if (!state) return;
+  const sliderVolts = [];
+  for (let i = 1; i <= 4; i += 1) sliderVolts.push(dxEnvelopeSliderVolts(state, `time${i}`));
+  const liveParams = {};
+  for (let i = 1; i <= 4; i += 1) {
+    const parsed = parseFloatFlexible(document.getElementById(`dxEnvelopeTime${i}MaxInput`).value);
+    state[`time${i}MaxSeconds`] = Number.isFinite(parsed) && parsed > 0 ? parsed : MAX_ENVELOPE_SECONDS;
+    state[`time${i}Curve`] = document.getElementById(`dxEnvelopeTime${i}CurveSelect`).value === "log"
+      ? "log"
+      : "linear";
+    liveParams[`time${i}MaxSeconds`] = state[`time${i}MaxSeconds`];
+    liveParams[`time${i}Curve`] = state[`time${i}Curve`];
+    deliverToWidget(pendingDxEnvelopeId, `time${i}`, sliderVolts[i - 1]);
+  }
+  sendLiveParamUpdate(pendingDxEnvelopeId, liveParams);
+  updateDxEnvelopeVisuals(pendingDxEnvelopeId);
+  savePresetNow();
+  closeDxEnvelopeSettings();
+});
 
 
+
+function adsrGraphGeometry(state) {
+  const plotWidth = ADSR_GRAPH_WIDTH - ADSR_GRAPH_PADDING * 2 - ADSR_GRAPH_HOLD_WIDTH;
+  const segmentWidth = plotWidth / 3;
+  const attackRatio = clamp(state.attack / state.attackMaxSeconds, 0, 1);
+  const decayRatio = clamp(state.decay / state.decayMaxSeconds, 0, 1);
+  const releaseRatio = clamp(state.release / state.releaseMaxSeconds, 0, 1);
+  const x0 = ADSR_GRAPH_PADDING;
+  const x1 = x0 + attackRatio * segmentWidth;
+  const x2 = x1 + decayRatio * segmentWidth;
+  const holdEnd = x2 + ADSR_GRAPH_HOLD_WIDTH;
+  const x3 = holdEnd + releaseRatio * segmentWidth;
+  const yForLevel = (level) => ADSR_GRAPH_HEIGHT - ADSR_GRAPH_PADDING -
+    clamp(level, 0, 1) * (ADSR_GRAPH_HEIGHT - ADSR_GRAPH_PADDING * 2);
+  return {
+    holdEnd,
+    points: {
+      start: { x: x0, y: yForLevel(0) },
+      peak: { x: x1, y: yForLevel(1) },
+      decayEnd: { x: x2, y: yForLevel(state.sustain) },
+      releaseEnd: { x: x3, y: yForLevel(0) },
+    },
+  };
+}
+
+function createAdsrGraph(widgetId) {
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.classList.add("adsr-graph");
+  svg.dataset.role = "adsr-graph";
+  svg.setAttribute("viewBox", `0 0 ${ADSR_GRAPH_WIDTH} ${ADSR_GRAPH_HEIGHT}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "ADSR envelope curve");
+
+  [0.25, 0.5, 0.75].forEach((ratio) => {
+    const line = document.createElementNS(svgNs, "line");
+    line.classList.add("adsr-grid-line");
+    const y = ADSR_GRAPH_PADDING + ratio * (ADSR_GRAPH_HEIGHT - ADSR_GRAPH_PADDING * 2);
+    line.setAttribute("x1", String(ADSR_GRAPH_PADDING));
+    line.setAttribute("x2", String(ADSR_GRAPH_WIDTH - ADSR_GRAPH_PADDING));
+    line.setAttribute("y1", String(y));
+    line.setAttribute("y2", String(y));
+    svg.appendChild(line);
+  });
+
+  const path = document.createElementNS(svgNs, "path");
+  path.classList.add("adsr-curve");
+  path.dataset.role = "adsr-curve";
+  svg.appendChild(path);
+
+  const hold = document.createElementNS(svgNs, "line");
+  hold.classList.add("adsr-hold");
+  hold.dataset.role = "adsr-hold";
+  svg.appendChild(hold);
+
+  const livePoint = document.createElementNS(svgNs, "circle");
+  livePoint.classList.add("adsr-live-point");
+  livePoint.dataset.role = "adsr-live-point";
+  livePoint.setAttribute("r", "4.5");
+  livePoint.setAttribute("aria-hidden", "true");
+  svg.appendChild(livePoint);
+
+  return svg;
+}
+
+function adsrLivePosition(state, geometry, now = performance.now()) {
+  const { start, peak, decayEnd, releaseEnd } = geometry.points;
+  if (state.livePhase === "idle") return start;
+  if (state.livePhase === "sustain") return decayEnd;
+
+  let from;
+  let to;
+  let duration;
+  if (state.livePhase === "attack") {
+    from = start;
+    to = peak;
+    duration = state.attack;
+  } else if (state.livePhase === "decay") {
+    from = peak;
+    to = decayEnd;
+    duration = state.decay;
+  } else {
+    from = { x: geometry.holdEnd, y: decayEnd.y };
+    to = releaseEnd;
+    duration = state.release;
+  }
+  const durationMs = Math.max(1, duration * 1000);
+  const progress = clamp((now - state.liveSegmentStartedAt) / durationMs, 0, 1);
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+function advanceAdsrLiveState(state, now = performance.now()) {
+  if (state.livePhase === "attack") {
+    const durationMs = Math.max(1, state.attack * 1000);
+    if (now >= state.liveSegmentStartedAt + durationMs) {
+      state.liveSegmentStartedAt += durationMs;
+      state.liveSegmentStartLevel = 1;
+      state.liveLevel = 1;
+      state.livePhase = "decay";
+    }
+  }
+  if (state.livePhase === "decay") {
+    const durationMs = Math.max(1, state.decay * 1000);
+    if (now >= state.liveSegmentStartedAt + durationMs) {
+      state.livePhase = "sustain";
+      state.liveLevel = state.sustain;
+    }
+  } else if (state.livePhase === "release") {
+    const durationMs = Math.max(1, state.release * 1000);
+    if (now >= state.liveSegmentStartedAt + durationMs) {
+      state.livePhase = "idle";
+      state.liveLevel = 0;
+    }
+  }
+}
+
+function currentAdsrLiveLevel(state, now = performance.now()) {
+  advanceAdsrLiveState(state, now);
+  if (state.livePhase === "idle") return 0;
+  if (state.livePhase === "sustain") return state.sustain;
+  const target = state.livePhase === "attack" ? 1 : state.livePhase === "decay" ? state.sustain : 0;
+  const duration = state.livePhase === "attack"
+    ? state.attack
+    : state.livePhase === "decay" ? state.decay : state.release;
+  const progress = clamp((now - state.liveSegmentStartedAt) / Math.max(0.001, duration * 1000), 0, 1);
+  return state.liveSegmentStartLevel + (target - state.liveSegmentStartLevel) * progress;
+}
+
+function setAdsrGate(state, gateOn, now = performance.now()) {
+  const currentLevel = currentAdsrLiveLevel(state, now);
+  state.liveLevel = currentLevel;
+  state.liveSegmentStartLevel = currentLevel;
+  state.liveSegmentStartedAt = now;
+  state.livePhase = gateOn ? "attack" : "release";
+}
+
+function applyAdsrCollapsed(widgetId) {
+  const state = adsrStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const collapsed = !!state.graphCollapsed;
+  el.querySelector(".adsr-body")?.classList.toggle("collapsed", collapsed);
+  const toggleBtn = el.querySelector('[data-role="adsr-collapse-toggle"]');
+  if (toggleBtn) {
+    toggleBtn.textContent = collapsed ? "▸" : "▾";
+    toggleBtn.setAttribute("aria-label", collapsed ? "Expand envelope graph" : "Collapse envelope graph");
+    toggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+}
+
+function updateAdsrLivePoint(widgetId, now = performance.now(), geometry = null) {
+  const state = adsrStates.get(widgetId);
+  const svg = document.getElementById(widgetId)?.querySelector('[data-role="adsr-graph"]');
+  if (!state || !svg) return;
+  const livePosition = adsrLivePosition(state, geometry || adsrGraphGeometry(state), now);
+  const livePoint = svg.querySelector('[data-role="adsr-live-point"]');
+  livePoint?.setAttribute("cx", String(livePosition.x));
+  livePoint?.setAttribute("cy", String(livePosition.y));
+}
+
+function updateAdsrGraph(widgetId) {
+  const state = adsrStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  const svg = el?.querySelector('[data-role="adsr-graph"]');
+  if (!state || !svg) return;
+  const geometry = adsrGraphGeometry(state);
+  const { start, peak, decayEnd, releaseEnd } = geometry.points;
+  svg.querySelector('[data-role="adsr-curve"]')?.setAttribute(
+    "d",
+    `M ${start.x} ${start.y} L ${peak.x} ${peak.y} L ${decayEnd.x} ${decayEnd.y} ` +
+      `L ${geometry.holdEnd} ${decayEnd.y} L ${releaseEnd.x} ${releaseEnd.y}`
+  );
+  const hold = svg.querySelector('[data-role="adsr-hold"]');
+  hold?.setAttribute("x1", String(decayEnd.x));
+  hold?.setAttribute("x2", String(geometry.holdEnd));
+  hold?.setAttribute("y1", String(decayEnd.y));
+  hold?.setAttribute("y2", String(decayEnd.y));
+  updateAdsrLivePoint(widgetId, performance.now(), geometry);
+}
+
+function tickAdsrLivePoints(now) {
+  adsrStates.forEach((state, widgetId) => {
+    const wasActive = state.livePhase !== "idle";
+    advanceAdsrLiveState(state, now);
+    if (wasActive && state.livePhase === "idle") {
+      updateAdsrGraph(widgetId);
+    } else if (wasActive || state.livePhase !== "idle") {
+      updateAdsrLivePoint(widgetId, now);
+    }
+  });
+  requestAnimationFrame(tickAdsrLivePoints);
+}
+requestAnimationFrame(tickAdsrLivePoints);
 
 function adsrSliderVolts(state, portId) {
   if (portId === "sus") return state.sustain * CV_MAX_VOLTS;
@@ -9665,6 +10413,8 @@ function updateAdsrSliders(widgetId) {
     const valueSpan = el.querySelector(`[data-role="adsr-${portId}-value"]`);
     if (valueSpan) valueSpan.textContent = formatAdsrValue(state, portId);
   });
+
+  updateAdsrGraph(widgetId);
 }
 
 
@@ -11307,6 +12057,17 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "fm-oscillator" && portId === "dutyCycle") {
+    const state = fmOscillatorStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.dutyCycle = clamp(Number.isNaN(num) ? CV_MAX_VOLTS / 2 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "dutyCycle", state.dutyCycle);
+      updateFmOscillatorDutyCycleVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { dutyCycle: state.dutyCycle });
+    }
+  }
+
   if (el.dataset.widgetType === "fm-oscillator" && portId === "gate") {
     if (voiceIndex !== undefined) {
       audioEngine.setVoiceParam(widgetId, voiceIndex, "gate", Number(value));
@@ -11674,13 +12435,26 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const state = adsrStates.get(widgetId);
     if (state) {
       if (portId === "gate") {
+        const gateOn = Number(value) > GATE_THRESHOLD_VOLTS;
         if (voiceIndex !== undefined) {
           audioEngine.setVoiceParam(widgetId, voiceIndex, "gate", Number(value));
         } else {
           audioEngine.setParam(widgetId, "gate", Number(value));
         }
         const dot = el.querySelector('.port-row-in [data-port-id="gate"]');
-        setLedActive(dot, Number(value) > GATE_THRESHOLD_VOLTS);
+        setLedActive(dot, gateOn);
+        if (voiceIndex !== undefined) {
+          if (gateOn) {
+            state.liveVoiceIndex = voiceIndex;
+            setAdsrGate(state, true);
+          } else if (state.liveVoiceIndex === voiceIndex) {
+            setAdsrGate(state, false);
+          }
+        } else if (gateOn !== state.liveGate) {
+          state.liveGate = gateOn;
+          setAdsrGate(state, gateOn);
+        }
+        updateAdsrGraph(widgetId);
       } else if (portId === "velocity") {
         
         
@@ -11706,6 +12480,49 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         audioEngine.setParam(widgetId, "sustain", level);
         updateAdsrSliders(widgetId);
         sendLiveParamUpdateThrottled(widgetId, { sustain: level });
+      }
+    }
+  }
+
+  if (el.dataset.widgetType === "dx-envelope") {
+    const state = dxEnvelopeStates.get(widgetId);
+    if (state) {
+      if (portId === "gate") {
+        const gateOn = Number(value) > GATE_THRESHOLD_VOLTS;
+        if (voiceIndex !== undefined) audioEngine.setVoiceParam(widgetId, voiceIndex, "gate", Number(value));
+        else audioEngine.setParam(widgetId, "gate", Number(value));
+        const dot = el.querySelector('.port-row-in [data-port-id="gate"]');
+        setLedActive(dot, gateOn);
+        if (voiceIndex !== undefined) {
+          if (gateOn) {
+            state.liveVoiceIndex = voiceIndex;
+            setDxEnvelopeGate(state, true);
+          } else if (state.liveVoiceIndex === voiceIndex) {
+            setDxEnvelopeGate(state, false);
+          }
+        } else if (gateOn !== state.liveGate) {
+          state.liveGate = gateOn;
+          setDxEnvelopeGate(state, gateOn);
+        }
+        updateDxEnvelopeVisuals(widgetId);
+      } else if (portId === "velocity") {
+        const velocity = Number.isFinite(Number(value)) ? Number(value) : CV_MAX_VOLTS;
+        if (voiceIndex !== undefined) audioEngine.setVoiceParam(widgetId, voiceIndex, "velocity", velocity);
+        else audioEngine.setParam(widgetId, "velocity", velocity);
+      } else if (/^level[1-4]$/.test(portId)) {
+        state[portId] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+        audioEngine.setParam(widgetId, portId, state[portId]);
+        updateDxEnvelopeVisuals(widgetId);
+        sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+      } else if (/^time[1-4]$/.test(portId)) {
+        const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+        state[portId] = Math.max(
+          0.001,
+          cvToSeconds(volts, state[`${portId}MaxSeconds`], state[`${portId}Curve`])
+        );
+        audioEngine.setParam(widgetId, portId, state[portId]);
+        updateDxEnvelopeVisuals(widgetId);
+        sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
       }
     }
   }
@@ -12486,6 +13303,7 @@ const WIDGET_ENGINES = {
         gain: state.gain,
         fmIndex: state.fmIndex,
         feedback: state.feedback,
+        dutyCycle: state.dutyCycle,
       };
     },
     applyParams: (id, params) => {
@@ -12498,17 +13316,20 @@ const WIDGET_ENGINES = {
       state.gain = params.gain ?? CV_MAX_VOLTS;
       state.fmIndex = params.fmIndex ?? 0;
       state.feedback = params.feedback ?? 0;
+      state.dutyCycle = params.dutyCycle ?? center;
       state.pitchCv = center;
       audioEngine.setParam(id, "waveType", state.waveType);
       audioEngine.setParam(id, "amplitude", 0, 0);
       audioEngine.setParam(id, "gain", state.gain);
       audioEngine.setParam(id, "fmIndex", state.fmIndex);
       audioEngine.setParam(id, "feedback", state.feedback);
+      audioEngine.setParam(id, "dutyCycle", state.dutyCycle);
       recomputeFmOscillatorFreq(id, undefined);
       updateFmOscillatorTuneVisual(id);
       updateFmOscillatorGainVisual(id);
       updateFmOscillatorIndexVisual(id);
       updateFmOscillatorFeedbackVisual(id);
+      updateFmOscillatorDutyCycleVisual(id);
       updateFmOscillatorWaveButtons(id);
     },
   },
@@ -12787,7 +13608,39 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "decay", state.decay);
       audioEngine.setParam(id, "sustain", state.sustain);
       audioEngine.setParam(id, "release", state.release);
+      state.graphCollapsed = params.graphCollapsed === true;
       updateAdsrSliders(id);
+      applyAdsrCollapsed(id);
+    },
+  },
+  "dx-envelope": {
+    getParams: (id) => {
+      const state = dxEnvelopeStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = dxEnvelopeStates.get(id);
+      if (!state || !params) return;
+      for (let i = 1; i <= 4; i += 1) {
+        const level = Number(params[`level${i}`] ?? state[`level${i}`]);
+        const maxSeconds = Number(params[`time${i}MaxSeconds`] ?? MAX_ENVELOPE_SECONDS);
+        state[`level${i}`] = clamp(Number.isFinite(level) ? level : 0, 0, CV_MAX_VOLTS);
+        state[`time${i}MaxSeconds`] = Number.isFinite(maxSeconds) && maxSeconds > 0
+          ? maxSeconds
+          : MAX_ENVELOPE_SECONDS;
+        state[`time${i}Curve`] = params[`time${i}Curve`] === "log" ? "log" : "linear";
+        const time = Number(params[`time${i}`] ?? state[`time${i}`]);
+        state[`time${i}`] = clamp(
+          Number.isFinite(time) ? time : 0.001,
+          0.001,
+          state[`time${i}MaxSeconds`]
+        );
+        audioEngine.setParam(id, `level${i}`, state[`level${i}`]);
+        audioEngine.setParam(id, `time${i}`, state[`time${i}`]);
+      }
+      state.graphCollapsed = params.graphCollapsed === true;
+      updateDxEnvelopeVisuals(id);
+      applyDxEnvelopeCollapsed(id);
     },
   },
   const: {

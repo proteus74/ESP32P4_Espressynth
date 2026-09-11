@@ -37,6 +37,12 @@ struct AdsrState;
 }
 using nodes::adsr::AdsrState;
 
+namespace nodes::dxenvelope
+{
+struct DxEnvelopeState;
+}
+using nodes::dxenvelope::DxEnvelopeState;
+
 namespace nodes::filter
 {
 struct FilterState;
@@ -253,6 +259,7 @@ struct NodeInstance
     ReverbLightState *reverbLight = nullptr;
     EspEffectState *espEffect = nullptr;
     AdsrState *adsr = nullptr;
+    DxEnvelopeState *dxEnvelope = nullptr;
     FilterState *filter = nullptr;
     CurtisFilterState *curtisFilter = nullptr;
     EspEqState *espEq = nullptr;

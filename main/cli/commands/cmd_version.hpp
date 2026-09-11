@@ -2,6 +2,7 @@
 
 #include "esp_app_desc.h"
 #include "esp_console.h"
+#include "version.h"
 
 #include <cstdio>
 
@@ -14,7 +15,7 @@ inline int cli_cmd_version(int argc, char** argv) {
     (void)argv;
 
     const esp_app_desc_t* desc = esp_app_get_description();
-    printf("%s %s\n", desc->project_name, desc->version);
+    printf("%s %s\n", desc->project_name, FIRMWARE_VERSION);
     printf("Built %s %s\n", desc->date, desc->time);
     printf("ESP-IDF %s\n", desc->idf_ver);
     return 0;

@@ -791,6 +791,152 @@ body.show-node-cpu .widget-cpu-badge {
   flex-basis: 90px;
 }
 
+.adsr-body {
+  padding: 0.45rem 0.7rem 0;
+}
+
+.adsr-body.collapsed {
+  padding-bottom: 0.45rem;
+}
+
+.adsr-body.collapsed .adsr-graph {
+  display: none;
+}
+
+.adsr-graph {
+  display: block;
+  width: 100%;
+  aspect-ratio: 60 / 24;
+  overflow: visible;
+}
+
+.adsr-grid-line {
+  stroke: color-mix(in srgb, var(--card-border) 70%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.adsr-curve {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.adsr-hold {
+  stroke: var(--ok);
+  stroke-width: 4;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.adsr-live-point {
+  fill: var(--ok);
+  stroke: var(--card);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--ok) 75%, transparent));
+}
+
+.adsr-collapse-toggle {
+  background: none;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.3rem;
+}
+
+.adsr-collapse-toggle:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.widget-instance[data-widget-type="dx-envelope"] {
+  width: 292px;
+  min-width: 292px;
+}
+
+.widget-instance[data-widget-type="dx-envelope"] .port-row-in > .port-label {
+  flex-basis: 58px;
+}
+
+.dx-envelope-body {
+  padding: 0.45rem 0.7rem 0;
+}
+
+.dx-envelope-body.collapsed {
+  padding-bottom: 0.45rem;
+}
+
+.dx-envelope-body.collapsed .dx-envelope-graph {
+  display: none;
+}
+
+.dx-envelope-graph {
+  display: block;
+  width: 100%;
+  aspect-ratio: 60 / 29;
+  overflow: visible;
+  touch-action: none;
+}
+
+.dx-envelope-grid-line {
+  stroke: color-mix(in srgb, var(--card-border) 70%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.dx-envelope-curve {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.dx-envelope-hold {
+  stroke: var(--ok);
+  stroke-width: 4;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.dx-envelope-point {
+  fill: var(--card);
+  stroke: var(--accent);
+  stroke-width: 3;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+
+.dx-envelope-point:hover,
+.dx-envelope-point:focus-visible,
+.dx-envelope-point.dragging {
+  fill: var(--accent);
+  outline: none;
+}
+
+.dx-envelope-point.dragging {
+  cursor: grabbing;
+}
+
+.dx-envelope-live-point {
+  fill: var(--ok);
+  stroke: var(--card);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--ok) 75%, transparent));
+}
+
 .widget-instance[data-widget-type="oscillator"],
 .widget-instance[data-widget-type="gain"] {
   min-width: 200px;
@@ -2123,6 +2269,19 @@ body.show-node-cpu .widget-cpu-badge {
   opacity: 1;
 }
 
+.dx-envelope-collapse-toggle {
+  background: none;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.3rem;
+}
+
+.dx-envelope-collapse-toggle:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .widget-instance-body {
   padding: 0.75rem 0.9rem;
   color: #94a3b8;
@@ -2226,6 +2385,24 @@ body.show-node-cpu .widget-cpu-badge {
   height: 4px;
   background: var(--bg);
   border-radius: 2px;
+}
+
+/* appearance: none above replaces the native control entirely, so the
+   browser's own disabled dimming never applies either - every custom thumb/
+   track color above needs its own :disabled override, or a disabled slider
+   (e.g. Self FB/FM Index/Duty Cycle while a cable drives the port, or Duty
+   Cycle on a non-Square waveform) looks pixel-identical to an enabled one. */
+.port-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.port-slider:disabled::-webkit-slider-thumb {
+  cursor: not-allowed;
+}
+
+.port-slider:disabled::-moz-range-thumb {
+  cursor: not-allowed;
 }
 
 /* Eight-channel master send: one compact row per bus.

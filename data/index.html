@@ -646,6 +646,30 @@
   </div>
 </div>
 
+<div id="dxEnvelopeSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>DX Envelope Settings</h3>
+    <p class="modal-hint">Time inputs are 0-10V CV. Set each segment's maximum duration and mapping.</p>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Time 1 Max (s)</span><input type="text" inputmode="decimal" id="dxEnvelopeTime1MaxInput" value="4"></label>
+      <label class="modal-field"><span>Time 1 Curve</span><select id="dxEnvelopeTime1CurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Time 2 Max (s)</span><input type="text" inputmode="decimal" id="dxEnvelopeTime2MaxInput" value="4"></label>
+      <label class="modal-field"><span>Time 2 Curve</span><select id="dxEnvelopeTime2CurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Time 3 Max (s)</span><input type="text" inputmode="decimal" id="dxEnvelopeTime3MaxInput" value="4"></label>
+      <label class="modal-field"><span>Time 3 Curve</span><select id="dxEnvelopeTime3CurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Time 4 Max (s)</span><input type="text" inputmode="decimal" id="dxEnvelopeTime4MaxInput" value="4"></label>
+      <label class="modal-field"><span>Time 4 Curve</span><select id="dxEnvelopeTime4CurveSelect"><option value="linear">Linear</option><option value="log">Log</option></select></label>
+    </div>
+    <div class="modal-actions"><button id="dxEnvelopeSettingsCancel" class="btn-secondary">Cancel</button><button id="dxEnvelopeSettingsSave">Save</button></div>
+  </div>
+</div>
+
 <div id="numericEditOverlay" class="modal-overlay hidden">
   <div class="modal modal-numeric-edit">
     <h3 id="numericEditLabel">Value</h3>

@@ -21,6 +21,7 @@
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
+#include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
@@ -88,6 +89,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Adsr:
         nodes::adsr::render(inst, frames);
+        break;
+    case NodeType::DxEnvelope:
+        nodes::dxenvelope::render(inst, frames);
         break;
     case NodeType::Filter:
         nodes::filter::render(inst, frames);
