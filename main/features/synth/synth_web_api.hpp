@@ -196,15 +196,28 @@ inline void broadcast_status_tick() {
     memorydiag::State memory_state;
     memorydiag::read(memory_state);
     const SynthEngine::TimingSnapshot timing = engine().consumeTimingSnapshot();
+    const SynthEngine::MidiVoiceUsageSnapshot voices = engine().midiVoiceUsage();
+    const SynthEngine::PhaseSnapshot phases = engine().phaseSnapshot();
+    const SynthEngine::BlockStatsSnapshot stats = engine().blockStatsSnapshot();
 
-    char json[640];
-    snprintf(json, sizeof(json),
+    // Status tick runs on app_main's small stack. Keep both large JSON
+    // staging buffers in BSS; placing this one beside node_cpu_json on the
+    // stack caused an immediate stack-protection reset loop.
+    static char json[1536];
+    const int json_length = snprintf(json, sizeof(json),
              "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,\"peakUs\":%lu,\"budgetUs\":%lu,"
              "\"p50Us\":%lu,\"p95Us\":%lu,\"p99Us\":%lu,\"timingSamples\":%lu,"
              "\"underruns\":%lu,\"renderOverruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
              "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
              "\"sysLargestKb\":%lu,\"sysMinKb\":%lu,\"psLargestKb\":%lu,\"psMinKb\":%lu,"
-             "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u}",
+             "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u,"
+             "\"voiceActive\":%u,\"voiceMax\":%u,\"voiceCapRequested\":%u,\"voiceCapEffective\":%u,"
+             "\"phases\":{\"activity\":%.2f,\"render\":%.2f,\"output\":%.2f},"
+             "\"fm\":{\"pitchConst\":%lu,\"pitchAudio\":%lu,\"tuneConst\":%lu,\"tuneAudio\":%lu,"
+             "\"ampConst\":%lu,\"ampAudio\":%lu,\"ampZero\":%lu,\"silent\":%lu,"
+             "\"gainConverged\":%lu,\"modActive\":%lu,\"feedbackActive\":%lu},"
+             "\"dx\":{\"holding\":%lu,\"ramping\":%lu,\"boundary\":%lu,\"shapeConfigured\":%lu},"
+             "\"instances\":{\"total\":%lu,\"rendered\":%lu,\"idleForced\":%lu}}",
              static_cast<double>(core0_load), static_cast<double>(engine().audioCoreLoadPercent()),
              static_cast<unsigned long>(timing.peakUs), static_cast<unsigned long>(kBlockBudgetUs),
              static_cast<unsigned long>(timing.p50Us), static_cast<unsigned long>(timing.p95Us),
@@ -215,10 +228,23 @@ inline void broadcast_status_tick() {
              static_cast<unsigned long>(memory.internalLargest / 1024), static_cast<unsigned long>(memory.internalMinimum / 1024),
              static_cast<unsigned long>(memory.psramLargest / 1024), static_cast<unsigned long>(memory.psramMinimum / 1024),
              static_cast<unsigned long>(memory.synthStackHighWaterBytes), static_cast<unsigned long>(memory_state.generation),
-             static_cast<unsigned>(memory_state.phase));
-    broadcast_json(json);
+             static_cast<unsigned>(memory_state.phase), static_cast<unsigned>(voices.active),
+             static_cast<unsigned>(voices.maximum), static_cast<unsigned>(engine().voicesCapRequested()),
+             static_cast<unsigned>(engine().voicesCapEffective()), static_cast<double>(phases.activityPercent),
+             static_cast<double>(phases.renderPercent), static_cast<double>(phases.outputPercent),
+             static_cast<unsigned long>(stats.fmPitchConstant), static_cast<unsigned long>(stats.fmPitchAudioRate),
+             static_cast<unsigned long>(stats.fmTuneConstant), static_cast<unsigned long>(stats.fmTuneAudioRate),
+             static_cast<unsigned long>(stats.fmAmpConstant), static_cast<unsigned long>(stats.fmAmpAudioRate),
+             static_cast<unsigned long>(stats.fmAmpConstantZero), static_cast<unsigned long>(stats.fmSilentSkipped),
+             static_cast<unsigned long>(stats.fmGainConverged), static_cast<unsigned long>(stats.fmModActive),
+             static_cast<unsigned long>(stats.fmFeedbackActive), static_cast<unsigned long>(stats.dxHolding),
+             static_cast<unsigned long>(stats.dxRamping), static_cast<unsigned long>(stats.dxBoundary),
+             static_cast<unsigned long>(stats.dxShapeConfigured), static_cast<unsigned long>(stats.instancesTotal),
+             static_cast<unsigned long>(stats.instancesRendered),
+             static_cast<unsigned long>(stats.instancesRenderedWhileIdle));
+    if (json_length > 0 && static_cast<size_t>(json_length) < sizeof(json)) broadcast_json(json);
 
-    char node_cpu_json[1536];
+    static char node_cpu_json[1536];
     int offset = snprintf(node_cpu_json, sizeof(node_cpu_json), "{\"type\":\"nodeCpu\",\"w\":[");
     const uint16_t widget_load_count = engine().widgetLoadCount();
     bool first = true;

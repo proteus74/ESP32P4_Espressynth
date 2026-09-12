@@ -234,6 +234,38 @@ inline void classifyVoiced(const PresetDoc &doc, bool *voiced)
     while (qHead < qTail)
     {
         const uint16_t cur = queue[qHead++];
+
+        // Freely-placeable linked-io pairing: a voiced LinkedInput must
+        // propagate voicedness to every LinkedOutput sharing its linkId,
+        // even though that pairing is never a doc.connections[] entry for
+        // the loop below to find (GraphBuilder resolves the actual hidden
+        // edge later, by matching linkId - see the "Linked-IO resolution"
+        // block further down). Without this, a per-voice signal (e.g.
+        // MidiIn's "gate") routed through a link would arrive at a single
+        // global LinkedOutput instance instead of one per voice - every
+        // voice's target (e.g. every Adsr instance) would then read that
+        // same one global value instead of its own voice's.
+        if (doc.widgets[cur].type == NodeType::LinkedInput)
+        {
+            const char *linkId = doc.widgets[cur].params.linkId;
+            if (linkId[0] != '\0')
+            {
+                for (uint16_t i = 0; i < doc.widgetCount; ++i)
+                {
+                    if (doc.widgets[i].type != NodeType::LinkedOutput || visited[i])
+                    {
+                        continue;
+                    }
+                    if (strcmp(doc.widgets[i].params.sourceLinkId, linkId) == 0)
+                    {
+                        visited[i] = true;
+                        voiced[i] = true;
+                        queue[qTail++] = i;
+                    }
+                }
+            }
+        }
+
         for (uint16_t c = 0; c < doc.connectionCount; ++c)
         {
             if (strcmp(doc.connections[c].fromWidget, doc.widgets[cur].id) != 0)
@@ -697,6 +729,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             NodeInstance &inst = g->instances[w.instanceBase + v];
             inst.type = w.type;
+            inst.constructInlineState();
             inst.widgetIndex = i;
             inst.voiceIndex = static_cast<uint8_t>(v);
             // Voice 0 of this widget - self-pointer for v==0. See
@@ -1373,18 +1406,26 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             const bool audioConnected =
                 (inst.audioConnectedPortMask & synth::portBit(p)) != 0;
-            bool midiPitchCvRoute = false;
+            // Polyphonic MidiIn pitch is always a block-constant scalar:
+            // deliverNoteControlRoutes disables glide whenever voices != 1,
+            // and portSample() already falls back to controlValue when no
+            // buffer exists. Keep a real sample buffer only for monophonic
+            // MidiIn routes, where glide can be enabled live. MidiSplit is
+            // kept conservative because its upstream MidiIn is indirect.
+            bool midiPitchNeedsBuffer = false;
             for (uint16_t r = 0; r < g->controlRouteCount; ++r)
             {
                 const ControlRoute &route = g->controlRoutes[r];
                 if (route.kind == ControlRoute::Kind::MidiPitchCv && route.targetWidget == inst.widgetIndex &&
                     route.targetPort == p)
                 {
-                    midiPitchCvRoute = true;
+                    const WidgetSlot &source = g->widgets[route.sourceWidget];
+                    midiPitchNeedsBuffer = source.type != NodeType::MidiIn ||
+                        g->instances[source.instanceBase].midiIn.voices == 1;
                     break;
                 }
             }
-            if (!audioConnected && !requireAllInputs && !midiPitchCvRoute)
+            if (!audioConnected && !requireAllInputs && !midiPitchNeedsBuffer)
             {
                 continue;
             }
@@ -1545,6 +1586,42 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         }
         delete[] targetEdgeCount;
         delete[] targetEdgeIndex;
+    }
+
+    // A DX Envelope feeding only FM amplitude ports through the buffer-view
+    // path need not materialize constant/ramp samples: Graph::renderBlock
+    // forwards its metadata and FmOscillatorNode consumes it directly. Keep
+    // this deliberately narrow. Audio-rate/gliding pitch or tune currently
+    // takes an FM fallback loop that may still read the amplitude buffer.
+    for (uint16_t wIdx = 0; wIdx < g->widgetCount; ++wIdx)
+    {
+        WidgetSlot &sourceWidget = g->widgets[wIdx];
+        if (sourceWidget.type != NodeType::DxEnvelope || sourceWidget.outgoingEdgeCount == 0)
+        {
+            continue;
+        }
+        bool metadataOnly = true;
+        const uint16_t edgeEnd = sourceWidget.outgoingEdgeStart + sourceWidget.outgoingEdgeCount;
+        for (uint16_t e = sourceWidget.outgoingEdgeStart; e < edgeEnd; ++e)
+        {
+            const Edge &edge = g->edges[e];
+            const NodeInstance &dst = g->instances[edge.toInstance];
+            if (edge.fromPort != 0 || dst.type != NodeType::FmOscillator || edge.toPort != 0 ||
+                edge.monitorTap || edge.scale != 1.0f ||
+                (dst.viewPortMask & synth::portBit(0)) == 0 ||
+                dst.inPorts[1] != nullptr || dst.inPorts[2] != nullptr)
+            {
+                metadataOnly = false;
+                break;
+            }
+        }
+        if (metadataOnly)
+        {
+            for (uint16_t v = 0; v < sourceWidget.instanceCount; ++v)
+            {
+                g->instances[sourceWidget.instanceBase + v].outputMetadataOnly = true;
+            }
+        }
     }
 
     // Subgraph pruning (plan section 3, P2: "Nur vom Ausgang oder einem

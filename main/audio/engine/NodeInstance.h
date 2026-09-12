@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <new>
 
 #include "NodeState.h"
 #include "NodeTypes.h"
@@ -88,21 +89,11 @@ struct HammondState;
 using nodes::hammond::HammondState;
 
 // One instance of one widget (a voiced widget has the preset's configured
-// voice count, a global widget has exactly 1). Flat struct (not a union of
-// state types) - costs a bit more memory than the minimum, but keeps
-// allocation and lifetime trivial (plain `new`/`delete`, real constructors
-// run, default member initializers apply) with no placement-new/manual-
-// lifetime subtleties for most of the ~25 per-type payloads below. The
-// thirteen largest ones (chorus/delay/reverb/reverbLight/espEffect/hammond,
-// plus adsr/filter/espEq/knob/button/upDownButton/valueMapper) are the
-// deliberate exception - heap-allocated only for a matching instance, see
-// their comment below - because leaving them as flat value members like the others made
-// every instance of every type pay their combined size regardless of whether
-// it ever used them. The last four (knob/button/upDownButton/valueMapper)
-// are dominated by their kValueListMax-sized valueList[] array (64 B each) -
-// small individually, but paid by every Oscillator/ADSR/Filter/... instance
-// too when left as value members, since only actual Knob/Button/... widgets
-// ever populate them.
+// voice count, a global widget has exactly 1). Small self-contained states
+// share one inline union; larger or separately-defined states share one
+// typed-pointer union and are allocated only for their matching NodeType.
+// This prevents every FM/DX voice from paying for every unrelated node
+// state while preserving internal-RAM placement of render-hot data.
 struct NodeInstance
 {
     NodeType type = NodeType::Unknown;
@@ -171,9 +162,8 @@ struct NodeInstance
     // Third per-port signal state (see Constant/Buffer in
     // audioPortConstantForBlock's comment below) - a linear ramp
     // start+i*inc for this whole block, published by a producer whose own
-    // output happens to be exactly that shape (currently only AdsrNode's
-    // active attack/decay/release segment, see RampScheduler::
-    // wholeBlockRamp() in DspPrimitives.h) and consumed only by node types
+    // output happens to be exactly that shape (currently AdsrNode and
+    // DxEnvelopeNode during active linear segments) and consumed only by node types
     // that explicitly check it (see noderender::rampForPort below). NOT
     // the same thing as controlRampPortMask above (that one is a transient
     // "don't treat as constant" safety flag for the MIDI-glide fill,
@@ -238,14 +228,32 @@ struct NodeInstance
     bool outIsConstant = false;
     float outConstantValue = 0.0f;
 
-    OscillatorState osc;
-    FmOscillatorState fmOsc;
-    LfoState lfo;
-    DetuneState detune;
-    FrequencyDividerState frequencyDivider;
-    GainState gain;
-    MixerState mixer;
-    MultiplexerState multiplexer;
+    // Exactly one NodeType can use exactly one of these small inline states.
+    // Keeping them as separate members made every instance pay for every
+    // unrelated node type. The anonymous union preserves existing access
+    // syntax while reducing this storage to the largest member. build()
+    // activates the matching member after assigning type.
+    union
+    {
+        uint8_t emptyInlineState;
+        OscillatorState osc;
+        FmOscillatorState fmOsc;
+        LfoState lfo;
+        DetuneState detune;
+        FrequencyDividerState frequencyDivider;
+        GainState gain;
+        MixerState mixer;
+        MultiplexerState multiplexer;
+        AudioOutState audioOut;
+        MeterState meter;
+        MidiInState midiIn;
+        MidiSplitState midiSplit;
+        ConstState constant;
+        SwitchState switchState;
+        WavePlayerState wavePlayer;
+        SoundFontPlayerState soundFontPlayer;
+        ClockState clock;
+    };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
     // Graph::destroy -
@@ -259,39 +267,33 @@ struct NodeInstance
     // size up high enough to force high-voice-count presets out of internal
     // RAM entirely. nullptr for every instance whose type isn't the matching
     // one - dereference only after checking inst.type.
-    ChorusState *chorus = nullptr;
-    DelayState *delay = nullptr;
-    ReverbState *reverb = nullptr;
-    ReverbLightState *reverbLight = nullptr;
-    EspEffectState *espEffect = nullptr;
-    AdsrState *adsr = nullptr;
-    DxEnvelopeState *dxEnvelope = nullptr;
-    StepArpState *stepArp = nullptr;
-    FilterState *filter = nullptr;
-    CurtisFilterState *curtisFilter = nullptr;
-    EspEqState *espEq = nullptr;
-    KnobState *knob = nullptr;
-    ButtonState *button = nullptr;
-    UpDownButtonState *upDownButton = nullptr;
-    // Only audio page-link widgets need the six extra bus buffers. Keeping
-    // them behind this pointer avoids adding six pointers to every voice.
-    LinkState *link = nullptr;
-    // ValueMapperState is defined (state + render/build/destroy/setParam
-    // logic together) in nodes/ValueMapperNode.h, not NodeState.h - pointer
-    // member only needs the forward declaration below.
-    ValueMapperState *valueMapper = nullptr;
-    // HammondState is defined (state + render/build/destroy/setParam logic
-    // together) in nodes/HammondNode.h, not NodeState.h.
-    HammondState *hammond = nullptr;
-    AudioOutState audioOut;
-    MeterState meter;
-    MidiInState midiIn;
-    MidiSplitState midiSplit;
-    ConstState constant;
-    SwitchState switchState;
-    WavePlayerState wavePlayer;
-    SoundFontPlayerState soundFontPlayer;
-    ClockState clock;
+    // Exactly one of these pointers can be meaningful because one instance
+    // has exactly one NodeType. Sharing the storage removes 16 permanently
+    // null pointers from every instance. typeState supplies the single
+    // default initializer; assigning the matching typed pointer during
+    // GraphBuilder::build starts that trivial union member's lifetime.
+    union
+    {
+        void *typeState = nullptr;
+        ChorusState *chorus;
+        DelayState *delay;
+        ReverbState *reverb;
+        ReverbLightState *reverbLight;
+        EspEffectState *espEffect;
+        AdsrState *adsr;
+        DxEnvelopeState *dxEnvelope;
+        StepArpState *stepArp;
+        FilterState *filter;
+        CurtisFilterState *curtisFilter;
+        EspEqState *espEq;
+        KnobState *knob;
+        ButtonState *button;
+        UpDownButtonState *upDownButton;
+        // Only audio page-link widgets need the six extra bus buffers.
+        LinkState *link;
+        ValueMapperState *valueMapper;
+        HammondState *hammond;
+    };
     // multiplier/adder/divide/abs/link types carry no extra state.
 
     // Per-audio-input-port accumulator buffers. Only ports with sample-rate
@@ -309,6 +311,80 @@ struct NodeInstance
     // idle block still runs the one-time zero-out below instead of trusting
     // the buffers' initial state.
     bool wasRenderedLastBlock = true;
+
+    // Build-time proof that every consumer of this instance's output can
+    // consume outIsConstant/outIsRamp metadata without reading outL. Used
+    // by DX Envelope to advance its scheduler while avoiding redundant
+    // sample-buffer writes. False is the safe fallback for every topology.
+    bool outputMetadataOnly = false;
+
+    NodeInstance() : emptyInlineState(0) {}
+
+    void constructInlineState()
+    {
+        switch (type)
+        {
+        case NodeType::Oscillator:
+            new (&osc) OscillatorState();
+            break;
+        case NodeType::FmOscillator:
+            new (&fmOsc) FmOscillatorState();
+            break;
+        case NodeType::Lfo:
+            new (&lfo) LfoState();
+            break;
+        case NodeType::Detune:
+            new (&detune) DetuneState();
+            break;
+        case NodeType::FrequencyDivider:
+            new (&frequencyDivider) FrequencyDividerState();
+            break;
+        case NodeType::Gain:
+            new (&gain) GainState();
+            break;
+        case NodeType::Mixer:
+            new (&mixer) MixerState();
+            break;
+        case NodeType::Multiplexer:
+            new (&multiplexer) MultiplexerState();
+            break;
+        case NodeType::AudioOut:
+        case NodeType::UsbOut:
+        case NodeType::Es8311Out:
+        case NodeType::Wm8960Out:
+            new (&audioOut) AudioOutState();
+            break;
+        case NodeType::VuMeter:
+        case NodeType::Oscilloscope:
+        case NodeType::Spectrum:
+            new (&meter) MeterState();
+            break;
+        case NodeType::MidiIn:
+            new (&midiIn) MidiInState();
+            break;
+        case NodeType::MidiSplit:
+            new (&midiSplit) MidiSplitState();
+            break;
+        case NodeType::Const:
+            new (&constant) ConstState();
+            break;
+        case NodeType::Switch:
+            new (&switchState) SwitchState();
+            break;
+        case NodeType::WavePlayer:
+            new (&wavePlayer) WavePlayerState();
+            break;
+        case NodeType::SoundFontPlayer:
+            new (&soundFontPlayer) SoundFontPlayerState();
+            break;
+        case NodeType::Clock:
+            new (&clock) ClockState();
+            break;
+        default:
+            emptyInlineState = 0;
+            break;
+        }
+    }
 };
 
 inline float *outputPortBuffer(NodeInstance &inst, uint8_t port)
@@ -368,6 +444,17 @@ inline bool controlPortConnected(const NodeInstance &inst, int portIdx)
 // below).
 inline bool audioPortConstantForBlock(const NodeInstance &inst, int port, size_t frames, float &value)
 {
+    // A metadata-only producer may deliberately leave its shared output
+    // buffer untouched while advertising the current block as a ramp. The
+    // bytes behind inPorts[port] then belong to an older block and must not
+    // be scanned as if they described the current one. Ramp-aware consumers
+    // call rampForPort() after this returns false; other consumers retain
+    // their conservative fallback behavior.
+    if ((inst.rampPortMask & synth::portBit(port)) != 0)
+    {
+        return false;
+    }
+
     const float *samples = inst.inPorts[port];
     if (samples == nullptr || frames == 0)
     {

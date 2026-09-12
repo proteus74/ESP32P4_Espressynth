@@ -134,20 +134,20 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
 // from the untaken ternary branch conservatively blocks that). When all
 // three flags hold this way, `amp`/`gainMul` equal c.ampConstantValue/
 // c.gainTarget on every single iteration regardless - reading those two
-// once before the loop is NOT a float reorder (still `sample * amp *
-// gainMul * kAudioPeakVolts`, same three multiplies, same left-to-right
-// order the original ternary's taken branch already produced every time -
-// see plan's own rounding caveat on why order must not change), just
-// skipping their redundant per-sample recomputation.
+// once before the loop skips their redundant per-sample recomputation.
+// gainMul*kAudioPeakVolts is also folded once per block. The constant-amp
+// path folds amp into that scale too, leaving one output multiply per sample;
+// the ramp path keeps amp dynamic and needs two. Reassociation can differ by
+// normal single-precision rounding only (at most one int16 PCM step in the
+// host-side randomized regression used for this change).
 template <WaveType W>
 IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
 {
-    const float amp = c.ampConstantValue;
-    const float gainMul = c.gainTarget;
+    const float outputScale = c.ampConstantValue * c.gainTarget * cv::kAudioPeakVolts;
     for (size_t i = 0; i < frames; ++i)
     {
         const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt, 0.0f, c.dutyThresholdInt);
-        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        c.inst->outL[i] = sample * outputScale;
     }
 }
 
@@ -166,12 +166,12 @@ IRAM_ATTR inline void renderConstFastLoop(FastLoopCtx &c, size_t frames)
 template <WaveType W>
 IRAM_ATTR inline void renderRampAmpFastLoop(FastLoopCtx &c, size_t frames)
 {
-    const float gainMul = c.gainTarget;
+    const float scaledGain = c.gainTarget * cv::kAudioPeakVolts;
     float amp = c.ampRampStart;
     for (size_t i = 0; i < frames; ++i)
     {
         const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt, 0.0f, c.dutyThresholdInt);
-        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        c.inst->outL[i] = sample * amp * scaledGain;
         amp += c.ampRampStep;
     }
 }
@@ -217,8 +217,7 @@ IRAM_ATTR inline void renderModulatedLoop(FastLoopCtx &c, size_t frames)
 template <WaveType W>
 IRAM_ATTR inline void renderModulatedConstFastLoop(FastLoopCtx &c, size_t frames)
 {
-    const float amp = c.ampConstantValue;
-    const float gainMul = c.gainTarget;
+    const float outputScale = c.ampConstantValue * c.gainTarget * cv::kAudioPeakVolts;
     float previous = *c.feedbackSample;
     for (size_t i = 0; i < frames; ++i)
     {
@@ -230,7 +229,7 @@ IRAM_ATTR inline void renderModulatedConstFastLoop(FastLoopCtx &c, size_t frames
         const float sample = c.phaseGen->processWithIncrementT<W, true>(c.phaseIncrementInt, phaseOffset, c.dutyThresholdInt);
         if (c.feedbackActive)
             previous = sample;
-        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        c.inst->outL[i] = sample * outputScale;
     }
     if (c.feedbackActive)
         *c.feedbackSample = previous;
@@ -241,7 +240,7 @@ IRAM_ATTR inline void renderModulatedConstFastLoop(FastLoopCtx &c, size_t frames
 template <WaveType W>
 IRAM_ATTR inline void renderModulatedRampAmpFastLoop(FastLoopCtx &c, size_t frames)
 {
-    const float gainMul = c.gainTarget;
+    const float scaledGain = c.gainTarget * cv::kAudioPeakVolts;
     float amp = c.ampRampStart;
     float previous = *c.feedbackSample;
     for (size_t i = 0; i < frames; ++i)
@@ -254,7 +253,7 @@ IRAM_ATTR inline void renderModulatedRampAmpFastLoop(FastLoopCtx &c, size_t fram
         const float sample = c.phaseGen->processWithIncrementT<W, true>(c.phaseIncrementInt, phaseOffset, c.dutyThresholdInt);
         if (c.feedbackActive)
             previous = sample;
-        c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        c.inst->outL[i] = sample * amp * scaledGain;
         amp += c.ampRampStep;
     }
     if (c.feedbackActive)
@@ -339,10 +338,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float indexAmount = fmIndexCv * cv::kInvMaxVolts * kFmIndexMaxPhaseDeviation;
 
     // "dutyCycle" (port 8): control-only, one evaluation per block, same
-    // pattern as "fmIndex" above. Only ever consulted by PhaseOsc for
-    // WaveType::Square (see DspPrimitives.h's sampleAt) - computed here
-    // unconditionally anyway, same as phaseOffsetScale, to keep every fast
-    // loop's call site uniform regardless of the selected waveform. 5V
+    // pattern as "fmIndex" above. Only compute its fixed-point threshold for
+    // Square; every other waveform ignores it and keeps the default. 5V
     // (center) = classic 50% square, matching dutyCycleCv's default.
     // NOTE: port 8 needs the full-width synth::portBit() here, not the
     // `static_cast<uint8_t>(1u << n)` pattern used for ports 0-7 elsewhere
@@ -350,7 +347,9 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // truncate to 0, i.e. "never connected").
     const bool dutyCycleFed = controlPortConnected(inst, 8) || (inst.audioConnectedPortMask & synth::portBit(8)) != 0;
     const float dutyCycleCv = dutyCycleFed ? portSample(inst, 8, 0) : s.dutyCycleCv;
-    const uint32_t dutyThresholdInt = PhaseOsc::toPhaseInt(dutyCycleCv * cv::kInvMaxVolts);
+    const uint32_t dutyThresholdInt = wave == WaveType::Square
+                                          ? PhaseOsc::dutyThresholdFromUnit(dutyCycleCv * cv::kInvMaxVolts)
+                                          : 0x80000000u;
     // Unpatched and patched-but-silent fmIn both use the pure-carrier path.
     // The block scan exits on the first changed sample, so an active audio
     // modulator normally costs only a couple of comparisons. Silent blocks
@@ -543,15 +542,16 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.fmOsc.wave = p.waveType;
-    inst.fmOsc.tuneVolts = p.tuneVolts;
-    inst.fmOsc.amplitude = p.amplitude;
-    inst.fmOsc.gainCv = p.gain;
-    inst.fmOsc.fmIndexCv = p.fmIndex;
-    inst.fmOsc.feedbackCv = p.oscillatorFeedback;
-    inst.fmOsc.dutyCycleCv = p.dutyCycle;
+    auto &s = inst.fmOsc;
+    s.wave = p.waveType;
+    s.tuneVolts = p.tuneVolts;
+    s.amplitude = p.amplitude;
+    s.gainCv = p.gain;
+    s.fmIndexCv = p.fmIndex;
+    s.feedbackCv = p.oscillatorFeedback;
+    s.dutyCycleCv = p.dutyCycle;
     // Same cutoff/reason as Oscillator's gainSmooth - see NodeState.h.
-    inst.fmOsc.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
+    s.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -560,46 +560,47 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     {
         return false;
     }
+    auto &s = inst.fmOsc;
     if (strcmp(name, "tune") == 0)
     {
-        inst.fmOsc.tuneVolts = value;
+        s.tuneVolts = value;
         return true;
     }
     if (strcmp(name, "amplitude") == 0)
     {
-        inst.fmOsc.amplitude = value;
+        s.amplitude = value;
         return true;
     }
     if (strcmp(name, "gain") == 0)
     {
-        inst.fmOsc.gainCv = value;
+        s.gainCv = value;
         return true;
     }
     if (strcmp(name, "fmIndex") == 0)
     {
-        inst.fmOsc.fmIndexCv = value;
+        s.fmIndexCv = value;
         return true;
     }
     if (strcmp(name, "feedback") == 0)
     {
-        inst.fmOsc.feedbackCv = value;
+        s.feedbackCv = value;
         return true;
     }
     if (strcmp(name, "dutyCycle") == 0)
     {
-        inst.fmOsc.dutyCycleCv = value;
+        s.dutyCycleCv = value;
         return true;
     }
     if (strcmp(name, "gate") == 0)
     {
         const bool gateNow = value > cv::kGateThresholdVolts;
-        if (gateNow && !inst.fmOsc.gatePrev && inst.fmOsc.wave != WaveType::Noise &&
-            inst.fmOsc.wave != WaveType::PinkNoise)
+        if (gateNow && !s.gatePrev && s.wave != WaveType::Noise &&
+            s.wave != WaveType::PinkNoise)
         {
-            inst.fmOsc.phaseGen.resetPhase();
-            inst.fmOsc.feedbackSample = 0.0f;
+            s.phaseGen.resetPhase();
+            s.feedbackSample = 0.0f;
         }
-        inst.fmOsc.gatePrev = gateNow;
+        s.gatePrev = gateNow;
         return true;
     }
     return false;

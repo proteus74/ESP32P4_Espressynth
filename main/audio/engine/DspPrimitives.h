@@ -405,11 +405,12 @@ public:
     // per-sample scan - see NodeInstance.h's rampPortMask.
     bool wholeBlockRamp(size_t frames, float &start, float &inc) const
     {
-        if (segCount_ == 0 || frames == 0 || segs_[0].remaining < frames)
+        if (segCount_ == 0 || frames == 0 || segs_[0].remaining <= frames)
         {
             return false;
         }
-        start = current_;
+        // process() advances before returning the first sample of the block.
+        start = current_ + segs_[0].inc;
         inc = segs_[0].inc;
         return true;
     }
@@ -565,7 +566,7 @@ public:
             uint32_t p = phase_;
             if constexpr (UsePhaseOffset)
             {
-                p += toPhaseInt(phaseOffset);
+                p += toPhaseOffsetInt(phaseOffset);
             }
             const float sample = sampleAtT<W>(p, dutyThresholdInt);
             phase_ += phaseIncrementInt;
@@ -612,20 +613,50 @@ public:
     // magnitude; FM's phaseOffset can span several cycles, see
     // FmOscillatorNode.h's kFmIndexMaxPhaseDeviation) into this class's
     // internal 32-bit fixed-point domain (2^32 = one full cycle, wraps via
-    // plain unsigned overflow). fmodf reduces to a safe sub-1-cycle range
-    // FIRST: RV32 has no single hardware instruction for float->uint32
-    // across the full [0, 2^32) range, and scaling an unreduced value by
-    // 2^32 before converting would overflow int32_t for anything
-    // approaching a full cycle - the reduction has to happen before the
-    // scale, not after.
+    // plain unsigned overflow). Reduce to [0,1) first, then convert either
+    // half separately: RV32 can convert each [0,2^31) half directly to a
+    // signed integer, while a single float->uint32 conversion over the full
+    // range needs a much heavier helper. floorf compiles to an inline RISC-V
+    // rounding instruction in this build; unlike fmodf it creates no
+    // per-sample library call in an FM carrier.
     IRAM_ATTR static uint32_t toPhaseInt(float cycles)
     {
-        float wrapped = fmodf(cycles, 1.0f);
-        if (wrapped < 0.0f)
+        const float wrapped = cycles - floorf(cycles);
+        if (wrapped < 0.5f)
+            return static_cast<uint32_t>(static_cast<int32_t>(wrapped * kPhaseIntScale));
+        return 0x80000000u +
+               static_cast<uint32_t>(static_cast<int32_t>((wrapped - 0.5f) * kPhaseIntScale));
+    }
+
+    // FM's per-sample phase offset normally stays inside a small number of
+    // cycles. Convert that common range as signed 5.27 fixed point, then
+    // shift into PhaseOsc's 0.32 domain. Unsigned wrap supplies the modulo
+    // behavior for negative values without floorf. Float input precision is
+    // already coarser than the five discarded low bits throughout this
+    // range, so representable normal FM offsets retain their useful phase
+    // precision. Arbitrary/extreme sources keep the general conversion.
+    IRAM_ATTR static uint32_t toPhaseOffsetInt(float cycles)
+    {
+        constexpr float kFastLimitCycles = 16.0f;
+        constexpr float kSignedPhaseScale = 134217728.0f; // 2^27
+        if (cycles > -kFastLimitCycles && cycles < kFastLimitCycles)
         {
-            wrapped += 1.0f;
+            const int32_t signedPhase = static_cast<int32_t>(cycles * kSignedPhaseScale);
+            return static_cast<uint32_t>(signedPhase) << 5;
         }
-        return static_cast<uint32_t>(wrapped * kPhaseIntScale);
+        return toPhaseInt(cycles);
+    }
+
+    // Square-duty conversion is not cyclic: 0V means 0%, 10V means 100%.
+    // It therefore clamps instead of using toPhaseInt(), whose deliberate
+    // modulo semantics would otherwise map the upper endpoint back to zero.
+    IRAM_ATTR static uint32_t dutyThresholdFromUnit(float unit)
+    {
+        if (unit <= 0.0f)
+            return 0u;
+        if (unit >= 1.0f)
+            return 0xFFFFFFFFu;
+        return toPhaseInt(unit);
     }
 
 private:

@@ -102,7 +102,7 @@ inline void log_p0_baseline_tick() {
              "silentSkip=%lu gainConverged=%lu | fm pitch const/audioRate=%lu/%lu tune "
              "const/audioRate=%lu/%lu amp const/audioRate=%lu/%lu ampConstZero=%lu silentSkip=%lu "
              "gainConverged=%lu modActive=%lu feedbackActive=%lu | instances "
-             "total/rendered/idleForced=%lu/%lu/%lu",
+             "total/rendered/idleForced=%lu/%lu/%lu | dx holding/ramping/boundary/shape=%lu/%lu/%lu/%lu",
              static_cast<double>(phases.activityPercent), static_cast<double>(phases.renderPercent),
              static_cast<double>(phases.outputPercent), static_cast<unsigned long>(stats.oscPitchConstant),
              static_cast<unsigned long>(stats.oscPitchAudioRate), static_cast<unsigned long>(stats.oscTuneConstant),
@@ -116,7 +116,9 @@ inline void log_p0_baseline_tick() {
              static_cast<unsigned long>(stats.fmModActive), static_cast<unsigned long>(stats.fmFeedbackActive),
              static_cast<unsigned long>(stats.instancesTotal),
              static_cast<unsigned long>(stats.instancesRendered),
-             static_cast<unsigned long>(stats.instancesRenderedWhileIdle));
+             static_cast<unsigned long>(stats.instancesRenderedWhileIdle),
+             static_cast<unsigned long>(stats.dxHolding), static_cast<unsigned long>(stats.dxRamping),
+             static_cast<unsigned long>(stats.dxBoundary), static_cast<unsigned long>(stats.dxShapeConfigured));
 
     // Per-widget breakdown (same data the browser's node-CPU display uses,
     // see synth_web_api.hpp's broadcast_status_tick "nodeCpu" - printed here

@@ -146,6 +146,10 @@ public:
         uint32_t fmGainConverged = 0;
         uint32_t fmModActive = 0;
         uint32_t fmFeedbackActive = 0;
+        uint32_t dxHolding = 0;
+        uint32_t dxRamping = 0;
+        uint32_t dxBoundary = 0;
+        uint32_t dxShapeConfigured = 0;
         uint32_t instancesTotal = 0;
         uint32_t instancesRendered = 0;
         uint32_t instancesRenderedWhileIdle = 0;
@@ -172,6 +176,10 @@ public:
         s.fmGainConverged = fmGainConverged_.load(std::memory_order_relaxed);
         s.fmModActive = fmModActive_.load(std::memory_order_relaxed);
         s.fmFeedbackActive = fmFeedbackActive_.load(std::memory_order_relaxed);
+        s.dxHolding = dxHolding_.load(std::memory_order_relaxed);
+        s.dxRamping = dxRamping_.load(std::memory_order_relaxed);
+        s.dxBoundary = dxBoundary_.load(std::memory_order_relaxed);
+        s.dxShapeConfigured = dxShapeConfigured_.load(std::memory_order_relaxed);
         s.instancesTotal = instancesTotal_.load(std::memory_order_relaxed);
         s.instancesRendered = instancesRendered_.load(std::memory_order_relaxed);
         s.instancesRenderedWhileIdle = instancesRenderedWhileIdle_.load(std::memory_order_relaxed);
@@ -599,6 +607,10 @@ private:
     std::atomic<uint32_t> fmGainConverged_{0};
     std::atomic<uint32_t> fmModActive_{0};
     std::atomic<uint32_t> fmFeedbackActive_{0};
+    std::atomic<uint32_t> dxHolding_{0};
+    std::atomic<uint32_t> dxRamping_{0};
+    std::atomic<uint32_t> dxBoundary_{0};
+    std::atomic<uint32_t> dxShapeConfigured_{0};
     std::atomic<uint32_t> instancesTotal_{0};
     std::atomic<uint32_t> instancesRendered_{0};
     std::atomic<uint32_t> instancesRenderedWhileIdle_{0};
@@ -1205,6 +1217,10 @@ inline void SynthEngine::taskLoop()
         fmGainConverged_.store(blockStats.fmGainConverged, std::memory_order_relaxed);
         fmModActive_.store(blockStats.fmModActive, std::memory_order_relaxed);
         fmFeedbackActive_.store(blockStats.fmFeedbackActive, std::memory_order_relaxed);
+        dxHolding_.store(blockStats.dxHolding, std::memory_order_relaxed);
+        dxRamping_.store(blockStats.dxRamping, std::memory_order_relaxed);
+        dxBoundary_.store(blockStats.dxBoundary, std::memory_order_relaxed);
+        dxShapeConfigured_.store(blockStats.dxShapeConfigured, std::memory_order_relaxed);
         instancesTotal_.store(blockStats.instancesTotal, std::memory_order_relaxed);
         instancesRendered_.store(blockStats.instancesRendered, std::memory_order_relaxed);
         instancesRenderedWhileIdle_.store(blockStats.instancesRenderedWhileIdle, std::memory_order_relaxed);

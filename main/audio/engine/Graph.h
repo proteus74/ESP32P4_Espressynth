@@ -2074,21 +2074,24 @@ inline void Graph::destroy()
         case NodeType::ValueMapper:
             nodes::valuemapper::destroy(inst);
             break;
+        case NodeType::AudioOutputLink:
+        case NodeType::AudioInputLink:
+            if (inst.link != nullptr)
+            {
+                for (float *&bus : inst.link->busOut)
+                {
+                    heap_caps_free(bus);
+                    bus = nullptr;
+                }
+                heap_caps_free(inst.link);
+                inst.link = nullptr;
+            }
+            break;
         default:
             break;
         }
         heap_caps_free(inst.outL);
         heap_caps_free(inst.outR);
-        if (inst.link != nullptr)
-        {
-            for (float *&bus : inst.link->busOut)
-            {
-                heap_caps_free(bus);
-                bus = nullptr;
-            }
-            heap_caps_free(inst.link);
-            inst.link = nullptr;
-        }
         inst.outL = nullptr;
         inst.outR = nullptr;
     }

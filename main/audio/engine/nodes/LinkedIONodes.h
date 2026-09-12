@@ -22,10 +22,28 @@ inline void render(NodeInstance &inst, size_t frames)
     if (source != nullptr)
     {
         memcpy(inst.outL, source, frames * sizeof(float));
+        return;
+    }
+    // No real DSP edge feeds port 0 - e.g. a linked-input fed by a
+    // ControlRoute-only source (MidiIn's "gate"/"velocity", a Knob, a
+    // Button, ...) never writes inPorts[], only controlValue[] (see
+    // Graph::deliverNoteControlRoutes/pushControlRouteValue). Falling
+    // straight to silence here (the previous behavior) meant a MidiIn
+    // "Gate" -> linked-input -> linked-output -> Adsr "Gate" chain never
+    // worked, even though the exact same MidiIn -> Adsr "Gate" wire
+    // connected directly works fine. Same portSample()-style fallback
+    // nodes/LinkNodes.h's AudioOutputLink passthrough already uses.
+    const float scalar = inst.controlValue[0];
+    if (scalar == 0.0f)
+    {
+        memset(inst.outL, 0, frames * sizeof(float));
     }
     else
     {
-        memset(inst.outL, 0, frames * sizeof(float));
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = scalar;
+        }
     }
 }
 

@@ -61,6 +61,14 @@ struct BlockCounters
     uint32_t fmModActive = 0;
     uint32_t fmFeedbackActive = 0;
 
+    // DX-envelope block paths. These distinguish the cheap sustain/idle
+    // fill from a full linear-ramp block and the uncommon boundary block
+    // that crosses from one segment into the next.
+    uint32_t dxHolding = 0;
+    uint32_t dxRamping = 0;
+    uint32_t dxBoundary = 0;
+    uint32_t dxShapeConfigured = 0;
+
     // Graph::renderBlock instance bookkeeping: total voice instances that
     // exist in the live graph, how many were actually rendered
     // (processNodeBlock called) this block, and how many of those were

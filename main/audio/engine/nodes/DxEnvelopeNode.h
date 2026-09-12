@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 
 #include "../CvConventions.h"
+#include "../EngineStats.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -41,7 +42,7 @@ public:
             times_[i] = clampTime(times[i]);
         }
         sampleRate_ = sampleRate;
-        if (!initialized_ || (phase_ == Phase::Idle && segCount_ == 0 && current_ == oldReleaseLevel))
+        if (!initialized_ || (phase_ == Phase::Idle && remaining_ == 0 && current_ == oldReleaseLevel))
         {
             current_ = levels_[3];
         }
@@ -50,55 +51,81 @@ public:
 
     void gateOn()
     {
-        segCount_ = 0;
         phase_ = Phase::Running;
-        pushSegment(levels_[0], times_[0]);
-        pushSegment(levels_[1], times_[1]);
-        pushSegment(levels_[2], times_[2]);
+        segmentIndex_ = 0;
+        startSegment();
     }
 
     void gateOff()
     {
-        segCount_ = 0;
         phase_ = Phase::Release;
-        pushSegment(levels_[3], times_[3]);
+        segmentIndex_ = 3;
+        startSegment();
     }
 
     float process()
     {
-        if (segCount_ == 0)
+        if (remaining_ == 0)
             return current_;
 
-        current_ += segments_[0].increment;
-        if (--segments_[0].remaining == 0)
+        current_ += increment_;
+        if (--remaining_ == 0)
         {
-            current_ = segments_[0].target;
-            for (uint8_t i = 1; i < segCount_; ++i)
-            {
-                segments_[i - 1] = segments_[i];
-            }
-            --segCount_;
-            if (segCount_ == 0)
-            {
-                phase_ = phase_ == Phase::Release ? Phase::Idle : Phase::Sustain;
-            }
+            current_ = target_;
+            advanceSegment();
         }
         return current_;
     }
 
-    bool isIdle() const { return phase_ == Phase::Idle && segCount_ == 0 && current_ == 0.0f; }
-    bool isHolding() const { return segCount_ == 0; }
+    bool isIdle() const { return phase_ == Phase::Idle && remaining_ == 0 && current_ == 0.0f; }
+    bool isHolding() const { return remaining_ == 0; }
     float current() const { return current_; }
     float level(size_t index) const { return levels_[index]; }
     float time(size_t index) const { return times_[index]; }
 
     bool wholeBlockRamp(size_t frames, float &start, float &increment) const
     {
-        if (segCount_ == 0 || frames == 0 || segments_[0].remaining < frames)
+        // process() advances before returning its sample. Publish that first
+        // returned value, not current_ (which is the sample before this
+        // block). Require one sample beyond the block so the final value
+        // cannot be the target snap/segment transition rather than a pure
+        // repeated-add ramp.
+        if (remaining_ <= frames || frames == 0)
             return false;
-        start = current_;
-        increment = segments_[0].increment;
+        start = current_ + increment_;
+        increment = increment_;
         return true;
+    }
+
+    // Precondition: wholeBlockRamp(frames, ...) returned true. Keeps the
+    // exact repeated float additions of process(), but hoists the remaining
+    // test and all scheduler member traffic out of the sample loop.
+    void processRampBlock(float *out, size_t frames, float scale)
+    {
+        float current = current_;
+        const float increment = increment_;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            current += increment;
+            out[i] = current * scale;
+        }
+        current_ = current;
+        remaining_ -= static_cast<uint32_t>(frames);
+    }
+
+    // Same state transition as processRampBlock(), without materializing
+    // samples. Repeated additions preserve scheduler state exactly; the
+    // consumer reconstructs the advertised start/increment ramp itself.
+    void advanceRampBlock(size_t frames)
+    {
+        float current = current_;
+        const float increment = increment_;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            current += increment;
+        }
+        current_ = current;
+        remaining_ -= static_cast<uint32_t>(frames);
     }
 
 private:
@@ -110,33 +137,36 @@ private:
         Release,
     };
 
-    struct Segment
+    void startSegment()
     {
-        float target = 0.0f;
-        uint32_t remaining = 0;
-        float increment = 0.0f;
-    };
-
-    void pushSegment(float target, float durationSeconds)
-    {
-        if (segCount_ >= 3)
-            return;
-        uint32_t samples = static_cast<uint32_t>(durationSeconds * sampleRate_);
+        uint32_t samples = static_cast<uint32_t>(times_[segmentIndex_] * sampleRate_);
         if (samples < 1)
             samples = 1;
-        const float base = segCount_ == 0 ? current_ : segments_[segCount_ - 1].target;
-        segments_[segCount_].target = target;
-        segments_[segCount_].remaining = samples;
-        segments_[segCount_].increment = (target - base) / static_cast<float>(samples);
-        ++segCount_;
+        remaining_ = samples;
+        target_ = levels_[segmentIndex_];
+        increment_ = (target_ - current_) / static_cast<float>(samples);
     }
 
-    Segment segments_[3];
+    void advanceSegment()
+    {
+        if (phase_ == Phase::Running && segmentIndex_ < 2)
+        {
+            ++segmentIndex_;
+            startSegment();
+            return;
+        }
+        remaining_ = 0;
+        phase_ = phase_ == Phase::Release ? Phase::Idle : Phase::Sustain;
+    }
+
     float levels_[4] = {10.0f, 8.0f, 7.0f, 0.0f};
     float times_[4] = {0.1f, 0.25f, 0.4f, 0.6f};
     float current_ = 0.0f;
     float sampleRate_ = 44100.0f;
-    uint8_t segCount_ = 0;
+    float increment_ = 0.0f;
+    float target_ = 0.0f;
+    uint32_t remaining_ = 0;
+    uint8_t segmentIndex_ = 0;
     Phase phase_ = Phase::Idle;
     bool initialized_ = false;
 };
@@ -153,29 +183,28 @@ struct DxEnvelopeState
 inline void render(NodeInstance &inst, size_t frames)
 {
     auto &state = *inst.dxEnvelope;
-    float levels[4];
-    float times[4];
-    bool shapeConnected = false;
-    for (size_t i = 0; i < 4; ++i)
+    constexpr synth::PortMask kShapePortMask = 0xFFu;
+    if ((inst.audioConnectedPortMask & kShapePortMask) != 0)
     {
-        levels[i] = state.scheduler.level(i);
-        times[i] = state.scheduler.time(i);
-        if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i))) != 0)
+        float levels[4];
+        float times[4];
+        for (size_t i = 0; i < 4; ++i)
         {
-            levels[i] = clampLevel(noderender::portSample(inst, static_cast<int>(i), 0));
-            shapeConnected = true;
+            levels[i] = state.scheduler.level(i);
+            times[i] = state.scheduler.time(i);
+            if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i))) != 0)
+            {
+                levels[i] = clampLevel(noderender::portSample(inst, static_cast<int>(i), 0));
+            }
+            if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i + 4))) != 0)
+            {
+                times[i] = cv::cvToEnvelopeSeconds(
+                    noderender::portSample(inst, static_cast<int>(i + 4), 0),
+                    state.timeMaxSeconds[i], state.timeLog[i]);
+            }
         }
-        if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i + 4))) != 0)
-        {
-            times[i] = cv::cvToEnvelopeSeconds(
-                noderender::portSample(inst, static_cast<int>(i + 4), 0),
-                state.timeMaxSeconds[i], state.timeLog[i]);
-            shapeConnected = true;
-        }
-    }
-    if (shapeConnected)
-    {
         state.scheduler.configure(levels, times, static_cast<float>(synth::kSampleRate));
+        ++enginestats::current.dxShapeConfigured;
     }
 
     // "gate" (Port-Index 8, real but control-only audio-rate port, see
@@ -198,11 +227,17 @@ inline void render(NodeInstance &inst, size_t frames)
     inst.outIsConstant = false;
     if (state.scheduler.isHolding())
     {
+        ++enginestats::current.dxHolding;
         const float held = state.scheduler.current() * state.velocity;
         inst.outIsConstant = true;
         inst.outConstantValue = held;
-        for (size_t i = 0; i < frames; ++i)
-            inst.outL[i] = held;
+        if (inst.outputMetadataOnly)
+            return;
+        if (held == 0.0f)
+            memset(inst.outL, 0, frames * sizeof(float));
+        else
+            for (size_t i = 0; i < frames; ++i)
+                inst.outL[i] = held;
         return;
     }
 
@@ -210,9 +245,19 @@ inline void render(NodeInstance &inst, size_t frames)
     float rampIncrement = 0.0f;
     if (state.scheduler.wholeBlockRamp(frames, rampStart, rampIncrement))
     {
+        ++enginestats::current.dxRamping;
         inst.outIsRamp = true;
         inst.outRamp.start = rampStart * state.velocity;
         inst.outRamp.inc = rampIncrement * state.velocity;
+        if (inst.outputMetadataOnly)
+            state.scheduler.advanceRampBlock(frames);
+        else
+            state.scheduler.processRampBlock(inst.outL, frames, state.velocity);
+        return;
+    }
+    else
+    {
+        ++enginestats::current.dxBoundary;
     }
     for (size_t i = 0; i < frames; ++i)
         inst.outL[i] = state.scheduler.process() * state.velocity;

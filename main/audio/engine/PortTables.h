@@ -747,11 +747,23 @@ inline bool hasNoOutputs(NodeType type)
 {
     return type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
-           type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::LinkedInput;
+           type == NodeType::Spectrum || type == NodeType::MidiIn;
     // Note: Button/UpDownButton/Switch are deliberately NOT listed here even
     // though they may have no *audio* output port - hasNoOutputs() gates the
     // voiced/global BFS sink check, and these types still produce a value
     // (via ControlRoute or, for Switch, a real audio out port).
+    //
+    // LinkedInput is ALSO deliberately not listed (removed - it used to be
+    // here): it has no *named* audioOutIndex (see audioOutIndex(LinkedInput,
+    // ...) below), but it is not a dead end - it still reaches a
+    // linkId-paired LinkedOutput via the hidden edge GraphBuilder's
+    // "Linked-IO resolution" pass wires up. Treating it as a hard BFS
+    // boundary here meant a per-voice source (e.g. MidiIn's "gate") routed
+    // through a linked-input/linked-output pair lost its per-voice identity
+    // - GraphBuilder::classifyVoiced()'s own special-case for
+    // NodeType::LinkedInput (see GraphBuilder.h) is what actually carries
+    // voicedness across the linkId pairing now; this predicate just needs to
+    // stop treating it as a stop sign.
 }
 
 // Heavy post-mix effects that must never be multiplied per synth voice.
