@@ -2214,13 +2214,90 @@ body.show-node-cpu .widget-cpu-badge {
   padding: 0.5rem 0.6rem;
 }
 
+.scope-display {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
 .scope-canvas {
   display: block;
-  width: 100%;
-  height: 80px;
   background: var(--bg);
   border: 1px solid var(--card-border);
   border-radius: 0.3rem;
+}
+
+.scope-trigger-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 34px;
+  gap: 0.25rem;
+}
+
+.scope-trigger-controls select {
+  width: 38px;
+  padding: 0.1rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.2rem;
+  font-size: 0.58rem;
+}
+
+.scope-buffer-toggle {
+  width: 38px;
+  padding: 0.1rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.2rem;
+  font-size: 0.58rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.scope-buffer-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scope-trigger-label {
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1;
+}
+
+.scope-trigger-slider {
+  width: 18px;
+  min-height: 56px;
+  flex: 1;
+  margin: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: #f87171;
+}
+
+.scope-trigger-value {
+  width: 38px;
+  color: #fca5a5;
+  font-family: monospace;
+  font-size: 0.58rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.scope-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 3;
+  background: linear-gradient(135deg, transparent 45%, currentColor 46%, currentColor 58%, transparent 59%, transparent 68%, currentColor 69%);
+  color: var(--accent);
+  opacity: 0.55;
 }
 
 /* Spectrum-Analyzer-Widget */
@@ -2575,6 +2652,11 @@ body.show-node-cpu .widget-cpu-badge {
 .port-slider:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.port-row-modulated .port-label,
+.port-row-modulated .port-value {
+  opacity: 0.55;
 }
 
 .port-slider:disabled::-webkit-slider-thumb {
@@ -2953,9 +3035,11 @@ body.show-node-cpu .widget-cpu-badge {
 .connection-path {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 3;
+  stroke-width: var(--connection-width, 5px);
+  stroke-linecap: round;
   pointer-events: stroke;
   cursor: pointer;
+  transition: opacity 120ms ease, filter 120ms ease;
 }
 
 .connection-path:hover {
@@ -2964,12 +3048,17 @@ body.show-node-cpu .widget-cpu-badge {
 
 .connection-path.selected {
   opacity: 1;
+  filter:
+    drop-shadow(0 0 2px rgba(255, 255, 255, 1))
+    drop-shadow(0 0 6px rgba(96, 210, 255, 0.95))
+    drop-shadow(0 0 12px rgba(96, 210, 255, 0.75));
 }
 
 .connection-path-temp {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 3;
+  stroke-width: var(--connection-width, 5px);
+  stroke-linecap: round;
   stroke-dasharray: 5 4;
   pointer-events: none;
 }

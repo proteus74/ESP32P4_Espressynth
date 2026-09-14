@@ -29,6 +29,8 @@ enum class NodeType : uint8_t
     FrequencyDivider,
     Abs,
     ValueMapper,
+    Bitcrusher,
+    WaveFolder,
     Chorus,
     Delay,
     Reverb,
@@ -51,6 +53,7 @@ enum class NodeType : uint8_t
     SoundFontPlayer,
     MidiSplit,
     Clock,
+    SampleHold,
     ReverbLight,
     Hammond,
     Multiplexer,
@@ -159,6 +162,10 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Abs;
     if (strcmp(typeStr, "value-mapper") == 0)
         return NodeType::ValueMapper;
+    if (strcmp(typeStr, "bitcrusher") == 0)
+        return NodeType::Bitcrusher;
+    if (strcmp(typeStr, "wave-folder") == 0)
+        return NodeType::WaveFolder;
     if (strcmp(typeStr, "chorus") == 0)
         return NodeType::Chorus;
     if (strcmp(typeStr, "delay") == 0)
@@ -212,6 +219,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::SoundFontPlayer;
     if (strcmp(typeStr, "clock") == 0)
         return NodeType::Clock;
+    if (strcmp(typeStr, "sample-hold") == 0)
+        return NodeType::SampleHold;
     if (strcmp(typeStr, "hammond") == 0)
         return NodeType::Hammond;
     if (strcmp(typeStr, "multiplexer") == 0)

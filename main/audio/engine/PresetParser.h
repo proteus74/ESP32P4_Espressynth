@@ -106,6 +106,12 @@ struct WidgetParams
     float amount = 10.0f;
     bool amountExponential = false;
     bool gainGlobal = false;
+    // bitcrusher - 0..10 combines 16..2-bit quantization with 1..32-sample hold.
+    float bitcrusherCrush = 5.0f;
+    bool bitcrusherBypass = false;
+    // wave-folder - all four controls are raw 0-10V CV values.
+    float waveFolderDrive = 0.0f, waveFolderSymmetry = 5.0f;
+    float waveFolderGain = 10.0f, waveFolderMix = 10.0f;
     // mixer/multiplier/adder
     uint8_t inputCount = 2;
     float mixerGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};
@@ -150,6 +156,8 @@ struct WidgetParams
     // maxBpm (see ClockState); pulseMs is the pulse width in ms.
     float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
     bool clockRoundBpm = false;
+    // sample-hold - manual threshold, overridden by a connected Threshold CV.
+    float sampleHoldThreshold = 5.0f;
     // midi-in
     int8_t channel = -1;
     uint8_t voices = 1;

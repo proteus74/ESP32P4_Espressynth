@@ -242,6 +242,8 @@ struct NodeInstance
         DetuneState detune;
         FrequencyDividerState frequencyDivider;
         GainState gain;
+        BitcrusherState bitcrusher;
+        WaveFolderState waveFolder;
         MixerState mixer;
         MultiplexerState multiplexer;
         AudioOutState audioOut;
@@ -253,6 +255,7 @@ struct NodeInstance
         WavePlayerState wavePlayer;
         SoundFontPlayerState soundFontPlayer;
         ClockState clock;
+        SampleHoldState sampleHold;
     };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
@@ -342,6 +345,12 @@ struct NodeInstance
         case NodeType::Gain:
             new (&gain) GainState();
             break;
+        case NodeType::Bitcrusher:
+            new (&bitcrusher) BitcrusherState();
+            break;
+        case NodeType::WaveFolder:
+            new (&waveFolder) WaveFolderState();
+            break;
         case NodeType::Mixer:
             new (&mixer) MixerState();
             break;
@@ -379,6 +388,9 @@ struct NodeInstance
             break;
         case NodeType::Clock:
             new (&clock) ClockState();
+            break;
+        case NodeType::SampleHold:
+            new (&sampleHold) SampleHoldState();
             break;
         default:
             emptyInlineState = 0;

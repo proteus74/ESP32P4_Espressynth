@@ -15,8 +15,11 @@
 #include "nodes/AdsrNode.h"
 #include "nodes/ArithmeticNodes.h"
 #include "nodes/ButtonNode.h"
+#include "nodes/BitcrusherNode.h"
+#include "nodes/WaveFolderNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
@@ -122,6 +125,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::Clock:
         nodes::clock::parsePreset(p, out);
         break;
+    case NodeType::SampleHold:
+        nodes::samplehold::parsePreset(p, out);
+        break;
     case NodeType::Mixer:
         nodes::mixer::parsePreset(p, out);
         break;
@@ -131,6 +137,12 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::Multiplier:
     case NodeType::Adder:
         nodes::arithmetic::parsePresetMultiplierOrAdder(p, out);
+        break;
+    case NodeType::Bitcrusher:
+        nodes::bitcrusher::parsePreset(p, out);
+        break;
+    case NodeType::WaveFolder:
+        nodes::wavefolder::parsePreset(p, out);
         break;
     case NodeType::Chorus:
         nodes::chorus::parsePreset(p, out);

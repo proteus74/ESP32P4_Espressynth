@@ -1854,6 +1854,14 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].chorus->bypass = bypass;
             }
         }
+        else if (slot.type == NodeType::Bitcrusher && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].bitcrusher.bypass = bypass;
+            }
+        }
         else if (slot.type == NodeType::EspEq && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
         {
             const bool bypass = cJSON_IsTrue(item);

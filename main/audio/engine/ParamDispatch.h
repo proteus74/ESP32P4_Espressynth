@@ -13,8 +13,11 @@
 #include "nodes/AdsrNode.h"
 #include "nodes/ArithmeticNodes.h"
 #include "nodes/ButtonNode.h"
+#include "nodes/BitcrusherNode.h"
+#include "nodes/WaveFolderNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/SampleHoldNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -93,6 +96,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::Clock:
         return nodes::clock::setParam(inst, name, value);
 
+    case NodeType::SampleHold:
+        return nodes::samplehold::setParam(inst, name, value);
+
     case NodeType::SoundFontPlayer:
         if (paramDispatchIs(name, "bank"))
             return soundfont::setBankProgram(inst.soundFontPlayer, static_cast<int>(value + 0.5f),
@@ -151,6 +157,12 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Multiplexer:
         return nodes::multiplexer::setParam(inst, name, value);
+
+    case NodeType::Bitcrusher:
+        return nodes::bitcrusher::setParam(inst, name, value);
+
+    case NodeType::WaveFolder:
+        return nodes::wavefolder::setParam(inst, name, value);
 
     case NodeType::Chorus:
         return nodes::chorus::setParam(inst, name, value);

@@ -15,8 +15,11 @@
 #include "nodes/AdsrNode.h"
 #include "nodes/ArithmeticNodes.h"
 #include "nodes/ButtonNode.h"
+#include "nodes/BitcrusherNode.h"
+#include "nodes/WaveFolderNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
@@ -69,6 +72,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Clock:
         nodes::clock::render(inst, frames);
+        break;
+    case NodeType::SampleHold:
+        nodes::samplehold::render(inst, frames);
         break;
     case NodeType::Detune:
         nodes::detune::render(inst, frames);
@@ -140,6 +146,12 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::ValueMapper:
         nodes::valuemapper::render(inst, frames);
+        break;
+    case NodeType::Bitcrusher:
+        nodes::bitcrusher::render(inst, frames);
+        break;
+    case NodeType::WaveFolder:
+        nodes::wavefolder::render(inst, frames);
         break;
     case NodeType::Chorus:
         nodes::chorus::render(inst, frames);

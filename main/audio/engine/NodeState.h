@@ -242,6 +242,24 @@ struct GainState
     OnePoleLowpass amountSmooth;
 };
 
+struct BitcrusherState
+{
+    float crush = 5.0f;
+    float heldSample = 0.0f;
+    uint32_t holdCounter = 0;
+    bool bypass = false;
+};
+
+// Wave Folder controls use the shared 0-10V CV convention. Symmetry's
+// centre is 5V (0V DC offset); Drive starts at 0V (1x); Gain/Mix at 10V.
+struct WaveFolderState
+{
+    float drive = 0.0f;
+    float symmetry = 5.0f;
+    float gain = 10.0f;
+    float mix = 10.0f;
+};
+
 // Free-running BPM pulse generator - mirrors main.js's Clock widget
 // (fireClockPulse/restartClockTimer), but sample-accurate instead of per-JS
 // setInterval. cvVolts (0-10V, "tempo" input) scales linearly between
@@ -264,6 +282,15 @@ struct ClockState
     // number before use (see ClockNode.h's render()) - off by default
     // (existing fractional-BPM behavior unchanged).
     bool roundBpm = false;
+};
+
+// Samples "in" exactly once for each below-to-at/above-threshold transition
+// on "trigger", then keeps that CV at "out" until the next transition.
+struct SampleHoldState
+{
+    float threshold = 5.0f;
+    float heldValue = 0.0f;
+    bool triggerWasAbove = false;
 };
 
 struct MixerState

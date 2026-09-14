@@ -2280,6 +2280,128 @@ export class AudioEngine {
           releaseEndsAt: null,
         };
       }
+      case "bitcrusher": {
+        const processor = ctx.createScriptProcessor(256, 1, 1);
+        const entry = {
+          type,
+          processor,
+          crush: Math.max(0, Math.min(10, Number(params.crush ?? 5))),
+          bypass: params.bypass === true,
+          heldSample: 0,
+          holdCounter: 0,
+        };
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const output = event.outputBuffer.getChannelData(0);
+          const crush = entry.crush;
+          if (entry.bypass || crush <= 0) {
+            output.set(input);
+            return;
+          }
+          const amount = crush / 10;
+          const bits = Math.round(16 - 14 * amount);
+          const holdSamples = Math.round(1 + 31 * amount * amount);
+          const levels = (2 ** (bits - 1)) - 1;
+          const step = 1 / levels;
+          for (let i = 0; i < input.length; i += 1) {
+            if (entry.holdCounter === 0) {
+              entry.heldSample = Math.round(input[i] / step) * step;
+              entry.holdCounter = holdSamples;
+            }
+            output[i] = entry.heldSample;
+            entry.holdCounter -= 1;
+          }
+        };
+        return entry;
+      }
+      case "wave-folder": {
+        // Keep signal and every parameter on separate merger channels. This
+        // lets Drive/Symmetry/Gain/Mix be modulated at audio rate.
+        const inputMerger = ctx.createChannelMerger(5);
+        const processor = ctx.createScriptProcessor(256, 5, 1);
+        const controlSources = ["drive", "symmetry", "gain", "mix"].map((name, index) => {
+          const source = ctx.createConstantSource();
+          const fallback = [0, CV_MAX_VOLTS / 2, CV_MAX_VOLTS, CV_MAX_VOLTS][index];
+          source.offset.value = clampRange(Number(params[name] ?? fallback), 0, CV_MAX_VOLTS);
+          source.connect(inputMerger, 0, index + 1);
+          source.start();
+          return source;
+        });
+        inputMerger.connect(processor);
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          controlSources,
+          controlValues: controlSources.map((source) => source.offset.value),
+          controlConnectionCounts: [0, 0, 0, 0],
+        };
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const driveCv = event.inputBuffer.getChannelData(1);
+          const symmetryCv = event.inputBuffer.getChannelData(2);
+          const gainCv = event.inputBuffer.getChannelData(3);
+          const mixCv = event.inputBuffer.getChannelData(4);
+          const output = event.outputBuffer.getChannelData(0);
+          const fold = (sample) => {
+            // Audio in the editor uses the same nominal +/-5 V domain as
+            // the firmware.  Keeping this limit in volts is essential: a
+            // +/-1 Web Audio normalization here would fold a normal signal
+            // five times too often and make the preview disagree with the
+            // hardware WaveFolderNode.
+            const limit = AUDIO_PEAK_VOLTS;
+            const period = limit * 4;
+            let phase = (sample + limit) % period;
+            if (phase < 0) phase += period;
+            return limit - Math.abs(phase - limit * 2);
+          };
+          for (let i = 0; i < output.length; i += 1) {
+            const drive = 1 + 7 * clampRange(driveCv[i], 0, CV_MAX_VOLTS) / CV_MAX_VOLTS;
+            const bias = clampRange(symmetryCv[i], 0, CV_MAX_VOLTS) - CV_MAX_VOLTS / 2;
+            const gain = clampRange(gainCv[i], 0, CV_MAX_VOLTS) / CV_MAX_VOLTS;
+            const mix = clampRange(mixCv[i], 0, CV_MAX_VOLTS) / CV_MAX_VOLTS;
+            const dry = input[i];
+            const wet = fold(dry * drive + bias);
+            output[i] = (dry + (wet - dry) * mix) * gain;
+          }
+        };
+        return entry;
+      }
+      case "sample-hold": {
+        // ChannelMerger keeps In, Trigger and Threshold independent. A
+        // ScriptProcessor has just one input, so connecting directly to it
+        // would mix all three signals before we could compare them.
+        const inputMerger = ctx.createChannelMerger(3);
+        const processor = ctx.createScriptProcessor(256, 3, 1);
+        const thresholdSource = ctx.createConstantSource();
+        thresholdSource.offset.value = clampRange(Number(params.threshold ?? 5), 0, CV_MAX_VOLTS);
+        thresholdSource.connect(inputMerger, 0, 2);
+        thresholdSource.start();
+        inputMerger.connect(processor);
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          thresholdSource,
+          threshold: thresholdSource.offset.value,
+          thresholdConnectionCount: 0,
+          heldValue: 0,
+          triggerWasAbove: false,
+        };
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const trigger = event.inputBuffer.getChannelData(1);
+          const threshold = event.inputBuffer.getChannelData(2);
+          const output = event.outputBuffer.getChannelData(0);
+          for (let i = 0; i < output.length; i += 1) {
+            const triggerAbove = trigger[i] >= threshold[i];
+            if (triggerAbove && !entry.triggerWasAbove) entry.heldValue = input[i];
+            output[i] = entry.heldValue;
+            entry.triggerWasAbove = triggerAbove;
+          }
+        };
+        return entry;
+      }
       case "chorus": {
         
         
@@ -2532,7 +2654,10 @@ export class AudioEngine {
         
         
         
-        const fftSize = 1024;
+        // Keep substantially more samples than the scope renders.  That gives
+        // the renderer enough data on both sides of a trigger edge to show a
+        // contiguous time window instead of wrapping the analyser buffer.
+        const fftSize = 4096;
         const analyser1 = ctx.createAnalyser();
         analyser1.fftSize = fftSize;
         const analyser2 = ctx.createAnalyser();
@@ -2977,6 +3102,15 @@ export class AudioEngine {
       }
       if (entry.depthGainL) entry.depthGainL.disconnect();
       if (entry.depthGainR) entry.depthGainR.disconnect();
+      if (entry.processor) {
+        entry.processor.onaudioprocess = null;
+        entry.processor.disconnect();
+      }
+      if (entry.thresholdSource) {
+        entry.thresholdSource.stop();
+        entry.thresholdSource.disconnect();
+      }
+      if (entry.inputMerger) entry.inputMerger.disconnect();
       if (entry.delayL) entry.delayL.disconnect();
       if (entry.delayR) entry.delayR.disconnect();
       
@@ -3607,6 +3741,25 @@ export class AudioEngine {
         }
         break;
       }
+      case "bitcrusher":
+        if (paramName === "crush") entry.crush = Math.max(0, Math.min(10, Number(value) || 0));
+        else if (paramName === "bypass") entry.bypass = value === true || Number(value) >= 0.5;
+        break;
+      case "wave-folder": {
+        const index = ["drive", "symmetry", "gain", "mix"].indexOf(paramName);
+        if (index >= 0) {
+          const safe = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          entry.controlValues[index] = safe;
+          if (entry.controlConnectionCounts[index] === 0) applyRampValue(entry.controlSources[index].offset, safe);
+        }
+        break;
+      }
+      case "sample-hold":
+        if (paramName === "threshold") {
+          entry.threshold = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          if (entry.thresholdConnectionCount === 0) applyRampValue(entry.thresholdSource.offset, entry.threshold);
+        }
+        break;
       case "chorus":
         if (paramName === "rate") {
           applyRamp(entry.lfo.frequency);
@@ -3859,6 +4012,9 @@ export class AudioEngine {
     if (entry.type === "detune" && port === "f2") return entry.f2;
     if (entry.type === "adsr" && port === "out") return entry.output;
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
+    if (entry.type === "bitcrusher" && port === "out") return entry.processor;
+    if (entry.type === "wave-folder" && port === "out") return entry.processor;
+    if (entry.type === "sample-hold" && port === "out") return entry.processor;
     if (entry.type === "chorus" && port === "left") return entry.delayL;
     if (entry.type === "chorus" && port === "right") return entry.delayR;
     if (entry.type === "delay" || entry.type === "reverb" || entry.type === "reverb-light") {
@@ -3953,6 +4109,9 @@ export class AudioEngine {
       if (entry.type === "value-mapper" && port === "in") return entry.chain.prescale;
     }
     if (entry.type === "detune" && port === "cv") return entry.cvIn;
+    if (entry.type === "bitcrusher" && port === "in") return entry.processor;
+    if (entry.type === "wave-folder" && ["in", "drive", "symmetry", "gain", "mix"].includes(port)) return entry.inputMerger;
+    if (entry.type === "sample-hold" && (port === "in" || port === "trigger" || port === "threshold")) return entry.inputMerger;
     if (entry.type === "chorus" && port === "in") return entry.inputNode;
     if (entry.type === "delay") {
       if (port === "inL") return entry.inputL;
@@ -4006,6 +4165,40 @@ export class AudioEngine {
   }
 
   _connectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
+    if (toEntry && toEntry.type === "wave-folder") {
+      const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        if (inputIndex > 0 && toEntry.controlConnectionCounts[inputIndex - 1]++ === 0) {
+          toEntry.controlSources[inputIndex - 1].disconnect(toEntry.inputMerger, 0, inputIndex);
+        }
+        from.connect(toEntry.inputMerger, 0, inputIndex);
+      } catch (err) {
+        if (inputIndex > 0 && --toEntry.controlConnectionCounts[inputIndex - 1] <= 0) {
+          toEntry.controlConnectionCounts[inputIndex - 1] = 0;
+          toEntry.controlSources[inputIndex - 1].connect(toEntry.inputMerger, 0, inputIndex);
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "sample-hold") {
+      const inputIndex = { in: 0, trigger: 1, threshold: 2 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        if (inputIndex === 2 && toEntry.thresholdConnectionCount++ === 0) {
+          toEntry.thresholdSource.disconnect(toEntry.inputMerger, 0, 2);
+        }
+        from.connect(toEntry.inputMerger, 0, inputIndex);
+      } catch (err) {
+        if (inputIndex === 2 && --toEntry.thresholdConnectionCount <= 0) {
+          toEntry.thresholdConnectionCount = 0;
+          toEntry.thresholdSource.connect(toEntry.inputMerger, 0, 2);
+        }
+      }
+      return;
+    }
     if (toEntry && toEntry.type === "multiplier") {
       this._wireMultiplierInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
       return;
@@ -4189,6 +4382,34 @@ export class AudioEngine {
   }
 
   _disconnectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
+    if (toEntry && toEntry.type === "wave-folder") {
+      const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        from.disconnect(toEntry.inputMerger, 0, inputIndex);
+        if (inputIndex > 0 && --toEntry.controlConnectionCounts[inputIndex - 1] <= 0) {
+          toEntry.controlConnectionCounts[inputIndex - 1] = 0;
+          toEntry.controlSources[inputIndex - 1].connect(toEntry.inputMerger, 0, inputIndex);
+        }
+      } catch (err) {
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "sample-hold") {
+      const inputIndex = { in: 0, trigger: 1, threshold: 2 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        from.disconnect(toEntry.inputMerger, 0, inputIndex);
+        if (inputIndex === 2 && --toEntry.thresholdConnectionCount <= 0) {
+          toEntry.thresholdConnectionCount = 0;
+          toEntry.thresholdSource.connect(toEntry.inputMerger, 0, 2);
+        }
+      } catch (err) {
+      }
+      return;
+    }
     if (toEntry && toEntry.type === "multiplier") {
       this._wireMultiplierInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
       return;

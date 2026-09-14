@@ -1,4 +1,4 @@
-import { AudioEngine } from "./audio-engine.js?v=20260909-link-output-levels-8";
+import { AudioEngine } from "./audio-engine.js?v=20260913-bitcrusher-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 
 const GRID = 20;
@@ -981,6 +981,38 @@ const WIDGET_TYPES = {
     inputs: [],
     outputs: [{ id: "value", label: "" }],
   },
+  bitcrusher: {
+    label: "Bitcrusher",
+    icon: "▦",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "bypass", label: "Bypass" },
+      { id: "crush", label: "Crush" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
+  "wave-folder": {
+    label: "Wave Folder",
+    icon: "〰",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "drive", label: "Drive" },
+      { id: "symmetry", label: "Symmetry" },
+      { id: "gain", label: "Gain" },
+      { id: "mix", label: "Mix" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
+  "sample-hold": {
+    label: "S&H",
+    icon: "⌁",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "trigger", label: "Trigger" },
+      { id: "threshold", label: "Threshold" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   chorus: {
     label: "Chorus",
     icon: "🌀",
@@ -1128,11 +1160,11 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player"] },
-  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator"] },
+  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "sample-hold"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
-  { label: "Effects", types: ["chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
+  { label: "Effects", types: ["bitcrusher", "wave-folder", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out", "linked-input", "linked-output"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
 ];
@@ -1233,6 +1265,9 @@ const AUDIO_PORTS = {
     out: [],
   },
   chorus: { in: ["in"], out: ["left", "right"] },
+  bitcrusher: { in: ["in"], out: ["out"] },
+  "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
+  "sample-hold": { in: ["in", "trigger", "threshold"], out: ["out"] },
   
   
   
@@ -1374,11 +1409,11 @@ const LFO_POLARITY_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
-  "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
+  "bitcrusher", "wave-folder", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
   "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
 ];
@@ -1389,7 +1424,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold"];
 
 
 
@@ -1429,7 +1464,7 @@ let canvasContent = pages.generator.canvasContentEl;
 let lassoBox = pages.generator.lassoBoxEl;
 const zoomIndicator = document.getElementById("zoomIndicator");
 
-const ZOOM_MIN = 0.5;
+const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 2.0;
 const ZOOM_STEP = 0.05;
 
@@ -1573,8 +1608,9 @@ function clearSelection() {
   selectedWidgetIds.clear();
   updateSelectionClasses();
   if (selectedConnectionId) {
-    const prev = connectionsLayer.querySelector(`[data-conn-id="${selectedConnectionId}"]`);
-    if (prev) prev.classList.remove("selected");
+    connectionsLayer.querySelectorAll(".connection-path.selected").forEach((path) => {
+      path.classList.remove("selected");
+    });
     selectedConnectionId = null;
   }
 }
@@ -1585,6 +1621,19 @@ function openLfoSettings(widgetId) {
   pendingLfoId = widgetId;
   lfoMaxRateInput.value = String(state.maxRate);
   lfoSettingsOverlay.classList.remove("hidden");
+}
+
+function uniqueWidgetLabel(requestedLabel) {
+  const base = String(requestedLabel || "Widget").trim() || "Widget";
+  const used = new Set(
+    [...document.querySelectorAll(".widget-instance-label")]
+      .map((el) => el.textContent.trim().toLocaleLowerCase())
+  );
+  if (!used.has(base.toLocaleLowerCase())) return base;
+
+  let suffix = 1;
+  while (used.has(`${base}${suffix}`.toLocaleLowerCase())) suffix += 1;
+  return `${base}${suffix}`;
 }
 
 function createWidget(type, label, x, y, forcedId) {
@@ -1605,6 +1654,9 @@ function createWidget(type, label, x, y, forcedId) {
     id = `widget-${widgetCounter}`;
   }
   const def = WIDGET_TYPES[type] || { label, inputs: [], outputs: [] };
+  // Restoring a preset keeps its saved labels unchanged. Fresh placement and
+  // paste, however, get a unique label immediately (ADSR, ADSR1, ADSR2 …).
+  const widgetLabel = forcedId ? label : uniqueWidgetLabel(label || def.label);
 
   const el = document.createElement("div");
   el.className = "widget-instance";
@@ -1627,7 +1679,7 @@ function createWidget(type, label, x, y, forcedId) {
 
   const labelSpan = document.createElement("span");
   labelSpan.className = "widget-instance-label";
-  labelSpan.textContent = label;
+  labelSpan.textContent = widgetLabel;
   titleWrap.appendChild(labelSpan);
 
   header.appendChild(titleWrap);
@@ -2489,6 +2541,24 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, "chorus", { ...chorusDefaults });
   }
 
+  if (type === "bitcrusher") {
+    const state = { crush: 5, bypass: false };
+    bitcrusherStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
+  if (type === "wave-folder") {
+    const state = { drive: 0, symmetry: CV_MAX_VOLTS / 2, gain: CV_MAX_VOLTS, mix: CV_MAX_VOLTS };
+    waveFolderStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
+  if (type === "sample-hold") {
+    const state = { threshold: CV_MAX_VOLTS / 2 };
+    sampleHoldStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
   if (type === "delay" || type === "reverb" || type === "reverb-light") {
     const state = defaultEffectCvState(type);
     effectCvStates.set(id, state);
@@ -2690,18 +2760,85 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "oscilloscope") {
     audioEngine.createNode(id, "oscilloscope", {});
+    const state = createOscilloscopeState();
+    oscilloscopeStates.set(id, state);
 
     const body = document.createElement("div");
     body.className = "widget-instance-body oscilloscope-body";
 
+    const display = document.createElement("div");
+    display.className = "scope-display";
+
     const canvas = document.createElement("canvas");
     canvas.className = "scope-canvas";
     canvas.dataset.role = "scope-canvas";
-    canvas.width = 220;
-    canvas.height = 80;
+    display.appendChild(canvas);
 
-    body.appendChild(canvas);
+    const controls = document.createElement("div");
+    controls.className = "scope-trigger-controls";
+    const triggerLabel = document.createElement("span");
+    triggerLabel.className = "scope-trigger-label";
+    triggerLabel.textContent = "Trig";
+    const source = document.createElement("select");
+    source.dataset.role = "scope-trigger-channel";
+    source.title = "Trigger channel";
+    [["in1", "Ch 1"], ["in2", "Ch 2"]].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      source.appendChild(option);
+    });
+    source.addEventListener("mousedown", (event) => event.stopPropagation());
+    source.addEventListener("click", (event) => event.stopPropagation());
+    source.addEventListener("change", () => setOscilloscopeTriggerChannel(id, source.value));
+
+    const bufferLabel = document.createElement("span");
+    bufferLabel.className = "scope-trigger-label";
+    bufferLabel.textContent = "Buf";
+    const bufferToggle = document.createElement("button");
+    bufferToggle.type = "button";
+    bufferToggle.className = "scope-buffer-toggle";
+    bufferToggle.dataset.role = "scope-buffer-toggle";
+    bufferToggle.title = "Toggle visible sample window";
+    bufferToggle.addEventListener("mousedown", (event) => event.stopPropagation());
+    bufferToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleOscilloscopeTimebase(id);
+    });
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "scope-trigger-slider";
+    slider.dataset.role = "scope-trigger-level";
+    slider.min = "-12";
+    slider.max = "12";
+    slider.step = "0.1";
+    slider.title = "Trigger level";
+    slider.addEventListener("mousedown", (event) => event.stopPropagation());
+    slider.addEventListener("click", (event) => event.stopPropagation());
+    slider.addEventListener("input", () => setOscilloscopeTriggerLevel(id, Number(slider.value)));
+
+    const level = document.createElement("span");
+    level.className = "scope-trigger-value";
+    level.dataset.role = "scope-trigger-value";
+    controls.appendChild(triggerLabel);
+    controls.appendChild(source);
+    controls.appendChild(bufferLabel);
+    controls.appendChild(bufferToggle);
+    controls.appendChild(slider);
+    controls.appendChild(level);
+    display.appendChild(controls);
+
+    body.appendChild(display);
     el.appendChild(body);
+
+    const resizeHandle = document.createElement("div");
+    resizeHandle.className = "scope-resize-handle";
+    resizeHandle.title = "Resize oscilloscope";
+    resizeHandle.setAttribute("aria-hidden", "true");
+    resizeHandle.addEventListener("mousedown", (event) => startOscilloscopeResize(event, id));
+    el.appendChild(resizeHandle);
+    applyOscilloscopeState(id);
   }
 
   if (type === "spectrum") {
@@ -3398,6 +3535,69 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatEspEffectValue(cfg, effectState[port.id]);
         row.appendChild(valueSpan);
       }
+      if (type === "bitcrusher" && port.id === "crush") {
+        const state = bitcrusherStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = "10";
+        slider.step = "0.1";
+        slider.value = String(state.crush);
+        slider.dataset.role = "bitcrusher-crush-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, "crush", Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "bitcrusher-crush-value";
+        valueSpan.textContent = formatNumber(state.crush);
+        row.appendChild(valueSpan);
+      }
+      if (type === "sample-hold" && port.id === "threshold") {
+        const state = sampleHoldStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state.threshold);
+        slider.dataset.role = "sample-hold-threshold-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setSampleHoldThreshold(id, Number(slider.value)));
+        slider.addEventListener("change", () => savePresetNow());
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "sample-hold-threshold-value";
+        valueSpan.textContent = `${formatNumber(state.threshold)} V`;
+        row.appendChild(valueSpan);
+      }
+      if (type === "wave-folder" && WAVE_FOLDER_SLIDER_PORTS.includes(port.id)) {
+        const state = waveFolderStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state[port.id]);
+        slider.dataset.role = `wave-folder-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setWaveFolderParam(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `wave-folder-${port.id}-value`;
+        row.appendChild(valueSpan);
+      }
       if (type === "chorus" && ["rate", "depth", "offset"].includes(port.id)) {
         const chorusState = chorusStates.get(id);
         const cfg = CHORUS_SLIDER_CONFIG[port.id];
@@ -3904,6 +4104,9 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "adsr") updateAdsrSliders(id);
   if (type === "dx-envelope") updateDxEnvelopeVisuals(id);
   if (type === "step-arpeggiator") updateStepArpVisual(id);
+  if (type === "sample-hold") updateSampleHoldVisual(id);
+  if (type === "wave-folder") updateWaveFolderVisual(id);
+  refreshWiredSliderLocks();
   savePresetNow();
   return el;
 }
@@ -3950,11 +4153,15 @@ function removeWidget(id, force = false) {
   constStates.delete(id);
   voltmeterStates.delete(id);
   audioMonitorStates.delete(id);
+  oscilloscopeStates.delete(id);
   annotationStates.delete(id);
   annotationSelections.delete(id);
   clearTimeout(annotationSaveTimers.get(id));
   annotationSaveTimers.delete(id);
   chorusStates.delete(id);
+  bitcrusherStates.delete(id);
+  waveFolderStates.delete(id);
+  sampleHoldStates.delete(id);
   effectCvStates.delete(id);
   stepArpStopInternalClock(id);
   clearTimeout(stepArpStates.get(id)?.gateOutTimer);
@@ -4178,6 +4385,8 @@ function layoutPortsGrid(portsEl) {
 function createPortRow(widgetId, port, direction, widgetType) {
   const row = document.createElement("div");
   row.className = `port-row port-row-${direction}`;
+  row.dataset.portId = port.id;
+  row.dataset.portDir = direction;
 
   const dot = document.createElement("span");
   const kind = portKindFromType(widgetType, port.id, direction);
@@ -4288,6 +4497,7 @@ const constStates = new Map();
 
 const voltmeterStates = new Map();
 const audioMonitorStates = new Map();
+const oscilloscopeStates = new Map();
 const annotationStates = new Map();
 const annotationSelections = new Map();
 const annotationSaveTimers = new Map();
@@ -4300,6 +4510,108 @@ const ANNOTATION_MAX_WIDTH = 1200;
 const ANNOTATION_MAX_HEIGHT = 900;
 const ANNOTATION_DEFAULT_BACKGROUND = "default";
 const ANNOTATION_CARD_BACKGROUND_FALLBACK = "#1e293b";
+
+const OSCILLOSCOPE_DEFAULT_WIDTH = 300;
+const OSCILLOSCOPE_DEFAULT_HEIGHT = 140;
+const OSCILLOSCOPE_MIN_WIDTH = 220;
+const OSCILLOSCOPE_MIN_HEIGHT = 90;
+const OSCILLOSCOPE_MAX_WIDTH = 1100;
+const OSCILLOSCOPE_MAX_HEIGHT = 700;
+
+function createOscilloscopeState() {
+  return {
+    width: OSCILLOSCOPE_DEFAULT_WIDTH,
+    height: OSCILLOSCOPE_DEFAULT_HEIGHT,
+    triggerChannel: "in1",
+    triggerLevel: 0,
+    timebase: "short",
+  };
+}
+
+function applyOscilloscopeState(widgetId) {
+  const state = oscilloscopeStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  state.width = clamp(Math.round(Number(state.width) || OSCILLOSCOPE_DEFAULT_WIDTH), OSCILLOSCOPE_MIN_WIDTH, OSCILLOSCOPE_MAX_WIDTH);
+  state.height = clamp(Math.round(Number(state.height) || OSCILLOSCOPE_DEFAULT_HEIGHT), OSCILLOSCOPE_MIN_HEIGHT, OSCILLOSCOPE_MAX_HEIGHT);
+  state.triggerChannel = state.triggerChannel === "in2" ? "in2" : "in1";
+  state.triggerLevel = clamp(Number(state.triggerLevel) || 0, -12, 12);
+  state.timebase = state.timebase === "long" ? "long" : "short";
+  const canvas = el.querySelector('[data-role="scope-canvas"]');
+  if (canvas) {
+    canvas.width = state.width;
+    canvas.height = state.height;
+  }
+  const source = el.querySelector('[data-role="scope-trigger-channel"]');
+  if (source) source.value = state.triggerChannel;
+  const bufferToggle = el.querySelector('[data-role="scope-buffer-toggle"]');
+  if (bufferToggle) {
+    bufferToggle.textContent = state.timebase === "long" ? "2k" : "1k";
+    bufferToggle.setAttribute("aria-label", `Visible samples: ${bufferToggle.textContent}`);
+  }
+  const slider = el.querySelector('[data-role="scope-trigger-level"]');
+  if (slider) slider.value = String(state.triggerLevel);
+  const value = el.querySelector('[data-role="scope-trigger-value"]');
+  if (value) value.textContent = `${formatNumber(state.triggerLevel)} V`;
+}
+
+function setOscilloscopeTriggerChannel(widgetId, channel) {
+  const state = oscilloscopeStates.get(widgetId);
+  if (!state) return;
+  state.triggerChannel = channel === "in2" ? "in2" : "in1";
+  applyOscilloscopeState(widgetId);
+  markDirty();
+}
+
+function setOscilloscopeTriggerLevel(widgetId, value) {
+  const state = oscilloscopeStates.get(widgetId);
+  if (!state) return;
+  state.triggerLevel = clamp(Number(value) || 0, -12, 12);
+  applyOscilloscopeState(widgetId);
+  markDirty();
+}
+
+function toggleOscilloscopeTimebase(widgetId) {
+  const state = oscilloscopeStates.get(widgetId);
+  if (!state) return;
+  state.timebase = state.timebase === "long" ? "short" : "long";
+  applyOscilloscopeState(widgetId);
+  markDirty();
+}
+
+function startOscilloscopeResize(event, widgetId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const state = oscilloscopeStates.get(widgetId);
+  if (!state) return;
+  selectOnlyWidget(widgetId);
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const startWidth = state.width;
+  const startHeight = state.height;
+  const zoomFactor = Math.max(zoom, ZOOM_MIN);
+  let moved = false;
+
+  const onMove = (moveEvent) => {
+    if (!moved) {
+      pushHistorySnapshot();
+      moved = true;
+    }
+    state.width = clamp(Math.round(startWidth + (moveEvent.clientX - startX) / zoomFactor), OSCILLOSCOPE_MIN_WIDTH, OSCILLOSCOPE_MAX_WIDTH);
+    state.height = clamp(Math.round(startHeight + (moveEvent.clientY - startY) / zoomFactor), OSCILLOSCOPE_MIN_HEIGHT, OSCILLOSCOPE_MAX_HEIGHT);
+    applyOscilloscopeState(widgetId);
+    drawConnections();
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (!moved) return;
+    markDirty();
+    drawConnections();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
 
 function sanitizeAnnotationBackground(value) {
   const color = String(value || "").trim();
@@ -8131,7 +8443,8 @@ function tickAudioMonitors() {
     const ch2Connected = isScopeChannelConnected(el.id, "in2");
     const waveform2 = ch2Connected ? audioEngine.getWaveform(el.id, "in2") : null;
     const cvMode = isScopeChannelCv(el.id, "in1") || (ch2Connected && isScopeChannelCv(el.id, "in2"));
-    drawOscilloscope(canvas, waveform1, waveform2, cvMode);
+    const state = oscilloscopeStates.get(el.id) || createOscilloscopeState();
+    drawOscilloscope(canvas, waveform1, waveform2, cvMode, state);
   });
   document.querySelectorAll('.widget-instance[data-widget-type="spectrum"]').forEach((el) => {
     const state = audioMonitorStates.get(el.id);
@@ -8189,7 +8502,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
-  "mixer", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
+  "mixer", "bitcrusher", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
   "linked-input", "linked-output",
 ]);
 
@@ -8222,19 +8535,40 @@ const SCOPE_CH2_COLOR = "#f59e0b";
 const SCOPE_CV_DISPLAY_VOLTS = 12;
 const SCOPE_AUDIO_DISPLAY_VOLTS = 5;
 
-function drawOscilloscopeTrace(ctx2d, waveform, w, toY) {
+const SCOPE_SHORT_WINDOW_SAMPLES = 1024;
+const SCOPE_LONG_WINDOW_SAMPLES = 2048;
+const SCOPE_PRETRIGGER_RATIO = 0.15;
+
+function scopeWindowStart(waveform, level, windowSamples) {
+  const visibleSamples = Math.min(windowSamples, waveform.length);
+  const preTrigger = Math.round(visibleSamples * SCOPE_PRETRIGGER_RATIO);
+  const latestEdge = waveform.length - (visibleSamples - preTrigger);
+  let triggerIndex = -1;
+
+  // The latest usable rising edge keeps the display close to "now" while
+  // retaining a small pre-trigger section. The selected window is always
+  // wholly inside the analyser buffer, so it must never wrap.
+  for (let i = preTrigger; i <= latestEdge; i += 1) {
+    if (waveform[i - 1] < level && waveform[i] >= level) triggerIndex = i;
+  }
+  return triggerIndex >= 0
+    ? triggerIndex - preTrigger
+    : Math.max(0, waveform.length - visibleSamples);
+}
+
+function drawOscilloscopeTrace(ctx2d, waveform, w, toY, startIndex, sampleCount) {
   ctx2d.beginPath();
-  const step = w / waveform.length;
-  for (let i = 0; i < waveform.length; i += 1) {
+  const step = w / Math.max(1, sampleCount - 1);
+  for (let i = 0; i < sampleCount; i += 1) {
     const x = i * step;
-    const y = toY(waveform[i]);
+    const y = toY(waveform[startIndex + i]);
     if (i === 0) ctx2d.moveTo(x, y);
     else ctx2d.lineTo(x, y);
   }
   ctx2d.stroke();
 }
 
-function drawOscilloscope(canvas, waveform1, waveform2, cvMode) {
+function drawOscilloscope(canvas, waveform1, waveform2, cvMode, state) {
   const ctx2d = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
@@ -8250,6 +8584,10 @@ function drawOscilloscope(canvas, waveform1, waveform2, cvMode) {
   // CV stays wider so regular 0-10 V control signals remain fully visible.
   const range = cvMode ? SCOPE_CV_DISPLAY_VOLTS : SCOPE_AUDIO_DISPLAY_VOLTS;
   const toY = (v) => (1 - clamp(v, -range, range) / range) * (h / 2);
+  const triggerWaveform = state.triggerChannel === "in2" && waveform2 ? waveform2 : waveform1;
+  const requestedSamples = state.timebase === "long" ? SCOPE_LONG_WINDOW_SAMPLES : SCOPE_SHORT_WINDOW_SAMPLES;
+  const sampleCount = Math.min(requestedSamples, waveform1.length, waveform2?.length ?? waveform1.length);
+  const startIndex = scopeWindowStart(triggerWaveform, state.triggerLevel, sampleCount);
 
   if (cvMode) {
     ctx2d.strokeStyle = "rgba(255, 255, 255, 0.15)";
@@ -8260,12 +8598,23 @@ function drawOscilloscope(canvas, waveform1, waveform2, cvMode) {
     ctx2d.stroke();
   }
 
+  if (state.triggerLevel >= -range && state.triggerLevel <= range) {
+    ctx2d.strokeStyle = "rgba(248, 113, 113, 0.65)";
+    ctx2d.lineWidth = 1;
+    ctx2d.setLineDash([4, 3]);
+    ctx2d.beginPath();
+    ctx2d.moveTo(0, toY(state.triggerLevel));
+    ctx2d.lineTo(w, toY(state.triggerLevel));
+    ctx2d.stroke();
+    ctx2d.setLineDash([]);
+  }
+
   ctx2d.lineWidth = 1.5;
   ctx2d.strokeStyle = SCOPE_CH1_COLOR;
-  drawOscilloscopeTrace(ctx2d, waveform1, w, toY);
+  drawOscilloscopeTrace(ctx2d, waveform1, w, toY, startIndex, sampleCount);
   if (waveform2) {
     ctx2d.strokeStyle = SCOPE_CH2_COLOR;
-    drawOscilloscopeTrace(ctx2d, waveform2, w, toY);
+    drawOscilloscopeTrace(ctx2d, waveform2, w, toY, startIndex, sampleCount);
   }
 }
 
@@ -9449,6 +9798,76 @@ function renderMidiSplitPorts(widgetId, portsEl) {
 
 
 const chorusStates = new Map();
+const bitcrusherStates = new Map();
+const waveFolderStates = new Map();
+const sampleHoldStates = new Map();
+
+const WAVE_FOLDER_SLIDER_PORTS = ["drive", "symmetry", "gain", "mix"];
+
+function formatWaveFolderValue(portId, value) {
+  const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  if (portId === "drive") return `${formatNumber(1 + 7 * volts / CV_MAX_VOLTS)}×`;
+  if (portId === "symmetry") return `${formatNumber(volts - CV_MAX_VOLTS / 2)} V`;
+  return `${formatNumber(volts / CV_MAX_VOLTS * 100)} %`;
+}
+
+function updateWaveFolderVisual(widgetId) {
+  const state = waveFolderStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  WAVE_FOLDER_SLIDER_PORTS.forEach((portId) => {
+    const slider = el.querySelector(`[data-role="wave-folder-${portId}-slider"]`);
+    if (slider) slider.value = String(state[portId]);
+    const value = el.querySelector(`[data-role="wave-folder-${portId}-value"]`);
+    if (value) value.textContent = formatWaveFolderValue(portId, state[portId]);
+  });
+}
+
+function setWaveFolderParam(widgetId, portId, value) {
+  const state = waveFolderStates.get(widgetId);
+  if (!state || !WAVE_FOLDER_SLIDER_PORTS.includes(portId)) return;
+  state[portId] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, portId, state[portId]);
+  updateWaveFolderVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+}
+
+function updateSampleHoldVisual(widgetId) {
+  const state = sampleHoldStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const thresholdWired = connections.some(
+    (c) => c.to.widgetId === widgetId && c.to.portId === "threshold"
+  );
+  const slider = el.querySelector('[data-role="sample-hold-threshold-slider"]');
+  if (slider) {
+    slider.value = String(state.threshold);
+    slider.disabled = thresholdWired;
+  }
+  const value = el.querySelector('[data-role="sample-hold-threshold-value"]');
+  if (value) value.textContent = `${formatNumber(state.threshold)} V`;
+}
+
+function setSampleHoldThreshold(widgetId, value) {
+  const state = sampleHoldStates.get(widgetId);
+  if (!state) return;
+  state.threshold = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, "threshold", state.threshold);
+  updateSampleHoldVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { threshold: state.threshold });
+}
+
+function updateBitcrusherVisual(widgetId) {
+  const state = bitcrusherStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const slider = el.querySelector('[data-role="bitcrusher-crush-slider"]');
+  if (slider) slider.value = String(state.crush);
+  const value = el.querySelector('[data-role="bitcrusher-crush-value"]');
+  if (value) value.textContent = formatNumber(state.crush);
+  const bypass = el.querySelector('[data-role="bitcrusher-bypass-switch"]');
+  if (bypass) bypass.checked = state.bypass;
+}
 
 const CHORUS_SLIDER_CONFIG = {
   rate: { min: 0.05, max: 8, step: 0.01 },
@@ -9529,6 +9948,7 @@ function hasBypass(type) {
     isEffectCvBypassType(type) ||
     type === "filter" ||
     type === "curtis-filter" ||
+    type === "bitcrusher" ||
     type === "chorus" ||
     type === "esp-eq" ||
     type === "esp-alc" ||
@@ -9545,6 +9965,7 @@ function hasBypass(type) {
 function bypassStateMapFor(type) {
   if (isEffectCvBypassType(type)) return effectCvStates;
   if (type === "filter" || type === "curtis-filter") return filterStates;
+  if (type === "bitcrusher") return bitcrusherStates;
   if (type === "chorus") return chorusStates;
   return espEffectStates;
 }
@@ -11848,6 +12269,9 @@ function onCanvasDragUp(e) {
 
   if (canvasDragState.mode === "pan") {
     canvas.classList.remove("panning");
+    // Middle-button click on clear canvas fits every placed widget into view;
+    // dragging the same button keeps its established pan behavior.
+    if (!canvasDragState.moved) fitPageToView();
   } else if (canvasDragState.moved) {
     const lassoRect = lassoBox.getBoundingClientRect();
     const newSelection = new Set();
@@ -12113,9 +12537,11 @@ document.addEventListener("keydown", (e) => {
             (WIDGET_TYPES[el.dataset.widgetType] || {}).label || el.dataset.widgetType,
           x: parseInt(el.style.left, 10) || 0,
           y: parseInt(el.style.top, 10) || 0,
-          ...(el.dataset.widgetType === "annotation" || el.dataset.widgetType === "linked-input" || el.dataset.widgetType === "linked-output"
-            ? { params: JSON.parse(JSON.stringify(getWidgetParams(el.dataset.widgetType, el.id))) }
-            : {}),
+          // A paste is a widget clone, not a fresh widget. Capture every
+          // type's serializable state - envelopes, oscillator settings,
+          // effects, controls, etc. Linked I/O is remapped below, but its
+          // params must still be copied here too.
+          params: JSON.parse(JSON.stringify(getWidgetParams(el.dataset.widgetType, el.id))),
         })),
       
       
@@ -12342,61 +12768,83 @@ function widgetBounds(widgetEl) {
   return { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y };
 }
 
+// Every jack gets a short, straight lead before a cable may turn.  Looking at
+// the jack's nearest widget edge also covers special controls whose jacks sit
+// on a top, bottom, or side edge instead of the normal input-left/output-right
+// layout.
+function portOutwardDirection(point, bounds, fallback) {
+  const distances = [
+    { distance: Math.abs(point.x - bounds.left), x: -1, y: 0 },
+    { distance: Math.abs(bounds.right - point.x), x: 1, y: 0 },
+    { distance: Math.abs(point.y - bounds.top), x: 0, y: -1 },
+    { distance: Math.abs(bounds.bottom - point.y), x: 0, y: 1 },
+  ];
+  distances.sort((a, b) => a.distance - b.distance);
+  const nearest = distances[0];
+  // A port can be one sub-pixel inside a rounded card edge.  Keep its usual
+  // flow direction when several edges are effectively equally close.
+  const tied = distances.filter((edge) => edge.distance - nearest.distance < 1 / zoom);
+  return tied.find((edge) => edge.x === fallback.x && edge.y === fallback.y) || nearest;
+}
+
+function offsetPoint(point, direction, distance) {
+  return { x: point.x + direction.x * distance, y: point.y + direction.y * distance };
+}
+
 function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
   if (fromWidgetEl && toWidgetEl) {
     const fromBounds = widgetBounds(fromWidgetEl);
     const toBounds = widgetBounds(toWidgetEl);
-    const clearance = 20;
-    const sourceExitX = Math.max(p1.x + clearance, fromBounds.right + clearance);
-    const targetEntryX = Math.min(p2.x - clearance, toBounds.left - clearance);
+    // Coordinates are in canvas units. Dividing by zoom keeps normal leads
+    // 14 screen pixels long, so a cable never appears to turn on its jack.
+    const minimumLead = 14 / zoom;
+    const clearance = 20 / zoom;
+    const fromDirection = portOutwardDirection(p1, fromBounds, { x: 1, y: 0 });
+    const toDirection = portOutwardDirection(p2, toBounds, { x: -1, y: 0 });
+    const horizontalGap = p2.x - p1.x;
+    const facingPorts = fromDirection.x === 1 && toDirection.x === -1;
+    // Two side-by-side, vertically stacked widgets can leave less than two
+    // full 14px leads between their jacks.  Use the available narrow channel
+    // instead of taking the long route around both cards; six screen pixels
+    // still makes the outward lead and its bend clearly visible.
+    const compactVerticalRoute = facingPorts && horizontalGap >= 18 / zoom;
+    const endpointLead = compactVerticalRoute
+      ? Math.min(minimumLead, horizontalGap / 3)
+      : minimumLead;
+    const fromLead = offsetPoint(p1, fromDirection, endpointLead);
+    const toLead = offsetPoint(p2, toDirection, endpointLead);
 
-    // Source is left of target: use free corridor between both widgets. This
-    // is the normal audio/control flow and needs no detour above or below.
-    if (sourceExitX <= targetEntryX) {
-      const middleX = (sourceExitX + targetEntryX) / 2;
+    // Standard right-output to left-input route: both endpoint leads are
+    // horizontal, then one vertical jog in clear space between widgets.
+    if (facingPorts && fromLead.x <= toLead.x) {
+      const middleX = (fromLead.x + toLead.x) / 2;
       return roundedOrthogonalPath([
         p1,
-        { x: middleX, y: p1.y },
-        { x: middleX, y: p2.y },
+        fromLead,
+        { x: middleX, y: fromLead.y },
+        { x: middleX, y: toLead.y },
+        toLead,
         p2,
       ]);
     }
 
-    // Widgets stacked with a real vertical gap between them (e.g. a Knob
-    // widget's row of top-edge outputs feeding a Step Arpeggiator's row of
-    // bottom-edge step inputs directly above it): route straight through
-    // that gap at each port's own X. Mirrors the free-corridor case above -
-    // without this, every parallel connection between the same widget pair
-    // shares the same widget-bounds-based jog X/Y below and collapses onto
-    // one visually identical line instead of fanning out per port.
-    const gapBelow = toBounds.top - fromBounds.bottom;
-    const gapAbove = fromBounds.top - toBounds.bottom;
-    if (gapBelow >= clearance * 2) {
-      const middleY = fromBounds.bottom + gapBelow / 2;
-      return roundedOrthogonalPath([p1, { x: p1.x, y: middleY }, { x: p2.x, y: middleY }, p2]);
-    }
-    if (gapAbove >= clearance * 2) {
-      const middleY = toBounds.bottom + gapAbove / 2;
-      return roundedOrthogonalPath([p1, { x: p1.x, y: middleY }, { x: p2.x, y: middleY }, p2]);
-    }
-
+    // Widgets are stacked, overlap, or their ports face a non-standard edge.
+    // Route around their shared top/bottom outside edge.  Crucially, leads
+    // stay in path: no branch may replace them with a vertical line at jack.
     const targetBelowSource = p2.y >= p1.y;
-    let routeY = targetBelowSource ? fromBounds.bottom + clearance : fromBounds.top - clearance;
-
-    // Prefer gap between widgets. If they overlap vertically, go around their
-    // shared outside edge so no horizontal cable segment crosses either widget.
-    if (targetBelowSource && routeY >= toBounds.top - clearance) {
-      routeY = Math.max(fromBounds.bottom, toBounds.bottom) + clearance;
-    } else if (!targetBelowSource && routeY <= toBounds.bottom + clearance) {
-      routeY = Math.min(fromBounds.top, toBounds.top) - clearance;
-    }
-
+    const routeY = targetBelowSource
+      ? Math.max(fromBounds.bottom, toBounds.bottom) + clearance
+      : Math.min(fromBounds.top, toBounds.top) - clearance;
+    const routeX = fromDirection.x < 0
+      ? Math.min(fromBounds.left, toBounds.left) - clearance
+      : Math.max(fromBounds.right, toBounds.right) + clearance;
     return roundedOrthogonalPath([
       p1,
-      { x: sourceExitX, y: p1.y },
-      { x: sourceExitX, y: routeY },
-      { x: targetEntryX, y: routeY },
-      { x: targetEntryX, y: p2.y },
+      fromLead,
+      { x: routeX, y: fromLead.y },
+      { x: routeX, y: routeY },
+      { x: toLead.x, y: routeY },
+      toLead,
       p2,
     ]);
   }
@@ -12411,7 +12859,13 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
 
 function bezierPath(p1, p2, fromWidgetEl, toWidgetEl) {
   if (orthogonalCablesEnabled) return orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl);
-  const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 40);
+  const horizontalGap = p2.x - p1.x;
+  const minimumLead = 10 / zoom;
+  // Forward-facing ports: never let control handles cross each other. That
+  // crossing was responsible for loops between close widgets.
+  const dx = horizontalGap >= minimumLead * 2
+    ? Math.max(minimumLead, Math.min(horizontalGap / 2, 80 / zoom))
+    : Math.max(Math.abs(horizontalGap) / 2, 40 / zoom);
   if (cableSagEnabled) {
     const sagY = Math.max(p1.y, p2.y) + Math.min(120, 28 + Math.abs(p2.x - p1.x) * 0.08);
     return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${sagY}, ${p2.x - dx} ${sagY}, ${p2.x} ${p2.y}`;
@@ -12457,9 +12911,16 @@ function setBackgroundDotsEnabled(enabled) {
 
 let selectedConnectionId = null;
 
+function connectionsShareOutput(a, b) {
+  return Boolean(a && b) &&
+    a.from.widgetId === b.from.widgetId &&
+    a.from.portId === b.from.portId;
+}
+
 function drawConnections() {
   ensureConnectionColors();
   connectionsLayer.innerHTML = "";
+  const selectedConnection = connections.find((conn) => conn.id === selectedConnectionId) || null;
   connections.forEach((conn) => {
     const fromDot = findPortDot(conn.from.widgetId, conn.from.portId, "out");
     const toDot = findPortDot(conn.to.widgetId, conn.to.portId, "in");
@@ -12468,7 +12929,7 @@ function drawConnections() {
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", "connection-path");
     path.dataset.connId = conn.id;
-    if (conn.id === selectedConnectionId) path.classList.add("selected");
+    if (connectionsShareOutput(conn, selectedConnection)) path.classList.add("selected");
     path.setAttribute(
       "d",
       bezierPath(
@@ -12484,12 +12945,11 @@ function drawConnections() {
     
     path.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (selectedConnectionId && selectedConnectionId !== conn.id) {
-        const prev = connectionsLayer.querySelector(`[data-conn-id="${selectedConnectionId}"]`);
-        if (prev) prev.classList.remove("selected");
-      }
       selectedConnectionId = conn.id;
-      path.classList.add("selected");
+      connectionsLayer.querySelectorAll(".connection-path").forEach((candidatePath) => {
+        const candidate = connections.find((item) => item.id === candidatePath.dataset.connId);
+        candidatePath.classList.toggle("selected", connectionsShareOutput(candidate, conn));
+      });
     });
 
     
@@ -12525,6 +12985,25 @@ function drawConnections() {
   stepArpStates.forEach((_, widgetId) => {
     updateStepArpVisual(widgetId);
     stepArpRestartInternalClock(widgetId);
+  });
+  sampleHoldStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
+  waveFolderStates.forEach((_, widgetId) => updateWaveFolderVisual(widgetId));
+  refreshWiredSliderLocks();
+}
+
+// Sliders inside input port rows belong to those ports. A cable owns its
+// target parameter regardless of whether it carries CV or audio-rate signal.
+// Settings and decorative sliders have no port row and stay editable.
+function refreshWiredSliderLocks() {
+  document.querySelectorAll(".widget-instance .port-row-in[data-port-id]").forEach((row) => {
+    const slider = row.querySelector("input.port-slider");
+    if (!slider) return;
+    const widget = row.closest(".widget-instance");
+    if (!widget) return;
+    const wired = connections.some((c) => c.to.widgetId === widget.id && c.to.portId === row.dataset.portId);
+    slider.disabled = wired;
+    slider.title = wired ? "Von verbundenem Port gesteuert" : "";
+    row.classList.toggle("port-row-modulated", wired);
   });
 }
 
@@ -12587,7 +13066,11 @@ CONNECTION_COLORS.forEach((color) => {
   swatch.style.background = color;
   swatch.addEventListener("click", () => {
     const conn = connections.find((c) => c.id === pendingColorConnId);
-    if (conn) conn.color = color;
+    if (conn) {
+      connections.forEach((candidate) => {
+        if (connectionsShareOutput(candidate, conn)) candidate.color = color;
+      });
+    }
     closeConnectionColorPicker();
     drawConnections();
     markDirty();
@@ -13577,6 +14060,20 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "bitcrusher" && portId === "crush") {
+    const state = bitcrusherStates.get(widgetId);
+    if (state) {
+      state.crush = Math.max(0, Math.min(10, Number(value) || 0));
+      audioEngine.setParam(widgetId, "crush", state.crush);
+      updateBitcrusherVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { crush: state.crush });
+    }
+  }
+
+  if (el.dataset.widgetType === "wave-folder" && WAVE_FOLDER_SLIDER_PORTS.includes(portId)) {
+    setWaveFolderParam(widgetId, portId, Number(value));
+  }
+
   if (isEffectCvBypassType(el.dataset.widgetType) && portId === "bypass") {
     const state = effectCvStates.get(widgetId);
     if (state) {
@@ -13603,6 +14100,16 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
       audioEngine.setParam(widgetId, "bypass", state.bypass);
       updateChorusVisual(widgetId);
+      sendLiveParamUpdate(widgetId, { bypass: state.bypass });
+    }
+  }
+
+  if (el.dataset.widgetType === "bitcrusher" && portId === "bypass") {
+    const state = bitcrusherStates.get(widgetId);
+    if (state) {
+      state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
+      audioEngine.setParam(widgetId, "bypass", state.bypass);
+      updateBitcrusherVisual(widgetId);
       sendLiveParamUpdate(widgetId, { bypass: state.bypass });
     }
   }
@@ -14198,6 +14705,22 @@ const WIDGET_ENGINES = {
   debug: {
     getParams: () => ({}),
     applyParams: () => {},
+  },
+  oscilloscope: {
+    getParams: (id) => {
+      const state = oscilloscopeStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = oscilloscopeStates.get(id);
+      if (!state || !params) return;
+      state.width = params.width;
+      state.height = params.height;
+      state.triggerChannel = params.triggerChannel;
+      state.triggerLevel = params.triggerLevel;
+      state.timebase = params.timebase;
+      applyOscilloscopeState(id);
+    },
   },
   spectrum: {
     getParams: (id) => ({ rangeVolts: audioMonitorStates.get(id)?.rangeVolts ?? AUDIO_PEAK_VOLTS }),
@@ -15023,6 +15546,50 @@ const WIDGET_ENGINES = {
       updateChorusVisual(id);
     },
   },
+  bitcrusher: {
+    getParams: (id) => {
+      const state = bitcrusherStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = bitcrusherStates.get(id);
+      if (!state || !params) return;
+      state.crush = Math.max(0, Math.min(10, Number(params.crush ?? 5)));
+      state.bypass = params.bypass === true;
+      audioEngine.setParam(id, "crush", state.crush);
+      audioEngine.setParam(id, "bypass", state.bypass);
+      updateBitcrusherVisual(id);
+    },
+  },
+  "wave-folder": {
+    getParams: (id) => {
+      const state = waveFolderStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = waveFolderStates.get(id);
+      if (!state || !params) return;
+      state.drive = clamp(Number(params.drive ?? 0) || 0, 0, CV_MAX_VOLTS);
+      state.symmetry = clamp(Number(params.symmetry ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS);
+      state.mix = clamp(Number(params.mix ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS);
+      WAVE_FOLDER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
+      updateWaveFolderVisual(id);
+    },
+  },
+  "sample-hold": {
+    getParams: (id) => {
+      const state = sampleHoldStates.get(id);
+      return state ? { threshold: state.threshold } : {};
+    },
+    applyParams: (id, params) => {
+      const state = sampleHoldStates.get(id);
+      if (!state || !params) return;
+      state.threshold = clamp(Number(params.threshold ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(id, "threshold", state.threshold);
+      updateSampleHoldVisual(id);
+    },
+  },
   delay: makeEffectCvEngine("delay"),
   reverb: makeEffectCvEngine("reverb"),
   "reverb-light": makeEffectCvEngine("reverb-light"),
@@ -15369,6 +15936,21 @@ function fitPageToView() {
     minY = Math.min(minY, y0);
     maxX = Math.max(maxX, x0 + el.offsetWidth);
     maxY = Math.max(maxY, y0 + el.offsetHeight);
+  });
+
+  // Orthogonal cables may intentionally travel outside a widget's rectangle.
+  // Include their actual SVG bounds, so Fit-to-View never clips a cable loop.
+  connectionsLayer.querySelectorAll(".connection-path").forEach((path) => {
+    try {
+      const bounds = path.getBBox();
+      if (bounds.width === 0 && bounds.height === 0) return;
+      minX = Math.min(minX, bounds.x);
+      minY = Math.min(minY, bounds.y);
+      maxX = Math.max(maxX, bounds.x + bounds.width);
+      maxY = Math.max(maxY, bounds.y + bounds.height);
+    } catch {
+      // A detached SVG path has no box. Widget bounds still produce a fit.
+    }
   });
 
   const boxWidth = maxX - minX;
@@ -16136,6 +16718,23 @@ const savedWidgetOpacity = Number(localStorage.getItem(WIDGET_OPACITY_KEY));
 setWidgetOpacity(Number.isFinite(savedWidgetOpacity) ? savedWidgetOpacity : 100, false);
 menuWidgetOpacity.closest(".dropdown-range").addEventListener("click", (e) => e.stopPropagation());
 menuWidgetOpacity.addEventListener("input", () => setWidgetOpacity(menuWidgetOpacity.value));
+
+const CONNECTION_WIDTH_KEY = "espressynth.connectionWidth";
+const menuConnectionWidth = document.getElementById("menuConnectionWidth");
+const menuConnectionWidthValue = document.getElementById("menuConnectionWidthValue");
+
+function setConnectionWidth(width, persist = true) {
+  const value = Math.round(Math.min(10, Math.max(2, Number(width) || 5)));
+  document.documentElement.style.setProperty("--connection-width", `${value}px`);
+  menuConnectionWidth.value = String(value);
+  menuConnectionWidthValue.textContent = `${value} px`;
+  if (persist) localStorage.setItem(CONNECTION_WIDTH_KEY, String(value));
+}
+
+const savedConnectionWidth = Number(localStorage.getItem(CONNECTION_WIDTH_KEY));
+setConnectionWidth(Number.isFinite(savedConnectionWidth) ? savedConnectionWidth : 5, false);
+menuConnectionWidth.closest(".dropdown-range").addEventListener("click", (e) => e.stopPropagation());
+menuConnectionWidth.addEventListener("input", () => setConnectionWidth(menuConnectionWidth.value));
 
 document.getElementById("logWindowClose").addEventListener("click", () => {
   setLogWindowVisible(false);
