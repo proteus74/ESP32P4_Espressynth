@@ -17,6 +17,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "DeviceSettings.h"
 #include "DspPrimitives.h"
 #include "EngineStats.h"
 #include "Graph.h"

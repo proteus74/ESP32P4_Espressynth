@@ -116,7 +116,13 @@ extern "C" __attribute__((used)) void tuh_midi_rx_cb(uint8_t idx, uint32_t bytes
     using namespace Feature::MIDI;
     uint8_t packet[4];
     while (bytes >= 4 && tuh_midi_packet_read(idx, packet)) {
-        if (queue != nullptr) {
+        // CIN 0x0/0x1 (Reserved/Miscellaneous) packets are how many devices pad a bulk
+        // transfer to a full multiple of 4 bytes - not real MIDI messages. Forwarding them
+        // used to flood the engine + web log with bogus "status=0x00" events on every
+        // keypress and overwhelm httpd's async send queue. Drop them here, same filter
+        // UsbMidiEvent::parse() already applies to the USB-device side.
+        const uint8_t cin = packet[0] & 0x0f;
+        if (cin != 0x0 && cin != 0x1 && queue != nullptr) {
             midi_packet_t event{};
             std::memcpy(event.data, packet, sizeof(event.data));
             xQueueSend(queue, &event, 0);

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260913-cable-width-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20260916-link-labels-2">
 </head>
 <body>
 
@@ -27,6 +27,7 @@
   <div class="menu-item">
     <span>Edit</span>
     <div class="dropdown">
+      <button id="menuAddPage">Add Page</button>
       <button>Undo</button>
       <button>Copy</button>
       <button id="menuPresetDescription">Preset Description</button>
@@ -92,8 +93,10 @@
 </nav>
 
 <div class="page-tabs">
-  <button class="page-tab active" data-page="generator">Sound Generation</button>
-  <button class="page-tab" data-page="fx">FX &amp; Masteroutput</button>
+  <div class="page-tab-list" id="pageTabList">
+    <button class="page-tab active" data-page="generator">Sound Generation</button>
+    <button class="page-tab" data-page="fx">FX &amp; Masteroutput</button>
+  </div>
   <div class="mem-stats" id="memStats">
     <div class="preset-load-progress hidden" id="presetLoadProgress">
       <span class="preset-load-progress-label" id="presetLoadProgressLabel">Loading preset…</span>
@@ -123,6 +126,11 @@
   </div>
 </div>
 
+<div id="pageTabContextMenu" class="page-tab-context-menu hidden">
+  <button type="button" data-action="rename">Rename</button>
+  <button type="button" data-action="delete">Delete Page</button>
+</div>
+
 <div class="workspace">
   <main class="canvas" id="canvas-generator">
     <div class="canvas-content" id="canvasContent-generator">
@@ -145,6 +153,28 @@
 <div id="settingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Settings</h3>
+
+    <h4 class="modal-section-title">Device</h4>
+    <label class="modal-field">
+      <span>Device Name</span>
+      <input type="text" id="deviceNameInput" maxlength="31" placeholder="ESPRESSYNTH">
+    </label>
+
+    <h4 class="modal-section-title">Preset Navigation (MIDI Learn)</h4>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field">
+        <span>Previous Preset</span>
+        <input type="text" id="presetPrevCcDisplay" readonly placeholder="– none yet –">
+      </label>
+      <button id="presetPrevLearnBtn" type="button" class="btn-secondary">Learn</button>
+    </div>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field">
+        <span>Next Preset</span>
+        <input type="text" id="presetNextCcDisplay" readonly placeholder="– none yet –">
+      </label>
+      <button id="presetNextLearnBtn" type="button" class="btn-secondary">Learn</button>
+    </div>
 
     <h4 class="modal-section-title">Ethernet</h4>
     <label class="modal-field modal-field-checkbox">
@@ -217,6 +247,8 @@
       <span>Git Commit</span>
       <span id="infoGitVersionValue">–</span>
     </label>
+    <div class="modal-section-title">Detected I2C Devices</div>
+    <div id="infoI2CDevices" class="modal-field-readout">–</div>
     <div class="modal-actions">
       <button id="infoClose" class="btn-secondary">Close</button>
     </div>
@@ -919,6 +951,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260914-wave-folder-preview-1"></script>
+<script type="module" src="/static/js/main.js?v=20260916-link-labels-6"></script>
 </body>
 </html>

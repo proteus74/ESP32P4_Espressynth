@@ -477,7 +477,7 @@ inline void initSoundFontPlayer(Graph &g, uint16_t widgetIndex, NodeInstance &in
     inst.soundFontPlayer.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 }
 
-inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p, bool psram)
+inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p, bool psram, uint16_t &psramFallbacks)
 {
     switch (type)
     {
@@ -563,7 +563,7 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         nodes::reverb::buildReverb(inst, p, psram);
         break;
     case NodeType::ReverbLight:
-        nodes::reverb::buildReverbLight(inst, p);
+        nodes::reverb::buildReverbLight(inst, p, psramFallbacks);
         break;
     case NodeType::AudioOut:
     case NodeType::UsbOut:
@@ -947,7 +947,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     return g;
                 }
             }
-            applyParams(inst, w.type, doc.widgets[i].params, kPsram);
+            applyParams(inst, w.type, doc.widgets[i].params, kPsram, outputPsramFallbacks);
             if (w.type == NodeType::MidiIn && doc.widgets[i].isFxPage)
             {
                 inst.midiIn.voices = 1;
@@ -1784,7 +1784,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     const size_t internalFreeAfter = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t internalLargestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     memorydiag::setGraphStats(g->instanceCount, sizeof(NodeInstance), blockBufferCount,
-                              blockBufferCount * synth::kBlockSize * sizeof(float), instancesInternal);
+                              blockBufferCount * synth::kBlockSize * sizeof(float), instancesInternal,
+                              outputPsramFallbacks);
     ESP_LOGI(kGraphBuilderTag,
              "%u instances, NodeInstance %u B (%s), output-PSRAM fallbacks %u, internal heap free %u -> %u B, "
              "largest block %u -> %u B, buffer views %u",

@@ -17,7 +17,7 @@ extern "C" void app_main(void) {
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
         if (seconds % 5 == 0) {
             App::log_usb_audio_stats_tick();
-        }Thank you. 
+        }
 #endif
 #if defined(CONFIG_APP_ENABLE_SYNTH) && defined(CONFIG_APP_ENABLE_WEBSERVER)
         Feature::Synth::broadcast_status_tick();

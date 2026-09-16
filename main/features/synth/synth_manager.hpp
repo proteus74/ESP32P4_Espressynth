@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdio>
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include "esp_err.h"
@@ -47,6 +48,11 @@ namespace Feature::Synth {
 inline SynthEngine s_engine;
 inline QueueHandle_t s_presetChangedQueue = nullptr;
 inline QueueHandle_t s_liveParamQueue = nullptr;
+// Depth-1 "only the latest press matters" queue (xQueueOverwrite, like
+// s_presetChangedQueue) that hands a preset-nav direction (-1/+1) off to
+// s_presetNavTask - see step_preset()'s comment for why that FS-heavy work
+// can't run on the MIDI transport task that detects the button edge.
+inline QueueHandle_t s_presetNavQueue = nullptr;
 
 /** @brief The live SynthEngine instance - valid once init() has returned successfully. */
 inline SynthEngine &engine() {
@@ -264,9 +270,123 @@ inline UsbMidiEvent from_transport(uint8_t status, uint8_t data1, uint8_t data2)
     return event;
 }
 
+/**
+ * @brief Steps the active preset forward/backward through the same
+ *        directory listing GET /api/presets (synth_web_api.hpp) exposes,
+ *        with the unnamed current.json slot as index 0 - same ordering
+ *        convention the browser's preset dropdown and the front-panel
+ *        display (display_lvgl.hpp's select_preset()) already use. Does
+ *        real filesystem I/O (opendir/readdir), so - like
+ *        request_preset_name()/request_current_preset() below - this must
+ *        only ever be called from a non-render task. In fact it needs more
+ *        than "non-render": a real device crashed here with a stack-
+ *        protection fault in usb_midi_task, whose 2048-byte stack
+ *        (usb_midi_host.hpp) turned out too small for opendir/readdir plus
+ *        the rest of the call chain even with every local buffer made
+ *        `static` - see s_presetNavTask below, the only caller now, which
+ *        exists solely to give this its own adequately-sized stack.
+ *
+ *        The name buffer is function-local `static` rather than on the
+ *        stack (same call-site rule as display_lvgl.hpp's own
+ *        s_preset_names). A human pressing a Learn-bound button from two
+ *        transports in the same instant is the only way two calls could
+ *        race on it, and the worst case is stepping to a stale index once -
+ *        never a crash.
+ */
+inline bool step_preset(int direction) {
+    constexpr size_t kCapacity = 32;
+    static char names[kCapacity][presetpaths::kMaxNameLen];
+    size_t count = 1; // index 0 = unnamed "Current" slot
+    names[0][0] = '\0';
+
+    DIR *dir = opendir(presetpaths::kDir);
+    if (dir != nullptr) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != nullptr && count < kCapacity) {
+            const char *fname = entry->d_name;
+            const size_t length = strlen(fname);
+            if (fname[0] == '.' || length < 6 || strcmp(fname, "current.json") == 0 ||
+                strcmp(fname + length - 5, ".json") != 0)
+                continue;
+            char preset_name[presetpaths::kMaxNameLen] = {};
+            snprintf(preset_name, sizeof(preset_name), "%.*s", static_cast<int>(length - 5), fname);
+            if (!presetpaths::isSafeName(preset_name)) continue;
+            snprintf(names[count], sizeof(names[0]), "%s", preset_name);
+            ++count;
+        }
+        closedir(dir);
+    }
+
+    static char active_path[300];
+    char active_name[presetpaths::kMaxNameLen] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    size_t index = 0;
+    for (size_t i = 1; i < count; ++i) {
+        if (strcmp(active_name, names[i]) == 0) {
+            index = i;
+            break;
+        }
+    }
+
+    index = direction < 0 ? (index == 0 ? count - 1 : index - 1) : (index + 1) % count;
+    return index == 0 ? request_current_preset() : request_preset_name(names[index]);
+}
+
+/**
+ * @brief Dedicated task for step_preset()'s filesystem work (own 4096-byte
+ *        stack - see step_preset()'s comment on why usb_midi_task's 2048
+ *        bytes crashed running this inline). Blocks on s_presetNavQueue and
+ *        steps the preset on whatever direction (-1/+1) it wakes up with.
+ */
+void preset_nav_task(void *) {
+    int direction = 0;
+    while (true) {
+        if (xQueueReceive(s_presetNavQueue, &direction, portMAX_DELAY) == pdTRUE) {
+            step_preset(direction);
+        }
+    }
+}
+
+/**
+ * @brief Preset-navigation MIDI learn (DeviceSettings.h): reacts only on
+ *        the learned CC's button-down edge (crossing up through 64), not on
+ *        its live value - a held pad/button re-sends the same "on" value
+ *        repeatedly and must not re-trigger a preset step on every message.
+ *        Only queues a direction (cheap, tiny stack) for s_presetNavTask to
+ *        actually act on - see step_preset()'s comment for why the real
+ *        filesystem work can't run on the caller's task. Every current
+ *        caller (dispatch_midi(), below) runs on the transport's own task
+ *        (USB-MIDI host, BLE host, or the httpd worker for the browser's
+ *        "Test MIDI" button), never the render task.
+ */
+inline void handleDeviceSettingsMidi(uint8_t status, uint8_t data1, uint8_t data2) {
+    if ((status >> 4) != 0xB) return; // Control Change only
+    auto &ds = synth::deviceSettings();
+    const uint8_t channel = status & 0x0F;
+    const bool above = data2 >= 64;
+
+    if (ds.prevCc >= 0 && static_cast<uint8_t>(ds.prevCc) == data1 &&
+        static_cast<uint8_t>(ds.prevChannel) == channel) {
+        if (above && !ds.prevHeld && s_presetNavQueue != nullptr) {
+            int direction = -1;
+            xQueueOverwrite(s_presetNavQueue, &direction);
+        }
+        ds.prevHeld = above;
+    }
+    if (ds.nextCc >= 0 && static_cast<uint8_t>(ds.nextCc) == data1 &&
+        static_cast<uint8_t>(ds.nextChannel) == channel) {
+        if (above && !ds.nextHeld && s_presetNavQueue != nullptr) {
+            int direction = 1;
+            xQueueOverwrite(s_presetNavQueue, &direction);
+        }
+        ds.nextHeld = above;
+    }
+}
+
 /** @brief Forwards a MIDI message to the running engine. Non-blocking, safe from any task. */
 inline void dispatch_midi(uint8_t status, uint8_t data1, uint8_t data2) {
     s_engine.onMidiEvent(from_transport(status, data1, data2));
+    handleDeviceSettingsMidi(status, data1, data2);
 }
 
 namespace {
@@ -403,6 +523,13 @@ inline esp_err_t init() {
     // Device-wide, independent of any preset (see MasterClock.h) - load before
     // the render task starts so the first Clock-node render already sees it.
     synth::loadMasterClockFromFs();
+    synth::loadDeviceSettingsFromFs();
+
+    // Core 0, low priority - same placement as SynthEngine's "preset_loader" task just below
+    // (SynthEngine.h): pure background filesystem work, must never land on core 1, which
+    // SynthEngine::begin()'s render task claims exclusively.
+    s_presetNavQueue = xQueueCreate(1, sizeof(int));
+    xTaskCreatePinnedToCore(&preset_nav_task, "preset_nav", 4096, nullptr, 3, nullptr, 0);
 
     s_engine.begin(codec, secondaryI2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
 

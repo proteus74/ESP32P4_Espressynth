@@ -42,6 +42,7 @@ struct GraphStats
     uint32_t blockBufferCount = 0;
     uint32_t blockBufferBytes = 0;
     bool instancesInternal = false;
+    uint32_t outputPsramFallbacks = 0;
 };
 
 struct State
@@ -61,7 +62,7 @@ uint32_t beginReload();
 void captureReloadPhase(uint32_t generation, ReloadPhase phase);
 void finishReload(uint32_t generation, bool success);
 void setGraphStats(uint32_t instanceCount, uint32_t nodeInstanceBytes, uint32_t blockBufferCount,
-                   uint32_t blockBufferBytes, bool instancesInternal);
+                   uint32_t blockBufferBytes, bool instancesInternal, uint32_t outputPsramFallbacks);
 void read(State &out);
 const char *phaseName(ReloadPhase phase);
 } // namespace memorydiag

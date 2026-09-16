@@ -124,6 +124,54 @@ menu "Application Features"
                     default -1
             endif
 
+            config APP_ADS1115_SUPPORT
+                bool "ADS1115 Support (2Ch 15 Bit ADC)"
+                default n
+                help
+                    Optional external ADS1115 2-channel ADC (I2C, addresses
+                    0x48-0x4B depending on ADDR pin wiring). Enables a boot-time
+                    address scan and a minimal driver skeleton
+                    (features/io/ads1115_driver.hpp) - not yet wired into the
+                    synth engine. Detected devices show up in the boot log and
+                    the web UI's Info panel.
+
+            if APP_ADS1115_SUPPORT
+                config APP_ADS1115_SEARCH_I2C0
+                    bool "Search on I2C Port 0"
+                    default n
+                    help
+                        Probe I2C bus 0 at boot (see "Enable I2C Port 0" above -
+                        must also be enabled).
+
+                config APP_ADS1115_SEARCH_I2C1
+                    bool "Search on I2C Port 1"
+                    default n
+                    help
+                        Probe I2C bus 1 at boot (see "Enable I2C Port 1" above -
+                        must also be enabled). Independent of "Search on I2C
+                        Port 0" - both may be enabled at once.
+            endif
+
+            config APP_GP8413_SUPPORT
+                bool "GP8413 Support (2Ch 15 Bit DAC)"
+                default n
+                help
+                    Optional external GP8413 2-channel 15-bit DAC (I2C,
+                    addresses 0x58-0x5F depending on A0/A1/A2 pin wiring).
+                    Enables a boot-time address scan and a minimal driver
+                    skeleton (features/io/gp8413_driver.hpp) - not yet wired
+                    into the synth engine.
+
+            if APP_GP8413_SUPPORT
+                config APP_GP8413_SEARCH_I2C0
+                    bool "Search on I2C Port 0"
+                    default n
+
+                config APP_GP8413_SEARCH_I2C1
+                    bool "Search on I2C Port 1"
+                    default n
+            endif
+
         endif
 
     endmenu

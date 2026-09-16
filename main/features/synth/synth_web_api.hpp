@@ -29,6 +29,7 @@
 #include "SamplePaths.h"
 #include "UsbMidiEvent.h"
 #include "features/filesystem/littlefs_manager.hpp"
+#include "features/io/i2c_device_registry.h"
 #include "features/sd_card/sd_card_manager.hpp"
 #include "features/web/web_server.hpp"
 #include "synth_manager.hpp"
@@ -271,8 +272,10 @@ inline void broadcast_status_tick() {
         char widget_id[24];
         float widget_percent = 0.0f;
         if (!engine().widgetLoadAt(i, widget_id, sizeof(widget_id), &widget_percent)) continue;
-        offset += snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset), "%s[\"%s\",%.1f]",
-                            first ? "" : ",", widget_id, static_cast<double>(widget_percent));
+        const float edge_percent = engine().widgetEdgeLoadPercentAt(i);
+        offset += snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset),
+                            "%s[\"%s\",%.1f,%.1f]", first ? "" : ",", widget_id,
+                            static_cast<double>(widget_percent), static_cast<double>(edge_percent));
         first = false;
     }
     if (offset > 0 && static_cast<size_t>(offset) < sizeof(node_cpu_json)) {
@@ -1015,6 +1018,24 @@ esp_err_t masterclock_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /api/settings/device ----
+
+// One-shot hydration for the Settings dialog (device name + the two preset-
+// nav Learn bindings, DeviceSettings.h) - same "plain GET, no WS handshake
+// race" reasoning as masterclock_handler above. Saved via the "@deviceSettings"
+// paramUpdate branch in the /ws handler below, not a POST here.
+esp_err_t device_settings_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[320];
+    const int n = synth::formatDeviceSettingsJson(json, sizeof(json));
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
 // ---- /api/version, /api/diagnostics/memory ----
 
 esp_err_t version_handler(httpd_req_t *req) {
@@ -1028,6 +1049,27 @@ esp_err_t version_handler(httpd_req_t *req) {
              "false",
 #endif
              desc->version);
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+esp_err_t i2c_devices_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[512];
+    int len = snprintf(json, sizeof(json), "{\"devices\":[");
+    const size_t count = Feature::IO::I2CDeviceRegistry::count();
+    for (size_t i = 0; i < count && len > 0 && static_cast<size_t>(len) < sizeof(json); ++i) {
+        Feature::IO::DetectedI2CDevice dev;
+        if (!Feature::IO::I2CDeviceRegistry::get(i, dev)) continue;
+        len += snprintf(json + len, sizeof(json) - static_cast<size_t>(len),
+                         "%s{\"name\":\"%s\",\"bus\":%u,\"address\":\"0x%02X\"}", i == 0 ? "" : ",", dev.name,
+                         dev.bus_port, dev.address);
+    }
+    if (len < 0 || static_cast<size_t>(len) >= sizeof(json) - 2) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
+    snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "]}");
     httpd_resp_sendstr(req, json);
     return ESP_OK;
 }
@@ -1046,13 +1088,14 @@ esp_err_t memory_diagnostics_handler(httpd_req_t *req) {
         ",\"psramFree\":%" PRIu32 ",\"psramLargest\":%" PRIu32 ",\"psramMinimum\":%" PRIu32
         ",\"synthStackHighWaterBytes\":%" PRIu32 "},"
         "\"graph\":{\"instances\":%" PRIu32 ",\"nodeInstanceBytes\":%" PRIu32 ",\"blockBuffers\":%" PRIu32
-        ",\"blockBufferBytes\":%" PRIu32 ",\"instancesInternal\":%s},\"phases\":{",
+        ",\"blockBufferBytes\":%" PRIu32 ",\"instancesInternal\":%s,\"outputPsramFallbacks\":%" PRIu32
+        "},\"phases\":{",
         state.generation, memorydiag::phaseName(state.phase), static_cast<unsigned>(state.phase),
         state.inProgress ? "true" : "false", state.success ? "true" : "false", current.internalFree,
         current.internalLargest, current.internalMinimum, current.psramFree, current.psramLargest,
         current.psramMinimum, current.synthStackHighWaterBytes, state.graph.instanceCount,
         state.graph.nodeInstanceBytes, state.graph.blockBufferCount, state.graph.blockBufferBytes,
-        state.graph.instancesInternal ? "true" : "false");
+        state.graph.instancesInternal ? "true" : "false", state.graph.outputPsramFallbacks);
     if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||
         httpd_resp_send_chunk(req, json, static_cast<ssize_t>(length)) != ESP_OK) {
         return ESP_FAIL;
@@ -1165,6 +1208,24 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsNumber(cc)) mc.midiCc = cc->valueint;
                     if (cJSON_IsNumber(channel)) mc.midiChannel = channel->valueint;
                     synth::saveMasterClockToFs();
+                    handled_locally = true;
+                } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@deviceSettings") == 0 &&
+                           cJSON_IsObject(params)) {
+                    // Device name + preset-nav Learn bindings (DeviceSettings.h) - same
+                    // "engine-global, not a graph widget, save right here off the render
+                    // task" reasoning as @masterClock above.
+                    auto &ds = synth::deviceSettings();
+                    cJSON *name = cJSON_GetObjectItemCaseSensitive(params, "name");
+                    cJSON *prevCc = cJSON_GetObjectItemCaseSensitive(params, "prevCc");
+                    cJSON *prevChannel = cJSON_GetObjectItemCaseSensitive(params, "prevChannel");
+                    cJSON *nextCc = cJSON_GetObjectItemCaseSensitive(params, "nextCc");
+                    cJSON *nextChannel = cJSON_GetObjectItemCaseSensitive(params, "nextChannel");
+                    if (cJSON_IsString(name)) snprintf(ds.name, sizeof(ds.name), "%s", name->valuestring);
+                    if (cJSON_IsNumber(prevCc)) ds.prevCc = prevCc->valueint;
+                    if (cJSON_IsNumber(prevChannel)) ds.prevChannel = prevChannel->valueint;
+                    if (cJSON_IsNumber(nextCc)) ds.nextCc = nextCc->valueint;
+                    if (cJSON_IsNumber(nextChannel)) ds.nextChannel = nextChannel->valueint;
+                    synth::saveDeviceSettingsToFs();
                     handled_locally = true;
                 }
             } else if (cJSON_IsString(type) && strcmp(type->valuestring, "filesInfo") == 0) {
@@ -1286,10 +1347,20 @@ inline void register_web_routes() {
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &version_uri);
 
+    static const httpd_uri_t i2c_devices_uri = {
+        .uri = "/api/system/i2c", .method = HTTP_GET, .handler = &i2c_devices_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &i2c_devices_uri);
+
     static const httpd_uri_t masterclock_uri = {
         .uri = "/api/masterclock", .method = HTTP_GET, .handler = &masterclock_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &masterclock_uri);
+
+    static const httpd_uri_t device_settings_uri = {
+        .uri = "/api/settings/device", .method = HTTP_GET, .handler = &device_settings_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &device_settings_uri);
 
     static const httpd_uri_t memory_diagnostics_uri = {
         .uri = "/api/diagnostics/memory", .method = HTTP_GET, .handler = &memory_diagnostics_handler,

@@ -337,11 +337,20 @@ button:hover {
 .page-tabs {
   display: flex;
   align-items: flex-end;
-  gap: 0.3rem;
   background: var(--card);
   border-bottom: 1px solid var(--card-border);
   padding: 0.5rem 0.6rem 0;
   flex-shrink: 0;
+}
+
+.page-tab-list {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* Raised, physical-looking tab: rounded top corners, its own border on
@@ -360,6 +369,8 @@ button:hover {
   position: relative;
   top: 1px;
   transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .page-tab:hover {
@@ -382,6 +393,49 @@ button:hover {
 
 .page-tab.active:hover {
   background: var(--bg);
+}
+
+.page-tab-rename-input {
+  width: 10rem;
+  min-width: 4rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.25rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: inherit;
+  padding: 0.1rem 0.25rem;
+}
+
+.page-tab-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 150px;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 0.375rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.page-tab-context-menu.hidden {
+  display: none;
+}
+
+.page-tab-context-menu button {
+  display: block;
+  width: 100%;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-weight: normal;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.page-tab-context-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
 }
 
 .master-clock-badge {
@@ -2609,6 +2663,40 @@ body.show-node-cpu .widget-cpu-badge {
    it, same as any other single-port widget (e.g. gain, vu-meter) - the only
    difference is the port's own label shows the link name/status instead of
    the generic "In"/"Out" text (see createWidget()'s port-row wiring). */
+.widget-instance[data-widget-type="linked-output"] {
+  width: 170px;
+  min-width: 170px;
+  max-width: 170px;
+  box-sizing: border-box;
+}
+
+.widget-instance[data-widget-type="linked-output"] .port-row-out {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.widget-instance[data-widget-type="linked-output"] .linked-io-status {
+  display: flex;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.widget-instance[data-widget-type="linked-output"] .linked-io-link-name {
+  flex: 0 0 auto;
+}
+
+.widget-instance[data-widget-type="linked-output"] .linked-io-page-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .linked-io-status.missing {
   color: #f87171;
 }

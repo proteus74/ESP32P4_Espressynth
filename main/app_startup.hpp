@@ -3,6 +3,7 @@
 #include "app_core.hpp"
 #include "boards/board_config.hpp"
 #include "boards/board_init.hpp"
+#include "features/io/i2c_device_scan.hpp"
 #include "esp_log.h"
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_ETHERNET)
@@ -152,6 +153,9 @@ inline void init() {
 #endif
 
     ESP_ERROR_CHECK(Board::init());
+
+    ESP_LOGI(TAG, "Scanning for optional I2C devices (ADS1115/GP8413)...");
+    Feature::IO::scan_configured_devices();
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE)
     ESP_LOGI(TAG, "Feature: USB 1.1 Device (TinyUSB) enabled -> Initializing...");

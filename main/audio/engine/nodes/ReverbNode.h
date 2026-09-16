@@ -480,7 +480,7 @@ inline void buildReverb(NodeInstance &inst, const WidgetParams &p, bool psram)
 // buffers, only 6 instead of 24 delay lines) - deliberately internal-RAM-
 // preferred instead of blanket PSRAM like Chorus/Delay/Reverb, with a PSRAM
 // fallback only if the internal heap is currently too tight.
-inline void buildReverbLight(NodeInstance &inst, const WidgetParams &p)
+inline void buildReverbLight(NodeInstance &inst, const WidgetParams &p, uint16_t &psramFallbacks)
 {
     static constexpr uint32_t kCombLen44k[ReverbLightState::kCombs] = {1116, 1188, 1277, 1356};
     static constexpr uint32_t kAllpassLen44k[ReverbLightState::kAllpasses] = {556, 441};
@@ -512,6 +512,12 @@ inline void buildReverbLight(NodeInstance &inst, const WidgetParams &p)
         if (!inst.reverbLight->combs[c].initSamples(len, false))
         {
             inst.reverbLight->combs[c].initSamples(len, true);
+            // Counted in the same outputPsramFallbacks total GraphBuilder.h logs once per
+            // preset build - otherwise this specific fallback (unlike every other buffer/
+            // state allocation in the engine) was invisible: it silently trades ReverbLight's
+            // whole reason for existing (avoiding Reverb's ~52 PSRAM accesses/sample) for the
+            // same PSRAM latency on the hot render path, with no way to tell after the fact.
+            ++psramFallbacks;
         }
         float g = powf(10.0f, -3.0f * static_cast<float>(len) / (static_cast<float>(synth::kSampleRate) * sizeSec));
         if (g > 0.98f)
@@ -526,6 +532,7 @@ inline void buildReverbLight(NodeInstance &inst, const WidgetParams &p)
         if (!inst.reverbLight->allpasses[a].initSamples(len, false))
         {
             inst.reverbLight->allpasses[a].initSamples(len, true);
+            ++psramFallbacks;
         }
     }
 

@@ -91,7 +91,7 @@ void finishReload(uint32_t generation, bool success)
 }
 
 void setGraphStats(uint32_t instanceCount, uint32_t nodeInstanceBytes, uint32_t blockBufferCount,
-                   uint32_t blockBufferBytes, bool instancesInternal)
+                   uint32_t blockBufferBytes, bool instancesInternal, uint32_t outputPsramFallbacks)
 {
     portENTER_CRITICAL(&gMux);
     gState.graph.instanceCount = instanceCount;
@@ -99,6 +99,7 @@ void setGraphStats(uint32_t instanceCount, uint32_t nodeInstanceBytes, uint32_t 
     gState.graph.blockBufferCount = blockBufferCount;
     gState.graph.blockBufferBytes = blockBufferBytes;
     gState.graph.instancesInternal = instancesInternal;
+    gState.graph.outputPsramFallbacks = outputPsramFallbacks;
     portEXIT_CRITICAL(&gMux);
 }
 

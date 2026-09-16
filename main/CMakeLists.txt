@@ -12,6 +12,7 @@
     "features/synth/PresetPaths.cpp"
     "features/synth/SamplePaths.cpp"
     "features/synth/MemoryDiagnostics.cpp"
+    "features/io/i2c_device_registry.cpp"
 )
 
 set(COMPONENT_ADD_INCLUDEDIRS

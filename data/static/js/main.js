@@ -17,6 +17,7 @@ function handleMidiEvent(data) {
   routeMidiToSwitches(data);
   routeMidiToOutputSwitches(data);
   routeMidiToMasterClock(data);
+  routeMidiToPresetNav(data);
   if (data.type === "masterClock") { applyMasterClockBroadcast(data); return; }
   if (data.type !== "midi" || !["note_on", "note_off"].includes(data.midiType)) return;
   previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
@@ -75,10 +76,12 @@ document.addEventListener("keydown", (e) => {
 const infoOverlay = document.getElementById("infoOverlay");
 const infoVersionValue = document.getElementById("infoVersionValue");
 const infoGitVersionValue = document.getElementById("infoGitVersionValue");
+const infoI2CDevices = document.getElementById("infoI2CDevices");
 
 async function openInfo() {
   infoVersionValue.textContent = "–";
   infoGitVersionValue.textContent = "–";
+  infoI2CDevices.textContent = "–";
   infoOverlay.classList.remove("hidden");
   try {
     const res = await fetch("/api/version");
@@ -88,6 +91,16 @@ async function openInfo() {
   } catch (err) {
     infoVersionValue.textContent = "unknown";
     infoGitVersionValue.textContent = "unknown";
+  }
+  try {
+    const res = await fetch("/api/system/i2c");
+    const data = await res.json();
+    const devices = data.devices || [];
+    infoI2CDevices.textContent = devices.length === 0
+      ? "None found"
+      : devices.map((d) => `${d.name} — I2C${d.bus} @ ${d.address}`).join(", ");
+  } catch (err) {
+    infoI2CDevices.textContent = "unknown";
   }
 }
 
@@ -369,6 +382,7 @@ const wifiPasswordInput = document.getElementById("wifiPasswordInput");
 const wifiScanButton = document.getElementById("wifiScan");
 const wifiStatus = document.getElementById("wifiStatus");
 const wifiNetworks = document.getElementById("wifiNetworks");
+const deviceNameInput = document.getElementById("deviceNameInput");
 
 function updateStaticFieldsVisibility() {
   ethStaticFields.hidden = ethDhcpInput.checked;
@@ -401,12 +415,27 @@ async function openSettings() {
   } catch (err) {
     appendLog(`Could not load network settings: ${err.message}`);
   }
+  try {
+    const res = await fetch("/api/settings/device");
+    const data = await res.json();
+    deviceNameInput.value = data.name || "";
+    presetPrevCc = typeof data.prevCc === "number" && data.prevCc >= 0 ? data.prevCc : null;
+    presetPrevChannel = typeof data.prevChannel === "number" && data.prevChannel >= 0 ? data.prevChannel : null;
+    presetNextCc = typeof data.nextCc === "number" && data.nextCc >= 0 ? data.nextCc : null;
+    presetNextChannel = typeof data.nextChannel === "number" && data.nextChannel >= 0 ? data.nextChannel : null;
+    updatePresetNavLearnUi();
+  } catch (err) {
+    appendLog(`Could not load device settings: ${err.message}`);
+  }
   updateStaticFieldsVisibility();
   ethDhcpInput.focus();
 }
 
 function closeSettings() {
   settingsOverlay.classList.add("hidden");
+  presetPrevLearnActive = false;
+  presetNextLearnActive = false;
+  updatePresetNavLearnUi();
 }
 
 document.getElementById("menuSettings").addEventListener("click", (e) => {
@@ -455,6 +484,7 @@ wifiScanButton.addEventListener("click", async () => {
 });
 
 document.getElementById("settingsSave").addEventListener("click", async () => {
+  sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
   const body = {
     ethDhcp: ethDhcpInput.checked,
     ethIp: ethIpInput.value.trim(),
@@ -684,7 +714,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "value", label: "" }],
   },
   switch: {
-    label: "Switch",
+    label: "Input-Switch",
     icon: "🔀",
     inputs: [
       { id: "in1", label: "In 1" },
@@ -693,7 +723,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "value", label: "Out" }],
   },
   multiplexer: {
-    label: "Multiplexer",
+    label: "Input-Multiplexer",
     icon: "🎯",
     // Static/default shape (2 inputs) - live input count (2-16) is handled by
     // renderMultiplexerPorts() below, same pattern as Mixer.
@@ -799,7 +829,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "value", label: "Out" }],
   },
   "fm-oscillator": {
-    label: "FM Operator",
+    label: "Oscillator",
     icon: "🔔",
     // Modular single-operator phase-modulation FM: no built-in modulator -
     // patch any node's audio output (typically a second WaveGen) into
@@ -1081,6 +1111,7 @@ const WIDGET_TYPES = {
   },
   "sample-hold": {
     label: "S&H",
+    pickerLabel: "S&H - Sample and Hold",
     icon: "⌁",
     inputs: [
       { id: "in", label: "In" },
@@ -1399,10 +1430,39 @@ const DUAL_MODE_TYPES = {
   detune: { states: () => detuneStates, audioPorts: { in: ["cv"], out: ["f1", "f2"] } },
 };
 
-function getPortKind(widgetId, portId, direction) {
+function getPortKind(widgetId, portId, direction, resolvingLinks = new Set()) {
   const el = document.getElementById(widgetId);
   if (!el) return "control";
   const type = el.dataset.widgetType;
+
+  // Linked I/O carries either a scalar control value or a real audio/CV
+  // signal.  Derive that mode from the Link In's upstream source instead of
+  // treating every link as audio.  The latter creates a silent GainNode for
+  // MIDI Pitch/Gate and incorrectly takes ownership of audio-rate targets.
+  if (type === "linked-input" && direction === "in") {
+    const key = `in:${widgetId}`;
+    if (resolvingLinks.has(key)) return "control";
+    const next = new Set(resolvingLinks);
+    next.add(key);
+    return connections.some(
+      (c) => c.to.widgetId === widgetId && c.to.portId === portId &&
+        getPortKind(c.from.widgetId, c.from.portId, "out", next) === "audio"
+    ) ? "audio" : "control";
+  }
+
+  if (type === "linked-output" && direction === "out") {
+    const key = `out:${widgetId}`;
+    if (resolvingLinks.has(key)) return "control";
+    const sourceLinkId = linkedOutputStates.get(widgetId)?.sourceLinkId;
+    if (!sourceLinkId) return "control";
+    const sourceWidgetId = [...linkedInputStates.entries()].find(
+      ([, state]) => state.linkId === sourceLinkId
+    )?.[0];
+    if (!sourceWidgetId) return "control";
+    const next = new Set(resolvingLinks);
+    next.add(key);
+    return getPortKind(sourceWidgetId, "in", "in", next);
+  }
 
   const dual = DUAL_MODE_TYPES[type];
   if (dual) {
@@ -1518,34 +1578,50 @@ const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "swit
 
 
 const LINK_WIDGET_TYPES = ["audio-output-link", "audio-input-link"];
+const LINKED_IO_WIDGET_TYPES = ["linked-input", "linked-output"];
 const OUTPUT_SINGLETON_TYPES = ["audio-out", "usb-out", "es8311-out", "wm8960-out"];
 
+function makePageState(kind, title, canvasEl, canvasContentEl, connectionsLayerEl, lassoBoxEl) {
+  return {
+    kind,
+    title,
+    canvasEl,
+    canvasContentEl,
+    connectionsLayerEl,
+    lassoBoxEl,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    selectedWidgetIds: new Set(),
+    clipboard: { widgets: [], connections: [] },
+    allowedTypes: kind === "generator"
+      ? [...GENERATOR_PAGE_TYPES, ...DUAL_PAGE_TYPES]
+      : [...FX_PAGE_TYPES, ...DUAL_PAGE_TYPES],
+    toMasterUi: { x: 40, y: 40 },
+    canvasEventsBound: false,
+  };
+}
+
 const pages = {
-  generator: {
-    canvasEl: document.getElementById("canvas-generator"),
-    canvasContentEl: document.getElementById("canvasContent-generator"),
-    connectionsLayerEl: document.getElementById("connectionsLayer-generator"),
-    lassoBoxEl: document.getElementById("lassoBox-generator"),
-    zoom: 1,
-    panX: 0,
-    panY: 0,
-    selectedWidgetIds: new Set(),
-    clipboard: { widgets: [], connections: [] },
-    allowedTypes: [...GENERATOR_PAGE_TYPES, ...DUAL_PAGE_TYPES],
-  },
-  fx: {
-    canvasEl: document.getElementById("canvas-fx"),
-    canvasContentEl: document.getElementById("canvasContent-fx"),
-    connectionsLayerEl: document.getElementById("connectionsLayer-fx"),
-    lassoBoxEl: document.getElementById("lassoBox-fx"),
-    zoom: 1,
-    panX: 0,
-    panY: 0,
-    selectedWidgetIds: new Set(),
-    clipboard: { widgets: [], connections: [] },
-    allowedTypes: [...FX_PAGE_TYPES, ...DUAL_PAGE_TYPES],
-  },
+  generator: makePageState(
+    "generator",
+    "Sound Generation",
+    document.getElementById("canvas-generator"),
+    document.getElementById("canvasContent-generator"),
+    document.getElementById("connectionsLayer-generator"),
+    document.getElementById("lassoBox-generator")
+  ),
+  fx: makePageState(
+    "fx",
+    "FX & Masteroutput",
+    document.getElementById("canvas-fx"),
+    document.getElementById("canvasContent-fx"),
+    document.getElementById("connectionsLayer-fx"),
+    document.getElementById("lassoBox-fx")
+  ),
 };
+let generatorPageOrder = ["generator"];
+let pageCounter = 0;
 let currentPageName = "generator";
 
 let canvas = pages.generator.canvasEl;
@@ -1564,6 +1640,42 @@ let widgetCounter = 0;
 let selectedWidgetIds = pages.generator.selectedWidgetIds;
 let clipboard = pages.generator.clipboard;
 
+function generatorPageNames() {
+  return generatorPageOrder.filter((name) => pages[name]?.kind === "generator");
+}
+
+function pageTitleForWidget(widgetId) {
+  const widget = document.getElementById(widgetId);
+  if (!widget) return "Unknown Page";
+  const page = Object.values(pages).find((candidate) => candidate.canvasContentEl.contains(widget));
+  return page?.title || "Unknown Page";
+}
+
+function sharedToMasterElement() {
+  return document.querySelector('.widget-instance[data-widget-type="audio-output-link"]');
+}
+
+// Sound pages are views of one graph. Move the one real To Master widget
+// between visible canvases instead of creating extra engine nodes.
+function captureToMasterPosition(pageName) {
+  const page = pages[pageName];
+  const el = sharedToMasterElement();
+  if (!page || page.kind !== "generator" || !el || !page.canvasContentEl.contains(el)) return;
+  page.toMasterUi = {
+    x: parseInt(el.style.left, 10) || 0,
+    y: parseInt(el.style.top, 10) || 0,
+  };
+}
+
+function moveToMasterToPage(pageName) {
+  const page = pages[pageName];
+  const el = sharedToMasterElement();
+  if (!page || page.kind !== "generator" || !el) return;
+  page.canvasContentEl.appendChild(el);
+  el.style.left = `${page.toMasterUi.x}px`;
+  el.style.top = `${page.toMasterUi.y}px`;
+}
+
 function switchPage(name) {
   if (name === currentPageName || !pages[name]) return;
 
@@ -1573,6 +1685,7 @@ function switchPage(name) {
   cancelPendingPaste();
 
   const prev = pages[currentPageName];
+  captureToMasterPosition(currentPageName);
   prev.zoom = zoom;
   prev.panX = panX;
   prev.panY = panY;
@@ -1591,6 +1704,7 @@ function switchPage(name) {
   panY = next.panY;
   selectedWidgetIds = next.selectedWidgetIds;
   clipboard = next.clipboard;
+  if (next.kind === "generator") moveToMasterToPage(name);
   next.canvasEl.classList.remove("hidden");
 
   document.querySelectorAll(".page-tab").forEach((btn) => {
@@ -1602,8 +1716,205 @@ function switchPage(name) {
   drawConnections();
 }
 
-document.querySelectorAll(".page-tab").forEach((btn) => {
-  btn.addEventListener("click", () => switchPage(btn.dataset.page));
+const pageTabList = document.getElementById("pageTabList");
+const pageTabContextMenu = document.getElementById("pageTabContextMenu");
+let contextPageName = null;
+
+function pageTab(name) {
+  return Array.from(pageTabList.querySelectorAll(".page-tab")).find((tab) => tab.dataset.page === name) || null;
+}
+
+function nextPageId(requestedId = "") {
+  const safeRequested = String(requestedId).replace(/[^a-zA-Z0-9_-]/g, "");
+  if (safeRequested && safeRequested !== "generator" && safeRequested !== "fx" && !pages[safeRequested]) {
+    return safeRequested;
+  }
+  do {
+    pageCounter += 1;
+  } while (pages[`generator-${pageCounter}`]);
+  return `generator-${pageCounter}`;
+}
+
+function defaultGeneratorPageTitle() {
+  let number = 2;
+  const used = new Set(generatorPageNames().map((name) => pages[name].title.toLocaleLowerCase()));
+  while (used.has(`sound generation ${number}`.toLocaleLowerCase())) number += 1;
+  return `Sound Generation ${number}`;
+}
+
+function createGeneratorPage({ id = "", title = "", toMasterUi = null, activate = false } = {}) {
+  const pageName = nextPageId(id);
+  const canvasEl = document.createElement("main");
+  canvasEl.className = "canvas hidden";
+  canvasEl.id = `canvas-${pageName}`;
+
+  const contentEl = document.createElement("div");
+  contentEl.className = "canvas-content";
+  contentEl.id = `canvasContent-${pageName}`;
+  const layerEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  layerEl.classList.add("connections-layer");
+  layerEl.id = `connectionsLayer-${pageName}`;
+  contentEl.appendChild(layerEl);
+  canvasEl.appendChild(contentEl);
+
+  const lassoEl = document.createElement("div");
+  lassoEl.className = "lasso-box hidden";
+  lassoEl.id = `lassoBox-${pageName}`;
+  canvasEl.appendChild(lassoEl);
+  pages.fx.canvasEl.before(canvasEl);
+
+  const pageTitle = String(title).trim().slice(0, 64) || defaultGeneratorPageTitle();
+  const page = makePageState("generator", pageTitle, canvasEl, contentEl, layerEl, lassoEl);
+  if (toMasterUi && Number.isFinite(toMasterUi.x) && Number.isFinite(toMasterUi.y)) {
+    page.toMasterUi = { x: toMasterUi.x, y: toMasterUi.y };
+  }
+  pages[pageName] = page;
+  generatorPageOrder.push(pageName);
+
+  const tab = document.createElement("button");
+  tab.className = "page-tab";
+  tab.dataset.page = pageName;
+  tab.textContent = pageTitle;
+  pageTab("fx").before(tab);
+  bindCanvasEvents(page);
+  canvasEl.classList.toggle("hide-background-dots", !backgroundDotsEnabled);
+
+  if (activate) switchPage(pageName);
+  return pageName;
+}
+
+function resetAdditionalGeneratorPages() {
+  if (currentPageName !== "generator" && pages[currentPageName]?.kind === "generator") {
+    switchPage("generator");
+  }
+  generatorPageNames().slice(1).forEach((name) => {
+    const page = pages[name];
+    Array.from(page.canvasContentEl.querySelectorAll(".widget-instance")).forEach((el) => removeWidget(el.id, true));
+    page.canvasEl.remove();
+    pageTab(name)?.remove();
+    delete pages[name];
+  });
+  generatorPageOrder = ["generator"];
+}
+
+function addGeneratorPage() {
+  pushHistorySnapshot();
+  const name = createGeneratorPage({ activate: true });
+  moveToMasterToPage(name);
+  drawConnections();
+  savePresetNow();
+}
+
+function deleteGeneratorPage(name) {
+  const page = pages[name];
+  if (!page || page.kind !== "generator" || name === "generator") return;
+  if (!confirm(`Delete page "${page.title}" and all of its widgets?`)) return;
+
+  pushHistorySnapshot();
+  const index = generatorPageOrder.indexOf(name);
+  if (currentPageName === name) switchPage(generatorPageOrder[Math.max(0, index - 1)] || "generator");
+  if (page.canvasContentEl.contains(sharedToMasterElement())) {
+    captureToMasterPosition(name);
+    moveToMasterToPage("generator");
+  }
+  Array.from(page.canvasContentEl.querySelectorAll(".widget-instance")).forEach((el) => removeWidget(el.id, true));
+  page.canvasEl.remove();
+  pageTab(name)?.remove();
+  delete pages[name];
+  generatorPageOrder = generatorPageOrder.filter((pageName) => pageName !== name);
+  drawConnections();
+  savePresetNow();
+}
+
+function startPageRename(name) {
+  const page = pages[name];
+  const tab = pageTab(name);
+  if (!page || page.kind !== "generator" || !tab || tab.querySelector("input")) return;
+  const currentTitle = page.title;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 64;
+  input.className = "page-tab-rename-input";
+  input.value = currentTitle;
+  tab.textContent = "";
+  tab.appendChild(input);
+  input.focus();
+  input.select();
+
+  let cancelled = false;
+  function commit() {
+    input.removeEventListener("blur", commit);
+    const title = cancelled ? currentTitle : (input.value.trim() || currentTitle);
+    if (title !== currentTitle) {
+      pushHistorySnapshot();
+      page.title = title;
+      refreshLinkedIO();
+      savePresetNow();
+    }
+    tab.textContent = page.title;
+  }
+  input.addEventListener("blur", commit);
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") input.blur();
+    if (event.key === "Escape") {
+      cancelled = true;
+      input.blur();
+    }
+  });
+}
+
+function closePageTabContextMenu() {
+  pageTabContextMenu.classList.add("hidden");
+  contextPageName = null;
+}
+
+pageTabList.addEventListener("click", (event) => {
+  const tab = event.target.closest(".page-tab");
+  if (!tab || event.target.closest("input")) return;
+  switchPage(tab.dataset.page);
+});
+
+pageTabList.addEventListener("dblclick", (event) => {
+  const tab = event.target.closest(".page-tab");
+  if (!tab || tab.dataset.page === "fx") return;
+  event.preventDefault();
+  startPageRename(tab.dataset.page);
+});
+
+pageTabList.addEventListener("contextmenu", (event) => {
+  const tab = event.target.closest(".page-tab");
+  if (!tab) return;
+  event.preventDefault();
+  closePageTabContextMenu();
+  if (tab.dataset.page === "fx") return;
+  contextPageName = tab.dataset.page;
+  const deleteButton = pageTabContextMenu.querySelector('[data-action="delete"]');
+  deleteButton.hidden = contextPageName === "generator";
+  pageTabContextMenu.classList.remove("hidden");
+  const rect = pageTabContextMenu.getBoundingClientRect();
+  pageTabContextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - rect.width - 8)}px`;
+  pageTabContextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - rect.height - 8)}px`;
+});
+
+pageTabContextMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  const name = contextPageName;
+  closePageTabContextMenu();
+  if (!name) return;
+  if (action === "rename") startPageRename(name);
+  if (action === "delete") deleteGeneratorPage(name);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#pageTabContextMenu")) closePageTabContextMenu();
+});
+
+document.getElementById("menuAddPage").addEventListener("click", (event) => {
+  event.stopPropagation();
+  menuItems.forEach((item) => item.classList.remove("open"));
+  addGeneratorPage();
 });
 
 function clamp(value, min, max) {
@@ -4444,7 +4755,7 @@ function removeWidget(id, force = false) {
   audioEngine.removeNode(id);
   refreshControlGraph();
   refreshVoiceGroups();
-  if (removedWasLinkedIO) refreshLinkedIO();
+  if (removedWasLinkedIO || connections.some(connectionTouchesLinkedIO)) refreshLinkedIO();
   if (midiLearnTargetId === id) midiLearnTargetId = null;
   if (buttonMidiLearnTargetId === id) buttonMidiLearnTargetId = null;
   if (upDownMidiLearnTargetIdUp === id) upDownMidiLearnTargetIdUp = null;
@@ -4482,9 +4793,13 @@ function loadInitTemplate() {
   
   
   
+  resetAdditionalGeneratorPages();
+  pages.generator.title = "Sound Generation";
+  pageTab("generator").textContent = pages.generator.title;
+  pages.generator.toMasterUi = { x: 40, y: 40 };
   switchPage("generator");
   clearCanvas();
-  const oscEl = createWidget("fm-oscillator", "FM Operator", 100, 100);
+  const oscEl = createWidget("fm-oscillator", "Oscillator", 100, 100);
   ensureSingletonLinkWidget("generator");
   const outputLinkEl = pages.generator.canvasContentEl.querySelector(
     '[data-widget-type="audio-output-link"]'
@@ -6374,11 +6689,11 @@ function openLinkedOutputSettings(widgetId) {
   noneOpt.textContent = "— Nicht verbunden —";
   linkedOutputSourceSelect.appendChild(noneOpt);
 
-  const outputs = [...linkedInputStates.values()];
+  const outputs = [...linkedInputStates.entries()].map(([widgetId, state]) => ({ widgetId, ...state }));
   outputs.forEach((out) => {
     const opt = document.createElement("option");
     opt.value = out.linkId;
-    opt.textContent = out.linkName || out.linkId;
+    opt.textContent = `${pageTitleForWidget(out.widgetId)} — ${out.linkName || out.linkId}`;
     linkedOutputSourceSelect.appendChild(opt);
   });
 
@@ -6406,7 +6721,10 @@ document.getElementById("linkedOutputSettingsSave").addEventListener("click", ()
   const state = linkedOutputStates.get(pendingLinkedOutputId);
   if (state) {
     state.sourceLinkId = linkedOutputSourceSelect.value || "";
+    audioEngine.setParam(pendingLinkedOutputId, "sourceLinkId", state.sourceLinkId);
     refreshLinkedIO();
+    refreshControlGraph();
+    refreshVoiceGroups();
     savePresetNow();
   }
   closeLinkedOutputSettings();
@@ -7620,7 +7938,7 @@ function updateDualModeAudioNode(widgetId, type, state, inputPortIds, params) {
           getPortKind(c.from.widgetId, c.from.portId, "out") === "audio" &&
           getPortKind(c.to.widgetId, c.to.portId, "in") === "audio"
         ) {
-          audioEngine.connect(c.from.widgetId, c.from.portId, c.to.widgetId, c.to.portId);
+          connectIfAudio(c);
         }
       });
   } else if (!wantAudio && state.audioMode) {
@@ -7847,6 +8165,29 @@ function traverseVoiceSet(midiInId) {
     const type = el ? el.dataset.widgetType : null;
     if (!type) continue;
 
+    if (type === "linked-input") {
+      visited.add(widgetId);
+      const linkId = linkedInputStates.get(widgetId)?.linkId;
+      if (linkId) {
+        linkedOutputStates.forEach((state, linkedOutputId) => {
+          if (state.sourceLinkId === linkId && !visited.has(linkedOutputId)) {
+            queue.push(linkedOutputId);
+          }
+        });
+      }
+      continue;
+    }
+
+    if (type === "linked-output") {
+      visited.add(widgetId);
+      connections
+        .filter((c) => c.from.widgetId === widgetId)
+        .forEach((c) => {
+          if (!visited.has(c.to.widgetId)) queue.push(c.to.widgetId);
+        });
+      continue;
+    }
+
     const outputs = (WIDGET_TYPES[type] && WIDGET_TYPES[type].outputs) || [];
     const isBoundary = LINK_WIDGET_TYPES.includes(type) || outputs.length === 0 || type === "soundfont-player";
     if (isBoundary) continue;
@@ -7886,7 +8227,7 @@ function refreshVoiceGroups() {
   document.querySelectorAll(".widget-instance").forEach((el) => {
     const widgetId = el.id;
     const type = el.dataset.widgetType;
-    if (LINK_WIDGET_TYPES.includes(type)) return;
+    if (LINK_WIDGET_TYPES.includes(type) || LINKED_IO_WIDGET_TYPES.includes(type)) return;
 
     const currentCount = audioEngine.getVoiceCount(widgetId);
     if (currentCount === 0) return; 
@@ -7904,19 +8245,16 @@ function refreshVoiceGroups() {
     
     const engine = WIDGET_ENGINES[type];
     const params = engine ? engine.getParams(widgetId) : {};
+    connections
+      .filter((c) => c.from.widgetId === widgetId || c.to.widgetId === widgetId)
+      .forEach((c) => linkedAudioRouteIds.delete(c.id));
     audioEngine.removeNode(widgetId);
     audioEngine.createNode(widgetId, type, params, desired);
     if (engine) engine.applyParams(widgetId, params);
 
     connections
       .filter((c) => c.from.widgetId === widgetId || c.to.widgetId === widgetId)
-      .forEach((c) => {
-        // toKind alone - see the interactive-drag connect site's comment.
-        const toKind = getPortKind(c.to.widgetId, c.to.portId, "in");
-        if (toKind === "audio") {
-          audioEngine.connect(c.from.widgetId, c.from.portId, c.to.widgetId, c.to.portId);
-        }
-      });
+      .forEach(connectIfAudio);
   });
 }
 
@@ -8516,6 +8854,60 @@ document.getElementById("masterClockSettingsSave")?.addEventListener("click", ()
     round: masterClockRoundBpm,
   });
   closeMasterClockSettings();
+});
+
+// Preset-navigation MIDI learn (Settings dialog): device-global like Master
+// Clock above, but the actual edge-triggered preset step runs natively on
+// the firmware (see synth_manager.hpp's handleDeviceSettingsMidi()) so it
+// keeps working with no browser tab open - this side only needs to capture
+// the learned CC while "Waiting…" and mirror it for display.
+let presetPrevCc = null;
+let presetPrevChannel = null;
+let presetNextCc = null;
+let presetNextChannel = null;
+let presetPrevLearnActive = false;
+let presetNextLearnActive = false;
+
+const presetPrevCcDisplay = document.getElementById("presetPrevCcDisplay");
+const presetNextCcDisplay = document.getElementById("presetNextCcDisplay");
+const presetPrevLearnBtn = document.getElementById("presetPrevLearnBtn");
+const presetNextLearnBtn = document.getElementById("presetNextLearnBtn");
+
+function updatePresetNavLearnUi() {
+  if (presetPrevCcDisplay) presetPrevCcDisplay.value = presetPrevCc === null ? "" : `${presetPrevCc} (Ch ${presetPrevChannel + 1})`;
+  if (presetNextCcDisplay) presetNextCcDisplay.value = presetNextCc === null ? "" : `${presetNextCc} (Ch ${presetNextChannel + 1})`;
+  if (presetPrevLearnBtn && !presetPrevLearnActive) presetPrevLearnBtn.textContent = "Learn";
+  if (presetNextLearnBtn && !presetNextLearnActive) presetNextLearnBtn.textContent = "Learn";
+}
+
+function routeMidiToPresetNav(data) {
+  if (data.type !== "midi" || data.midiType !== "control_change") return;
+  if (presetPrevLearnActive) {
+    presetPrevCc = data.control;
+    presetPrevChannel = data.channel;
+    presetPrevLearnActive = false;
+    updatePresetNavLearnUi();
+    sendLiveParamUpdate("@deviceSettings", { prevCc: presetPrevCc, prevChannel: presetPrevChannel });
+  } else if (presetNextLearnActive) {
+    presetNextCc = data.control;
+    presetNextChannel = data.channel;
+    presetNextLearnActive = false;
+    updatePresetNavLearnUi();
+    sendLiveParamUpdate("@deviceSettings", { nextCc: presetNextCc, nextChannel: presetNextChannel });
+  }
+}
+
+presetPrevLearnBtn?.addEventListener("click", () => {
+  presetPrevLearnActive = true;
+  presetNextLearnActive = false;
+  presetPrevLearnBtn.textContent = "Waiting…";
+  updatePresetNavLearnUi();
+});
+presetNextLearnBtn?.addEventListener("click", () => {
+  presetNextLearnActive = true;
+  presetPrevLearnActive = false;
+  presetNextLearnBtn.textContent = "Waiting…";
+  updatePresetNavLearnUi();
 });
 
 function stopClockTimer(widgetId) {
@@ -9638,6 +10030,8 @@ const audioInputLinkStates = new Map();
 // { linkId, linkName }. linkedOutputStates: { sourceLinkId }.
 const linkedInputStates = new Map();
 const linkedOutputStates = new Map();
+const activeLinkedControlRoutes = new Set();
+const linkedAudioRouteIds = new Set();
 let pendingLinkedInputId = null;
 let pendingLinkedOutputId = null;
 
@@ -9667,15 +10061,27 @@ function updateLinkedOutputVisual(widgetId) {
   if (!status) return;
   if (!state.sourceLinkId) {
     status.textContent = "Nicht verbunden";
+    status.removeAttribute("title");
     status.classList.remove("missing");
     return;
   }
-  const source = [...linkedInputStates.values()].find((s) => s.linkId === state.sourceLinkId);
-  if (source) {
-    status.textContent = "→ " + (source.linkName || source.linkId);
+  const sourceEntry = [...linkedInputStates.entries()].find(([, source]) => source.linkId === state.sourceLinkId);
+  if (sourceEntry) {
+    const [sourceWidgetId, source] = sourceEntry;
+    const linkName = source.linkName || source.linkId;
+    const pageName = pageTitleForWidget(sourceWidgetId);
+    const pagePart = document.createElement("span");
+    pagePart.className = "linked-io-page-name";
+    pagePart.textContent = pageName;
+    const linkPart = document.createElement("span");
+    linkPart.className = "linked-io-link-name";
+    linkPart.textContent = ` → ${linkName}`;
+    status.replaceChildren(pagePart, linkPart);
+    status.title = `${pageName} → ${linkName}`;
     status.classList.remove("missing");
   } else {
     status.textContent = "Fehlender Link: " + state.sourceLinkId;
+    status.removeAttribute("title");
     status.classList.add("missing");
   }
 }
@@ -9683,7 +10089,42 @@ function updateLinkedOutputVisual(widgetId) {
 function refreshLinkedIO() {
   document.querySelectorAll('.widget-instance[data-widget-type="linked-input"]').forEach((el) => updateLinkedInputVisual(el.id));
   document.querySelectorAll('.widget-instance[data-widget-type="linked-output"]').forEach((el) => updateLinkedOutputVisual(el.id));
+
+  // A link can change between control and audio when its input cable or its
+  // selected source changes. Remove only routes that were really connected
+  // in WebAudio, then rebuild the matching subset in the new mode.
+  linkedAudioRouteIds.forEach((id) => {
+    const connection = connections.find((c) => c.id === id);
+    if (connection) {
+      audioEngine.disconnect(
+        connection.from.widgetId,
+        connection.from.portId,
+        connection.to.widgetId,
+        connection.to.portId,
+      );
+    }
+  });
+  linkedAudioRouteIds.clear();
   audioEngine._wireLinkedIO();
+  connections.filter(connectionTouchesLinkedIO).forEach(connectIfAudio);
+}
+
+function forwardLinkedInputValue(widgetId, value, voiceIndex) {
+  const source = linkedInputStates.get(widgetId);
+  if (!source?.linkId) return;
+  const routeKey = `${widgetId}:${voiceIndex ?? "global"}`;
+  if (activeLinkedControlRoutes.has(routeKey)) return;
+
+  activeLinkedControlRoutes.add(routeKey);
+  try {
+    linkedOutputStates.forEach((target, targetWidgetId) => {
+      if (target.sourceLinkId === source.linkId) {
+        propagate(targetWidgetId, "out", value, voiceIndex);
+      }
+    });
+  } finally {
+    activeLinkedControlRoutes.delete(routeKey);
+  }
 }
 
 function buildAudioMeterTrack(role) {
@@ -12770,7 +13211,8 @@ function openWidgetPicker(x, y, clientX, clientY) {
 
       const itemLabel = document.createElement("span");
       itemLabel.className = "widget-source-label";
-      itemLabel.textContent = def.icon ? `${def.icon} ${def.label}` : def.label;
+      const pickerLabel = def.pickerLabel || def.label;
+      itemLabel.textContent = def.icon ? `${def.icon} ${pickerLabel}` : pickerLabel;
       item.appendChild(itemLabel);
 
       const helpBtn = document.createElement("button");
@@ -12885,9 +13327,6 @@ function handleCanvasMousedown(e) {
   document.addEventListener("mouseup", onCanvasDragUp);
 }
 
-pages.generator.canvasEl.addEventListener("mousedown", handleCanvasMousedown);
-pages.fx.canvasEl.addEventListener("mousedown", handleCanvasMousedown);
-
 function handleCanvasContextMenu(e) {
   if (e.target.closest(".widget-instance") || e.target.closest(".connection-path")) return;
   e.preventDefault();
@@ -12899,9 +13338,6 @@ function handleCanvasContextMenu(e) {
 document.addEventListener("contextmenu", (event) => {
   if (event.target.closest(".widget-instance")) event.preventDefault();
 });
-
-pages.generator.canvasEl.addEventListener("contextmenu", handleCanvasContextMenu);
-pages.fx.canvasEl.addEventListener("contextmenu", handleCanvasContextMenu);
 
 function onCanvasDragMove(e) {
   if (!canvasDragState) return;
@@ -12990,8 +13426,16 @@ function handleCanvasWheel(e) {
   applyTransform();
 }
 
-pages.generator.canvasEl.addEventListener("wheel", handleCanvasWheel, { passive: false });
-pages.fx.canvasEl.addEventListener("wheel", handleCanvasWheel, { passive: false });
+function bindCanvasEvents(page) {
+  if (page.canvasEventsBound) return;
+  page.canvasEventsBound = true;
+  page.canvasEl.addEventListener("mousedown", handleCanvasMousedown);
+  page.canvasEl.addEventListener("contextmenu", handleCanvasContextMenu);
+  page.canvasEl.addEventListener("wheel", handleCanvasWheel, { passive: false });
+}
+
+bindCanvasEvents(pages.generator);
+bindCanvasEvents(pages.fx);
 
 zoomIndicator.addEventListener("click", () => {
   zoom = 1;
@@ -13135,17 +13579,14 @@ function confirmPendingPaste(pos, minX, minY) {
     if (!fromId || !toId) return;
     if (connectionExists(fromId, c.from.portId, toId, c.to.portId)) return;
     connectionCounter += 1;
-    connections.push({
+    const connection = {
       id: `conn-${connectionCounter}`,
       from: { widgetId: fromId, portId: c.from.portId },
       to: { widgetId: toId, portId: c.to.portId },
       color: getConnectionColorForOutput(fromId, c.from.portId),
-    });
-    // toKind alone - see the interactive-drag connect site's comment.
-    const toKind = getPortKind(toId, c.to.portId, "in");
-    if (toKind === "audio") {
-      audioEngine.connect(fromId, c.from.portId, toId, c.to.portId);
-    }
+    };
+    connections.push(connection);
+    connectIfAudio(connection);
   });
 
   selectedWidgetIds = new Set(newIds);
@@ -13198,7 +13639,7 @@ document.addEventListener("keydown", (e) => {
     clipboard = {
       widgets: [...copiedIds]
         .map((id) => document.getElementById(id))
-        .filter(Boolean)
+        .filter((el) => el && !LINK_WIDGET_TYPES.includes(el.dataset.widgetType))
         .map((el) => ({
           id: el.id,
           type: el.dataset.widgetType,
@@ -13628,6 +14069,7 @@ function drawConnections() {
       pushHistorySnapshot();
       disconnectIfAudio(conn);
       connections = connections.filter((c) => c.id !== conn.id);
+      if (connectionTouchesLinkedIO(conn)) refreshLinkedIO();
       if (selectedConnectionId === conn.id) selectedConnectionId = null;
       refreshControlGraph();
       refreshVoiceGroups();
@@ -13765,12 +14207,46 @@ connectionColorOverlay.addEventListener("click", (e) => {
 document.getElementById("connectionColorCancel").addEventListener("click", closeConnectionColorPicker);
 
 function removeConnectionsForWidget(widgetId) {
-  connections = connections.filter(
-    (c) => c.from.widgetId !== widgetId && c.to.widgetId !== widgetId
+  const toRemove = connections.filter(
+    (c) => c.from.widgetId === widgetId || c.to.widgetId === widgetId
   );
+  toRemove.forEach(disconnectIfAudio);
+  connections = connections.filter((c) => !toRemove.includes(c));
+}
+
+function connectionTouchesLinkedIO(conn) {
+  const fromType = document.getElementById(conn.from.widgetId)?.dataset.widgetType;
+  const toType = document.getElementById(conn.to.widgetId)?.dataset.widgetType;
+  return fromType === "linked-input" || fromType === "linked-output" ||
+    toType === "linked-input" || toType === "linked-output";
+}
+
+function shouldConnectAudio(conn) {
+  if (getPortKind(conn.to.widgetId, conn.to.portId, "in") !== "audio") return false;
+
+  // Preserve the existing relaxed rule for ordinary control widgets such as
+  // Knob/Const, which own usable WebAudio ConstantSourceNodes. Linked I/O is
+  // different: its GainNode is silent when its upstream source is MIDI or
+  // another scalar control, so both ends must genuinely be audio here.
+  return !connectionTouchesLinkedIO(conn) ||
+    getPortKind(conn.from.widgetId, conn.from.portId, "out") === "audio";
+}
+
+function connectIfAudio(conn) {
+  if (!shouldConnectAudio(conn)) return;
+  const linkedRoute = connectionTouchesLinkedIO(conn);
+  if (linkedRoute && linkedAudioRouteIds.has(conn.id)) return;
+  audioEngine.connect(conn.from.widgetId, conn.from.portId, conn.to.widgetId, conn.to.portId);
+  if (linkedRoute) linkedAudioRouteIds.add(conn.id);
 }
 
 function disconnectIfAudio(conn) {
+  if (connectionTouchesLinkedIO(conn)) {
+    if (!linkedAudioRouteIds.delete(conn.id)) return;
+    audioEngine.disconnect(conn.from.widgetId, conn.from.portId, conn.to.widgetId, conn.to.portId);
+    return;
+  }
+
   // toKind alone - mirrors the relaxed connect() gate below (see its
   // comment): a control-only source can still be wired into an audio-shaped
   // destination, so its removal needs the matching real disconnect too.
@@ -13789,6 +14265,7 @@ function removeConnectionsForPort(widgetId, portId, direction) {
   });
   toRemove.forEach(disconnectIfAudio);
   connections = connections.filter((c) => !toRemove.includes(c));
+  if (toRemove.some(connectionTouchesLinkedIO)) refreshLinkedIO();
   refreshControlGraph();
   refreshVoiceGroups();
 }
@@ -13845,7 +14322,20 @@ function startConnectionDrag(e, fromDot) {
 
       pushHistorySnapshot();
       connectionCounter += 1;
-      const toKind = getPortKind(toWidgetId, toPortId, "in");
+      const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
+      const targetType = document.getElementById(toWidgetId)?.dataset.widgetType;
+      const toKind = targetType === "linked-input"
+        ? fromKind
+        : getPortKind(toWidgetId, toPortId, "in");
+
+      if (targetType === "linked-input" && getPortKind(toWidgetId, toPortId, "in") !== toKind) {
+        connections.filter(
+          (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
+        ).forEach(disconnectIfAudio);
+        connections = connections.filter(
+          (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
+        );
+      }
 
       if (toKind !== "audio") {
         connections.filter(
@@ -13855,12 +14345,13 @@ function startConnectionDrag(e, fromDot) {
           (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
         );
       }
-      connections.push({
+      const connection = {
         id: `conn-${connectionCounter}`,
         from: { widgetId: fromWidgetId, portId: fromPortId },
         to: { widgetId: toWidgetId, portId: toPortId },
         color: getConnectionColorForOutput(fromWidgetId, fromPortId),
-      });
+      };
+      connections.push(connection);
 
       // toKind alone, not fromKind too: a control-only source (Knob, Const,
       // ...) can still own a real WebAudio node (see audio-engine.js's
@@ -13871,9 +14362,8 @@ function startConnectionDrag(e, fromDot) {
       // the discrete propagate() path). Harmless when the source has no such
       // node: audioEngine.connect()'s _resolveScaledOutput resolves to null
       // and the connect is silently skipped, same as before.
-      if (toKind === "audio") {
-        audioEngine.connect(fromWidgetId, fromPortId, toWidgetId, toPortId);
-      }
+      if (connectionTouchesLinkedIO(connection)) refreshLinkedIO();
+      else connectIfAudio(connection);
 
       refreshControlGraph();
       refreshVoiceGroups();
@@ -13910,6 +14400,10 @@ function propagate(widgetId, portId, value, voiceIndex) {
 function deliverToWidget(widgetId, portId, value, voiceIndex) {
   const el = document.getElementById(widgetId);
   if (!el) return;
+
+  if (el.dataset.widgetType === "linked-input" && portId === "in") {
+    forwardLinkedInputValue(widgetId, value, voiceIndex);
+  }
 
   if (el.dataset.widgetType === "midi-in" && portId === "voices") {
     const normalized = clamp(Number(value) || 0, 0, CV_MAX_VOLTS) / CV_MAX_VOLTS;
@@ -16348,39 +16842,47 @@ function applyWidgetParams(type, id, params) {
 
 
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 let restoringPreset = false;
 
 function serializePreset() {
-  
-  
-  
-  
-  const serializePage = (name) => {
-    const p = pages[name];
-    const widgetIds = new Set();
-    const widgets = [];
-    p.canvasContentEl.querySelectorAll(".widget-instance").forEach((el) => {
-      widgetIds.add(el.id);
-      const labelSpan = el.querySelector(".widget-instance-label");
-      const type = el.dataset.widgetType;
-      
-      
-      
-      
-      const x = parseInt(el.style.left, 10) || 0;
-      const y = parseInt(el.style.top, 10) || 0;
-      widgets.push({
-        id: el.id,
-        type,
-        label: labelSpan ? labelSpan.textContent : type,
-        ui: { x, y },
-        params: getWidgetParams(type, el.id),
-      });
-    });
-    const pageConnections = connections.filter((c) => widgetIds.has(c.from.widgetId));
-    return { widgets, connections: pageConnections };
+  // Firmware still receives one flat generator graph. uiPages/pageId only
+  // restore the Web UI grouping and are ignored by the engine parser.
+  captureToMasterPosition(currentPageName);
+
+  const serializeWidget = (el, pageName) => {
+    const labelSpan = el.querySelector(".widget-instance-label");
+    const type = el.dataset.widgetType;
+    const isToMaster = type === "audio-output-link";
+    const position = isToMaster ? pages.generator.toMasterUi : {
+      x: parseInt(el.style.left, 10) || 0,
+      y: parseInt(el.style.top, 10) || 0,
+    };
+    return {
+      id: el.id,
+      type,
+      label: labelSpan ? labelSpan.textContent : type,
+      ui: { ...position, ...(pageName && !isToMaster ? { pageId: pageName } : {}) },
+      params: getWidgetParams(type, el.id),
+    };
   };
+
+  const generatorWidgets = [];
+  const generatorWidgetIds = new Set();
+  generatorPageNames().forEach((name) => {
+    pages[name].canvasContentEl.querySelectorAll(".widget-instance").forEach((el) => {
+      if (generatorWidgetIds.has(el.id)) return;
+      generatorWidgetIds.add(el.id);
+      generatorWidgets.push(serializeWidget(el, name));
+    });
+  });
+
+  const fxWidgets = [];
+  const fxWidgetIds = new Set();
+  pages.fx.canvasContentEl.querySelectorAll(".widget-instance").forEach((el) => {
+    fxWidgetIds.add(el.id);
+    fxWidgets.push(serializeWidget(el, "fx"));
+  });
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -16388,7 +16890,21 @@ function serializePreset() {
     description: presetDescription.description,
     longDescription: presetDescription.longDescription,
     author: presetDescription.author,
-    pages: { generator: serializePage("generator"), fx: serializePage("fx") },
+    uiPages: generatorPageNames().map((name) => ({
+      id: name,
+      title: pages[name].title,
+      toMasterUi: { ...pages[name].toMasterUi },
+    })),
+    pages: {
+      generator: {
+        widgets: generatorWidgets,
+        connections: connections.filter((c) => generatorWidgetIds.has(c.from.widgetId)),
+      },
+      fx: {
+        widgets: fxWidgets,
+        connections: connections.filter((c) => fxWidgetIds.has(c.from.widgetId)),
+      },
+    },
   };
 }
 
@@ -16488,8 +17004,11 @@ async function handleExplicitSave() {
 }
 
 function handleNewPreset() {
-  const hasWidgets =
-    pages.generator.canvasContentEl.querySelectorAll(".widget-instance").length > 1 ||
+  const generatorWidgetCount = generatorPageNames().reduce(
+    (count, name) => count + pages[name].canvasContentEl.querySelectorAll('.widget-instance:not([data-widget-type="audio-output-link"])').length,
+    0
+  );
+  const hasWidgets = generatorWidgetCount > 0 ||
     pages.fx.canvasContentEl.querySelectorAll(".widget-instance").length > 1;
   if (currentPresetName === null && hasWidgets) {
     if (!confirm("Discard unsaved preset?")) return;
@@ -16655,9 +17174,40 @@ function normalizePresetData(data) {
   };
 }
 
+function restoreGeneratorPageStructure(uiPages) {
+  resetAdditionalGeneratorPages();
+  pages.generator.title = "Sound Generation";
+  pages.generator.toMasterUi = { x: 40, y: 40 };
+  const pageIdMap = new Map([["generator", "generator"]]);
+  const entries = Array.isArray(uiPages) ? uiPages.slice(0, 64) : [];
+  const base = entries.find((entry) => entry?.id === "generator");
+  if (base) {
+    pages.generator.title = String(base.title || "Sound Generation").trim().slice(0, 64) || "Sound Generation";
+    if (Number.isFinite(base.toMasterUi?.x) && Number.isFinite(base.toMasterUi?.y)) {
+      pages.generator.toMasterUi = { x: base.toMasterUi.x, y: base.toMasterUi.y };
+    }
+  }
+  pageTab("generator").textContent = pages.generator.title;
+
+  const restoredIds = new Set(["generator", "fx"]);
+  entries.forEach((entry) => {
+    if (!entry || typeof entry.id !== "string" || restoredIds.has(entry.id)) return;
+    restoredIds.add(entry.id);
+    const restoredId = createGeneratorPage({
+      id: entry.id,
+      title: entry.title,
+      toMasterUi: entry.toMasterUi,
+    });
+    pageIdMap.set(entry.id, restoredId);
+  });
+  return pageIdMap;
+}
+
 function ensureSingletonLinkWidget(pageName) {
   const type = pageName === "generator" ? "audio-output-link" : "audio-input-link";
-  const exists = pages[pageName].canvasContentEl.querySelector(`[data-widget-type="${type}"]`);
+  const exists = type === "audio-output-link"
+    ? sharedToMasterElement()
+    : pages[pageName].canvasContentEl.querySelector(`[data-widget-type="${type}"]`);
   if (!exists) {
     createWidget(type, WIDGET_TYPES[type].label, 40, 40);
   }
@@ -16726,6 +17276,8 @@ async function applyPresetData(data, { fitToView = false } = {}) {
     author: typeof data.author === "string" ? data.author : "",
   };
   const pageData = normalizePresetData(data);
+  const hasUiPages = Array.isArray(data.uiPages);
+  const pageIdMap = restoreGeneratorPageStructure(data.uiPages);
   let removedAudioToValueWidgets = false;
   ["generator", "fx"].forEach((name) => {
     const page = pageData[name];
@@ -16787,23 +17339,51 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   });
 
   
-  ["generator", "fx"].forEach((name) => {
-    switchPage(name);
-    const loadedLinkTypes = new Set();
-    pageData[name].widgets.forEach((w) => {
-      if (LINK_WIDGET_TYPES.includes(w.type)) {
-        if (loadedLinkTypes.has(w.type)) return;
-        loadedLinkTypes.add(w.type);
-      }
-      const label = w.label || (WIDGET_TYPES[w.type] || {}).label || w.type;
-      const x = w.ui ? w.ui.x : w.x;
-      const y = w.ui ? w.ui.y : w.y;
-      createWidget(w.type, label, x, y, w.id);
-      applyWidgetParams(w.type, w.id, widgetParamsFromLegacy(w));
-    });
-    ensureSingletonLinkWidget(name);
-    if (fitToView) fitPageToView();
+  const loadedGeneratorLinkTypes = new Set();
+  pageData.generator.widgets.forEach((w) => {
+    if (LINK_WIDGET_TYPES.includes(w.type)) {
+      if (loadedGeneratorLinkTypes.has(w.type)) return;
+      loadedGeneratorLinkTypes.add(w.type);
+    }
+    const requestedPage = typeof w.ui?.pageId === "string" ? w.ui.pageId : "generator";
+    const targetPage = w.type === "audio-output-link"
+      ? "generator"
+      : (pageIdMap.get(requestedPage) || "generator");
+    switchPage(targetPage);
+    const label = w.label || (WIDGET_TYPES[w.type] || {}).label || w.type;
+    const x = w.ui ? w.ui.x : w.x;
+    const y = w.ui ? w.ui.y : w.y;
+    createWidget(w.type, label, x, y, w.id);
+    applyWidgetParams(w.type, w.id, widgetParamsFromLegacy(w));
+    if (w.type === "audio-output-link" && !hasUiPages) {
+      pages.generator.toMasterUi = { x: Number(x) || 0, y: Number(y) || 0 };
+    }
   });
+  switchPage("generator");
+  ensureSingletonLinkWidget("generator");
+  moveToMasterToPage("generator");
+
+  switchPage("fx");
+  const loadedFxLinkTypes = new Set();
+  pageData.fx.widgets.forEach((w) => {
+    if (LINK_WIDGET_TYPES.includes(w.type)) {
+      if (loadedFxLinkTypes.has(w.type)) return;
+      loadedFxLinkTypes.add(w.type);
+    }
+    const label = w.label || (WIDGET_TYPES[w.type] || {}).label || w.type;
+    const x = w.ui ? w.ui.x : w.x;
+    const y = w.ui ? w.ui.y : w.y;
+    createWidget(w.type, label, x, y, w.id);
+    applyWidgetParams(w.type, w.id, widgetParamsFromLegacy(w));
+  });
+  ensureSingletonLinkWidget("fx");
+
+  if (fitToView) {
+    [...generatorPageNames(), "fx"].forEach((name) => {
+      switchPage(name);
+      fitPageToView();
+    });
+  }
 
   
   
@@ -16939,13 +17519,8 @@ async function applyPresetData(data, { fitToView = false } = {}) {
     }
   });
 
-  connections.forEach((c) => {
-    // toKind alone - see the interactive-drag connect site's comment.
-    const toKind = getPortKind(c.to.widgetId, c.to.portId, "in");
-    if (toKind === "audio") {
-      audioEngine.connect(c.from.widgetId, c.from.portId, c.to.widgetId, c.to.portId);
-    }
-  });
+  linkedAudioRouteIds.clear();
+  connections.forEach(connectIfAudio);
   refreshControlGraph();
   refreshVoiceGroups();
   refreshLinkedIO();
@@ -17066,7 +17641,9 @@ function updateNodeCpuDisplay(pairs) {
   if (!Array.isArray(pairs)) return;
   pairs.forEach((pair) => {
     const widgetId = pair && pair[0];
-    const percent = Number(pair && pair[1]) || 0;
+    const renderPercent = Number(pair && pair[1]) || 0;
+    const edgePercent = Number(pair && pair[2]) || 0;
+    const percent = renderPercent + edgePercent;
     const el = widgetId ? document.getElementById(widgetId) : null;
     const header = el ? el.querySelector(".widget-instance-header") : null;
     if (!header) return;
@@ -17080,6 +17657,7 @@ function updateNodeCpuDisplay(pairs) {
       else header.appendChild(badge);
     }
     badge.textContent = `${percent.toFixed(1)}%`;
+    badge.title = `render ${renderPercent.toFixed(1)}% + edges ${edgePercent.toFixed(1)}%`;
     badge.classList.toggle("warn", percent >= 5 && percent < 15);
     badge.classList.toggle("danger", percent >= 15);
   });
@@ -17247,6 +17825,7 @@ function connectWs() {
       routeMidiToOutputSwitches(data);
       routeMidiToSoundFontPlayer(data);
       routeMidiToMasterClock(data);
+      routeMidiToPresetNav(data);
       flashMidiActivity();
     } else if (data.type === "midi-error") {
       appendLog(`MIDI error: ${data.error}`);
@@ -17306,10 +17885,12 @@ fetch("/api/masterclock").then((r) => r.json()).then(applyMasterClockBroadcast).
 
 
 
-// Firmware exposes network configuration through its native configuration surface, not this
-// legacy web API. Hide controls whose /api/settings/network and /api/ble/* routes do not exist.
+// Firmware exposes BLE pairing through its native configuration surface, not this legacy web
+// API - hide the control whose /api/ble/* routes do not exist. Settings stays: it also holds
+// Device Name + preset-nav Learn (backed by the real /api/settings/device route), even though
+// its Ethernet/Wi-Fi section is the same kind of dead /api/settings/network call and will just
+// silently fail to hydrate (openSettings() already logs-and-continues on that fetch).
 document.getElementById("menuBleConnect")?.remove();
-document.getElementById("menuSettings")?.remove();
 
 
 

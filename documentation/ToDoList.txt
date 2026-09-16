@@ -1,17 +1,13 @@
-FM-Operator umbenennen in Oszillator. 
+
 Icons beim Oszillator schöner machen? 
 
 Icons für die Filter oder bessere Bilder bei den Filtern? 
 Preset Umschaltung per MIDI 
 
-Linked Input und Linked Output funktionieren noch nicht richtig sauber. 
-
 Clock sollte doch irgendwie einen Frequency Ausgang haben, der dann in den LFO gehen kann. 
 
 Anbindung von EEZ Studio 
 Drum Sequencer 
-
- 
 
 i2c Display und SPI Display 
 
