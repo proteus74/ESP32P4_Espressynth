@@ -1785,6 +1785,7 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+
   if (type === "midi-split") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
