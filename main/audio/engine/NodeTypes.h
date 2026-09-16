@@ -64,6 +64,8 @@ enum class NodeType : uint8_t
     FmOscillator,
     DxEnvelope,
     StepArpeggiator,
+    OutputSwitch,
+    OutputMultiplexer,
     Unknown,
 };
 
@@ -75,10 +77,12 @@ enum class WaveType : uint8_t
     Sawtooth,
     Noise,
     PinkNoise,
+    SuperSaw,
 };
 
 enum class FilterKind : uint8_t
 {
+    None,
     LowPass,
     HighPass,
     BandPass,
@@ -86,6 +90,7 @@ enum class FilterKind : uint8_t
 
 enum class CurtisFilterMode : uint8_t
 {
+    None,
     LowPass24,
     LowPass12,
     BandPass12,
@@ -232,10 +237,14 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::CurtisFilter;
     if (strcmp(typeStr, "step-arpeggiator") == 0)
         return NodeType::StepArpeggiator;
+    if (strcmp(typeStr, "output-switch") == 0)
+        return NodeType::OutputSwitch;
+    if (strcmp(typeStr, "output-multiplexer") == 0)
+        return NodeType::OutputMultiplexer;
     return NodeType::Unknown;
 }
 
-inline WaveType waveTypeFromString(const char *s)
+inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
 {
     if (s == nullptr)
         return WaveType::Sine;
@@ -249,6 +258,8 @@ inline WaveType waveTypeFromString(const char *s)
         return WaveType::Noise;
     if (strcmp(s, "pink-noise") == 0)
         return WaveType::PinkNoise;
+    if (allowSuperSaw && strcmp(s, "supersaw") == 0)
+        return WaveType::SuperSaw;
     return WaveType::Sine;
 }
 
@@ -256,6 +267,8 @@ inline FilterKind filterKindFromString(const char *s)
 {
     if (s == nullptr)
         return FilterKind::LowPass;
+    if (strcmp(s, "none") == 0)
+        return FilterKind::None;
     if (strcmp(s, "highpass") == 0)
         return FilterKind::HighPass;
     if (strcmp(s, "bandpass") == 0)
@@ -267,6 +280,8 @@ inline CurtisFilterMode curtisFilterModeFromString(const char *s)
 {
     if (s == nullptr)
         return CurtisFilterMode::LowPass24;
+    if (strcmp(s, "none") == 0)
+        return CurtisFilterMode::None;
     if (strcmp(s, "lp12") == 0)
         return CurtisFilterMode::LowPass12;
     if (strcmp(s, "bp12") == 0 || strcmp(s, "bandpass") == 0)

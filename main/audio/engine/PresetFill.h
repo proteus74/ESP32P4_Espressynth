@@ -38,7 +38,9 @@
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
+#include "nodes/OutputMultiplexerNode.h"
 #include "nodes/OutputNodes.h"
+#include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
 #include "nodes/SwitchNode.h"
@@ -135,6 +137,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::Multiplexer:
         nodes::multiplexer::parsePreset(p, out);
         break;
+    case NodeType::OutputMultiplexer:
+        nodes::outputmultiplexer::parsePreset(p, out);
+        break;
     case NodeType::Multiplier:
     case NodeType::Adder:
         nodes::arithmetic::parsePresetMultiplierOrAdder(p, out);
@@ -198,6 +203,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Switch:
         nodes::switchnode::parsePreset(p, out);
+        break;
+    case NodeType::OutputSwitch:
+        nodes::outputswitch::parsePreset(p, out);
         break;
     case NodeType::WavePlayer:
         nodes::waveplayer::parsePreset(p, out);

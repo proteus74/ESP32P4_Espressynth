@@ -62,6 +62,13 @@ const FM_INDEX_MAX_HZ_DEVIATION = 2000;
 // One delayed raw sample modulates carrier frequency; hardware remains the
 // authoritative phase-modulation implementation.
 const SELF_FEEDBACK_MAX_HZ_DEVIATION = 2000;
+const SUPER_SAW_CENTS = [-28, -14, -7, 7, 14, 28];
+
+function superSawWeights(volts) {
+  const mix = clampRange((Number(volts) || 0) / CV_MAX_VOLTS, 0, 1);
+  const norm = 1 / (1 + 6 * mix);
+  return { center: norm, side: mix * norm };
+}
 
 
 
@@ -454,6 +461,53 @@ export class AudioEngine {
   retriggerOscillatorEntry(entry) {
     if (!entry || (entry.type !== "oscillator" && entry.type !== "fm-oscillator")) return;
     const now = this.ctx.currentTime;
+
+    if (entry.type === "fm-oscillator") {
+      const oldOscs = [entry.osc, ...entry.sideOscs];
+      const newCenter = this.ctx.createOscillator();
+      newCenter.type = entry.osc.type;
+      newCenter.frequency.value = entry.osc.frequency.value;
+      newCenter.connect(entry.normalCarrierGain);
+      newCenter.connect(entry.superSawCenterGain);
+      const newSides = SUPER_SAW_CENTS.map((_, index) => {
+        const side = this.ctx.createOscillator();
+        side.type = "sawtooth";
+        side.frequency.value = entry.sideOscs[index].frequency.value;
+        side.connect(entry.superSawSideGains[index]);
+        return side;
+      });
+      oldOscs.forEach((old) => {
+        try {
+          entry.pitchWaveShaper.disconnect(old.frequency);
+          entry.fmDepthGain.disconnect(old.frequency);
+          entry.feedbackGain.disconnect(old.frequency);
+        } catch (err) {
+        }
+      });
+      entry.sideOscs.forEach((old, index) => {
+        try {
+          entry.superSawDetuneScales[index].disconnect(old.detune);
+        } catch (err) {
+        }
+      });
+      [newCenter, ...newSides].forEach((fresh) => {
+        entry.pitchWaveShaper.connect(fresh.frequency);
+        entry.fmDepthGain.connect(fresh.frequency);
+        entry.feedbackGain.connect(fresh.frequency);
+        fresh.start(now);
+      });
+      newSides.forEach((side, index) => entry.superSawDetuneScales[index].connect(side.detune));
+      oldOscs.forEach((old) => {
+        try {
+          old.stop(now);
+          old.disconnect();
+        } catch (err) {
+        }
+      });
+      entry.osc = newCenter;
+      entry.sideOscs = newSides;
+      return;
+    }
 
     const newOsc = this.ctx.createOscillator();
     newOsc.type = entry.osc.type;
@@ -1320,8 +1374,14 @@ export class AudioEngine {
         // firmware.
         const waveType = params.waveType || "sine";
         const osc = ctx.createOscillator();
-        osc.type = isNoiseWave(waveType) ? "sine" : waveType;
+        osc.type = waveType === "supersaw" ? "sawtooth" : (isNoiseWave(waveType) ? "sine" : waveType);
         osc.frequency.value = params.frequency ?? 0;
+        const sideOscs = SUPER_SAW_CENTS.map(() => {
+          const side = ctx.createOscillator();
+          side.type = "sawtooth";
+          side.frequency.value = params.frequency ?? 0;
+          return side;
+        });
 
         const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
         const noiseData = noiseBuffer.getChannelData(0);
@@ -1342,6 +1402,72 @@ export class AudioEngine {
         ampGain.gain.value = 0;
         const ampCv = this._createCvGainChain(ctx, "linear");
         ampCv.waveShaper.connect(ampGain.gain);
+
+        const periodicSum = ctx.createGain();
+        const normalCarrierGain = ctx.createGain();
+        const superSawBus = ctx.createGain();
+        const superSawEnable = ctx.createGain();
+        const superSawCenterGain = ctx.createGain();
+        const superSawSideGains = sideOscs.map(() => ctx.createGain());
+        normalCarrierGain.gain.value = waveType === "supersaw" || isNoiseWave(waveType) ? 0 : 1;
+        superSawEnable.gain.value = waveType === "supersaw" ? 1 : 0;
+        osc.connect(normalCarrierGain);
+        normalCarrierGain.connect(periodicSum);
+        osc.connect(superSawCenterGain);
+        superSawCenterGain.connect(superSawBus);
+        sideOscs.forEach((side, index) => {
+          side.connect(superSawSideGains[index]);
+          superSawSideGains[index].connect(superSawBus);
+        });
+        superSawBus.connect(superSawEnable);
+        superSawEnable.connect(periodicSum);
+        periodicSum.connect(ampGain);
+
+        const superSawDetuneFallback = ctx.createConstantSource();
+        superSawDetuneFallback.offset.value = params.superSawDetune ?? CV_MAX_VOLTS / 2;
+        superSawDetuneFallback.start();
+        const superSawDetuneFallbackGate = ctx.createGain();
+        superSawDetuneFallbackGate.gain.value = 1;
+        const superSawDetuneInput = ctx.createGain();
+        superSawDetuneFallback.connect(superSawDetuneFallbackGate);
+        superSawDetuneFallbackGate.connect(superSawDetuneInput);
+        const superSawDetuneScales = SUPER_SAW_CENTS.map((cents, index) => {
+          const scale = ctx.createGain();
+          scale.gain.value = cents / CV_MAX_VOLTS;
+          superSawDetuneInput.connect(scale);
+          scale.connect(sideOscs[index].detune);
+          return scale;
+        });
+
+        const superSawMixFallback = ctx.createConstantSource();
+        superSawMixFallback.offset.value = params.superSawMix ?? CV_MAX_VOLTS / 2;
+        superSawMixFallback.start();
+        const superSawMixFallbackGate = ctx.createGain();
+        superSawMixFallbackGate.gain.value = 1;
+        const superSawMixInput = ctx.createGain();
+        const superSawMixNorm = ctx.createGain();
+        superSawMixNorm.gain.value = 1 / CV_MAX_VOLTS;
+        superSawMixFallback.connect(superSawMixFallbackGate);
+        superSawMixFallbackGate.connect(superSawMixInput);
+        superSawMixInput.connect(superSawMixNorm);
+        const centerCurve = new Float32Array(1024);
+        const sideCurve = new Float32Array(1024);
+        for (let i = 0; i < centerCurve.length; i += 1) {
+          const m = clampRange(-1 + (2 * i) / (centerCurve.length - 1), 0, 1);
+          const weights = superSawWeights(m * CV_MAX_VOLTS);
+          centerCurve[i] = weights.center;
+          sideCurve[i] = weights.side;
+        }
+        const superSawCenterShaper = ctx.createWaveShaper();
+        const superSawSideShaper = ctx.createWaveShaper();
+        superSawCenterShaper.curve = centerCurve;
+        superSawSideShaper.curve = sideCurve;
+        superSawMixNorm.connect(superSawCenterShaper);
+        superSawMixNorm.connect(superSawSideShaper);
+        superSawCenterGain.gain.value = 0;
+        superSawSideGains.forEach((gain) => { gain.gain.value = 0; });
+        superSawCenterShaper.connect(superSawCenterGain.gain);
+        superSawSideGains.forEach((gain) => superSawSideShaper.connect(gain.gain));
 
         const outGain = ctx.createGain();
         outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
@@ -1384,6 +1510,7 @@ export class AudioEngine {
         pitchWaveShaper.curve = buildPitchCvCurve();
         pitchShaperInput.connect(pitchWaveShaper);
         pitchWaveShaper.connect(osc.frequency);
+        sideOscs.forEach((side) => pitchWaveShaper.connect(side.frequency));
 
         // "fmIn" (audio-rate modulator input) + "fmIndex" (0-10V depth CV):
         // fmInScale normalizes the incoming +-AUDIO_PEAK_VOLTS waveform to
@@ -1397,6 +1524,7 @@ export class AudioEngine {
         fmDepthGain.gain.value = ((params.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
         fmInScale.connect(fmDepthGain);
         fmDepthGain.connect(osc.frequency);
+        sideOscs.forEach((side) => fmDepthGain.connect(side.frequency));
 
         const fmIndexCv = this._createCvGainChain(ctx, "linear");
         const fmIndexCvScale = ctx.createGain();
@@ -1408,9 +1536,10 @@ export class AudioEngine {
         feedbackDelay.delayTime.value = 1 / ctx.sampleRate;
         const feedbackGain = ctx.createGain();
         feedbackGain.gain.value = ((params.feedback ?? 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION;
-        osc.connect(feedbackDelay);
+        periodicSum.connect(feedbackDelay);
         feedbackDelay.connect(feedbackGain);
         feedbackGain.connect(osc.frequency);
+        sideOscs.forEach((side) => feedbackGain.connect(side.frequency));
         const feedbackCv = this._createCvGainChain(ctx, "linear");
         const feedbackCvScale = ctx.createGain();
         feedbackCvScale.gain.value = SELF_FEEDBACK_MAX_HZ_DEVIATION;
@@ -1418,23 +1547,43 @@ export class AudioEngine {
         feedbackCvScale.connect(feedbackGain.gain);
 
         osc.start();
+        sideOscs.forEach((side) => side.start());
         noiseSource.start();
         pinkNoiseSource.start();
         if (waveType === "noise") {
           noiseSource.connect(ampGain);
         } else if (waveType === "pink-noise") {
           pinkNoiseSource.connect(ampGain);
-        } else {
-          osc.connect(ampGain);
         }
 
         return {
           type,
           osc,
+          sideOscs,
           noiseSource,
           pinkNoiseSource,
           ampGain,
           ampCv,
+          periodicSum,
+          normalCarrierGain,
+          superSawBus,
+          superSawEnable,
+          superSawCenterGain,
+          superSawSideGains,
+          superSawDetuneFallback,
+          superSawDetuneFallbackGate,
+          superSawDetuneInput,
+          superSawDetuneScales,
+          superSawDetune: params.superSawDetune ?? CV_MAX_VOLTS / 2,
+          superSawDetuneCvActive: false,
+          superSawMixFallback,
+          superSawMixFallbackGate,
+          superSawMixInput,
+          superSawMixNorm,
+          superSawCenterShaper,
+          superSawSideShaper,
+          superSawMix: params.superSawMix ?? CV_MAX_VOLTS / 2,
+          superSawMixCvActive: false,
           waveType,
           outGain,
           gainCv,
@@ -1717,6 +1866,19 @@ export class AudioEngine {
         gain2.connect(output);
         return { type, gain1, gain2, output };
       }
+      case "output-switch": {
+        // Inverted topology from "switch" above: one shared input fans out
+        // to two independently-gated outputs instead of two inputs summing
+        // into one output.
+        const input = ctx.createGain();
+        const gain1 = ctx.createGain();
+        const gain2 = ctx.createGain();
+        gain1.gain.value = params.selectOut2 ? 0 : 1;
+        gain2.gain.value = params.selectOut2 ? 1 : 0;
+        input.connect(gain1);
+        input.connect(gain2);
+        return { type, input, gain1, gain2 };
+      }
       case "audio-out":
       case "usb-out":
       case "es8311-out":
@@ -1843,16 +2005,23 @@ export class AudioEngine {
       }
       case "filter":
       case "curtis-filter": {
+        const filterInput = ctx.createGain();
         const filterNode = ctx.createBiquadFilter();
         const isCurtis = type === "curtis-filter";
         const filterNode2 = isCurtis ? ctx.createBiquadFilter() : null;
-        const filterOutput = isCurtis ? ctx.createGain() : filterNode;
+        const filteredOutput = isCurtis ? ctx.createGain() : filterNode;
+        const filterOutput = ctx.createGain();
+        const dryGain = ctx.createGain();
+        const wetGain = ctx.createGain();
         const modeOut1 = isCurtis ? ctx.createGain() : null;
         const modeOut2 = isCurtis ? ctx.createGain() : null;
-        const initialFilterType = isCurtis
+        const initialFilterType = params.bypass === true ? "none" : (isCurtis
           ? (params.filterType || "lp24")
-          : (params.filterType || "lowpass");
-        filterNode.type = isCurtis ? curtisFilterToBiquad(initialFilterType) : initialFilterType;
+          : (params.filterType || "lowpass"));
+        filterNode.type = isCurtis ? curtisFilterToBiquad(initialFilterType) : (initialFilterType === "none" ? "lowpass" : initialFilterType);
+        filterInput.connect(filterNode);
+        filterInput.connect(dryGain);
+        dryGain.connect(filterOutput);
         if (isCurtis) {
           filterNode2.type = "lowpass";
           filterNode.connect(filterNode2);
@@ -1860,19 +2029,28 @@ export class AudioEngine {
           modeOut2.gain.value = initialFilterType === "lp24" ? 1 : 0;
           filterNode.connect(modeOut1);
           filterNode2.connect(modeOut2);
-          modeOut1.connect(filterOutput);
-          modeOut2.connect(filterOutput);
+          modeOut1.connect(filteredOutput);
+          modeOut2.connect(filteredOutput);
         }
+        filteredOutput.connect(wetGain);
+        wetGain.connect(filterOutput);
+        dryGain.gain.value = initialFilterType === "none" ? 1 : 0;
+        wetGain.gain.value = initialFilterType === "none" ? 0 : 1;
         
         
         
         const entry = {
           type,
+          filterInput,
           filterNode,
           filterNode2,
+          filteredOutput,
           filterOutput,
+          dryGain,
+          wetGain,
           modeOut1,
           modeOut2,
+          filterType: initialFilterType,
           cutoff: params.cutoff ?? 5,
           cutoffMinHz: params.cutoffMinHz ?? 20,
           cutoffMaxHz: params.cutoffMaxHz ?? 20000,
@@ -2045,6 +2223,23 @@ export class AudioEngine {
           selected,
           softFadeMs: Math.max(0, Math.min(100, Number(params.softFadeMs ?? 5))),
         };
+      }
+      case "output-multiplexer": {
+        // Inverted topology from "multiplexer" above: one shared input fans
+        // out to 16 pre-created output gains, only the selected one gated to
+        // 1 - no fade (see NodeState.h's OutputMultiplexerState comment,
+        // switching is instant by design).
+        const input = ctx.createGain();
+        input.gain.value = 1;
+        const outputGains = new Map();
+        const selected = Math.max(0, Math.min(15, Math.round(params.select ?? 0)));
+        for (let i = 1; i <= 16; i += 1) {
+          const g = ctx.createGain();
+          g.gain.value = i - 1 === selected ? 1 : 0;
+          input.connect(g);
+          outputGains.set(`out${i}`, g);
+        }
+        return { type, input, outputGains, selected };
       }
       case "multiplier": {
         
@@ -3001,6 +3196,7 @@ export class AudioEngine {
         entry.osc.stop();
         entry.osc.disconnect();
       }
+      if (entry.sideOscs) entry.sideOscs.forEach((osc) => { osc.stop(); osc.disconnect(); });
       if (entry.noiseSource) {
         entry.noiseSource.stop();
         entry.noiseSource.disconnect();
@@ -3029,7 +3225,11 @@ export class AudioEngine {
       if (entry.gainNode) entry.gainNode.disconnect();
       if (entry.filterNode) entry.filterNode.disconnect();
       if (entry.filterNode2) entry.filterNode2.disconnect();
+      if (entry.filterInput) entry.filterInput.disconnect();
+      if (entry.filteredOutput && entry.filteredOutput !== entry.filterNode) entry.filteredOutput.disconnect();
       if (entry.filterOutput && entry.filterOutput !== entry.filterNode) entry.filterOutput.disconnect();
+      if (entry.dryGain) entry.dryGain.disconnect();
+      if (entry.wetGain) entry.wetGain.disconnect();
       if (entry.modeOut1) entry.modeOut1.disconnect();
       if (entry.modeOut2) entry.modeOut2.disconnect();
       if (entry.inputMap) entry.inputMap.forEach((g) => g.disconnect());
@@ -3110,6 +3310,19 @@ export class AudioEngine {
       if (entry.feedbackDelay) entry.feedbackDelay.disconnect();
       if (entry.feedbackGain) entry.feedbackGain.disconnect();
       if (entry.feedbackCvScale) entry.feedbackCvScale.disconnect();
+      ["periodicSum", "normalCarrierGain", "superSawBus", "superSawEnable", "superSawCenterGain",
+        "superSawDetuneFallbackGate", "superSawDetuneInput", "superSawMixFallbackGate",
+        "superSawMixInput", "superSawMixNorm", "superSawCenterShaper", "superSawSideShaper"].forEach((key) => {
+        if (entry[key]) entry[key].disconnect();
+      });
+      if (entry.superSawSideGains) entry.superSawSideGains.forEach((gain) => gain.disconnect());
+      if (entry.superSawDetuneScales) entry.superSawDetuneScales.forEach((gain) => gain.disconnect());
+      ["superSawDetuneFallback", "superSawMixFallback"].forEach((key) => {
+        if (entry[key]) {
+          entry[key].stop();
+          entry[key].disconnect();
+        }
+      });
       if (entry.oscs) entry.oscs.forEach((o) => { o.stop(); o.disconnect(); });
       if (entry.footageScale) entry.footageScale.forEach((g) => g.disconnect());
       if (entry.drawbarGains) entry.drawbarGains.forEach((g) => g.disconnect());
@@ -3191,6 +3404,8 @@ export class AudioEngine {
       if (entry.dry) entry.dry.disconnect();
       if (entry.wet) entry.wet.disconnect();
       if (entry.output) entry.output.disconnect();
+      if (entry.input) entry.input.disconnect();
+      if (entry.outputGains) entry.outputGains.forEach((g) => g.disconnect());
       if (
         (entry.type === "audio-output-link" || entry.type === "audio-input-link") &&
         entry.nodes
@@ -3372,7 +3587,10 @@ export class AudioEngine {
           
           
           
-          if (!entry.pitchCvActive && !entry.tuneCvActive) applyRamp(entry.osc.frequency);
+          if (!entry.pitchCvActive && !entry.tuneCvActive) {
+            applyRamp(entry.osc.frequency);
+            entry.sideOscs?.forEach((side) => applyRamp(side.frequency));
+          }
         } else if (paramName === "tuneVolts") {
           
           
@@ -3381,10 +3599,16 @@ export class AudioEngine {
           
           applyRampValue(entry.tuneRestConst.offset, value);
         } else if (paramName === "waveType") {
-          if (isNoiseWave(value)) {
-            if (!isNoiseWave(entry.waveType)) {
-              entry.osc.disconnect(entry.ampGain);
-            }
+          if (entry.type === "fm-oscillator") {
+            if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
+            if (entry.waveType === "pink-noise") entry.pinkNoiseSource.disconnect(entry.ampGain);
+            entry.normalCarrierGain.gain.value = value === "supersaw" || isNoiseWave(value) ? 0 : 1;
+            entry.superSawEnable.gain.value = value === "supersaw" ? 1 : 0;
+            if (value === "noise") entry.noiseSource.connect(entry.ampGain);
+            else if (value === "pink-noise") entry.pinkNoiseSource.connect(entry.ampGain);
+            else entry.osc.type = value === "supersaw" ? "sawtooth" : value;
+          } else if (isNoiseWave(value)) {
+            if (!isNoiseWave(entry.waveType)) entry.osc.disconnect(entry.ampGain);
             if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
             if (entry.waveType === "pink-noise") entry.pinkNoiseSource.disconnect(entry.ampGain);
             if (value === "noise") entry.noiseSource.connect(entry.ampGain);
@@ -3432,6 +3656,12 @@ export class AudioEngine {
           // authoritative" precedent already documented for FM_INDEX_MAX_HZ_
           // DEVIATION/SELF_FEEDBACK_MAX_HZ_DEVIATION above.
           entry.dutyCycle = value;
+        } else if (paramName === "superSawDetune") {
+          entry.superSawDetune = value;
+          if (!entry.superSawDetuneCvActive) applyRampValue(entry.superSawDetuneFallback.offset, value);
+        } else if (paramName === "superSawMix") {
+          entry.superSawMix = value;
+          if (!entry.superSawMixCvActive) applyRampValue(entry.superSawMixFallback.offset, value);
         }
         break;
       case "hammond": {
@@ -3563,12 +3793,15 @@ export class AudioEngine {
           entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
           recomputeResonance();
         } else if (paramName === "filterType") {
+          entry.filterType = value;
+          applyRampValue(entry.dryGain.gain, value === "none" ? 1 : 0);
+          applyRampValue(entry.wetGain.gain, value === "none" ? 0 : 1);
           if (entry.type === "curtis-filter") {
             entry.filterNode.type = curtisFilterToBiquad(value);
             entry.modeOut1.gain.value = value === "lp24" ? 0 : 1;
             entry.modeOut2.gain.value = value === "lp24" ? 1 : 0;
           } else {
-            entry.filterNode.type = value;
+            entry.filterNode.type = value === "none" ? "lowpass" : value;
           }
         }
         break;
@@ -3661,6 +3894,16 @@ export class AudioEngine {
           }
         } else if (paramName === "softFadeMs") {
           entry.softFadeMs = Math.max(0, Math.min(100, Number(value) || 0));
+        }
+        break;
+      case "output-multiplexer":
+        if (paramName === "select") {
+          const selected = Math.max(0, Math.min(15, Math.round(value)));
+          entry.selected = selected;
+          for (let i = 1; i <= 16; i += 1) {
+            const g = entry.outputGains.get(`out${i}`);
+            if (g) applyLinearRampValue(g.gain, i - 1 === selected ? 1 : 0, 0);
+          }
         }
         break;
       case "adsr":
@@ -3776,6 +4019,12 @@ export class AudioEngine {
       }
       case "switch":
         if (paramName === "selectIn2") {
+          applyRampValue(entry.gain1.gain, value ? 0 : 1);
+          applyRampValue(entry.gain2.gain, value ? 1 : 0);
+        }
+        break;
+      case "output-switch":
+        if (paramName === "selectOut2") {
           applyRampValue(entry.gain1.gain, value ? 0 : 1);
           applyRampValue(entry.gain2.gain, value ? 1 : 0);
         }
@@ -4035,6 +4284,10 @@ export class AudioEngine {
     if (entry.type === "hammond" && port === "value") return entry.outGain;
     if (entry.type === "lfo" && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
+    if (entry.type === "output-switch") {
+      if (port === "out1") return entry.gain1;
+      if (port === "out2") return entry.gain2;
+    }
     
     
     
@@ -4058,6 +4311,7 @@ export class AudioEngine {
     if (entry.type.startsWith("esp-") && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
     if (entry.type === "mixer" && port === "out") return entry.sum;
     if (entry.type === "multiplexer" && port === "value") return entry.output;
+    if (entry.type === "output-multiplexer") return entry.outputGains.get(port) || null;
     if (entry.type === "multiplier" && port === "value") return entry.output;
     if (entry.type === "adder" && port === "value") return entry.sum;
     if (entry.type === "divide" && port === "value") return entry.output;
@@ -4106,7 +4360,7 @@ export class AudioEngine {
     
     
     if (entry.type === "gain" && port === "amount") return entry.prescale;
-    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "in") return entry.filterNode;
+    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "in") return entry.filterInput;
     
     
     
@@ -4122,6 +4376,8 @@ export class AudioEngine {
       if (port === "in1") return entry.gain1;
       if (port === "in2") return entry.gain2;
     }
+    if (entry.type === "output-switch" && port === "in") return entry.input;
+    if (entry.type === "output-multiplexer" && port === "in") return entry.input;
     if (entry.type === "oscillator") {
       
       
@@ -4148,6 +4404,8 @@ export class AudioEngine {
       if (port === "fmIn") return entry.fmInScale;
       if (port === "fmIndex") return entry.fmIndexCv.prescale;
       if (port === "feedback") return entry.feedbackCv.prescale;
+      if (port === "superSawDetune") return entry.superSawDetuneInput;
+      if (port === "superSawMix") return entry.superSawMixInput;
     }
     if (entry.type === "hammond") {
       if (port === "amplitude") return entry.ampCv.prescale;
@@ -4365,6 +4623,22 @@ export class AudioEngine {
       }
       return;
     }
+    if (toEntry && toEntry.type === "fm-oscillator" &&
+        (toPort === "superSawDetune" || toPort === "superSawMix")) {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        const input = toPort === "superSawDetune" ? toEntry.superSawDetuneInput : toEntry.superSawMixInput;
+        const gate = toPort === "superSawDetune" ? toEntry.superSawDetuneFallbackGate : toEntry.superSawMixFallbackGate;
+        try {
+          from.connect(input);
+          gate.gain.value = 0;
+          if (toPort === "superSawDetune") toEntry.superSawDetuneCvActive = true;
+          else toEntry.superSawMixCvActive = true;
+        } catch (err) {
+        }
+      }
+      return;
+    }
     if (toEntry && toEntry.type === "hammond" && /^drawbar[1-9]$/.test(toPort)) {
       const k = Number(toPort.slice(7)) - 1;
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
@@ -4415,7 +4689,10 @@ export class AudioEngine {
           // sole pitch source instead of adding on top of a stale direct-set
           // value (see the pitchRestGate comment in _buildNode).
           if (toEntry.oscs) toEntry.oscs.forEach((o) => { o.frequency.value = 0; });
-          else toEntry.osc.frequency.value = 0;
+          else {
+            toEntry.osc.frequency.value = 0;
+            toEntry.sideOscs?.forEach((o) => { o.frequency.value = 0; });
+          }
         } catch (err) {
 
         }
@@ -4585,6 +4862,22 @@ export class AudioEngine {
           toEntry.fmDepthGain.gain.value = ((toEntry.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
         } catch (err) {
 
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "fm-oscillator" &&
+        (toPort === "superSawDetune" || toPort === "superSawMix")) {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        const input = toPort === "superSawDetune" ? toEntry.superSawDetuneInput : toEntry.superSawMixInput;
+        const gate = toPort === "superSawDetune" ? toEntry.superSawDetuneFallbackGate : toEntry.superSawMixFallbackGate;
+        try {
+          from.disconnect(input);
+          gate.gain.value = 1;
+          if (toPort === "superSawDetune") toEntry.superSawDetuneCvActive = false;
+          else toEntry.superSawMixCvActive = false;
+        } catch (err) {
         }
       }
       return;

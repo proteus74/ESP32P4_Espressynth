@@ -5,53 +5,26 @@
 #include <cstring>
 
 #include "../CvConventions.h"
+#include "../MasterClock.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
 
-// Free-running BPM pulse generator - mirrors main.js's Clock widget
-// (fireClockPulse/restartClockTimer), but sample-accurate instead of per-JS
-// setInterval. cvVolts (0-10V, "tempo" input) scales linearly between
-// minBpm/maxBpm, phaseSec is the phase accumulator (0..period duration)
-// instead of a FreeRTOS timer - hence does not drift and needs no periodic
-// task switch. ClockState (value member) stays in NodeState.h.
+// Pulse output driven by the single device-wide synth::masterClock()
+// (MasterClock.h) - mirrors main.js's Clock widget (fireClockPulse/
+// restartClockTimer), but sample-accurate instead of per-JS setInterval.
+// Each instance only owns its own pulse width (pulseMs) and phase
+// accumulator (ClockState in NodeState.h); tempo comes from the shared
+// master clock, so every Clock node in the graph stays in sync with every
+// other one.
 namespace nodes::clock
 {
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    using namespace noderender;
-    // "tempo" (Port-Index 0) is a real, control-only audio-rate port (see
-    // PortTables.h), read once per block (a tempo jump produces no
-    // amplitude click, an immediately continuing pulse phase accumulator is
-    // enough).
     auto &s = inst.clock;
-    if ((inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0)
-    {
-        s.cvVolts = portSample(inst, 0, 0);
-    }
-    // "sync" (Port-Index 1) - same block-rate control-only reasoning as
-    // "tempo" above, and the same dual ControlRoute-or-DSP-edge "fed" check
-    // Lfo's own "sync" input uses (LfoNode.h). A rising edge restarts the
-    // phase accumulator from 0, so the very next sample begins a fresh
-    // pulse - resyncs the beat to an external trigger instead of letting it
-    // drift relative to it.
-    const bool syncFed = controlPortConnected(inst, 1) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
-    const float syncVal = syncFed ? portSample(inst, 1, 0) : 0.0f;
-    const bool syncAbove = syncVal >= cv::kGateThresholdVolts;
-    if (syncFed && syncAbove && !s.syncPrev)
-    {
-        s.phaseSec = 0.0f;
-    }
-    if (syncFed)
-    {
-        s.syncPrev = syncAbove;
-    }
-    float bpm = s.minBpm + (s.cvVolts / cv::kMaxVolts) * (s.maxBpm - s.minBpm);
-    if (s.roundBpm)
-    {
-        bpm = roundf(bpm);
-    }
+    const auto &mc = synth::masterClock();
+    float bpm = mc.roundBpm ? roundf(mc.bpm) : mc.bpm;
     const float periodSec = bpm > 0.0f ? 60.0f / bpm : 0.0f;
     const float pulseSec = s.pulseMs * 0.001f;
     const float dtSec = 1.0f / static_cast<float>(synth::kSampleRate);
@@ -76,11 +49,7 @@ inline void render(NodeInstance &inst, size_t frames)
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.clock.cvVolts = p.clockCvVolts;
-    inst.clock.minBpm = p.clockMinBpm;
-    inst.clock.maxBpm = p.clockMaxBpm;
     inst.clock.pulseMs = p.clockPulseMs;
-    inst.clock.roundBpm = p.clockRoundBpm;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -89,29 +58,9 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     {
         return false;
     }
-    if (strcmp(name, "cvVolts") == 0)
-    {
-        inst.clock.cvVolts = value;
-        return true;
-    }
-    if (strcmp(name, "minBpm") == 0)
-    {
-        inst.clock.minBpm = value;
-        return true;
-    }
-    if (strcmp(name, "maxBpm") == 0)
-    {
-        inst.clock.maxBpm = value;
-        return true;
-    }
     if (strcmp(name, "pulseMs") == 0)
     {
         inst.clock.pulseMs = value;
-        return true;
-    }
-    if (strcmp(name, "roundBpm") == 0)
-    {
-        inst.clock.roundBpm = value >= 0.5f;
         return true;
     }
     return false;
@@ -119,11 +68,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.clockCvVolts = presetparser::getFloat(p, "cvVolts", 0.0f);
-    out.clockMinBpm = presetparser::getFloat(p, "minBpm", 0.0f);
-    out.clockMaxBpm = presetparser::getFloat(p, "maxBpm", 240.0f);
     out.clockPulseMs = presetparser::getFloat(p, "pulseMs", 100.0f);
-    out.clockRoundBpm = presetparser::getBool(p, "roundBpm", false);
 }
 
 } // namespace nodes::clock

@@ -22,6 +22,7 @@
 #include "Graph.h"
 #include "GraphBuilder.h"
 #include "LiveParamMsg.h"
+#include "MasterClock.h"
 #include "MemoryDiagnostics.h"
 #include "PresetChangedMsg.h"
 #include "PresetFill.h"
@@ -146,6 +147,7 @@ public:
         uint32_t fmGainConverged = 0;
         uint32_t fmModActive = 0;
         uint32_t fmFeedbackActive = 0;
+        uint32_t fmSuperSawActive = 0;
         uint32_t dxHolding = 0;
         uint32_t dxRamping = 0;
         uint32_t dxBoundary = 0;
@@ -176,6 +178,7 @@ public:
         s.fmGainConverged = fmGainConverged_.load(std::memory_order_relaxed);
         s.fmModActive = fmModActive_.load(std::memory_order_relaxed);
         s.fmFeedbackActive = fmFeedbackActive_.load(std::memory_order_relaxed);
+        s.fmSuperSawActive = fmSuperSawActive_.load(std::memory_order_relaxed);
         s.dxHolding = dxHolding_.load(std::memory_order_relaxed);
         s.dxRamping = dxRamping_.load(std::memory_order_relaxed);
         s.dxBoundary = dxBoundary_.load(std::memory_order_relaxed);
@@ -607,6 +610,7 @@ private:
     std::atomic<uint32_t> fmGainConverged_{0};
     std::atomic<uint32_t> fmModActive_{0};
     std::atomic<uint32_t> fmFeedbackActive_{0};
+    std::atomic<uint32_t> fmSuperSawActive_{0};
     std::atomic<uint32_t> dxHolding_{0};
     std::atomic<uint32_t> dxRamping_{0};
     std::atomic<uint32_t> dxBoundary_{0};
@@ -695,6 +699,21 @@ constexpr float kSynthEngineOutputFadeMs = 8.0f;
 constexpr size_t kSynthEngineOutputFadeSamples =
     static_cast<size_t>(synth::kSampleRate * kSynthEngineOutputFadeMs / 1000.0f);
 constexpr float kSynthEngineOutputFadeStep = 1.0f / static_cast<float>(kSynthEngineOutputFadeSamples);
+
+// Master Clock's own MIDI-CC-learn/mapping - same "runs natively on the ESP
+// regardless of whether a browser is even connected" reasoning as Knob's CC
+// branch in Graph::handleMidiEvent, but engine-global (not a graph widget) so
+// it keeps working across a preset switch/rebuild. Only updates the live bpm
+// in RAM - see MasterClock.h's saveMasterClockToFs() comment for why this
+// path never touches flash.
+inline void handleMasterClockMidi(const UsbMidiEvent &event)
+{
+    if (event.codeIndex != 0xB) return; // Control Change
+    auto &mc = synth::masterClock();
+    if (mc.midiCc < 0 || static_cast<uint8_t>(mc.midiCc) != event.data1) return;
+    if (mc.midiChannel < 0 || static_cast<uint8_t>(mc.midiChannel) != (event.status & 0x0F)) return;
+    mc.bpm = (static_cast<float>(event.data2) / 127.0f) * mc.maxBpm;
+}
 
 // Parse each queued frame once, then route the resolved fields either to the
 // engine's hardware sinks or to the live graph.
@@ -880,6 +899,9 @@ inline bool SynthEngine::onMidiEvent(const UsbMidiEvent &event)
 
 inline bool SynthEngine::applyOutputParam(const char *widgetId, cJSON *params)
 {
+    // "@masterClock" is intercepted earlier, in synth_web_api.hpp's
+    // websocket_handler, entirely off this (real-time render) task - see
+    // that branch's comment for why.
     size_t idx;
     if (strcmp(widgetId, "@out:usb") == 0) idx = 0;
     else if (strcmp(widgetId, "@out:es8311") == 0) idx = 1;
@@ -1139,6 +1161,7 @@ inline void SynthEngine::taskLoop()
             while (midiEventQueue_ != nullptr && xQueueReceive(midiEventQueue_, &event, 0) == pdTRUE)
             {
                 liveGraph_->handleMidiEvent(event);
+                handleMasterClockMidi(event);
                 publishMidiControlActivity(event);
                 ++midiEventCount;
             }
@@ -1217,6 +1240,7 @@ inline void SynthEngine::taskLoop()
         fmGainConverged_.store(blockStats.fmGainConverged, std::memory_order_relaxed);
         fmModActive_.store(blockStats.fmModActive, std::memory_order_relaxed);
         fmFeedbackActive_.store(blockStats.fmFeedbackActive, std::memory_order_relaxed);
+        fmSuperSawActive_.store(blockStats.fmSuperSawActive, std::memory_order_relaxed);
         dxHolding_.store(blockStats.dxHolding, std::memory_order_relaxed);
         dxRamping_.store(blockStats.dxRamping, std::memory_order_relaxed);
         dxBoundary_.store(blockStats.dxBoundary, std::memory_order_relaxed);

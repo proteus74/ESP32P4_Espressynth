@@ -44,6 +44,30 @@ inline int indexedInPort(const char *portName, int maxInputs = 8)
     return (n >= 1 && n <= maxInputs) ? (n - 1) : -1;
 }
 
+// Matches "out1".."outN" (1-based in the name, 0-based return), else -1 -
+// output-side counterpart of indexedInPort() above, used by OutputSwitch/
+// OutputMultiplexer (nodes/OutputSwitchNode.h, nodes/OutputMultiplexerNode.h).
+inline int indexedOutPort(const char *portName, int maxOutputs)
+{
+    if (portName == nullptr || strncmp(portName, "out", 3) != 0)
+    {
+        return -1;
+    }
+    const char *numPart = portName + 3;
+    if (numPart[0] < '1' || numPart[0] > '9')
+    {
+        return -1;
+    }
+    int n = numPart[0] - '0';
+    if (numPart[1] != '\0')
+    {
+        if (numPart[1] < '0' || numPart[1] > '9' || numPart[2] != '\0')
+            return -1;
+        n = n * 10 + (numPart[1] - '0');
+    }
+    return (n >= 1 && n <= maxOutputs) ? (n - 1) : -1;
+}
+
 // Matches "gain1".."gain8" and returns a 0-based channel index.
 inline int indexedGainPort(const char *portName)
 {
@@ -118,6 +142,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         // other waveform.
         if (is(portName, "dutyCycle"))
             return 8;
+        if (is(portName, "superSawDetune"))
+            return 9;
+        if (is(portName, "superSawMix"))
+            return 10;
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -143,7 +171,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         }
         return -1;
     case NodeType::Lfo:
-        if (is(portName, "sync"))
+        if (is(portName, "reset"))
             return 0;
         if (is(portName, "oneShot"))
             return 1;
@@ -171,6 +199,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "in2"))
             return 1;
         return -1;
+    case NodeType::OutputSwitch:
+        // Mirror of Switch: one audio input routed to whichever of "out1"/
+        // "out2" is selected - see nodes/OutputSwitchNode.h.
+        return is(portName, "in") ? 0 : -1;
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         // "cutoff"/"resonance" are real, but control-only audio-rate ports
@@ -179,9 +211,8 @@ inline int audioInIndex(NodeType type, const char *portName)
         // under a genuine DSP edge (real frequency modulation possible).
         if (is(portName, "in"))
             return 0;
-        // "bypass" - same pattern as Reverb's "bypass" (control-only, see
-        // isControlOnlyInput), see FilterState::bypass.
-        if (is(portName, "bypass"))
+        // "filterType" is a control-only 0-10V discrete selector.
+        if (is(portName, "filterType"))
             return 1;
         if (is(portName, "cutoff"))
             return 2;
@@ -235,6 +266,15 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "select"))
             return 16;
         return indexedInPort(portName, 16);
+    case NodeType::OutputMultiplexer:
+        // Mirror of Multiplexer: one audio input ("in", port 0) routed to
+        // whichever of "out1".."out16" is selected via "select" (port 1,
+        // control-only) - see nodes/OutputMultiplexerNode.h.
+        if (is(portName, "in"))
+            return 0;
+        if (is(portName, "select"))
+            return 1;
+        return -1;
     case NodeType::Divide:
     {
         // Fixed 2 inputs (in1/in2) - unlike Mixer/Multiplier/Adder's
@@ -383,18 +423,6 @@ inline int audioInIndex(NodeType type, const char *portName)
         // entry in isControlOnlyInput needed, see NodeInstance.cpp.
         if (is(portName, "gain")) return 5;
         return -1;
-    case NodeType::Clock:
-        // "tempo" is a real, but control-only audio-rate port (see
-        // isControlOnlyInput) - same pattern as Filter's cutoff/resonance.
-        if (is(portName, "tempo"))
-            return 0;
-        // "sync" (index 1) - a rising edge resets the phase accumulator to
-        // 0 (see ClockNode.h's render()), same pattern as Lfo's own "sync"
-        // port (LfoNode.h) - restarts the beat exactly on an external
-        // trigger instead of drifting relative to it.
-        if (is(portName, "sync"))
-            return 1;
-        return -1;
     case NodeType::Adsr:
         // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate
         // ports (see isControlOnlyInput). "gate" (index 4) is ALSO a real,
@@ -534,6 +562,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::Switch:
         return is(portName, "value") ? 0 : -1;
+    case NodeType::OutputSwitch:
+        return indexedOutPort(portName, 2);
     case NodeType::Adsr:
         return is(portName, "out") ? 0 : -1;
     case NodeType::DxEnvelope:
@@ -558,6 +588,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return is(portName, "out") ? 0 : -1;
     case NodeType::Multiplexer:
         return is(portName, "value") ? 0 : -1;
+    case NodeType::OutputMultiplexer:
+        return indexedOutPort(portName, 16); // NodeState.h's kOutputMultiplexerMaxOutputs
     case NodeType::Multiplier:
     case NodeType::Adder:
     case NodeType::Divide:
@@ -654,18 +686,20 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Oscillator:
         return 6; // existing five inputs + internal-feedback depth (CV)
     case NodeType::FmOscillator:
-        return 9; // Oscillator's first five + "fmIn" + "fmIndex" + feedback + "dutyCycle"
+        return 11; // existing nine + SuperSaw detune/mix
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 4; // "sync" + "oneShot" + "global" + "zeroPoint" (CV)
+        return 4; // "reset" + "oneShot" + "global" + "zeroPoint" (CV)
     case NodeType::Detune:
         return 1;
     case NodeType::Switch:
         return 2;
+    case NodeType::OutputSwitch:
+        return 1; // "in"
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return 5; // "in" + "bypass" + "cutoff" + "resonance" + "global" (CV)
+        return 5; // "in" + "filterType" + "cutoff" + "resonance" + "global" (CV)
     case NodeType::Gain:
         return 3; // "in" + "amount" (CV) + "global" (CV)
     case NodeType::EspEq:
@@ -683,6 +717,8 @@ inline int audioInPortCount(NodeType type)
         return 8;
     case NodeType::Multiplexer:
         return 17; // "in1".."in16" + "select" (CV)
+    case NodeType::OutputMultiplexer:
+        return 2; // "in" + "select" (CV)
     case NodeType::Divide:
         return 2;
     case NodeType::FrequencyDivider:
@@ -733,8 +769,6 @@ inline int audioInPortCount(NodeType type)
         return 3;
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
-    case NodeType::Clock:
-        return 2; // "tempo"+"sync" (CV)
     case NodeType::Adsr:
         return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
@@ -824,7 +858,7 @@ inline bool isGlobalOnly(NodeType type)
 // efficiently as a per-sample-constant edge). Multiplier/Adder/Divide's
 // inputs (any index), Oscillator's "pitchCv"/"tune" (indices 1/2, NOT
 // "amplitude"/index 0 which stays genuinely audio-rate), Detune's "cv"
-// (index 0), and Lfo's "sync" (index 0) are control-only this way. Enforced
+// (index 0), and Lfo's "reset" (index 0) are control-only this way. Enforced
 // in GraphBuilder's connection resolution together with a source-type
 // allowlist (MidiIn/Lfo/Knob/Button/UpDownButton/Const/Multiplier/Adder/
 // Divide/Detune) - anything else silently fails to wire, exactly like an
@@ -844,10 +878,11 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5; // pitch/tune/waveform/feedback
     case NodeType::FmOscillator:
         // "pitchCv"(1)+"tune"(2)+"waveform"(3)+"fmIndex"(6)+"feedback"(7)+
-        // "dutyCycle"(8) - "amplitude"(0), "gain"(4) AND "fmIn"(5) stay
-        // genuinely audio-rate; "fmIn" being read per-sample is the entire
-        // point of this node.
-        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7 || portIdx == 8;
+        // "dutyCycle"(8)+SuperSaw detune/mix(9/10) - "amplitude"(0),
+        // "gain"(4) AND "fmIn"(5) stay genuinely audio-rate; "fmIn" being
+        // read per-sample is the entire point of this node.
+        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7 ||
+               portIdx == 8 || portIdx == 9 || portIdx == 10;
     case NodeType::Hammond:
         // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
         // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars
@@ -861,17 +896,17 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 2; // "global" - "amount" (index 1) stays real audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return portIdx >= 1; // "bypass"+"cutoff"+"resonance"+"global"
-    case NodeType::Clock:
-        return portIdx == 0 || portIdx == 1; // "tempo"+"sync" - same block-rate classification as Lfo's own "sync"
+        return portIdx >= 1; // "filterType"+"cutoff"+"resonance"+"global"
     case NodeType::Multiplexer:
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
+    case NodeType::OutputMultiplexer:
+        return portIdx == 1; // "select" - same reasoning as Multiplexer's own "select" (see nodes/OutputMultiplexerNode.h)
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel"/"gate"/"velocity" - all six
     case NodeType::DxEnvelope:
         return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:
-        return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "sync"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
+        return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "reset"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
     case NodeType::WavePlayer:
         return portIdx == 1 || portIdx == 2; // "note"+"gate" - "amplitude" (index 0) stays audio-rate
     case NodeType::SoundFontPlayer:

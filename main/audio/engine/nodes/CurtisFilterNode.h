@@ -26,6 +26,7 @@ using noderender::clampf;
 struct CurtisFilterState
 {
     CurtisFilterMode mode = CurtisFilterMode::LowPass24;
+    CurtisFilterMode renderedMode = CurtisFilterMode::None;
     float cutoffCv = 5.0f;
     float cutoffMinHz = 20.0f;
     float cutoffMaxHz = 20000.0f;
@@ -36,7 +37,6 @@ struct CurtisFilterState
     bool resonanceLog = true;
     uint8_t coeffStride = 4;
     bool global = false;
-    bool bypass = false;
     float cutoffLog2Ratio = 0.0f;
     float resonanceLog2Ratio = 0.0f;
     float stage[4] = {};
@@ -112,14 +112,14 @@ inline float asymmetricClip(float value)
     return cv::kAudioPeakVolts * dsp::tanhLookup(normalized * drive);
 }
 
-inline float feedbackFromQ(const CurtisFilterState &s, float q)
+inline float feedbackFromQ(const CurtisFilterState &s, float q, CurtisFilterMode mode)
 {
     const float qSpan = s.resonanceMaxQ - s.resonanceMinQ;
     const float normalized = qSpan > 0.0001f
                                  ? (q - s.resonanceMinQ) / qSpan
                                  : 0.0f;
     const float amount = clampf(normalized, 0.0f, 1.0f);
-    const bool fourPole = s.mode == CurtisFilterMode::LowPass24;
+    const bool fourPole = mode == CurtisFilterMode::LowPass24;
     // The two-pole modes reach oscillation with less loop gain than the
     // four-pole ladder. Keep both ranges musical and bounded below unity.
     return amount * (fourPole ? 0.985f : 0.94f);
@@ -130,10 +130,10 @@ inline int poleCount(CurtisFilterMode mode)
     return mode == CurtisFilterMode::LowPass24 ? 4 : 2;
 }
 
-inline void updateCoefficients(CurtisFilterState &s, float cutoffCv, float resonanceCv)
+inline void updateCoefficients(CurtisFilterState &s, float cutoffCv, float resonanceCv, CurtisFilterMode mode)
 {
     s.g = clampf(tptG(cutoffHz(s, cutoffCv)), 0.0001f, 0.9995f);
-    s.feedback = feedbackFromQ(s, resonanceQ(s, resonanceCv));
+    s.feedback = feedbackFromQ(s, resonanceQ(s, resonanceCv), mode);
     s.coeffsDirty = false;
 }
 
@@ -141,6 +141,8 @@ inline float outputForMode(CurtisFilterMode mode, float input, float stage1, flo
 {
     switch (mode)
     {
+    case CurtisFilterMode::None:
+        return input;
     case CurtisFilterMode::LowPass24:
         return stage4;
     case CurtisFilterMode::LowPass12:
@@ -152,24 +154,39 @@ inline float outputForMode(CurtisFilterMode mode, float input, float stage1, flo
     }
     return stage4;
 }
+
+inline CurtisFilterMode filterModeFromCv(float volts)
+{
+    int index = static_cast<int>(volts / (cv::kMaxVolts / 5.0f));
+    if (index < 0)
+        index = 0;
+    if (index > 4)
+        index = 4;
+    return static_cast<CurtisFilterMode>(index);
+}
 } // namespace
 
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     CurtisFilterState &s = *inst.curtisFilter;
-    // "bypass" (Port-Index 1, control-only) - same wired-CV-or-manual
-    // pattern as Reverb's bypass (see ReverbNode.h).
-    const bool bypass = (inst.controlConnectedPortMask & (1u << 1)) != 0
-                            ? inst.controlValue[1] >= cv::kGateThresholdVolts
-                            : s.bypass;
-    if (bypass)
+    const bool typeFed = controlPortConnected(inst, 1) ||
+                         (inst.audioConnectedPortMask & synth::portBit(1)) != 0;
+    const CurtisFilterMode mode = typeFed ? filterModeFromCv(portSample(inst, 1, 0)) : s.mode;
+    if (mode == CurtisFilterMode::None)
     {
+        s.renderedMode = CurtisFilterMode::None;
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = portSample(inst, 0, i);
         }
         return;
+    }
+    if (mode != s.renderedMode)
+    {
+        s.renderedMode = mode;
+        s.coeffsDirty = true;
+        s.audioCoeffsInitialized = false;
     }
     const bool globalPortFed = controlPortConnected(inst, 4) ||
                                (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
@@ -181,10 +198,10 @@ inline void render(NodeInstance &inst, size_t frames)
 
     if (!cutoffAudioFed && !resonanceAudioFed && s.coeffsDirty)
     {
-        updateCoefficients(s, s.cutoffCv, s.resonanceCv);
+        updateCoefficients(s, s.cutoffCv, s.resonanceCv, mode);
     }
 
-    const int poles = poleCount(s.mode);
+    const int poles = poleCount(mode);
     for (size_t i = 0; i < frames; ++i)
     {
         if (cutoffAudioFed || resonanceAudioFed)
@@ -195,7 +212,7 @@ inline void render(NodeInstance &inst, size_t frames)
                 const float resonance = resonanceAudioFed ? source.inPorts[3][i] : s.resonanceCv;
                 if (!s.audioCoeffsInitialized || cutoff != s.lastAudioCutoffCv || resonance != s.lastAudioResonanceCv)
                 {
-                    updateCoefficients(s, cutoff, resonance);
+                    updateCoefficients(s, cutoff, resonance, mode);
                     s.lastAudioCutoffCv = cutoff;
                     s.lastAudioResonanceCv = resonance;
                     s.audioCoeffsInitialized = true;
@@ -222,7 +239,7 @@ inline void render(NodeInstance &inst, size_t frames)
             const float stage3 = processStage(s, 2, stage2);
             stage4 = processStage(s, 3, stage3);
         }
-        const float output = outputForMode(s.mode, input, stage1, stage2, stage4);
+        const float output = outputForMode(mode, input, stage1, stage2, stage4);
         // tanhLookup is intrinsically bounded to +/-1, so asymmetricClip is
         // already guaranteed to remain inside the audio voltage domain.
         inst.outL[i] = asymmetricClip(output);
@@ -243,7 +260,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.resonanceLog = p.resonanceLog;
     s.coeffStride = p.coeffStride;
     s.global = p.filterGlobal;
-    s.bypass = p.filterBypass;
     s.refreshLog2Ratios();
     s.coeffsDirty = true;
 }
@@ -278,8 +294,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.coeffStride = static_cast<uint8_t>(clampf(value, 1.0f, 16.0f));
     else if (strcmp(name, "global") == 0)
         s.global = value >= 0.5f;
-    else if (strcmp(name, "bypass") == 0)
-        s.bypass = value >= 0.5f;
     else
         return false;
     s.refreshLog2Ratios();
@@ -295,7 +309,9 @@ inline void setMode(NodeInstance &inst, CurtisFilterMode mode)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.curtisFilterMode = curtisFilterModeFromString(presetparser::getString(p, "filterType", "lp24"));
+    out.curtisFilterMode = presetparser::getBool(p, "bypass", false)
+                               ? CurtisFilterMode::None
+                               : curtisFilterModeFromString(presetparser::getString(p, "filterType", "lp24"));
     out.cutoffCv = presetparser::getFloat(p, "cutoff", 5.0f);
     out.cutoffMinHz = presetparser::getFloat(p, "cutoffMinHz", 20.0f);
     out.cutoffMaxHz = presetparser::getFloat(p, "cutoffMaxHz", 20000.0f);
@@ -307,7 +323,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     const int stride = presetparser::getInt(p, "coeffStride", 4);
     out.coeffStride = static_cast<uint8_t>(stride < 1 ? 1 : (stride > 16 ? 16 : stride));
     out.filterGlobal = presetparser::getBool(p, "global", false);
-    out.filterBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::curtisfilter

@@ -152,13 +152,9 @@ inline void initPow2Lut()
 
 IRAM_ATTR inline float pow2Lookup(float exponent)
 {
-    float intPart = 0.0f;
-    float frac = modff(exponent, &intPart);
-    if (frac < 0.0f)
-    {
-        frac += 1.0f;
-        intPart -= 1.0f;
-    }
+    const float intPartFloat = floorf(exponent);
+    const int intPart = static_cast<int>(intPartFloat);
+    const float frac = exponent - intPartFloat;
     const float scaled = frac * static_cast<float>(synth::kPow2LutSize - 1);
     size_t i0 = static_cast<size_t>(scaled);
     if (i0 >= synth::kPow2LutSize - 1) // float rounding can push frac~1.0 up to the last index
@@ -167,7 +163,16 @@ IRAM_ATTR inline float pow2Lookup(float exponent)
     }
     const float lerpFrac = scaled - static_cast<float>(i0);
     const float pow2Frac = pow2LutTable[i0] + (pow2LutTable[i0 + 1] - pow2LutTable[i0]) * lerpFrac;
-    return ldexpf(pow2Frac, static_cast<int>(intPart));
+    // Build the exact normal IEEE-754 power-of-two scale directly. This
+    // removes libm's modff()/ldexpf() helpers from audio-rate pitch paths.
+    if (intPart < -126)
+        return 0.0f;
+    if (intPart > 127)
+        return INFINITY;
+    const uint32_t scaleBits = static_cast<uint32_t>(intPart + 127) << 23;
+    float integerScale;
+    memcpy(&integerScale, &scaleBits, sizeof(integerScale));
+    return pow2Frac * integerScale;
 }
 
 // tanh(x) lookup for audio-rate saturation. Only the positive half is
@@ -592,6 +597,14 @@ public:
         phase_ += phaseIncrementInt * static_cast<uint32_t>(frames);
     }
 
+    IRAM_ATTR uint32_t phaseInt() const { return phase_; }
+
+    // Stateless saw evaluation used by FM SuperSaw's six side accumulators.
+    IRAM_ATTR static float sawSampleAt(uint32_t phase)
+    {
+        return 2.0f * (static_cast<float>(phase) * kInvUint32Max) - 1.0f;
+    }
+
     // sampleRate is in practice ALWAYS the same value (kSampleRate, fixed
     // 48000 - see all callers in NodeInstance.cpp) - cache the reciprocal
     // instead of dividing anew each time. The comparison is always false
@@ -698,9 +711,10 @@ private:
             return 4.0f * fabsf(pf - nearest) - 1.0f;
         }
         case WaveType::Sawtooth:
-            return 2.0f * (static_cast<float>(p) * kInvUint32Max) - 1.0f;
+            return sawSampleAt(p);
         case WaveType::Noise:
         case WaveType::PinkNoise:
+        case WaveType::SuperSaw:
         default:
             return 0.0f;
         }
@@ -725,7 +739,7 @@ private:
         }
         else // Sawtooth
         {
-            return 2.0f * (static_cast<float>(p) * kInvUint32Max) - 1.0f;
+            return sawSampleAt(p);
         }
     }
 

@@ -16,6 +16,7 @@ const baseNote = Number(options.baseNote ?? 48);
 const velocity = Number(options.velocity ?? 90);
 const phaseSeconds = Number(options.seconds ?? 3);
 const settleSeconds = Number(options.settle ?? 7);
+const stressSeconds = Number(options.stressSeconds ?? 0);
 
 if (
   voicePoints.length === 0 ||
@@ -29,8 +30,12 @@ if (!Number.isInteger(baseNote) || baseNote < 0 || baseNote + Math.max(...voiceP
 if (!Number.isInteger(velocity) || velocity < 1 || velocity > 127) {
   throw new Error("--velocity must be an integer from 1 to 127");
 }
-if (!Number.isInteger(phaseSeconds) || phaseSeconds < 1 || !Number.isInteger(settleSeconds) || settleSeconds < 0) {
-  throw new Error("--seconds must be positive and --settle non-negative integers");
+if (
+  !Number.isInteger(phaseSeconds) || phaseSeconds < 1 ||
+  !Number.isInteger(settleSeconds) || settleSeconds < 0 ||
+  !Number.isInteger(stressSeconds) || stressSeconds < 0
+) {
+  throw new Error("--seconds must be positive; --settle and --stressSeconds must be non-negative integers");
 }
 
 const httpBase = `http://${host}`;
@@ -195,7 +200,7 @@ async function selectPreset() {
 const timeout = setTimeout(() => {
   console.error("Benchmark timed out");
   process.exit(2);
-}, (45 + voicePoints.length * (phaseSeconds * 5 + settleSeconds + 8)) * 1000);
+}, (45 + stressSeconds + voicePoints.length * (phaseSeconds * 5 + settleSeconds + 8)) * 1000);
 
 const allNotes = noteSet(Math.max(...voicePoints));
 try {
@@ -272,6 +277,17 @@ try {
       validVoiceCount: voices <= effectiveVoiceMinimum && generationMinimum === generationMaximum,
       phases,
     });
+  }
+
+  if (stressSeconds > 0) {
+    await selectPreset();
+    statusQueue.length = 0;
+    await discardStatuses(3);
+    const notes = noteSet(Math.max(...voicePoints));
+    result.stress = await measurePhase("stress", stressSeconds, () => {
+      notes.forEach((note) => sendNote("note_on", note));
+    });
+    notes.forEach((note) => sendNote("note_off", note));
   }
 
   console.log(JSON.stringify(result, null, 2));

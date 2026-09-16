@@ -257,6 +257,7 @@ struct NodeInstance
         SoundFontPlayerState soundFontPlayer;
         ClockState clock;
         SampleHoldState sampleHold;
+        OutputSwitchState outputSwitch;
     };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
@@ -297,6 +298,9 @@ struct NodeInstance
         LinkState *link;
         ValueMapperState *valueMapper;
         HammondState *hammond;
+        // Extra outPorts[] buffers (ports 2..) only needed above 2 configured
+        // outputs - see NodeState.h's OutputMultiplexerState comment.
+        OutputMultiplexerState *outputMux;
     };
     // multiplier/adder/divide/abs/link types carry no extra state.
 
@@ -396,6 +400,9 @@ struct NodeInstance
         case NodeType::SampleHold:
             new (&sampleHold) SampleHoldState();
             break;
+        case NodeType::OutputSwitch:
+            new (&outputSwitch) OutputSwitchState();
+            break;
         default:
             emptyInlineState = 0;
             break;
@@ -410,6 +417,15 @@ inline float *outputPortBuffer(NodeInstance &inst, uint8_t port)
     if (port == 1)
         return inst.outR;
     const uint8_t extra = port - 2;
+    // inst.link and inst.outputMux share the same union storage (exactly one
+    // NodeType uses either) - must branch on inst.type, not on either
+    // pointer's nullness, or an OutputMultiplexer instance's outputMux
+    // pointer would get misread as a LinkState* here.
+    if (inst.type == NodeType::OutputMultiplexer)
+    {
+        return inst.outputMux != nullptr && extra < kOutputMultiplexerMaxOutputs - 2 ? inst.outputMux->outPorts[extra]
+                                                                                      : nullptr;
+    }
     return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
 }
 
@@ -420,6 +436,11 @@ inline const float *outputPortBuffer(const NodeInstance &inst, uint8_t port)
     if (port == 1)
         return inst.outR;
     const uint8_t extra = port - 2;
+    if (inst.type == NodeType::OutputMultiplexer)
+    {
+        return inst.outputMux != nullptr && extra < kOutputMultiplexerMaxOutputs - 2 ? inst.outputMux->outPorts[extra]
+                                                                                      : nullptr;
+    }
     return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
 }
 

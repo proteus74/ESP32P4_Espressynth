@@ -36,7 +36,9 @@
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
+#include "nodes/OutputMultiplexerNode.h"
 #include "nodes/OutputNodes.h"
+#include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
 #include "nodes/SwitchNode.h"
@@ -95,6 +97,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Switch:
         nodes::switchnode::render(inst, frames);
         break;
+    case NodeType::OutputSwitch:
+        nodes::outputswitch::render(inst, frames);
+        break;
     case NodeType::Adsr:
         nodes::adsr::render(inst, frames);
         break;
@@ -118,6 +123,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Multiplexer:
         nodes::multiplexer::render(inst, frames);
+        break;
+    case NodeType::OutputMultiplexer:
+        nodes::outputmultiplexer::render(inst, frames);
         break;
     case NodeType::EspEq:
         processEspEq(*inst.espEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);

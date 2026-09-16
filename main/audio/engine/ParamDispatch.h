@@ -35,6 +35,7 @@
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
+#include "nodes/OutputMultiplexerNode.h"
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
@@ -158,6 +159,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Multiplexer:
         return nodes::multiplexer::setParam(inst, name, value);
+
+    case NodeType::OutputMultiplexer:
+        return nodes::outputmultiplexer::setParam(inst, name, value);
 
     case NodeType::Bitcrusher:
         return nodes::bitcrusher::setParam(inst, name, value);

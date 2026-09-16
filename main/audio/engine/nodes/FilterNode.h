@@ -24,6 +24,7 @@ struct FilterState
 {
     Biquad biquad;
     FilterKind kind = FilterKind::LowPass;
+    FilterKind renderedKind = FilterKind::None;
     // Raw CV (0-10V, see CvConventions.h) - the actual cutoff/Q is only
     // computed in render() below from this value + min/max/log, when
     // coeffsDirty is set.
@@ -36,7 +37,6 @@ struct FilterState
     float resonanceMaxQ = 20.0f;
     bool resonanceLog = true;
     bool coeffsDirty = true;
-    bool bypass = false;
 
     // Cached log2(max/lo) for cv::cvToRangeLogFast (see filterCutoffHz/
     // filterResonanceQ below) - avoids powf()/log2f() PER SAMPLE, as soon
@@ -110,6 +110,16 @@ inline float filterResonanceQ(const FilterState &s, float resonanceCv)
                                       : cv::cvToRange(resonanceCv, s.resonanceMinQ, s.resonanceMaxQ, false);
     return qCv < 0.05f ? 0.05f : qCv;
 }
+
+inline FilterKind filterKindFromCv(float volts)
+{
+    int index = static_cast<int>(volts / (cv::kMaxVolts / 4.0f));
+    if (index < 0)
+        index = 0;
+    if (index > 3)
+        index = 3;
+    return static_cast<FilterKind>(index);
+}
 } // namespace
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -117,19 +127,23 @@ inline void render(NodeInstance &inst, size_t frames)
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = *inst.filter;
-    // "bypass" (Port-Index 1, control-only) - same wired-CV-or-manual
-    // pattern as Reverb's bypass (see ReverbNode.h). Dry passthrough skips
-    // the whole biquad, exactly like an unconnected/unmodified signal.
-    const bool bypass = (inst.controlConnectedPortMask & (1u << 1)) != 0
-                            ? inst.controlValue[1] >= cv::kGateThresholdVolts
-                            : s.bypass;
-    if (bypass)
+    const bool typeFed = controlPortConnected(inst, 1) ||
+                         (inst.audioConnectedPortMask & synth::portBit(1)) != 0;
+    const FilterKind kind = typeFed ? filterKindFromCv(portSample(inst, 1, 0)) : s.kind;
+    if (kind == FilterKind::None)
     {
+        s.renderedKind = FilterKind::None;
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = portSample(inst, 0, i);
         }
         return;
+    }
+    if (kind != s.renderedKind)
+    {
+        s.renderedKind = kind;
+        s.coeffsDirty = true;
+        s.audioCoeffsInitialized = false;
     }
     // "cutoff"/"resonance" (Port-Index 2/3): a genuine DSP edge
     // (audioConnectedPortMask) recomputes the biquad coefficients every
@@ -181,8 +195,10 @@ inline void render(NodeInstance &inst, size_t frames)
                 {
                     const float q = filterResonanceQ(s, resonanceCv);
                     const float cutoff = filterCutoffHz(s, cutoffCv);
-                    switch (s.kind)
+                    switch (kind)
                     {
+                    case FilterKind::None:
+                        break;
                     case FilterKind::LowPass:
                         s.biquad.setLowpass(cutoff, q, kSampleRate);
                         break;
@@ -206,8 +222,10 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         const float q = filterResonanceQ(s, s.resonanceCv);
         const float cutoff = filterCutoffHz(s, s.cutoffCv);
-        switch (s.kind)
+        switch (kind)
         {
+        case FilterKind::None:
+            break;
         case FilterKind::LowPass:
             s.biquad.setLowpass(cutoff, q, kSampleRate);
             break;
@@ -239,7 +257,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.filter->resonanceLog = p.resonanceLog;
     inst.filter->coeffStride = p.coeffStride;
     inst.filter->global = p.filterGlobal;
-    inst.filter->bypass = p.filterBypass;
     inst.filter->refreshLog2Ratios();
     inst.filter->coeffsDirty = true;
 }
@@ -310,11 +327,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.filter->coeffStride = static_cast<uint8_t>(clamped);
         return true;
     }
-    if (strcmp(name, "bypass") == 0)
-    {
-        inst.filter->bypass = value >= 0.5f;
-        return true;
-    }
     // "cutoffCurve"/"resonanceCurve" are strings ("linear"/"log"), same
     // pattern as Gain's "curve" - see Graph.cpp's applyLiveParams.
     return false;
@@ -322,7 +334,9 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.filterType = filterKindFromString(presetparser::getString(p, "filterType", "lowpass"));
+    out.filterType = presetparser::getBool(p, "bypass", false)
+                         ? FilterKind::None
+                         : filterKindFromString(presetparser::getString(p, "filterType", "lowpass"));
     // "cutoff"/"resonance" are now 0-10V CV (see CvConventions.h), only
     // converted to real Hz/Q in render() via cutoffMinHz/cutoffMaxHz/
     // cutoffLog - default CV 5V (scale center).
@@ -339,7 +353,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
         out.coeffStride = static_cast<uint8_t>(coeffStride < 1 ? 1 : (coeffStride > 16 ? 16 : coeffStride));
     }
     out.filterGlobal = presetparser::getBool(p, "global", false);
-    out.filterBypass = presetparser::getBool(p, "bypass", false);
 }
 
 } // namespace nodes::filter

@@ -72,7 +72,8 @@ inline float velocityToVoltage(float velocity127) { return (velocity127 / 127.0f
 inline float hzFromPitchCv(float volts)
 {
     const float note = (volts - kMaxVolts / 2.0f) / kPitchCvVoltsPerOctave * 12.0f + kPitchCvAnchorNote;
-    return 440.0f * dsp::pow2Lookup((note - 69.0f) / 12.0f);
+    constexpr float kInvSemitonesPerOctave = 1.0f / 12.0f;
+    return 440.0f * dsp::pow2Lookup((note - 69.0f) * kInvSemitonesPerOctave);
 }
 
 // Maps a 0-10V CV value onto [minVal, maxVal] - linear, or true logarithmic

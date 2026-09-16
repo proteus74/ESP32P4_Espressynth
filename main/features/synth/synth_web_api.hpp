@@ -154,6 +154,24 @@ inline void broadcast_status_tick() {
         broadcast_json(json);
     }
 
+    // Master Clock (MasterClock.h) - device-wide, not tied to any preset, so
+    // it needs its own change-detection independent of presetChanged above;
+    // only fires on an actual change (a Learn/Save from any browser tab, or a
+    // live MIDI-CC tick moving bpm) so this stays cheap at the ~1/s tick rate.
+    {
+        static float last_bpm = -1.0f, last_max_bpm = -1.0f;
+        static bool last_round = false;
+        static int last_cc = -2, last_channel = -2;
+        const auto &mc = synth::masterClock();
+        if (mc.bpm != last_bpm || mc.maxBpm != last_max_bpm || mc.roundBpm != last_round ||
+            mc.midiCc != last_cc || mc.midiChannel != last_channel) {
+            last_bpm = mc.bpm; last_max_bpm = mc.maxBpm; last_round = mc.roundBpm;
+            last_cc = mc.midiCc; last_channel = mc.midiChannel;
+            char json[160];
+            if (synth::formatMasterClockJson(json, sizeof(json)) > 0) broadcast_json(json);
+        }
+    }
+
     static uint32_t last_voices_cap_id = 0;
     const uint32_t voices_cap_id = engine().voicesCapEventId();
     if (voices_cap_id != last_voices_cap_id) {
@@ -215,7 +233,7 @@ inline void broadcast_status_tick() {
              "\"phases\":{\"activity\":%.2f,\"render\":%.2f,\"output\":%.2f},"
              "\"fm\":{\"pitchConst\":%lu,\"pitchAudio\":%lu,\"tuneConst\":%lu,\"tuneAudio\":%lu,"
              "\"ampConst\":%lu,\"ampAudio\":%lu,\"ampZero\":%lu,\"silent\":%lu,"
-             "\"gainConverged\":%lu,\"modActive\":%lu,\"feedbackActive\":%lu},"
+             "\"gainConverged\":%lu,\"modActive\":%lu,\"feedbackActive\":%lu,\"superSawActive\":%lu},"
              "\"dx\":{\"holding\":%lu,\"ramping\":%lu,\"boundary\":%lu,\"shapeConfigured\":%lu},"
              "\"instances\":{\"total\":%lu,\"rendered\":%lu,\"idleForced\":%lu}}",
              static_cast<double>(core0_load), static_cast<double>(engine().audioCoreLoadPercent()),
@@ -237,7 +255,8 @@ inline void broadcast_status_tick() {
              static_cast<unsigned long>(stats.fmAmpConstant), static_cast<unsigned long>(stats.fmAmpAudioRate),
              static_cast<unsigned long>(stats.fmAmpConstantZero), static_cast<unsigned long>(stats.fmSilentSkipped),
              static_cast<unsigned long>(stats.fmGainConverged), static_cast<unsigned long>(stats.fmModActive),
-             static_cast<unsigned long>(stats.fmFeedbackActive), static_cast<unsigned long>(stats.dxHolding),
+             static_cast<unsigned long>(stats.fmFeedbackActive), static_cast<unsigned long>(stats.fmSuperSawActive),
+             static_cast<unsigned long>(stats.dxHolding),
              static_cast<unsigned long>(stats.dxRamping), static_cast<unsigned long>(stats.dxBoundary),
              static_cast<unsigned long>(stats.dxShapeConfigured), static_cast<unsigned long>(stats.instancesTotal),
              static_cast<unsigned long>(stats.instancesRendered),
@@ -976,6 +995,26 @@ esp_err_t midi_devices_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /api/masterclock ----
+
+// One-shot hydration for a freshly-opened tab (initial page load, or any
+// reconnect): plain synchronous GET, so - unlike trying to push a WS frame
+// during the /ws upgrade handshake itself (tried first; the frame never
+// actually reached the client, confirmed live) - there is no handshake-
+// timing race to get wrong. Live updates while already connected still go
+// out over the "masterClock" WS broadcast in broadcast_status_tick() below.
+esp_err_t masterclock_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[192];
+    const int n = synth::formatMasterClockJson(json, sizeof(json));
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
 // ---- /api/version, /api/diagnostics/memory ----
 
 esp_err_t version_handler(httpd_req_t *req) {
@@ -1104,6 +1143,30 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     }
                     handled_locally = true;
                 }
+            } else if (cJSON_IsString(type) && strcmp(type->valuestring, "paramUpdate") == 0) {
+                // Master Clock (MasterClock.h) is engine-global, not part of
+                // the live graph - handled right here on the httpd worker
+                // task instead of going through live_param_queue() to the
+                // audio render task below, so its flash write (Save/Learn,
+                // infrequent) never risks blocking a real-time audio block.
+                cJSON *widget_id = cJSON_GetObjectItemCaseSensitive(root, "widgetId");
+                cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
+                if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@masterClock") == 0 &&
+                    cJSON_IsObject(params)) {
+                    auto &mc = synth::masterClock();
+                    cJSON *bpm = cJSON_GetObjectItemCaseSensitive(params, "bpm");
+                    cJSON *maxBpm = cJSON_GetObjectItemCaseSensitive(params, "maxBpm");
+                    cJSON *round = cJSON_GetObjectItemCaseSensitive(params, "round");
+                    cJSON *cc = cJSON_GetObjectItemCaseSensitive(params, "cc");
+                    cJSON *channel = cJSON_GetObjectItemCaseSensitive(params, "channel");
+                    if (cJSON_IsNumber(bpm) && bpm->valuedouble >= 0.0) mc.bpm = static_cast<float>(bpm->valuedouble);
+                    if (cJSON_IsNumber(maxBpm) && maxBpm->valuedouble > 0.0) mc.maxBpm = static_cast<float>(maxBpm->valuedouble);
+                    if (cJSON_IsBool(round)) mc.roundBpm = cJSON_IsTrue(round);
+                    if (cJSON_IsNumber(cc)) mc.midiCc = cc->valueint;
+                    if (cJSON_IsNumber(channel)) mc.midiChannel = channel->valueint;
+                    synth::saveMasterClockToFs();
+                    handled_locally = true;
+                }
             } else if (cJSON_IsString(type) && strcmp(type->valuestring, "filesInfo") == 0) {
                 cJSON *volume_item = cJSON_GetObjectItemCaseSensitive(root, "volume");
                 const bool is_sd = cJSON_IsString(volume_item) && strcmp(volume_item->valuestring, "sd") == 0;
@@ -1222,6 +1285,11 @@ inline void register_web_routes() {
         .uri = "/api/version", .method = HTTP_GET, .handler = &version_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &version_uri);
+
+    static const httpd_uri_t masterclock_uri = {
+        .uri = "/api/masterclock", .method = HTTP_GET, .handler = &masterclock_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &masterclock_uri);
 
     static const httpd_uri_t memory_diagnostics_uri = {
         .uri = "/api/diagnostics/memory", .method = HTTP_GET, .handler = &memory_diagnostics_handler,

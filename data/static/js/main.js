@@ -15,6 +15,9 @@ function handleMidiEvent(data) {
   routeMidiToButtons(data);
   routeMidiToUpDownButtons(data);
   routeMidiToSwitches(data);
+  routeMidiToOutputSwitches(data);
+  routeMidiToMasterClock(data);
+  if (data.type === "masterClock") { applyMasterClockBroadcast(data); return; }
   if (data.type !== "midi" || !["note_on", "note_off"].includes(data.midiType)) return;
   previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
 }
@@ -661,6 +664,30 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
+  "output-switch": {
+    label: "Output Switch",
+    icon: "🔀",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [
+      { id: "out1", label: "Out 1" },
+      { id: "out2", label: "Out 2" },
+    ],
+  },
+  "output-multiplexer": {
+    label: "Output Multiplexer",
+    icon: "🎯",
+    // Static/default shape (2 outputs) - live output count (2-16) is
+    // handled by renderOutputMultiplexerPorts() below, same pattern as
+    // Multiplexer's own renderMultiplexerPorts().
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "select", label: "Select" },
+    ],
+    outputs: [
+      { id: "out1", label: "Out 1" },
+      { id: "out2", label: "Out 2" },
+    ],
+  },
   multiplier: {
     label: "Multiplier",
     icon: "✖️",
@@ -712,13 +739,9 @@ const WIDGET_TYPES = {
   clock: {
     label: "Clock",
     icon: "⏱️",
-    // "sync" - a rising edge restarts the phase accumulator from 0 (see
-    // nodes/ClockNode.h's render()), resyncing the beat to an external
-    // trigger instead of letting it drift relative to it.
-    inputs: [
-      { id: "tempo", label: "CV" },
-      { id: "sync", label: "Sync" },
-    ],
+    // Tempo comes from the single Master Clock (tab bar, see
+    // openMasterClockSettings) - this widget only owns its own pulse width.
+    inputs: [],
     outputs: [{ id: "pulse", label: "Pulse" }],
   },
   oscillator: {
@@ -752,10 +775,11 @@ const WIDGET_TYPES = {
       { id: "gate", label: "Gate" },
       { id: "gain", label: "Gain" },
       { id: "feedback", label: "Feedback (Self)" },
-      // Square-only (see updateFmOscillatorDutyCycleVisual - row stays
-      // hidden unless waveType==="square"). 0-10V CV, 5V = classic 50%
-      // square, matches FmOscillatorState::dutyCycleCv's default.
+      // Square-only (see updateFmOscillatorDutyCycleVisual). 0-10V CV,
+      // 5V = classic 50% square, matching the firmware default.
       { id: "dutyCycle", label: "Duty Cycle" },
+      { id: "superSawDetune", label: "SuperSaw Detune" },
+      { id: "superSawMix", label: "SuperSaw Mix" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -887,7 +911,7 @@ const WIDGET_TYPES = {
     icon: "🎚️",
     inputs: [
       { id: "in", label: "In" },
-      { id: "bypass", label: "Bypass" },
+      { id: "filterType", label: "Filter Type" },
       { id: "cutoff", label: "Cutoff" },
       { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
@@ -899,7 +923,7 @@ const WIDGET_TYPES = {
     icon: "🎚️",
     inputs: [
       { id: "in", label: "In" },
-      { id: "bypass", label: "Bypass" },
+      { id: "filterType", label: "Filter Type" },
       { id: "cutoff", label: "Cutoff" },
       { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
@@ -1122,7 +1146,7 @@ const WIDGET_TYPES = {
       { id: "rate", label: "Rate" },
       { id: "amplitude", label: "Amplitude" },
       { id: "phase", label: "Phase" },
-      { id: "sync", label: "Sync" },
+      { id: "reset", label: "Reset" },
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
       { id: "zeroPoint", label: "Zero Point" },
@@ -1173,7 +1197,7 @@ const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player"] },
   { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "sample-hold"] },
-  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
+  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
@@ -1191,7 +1215,7 @@ const AUDIO_PORTS = {
   
   
   oscillator: { in: ["amplitude", "gain", "pitchCv", "tune", "feedback"], out: ["value"] },
-  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback", "dutyCycle"], out: ["value"] },
+  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback", "dutyCycle", "superSawDetune", "superSawMix"], out: ["value"] },
   // All 13 are real audio-rate ports here (unlike Mixer's control-only
   // "gainN") - each of the 9 drawbar levels is independently CV-connectable.
   hammond: {
@@ -1200,9 +1224,12 @@ const AUDIO_PORTS = {
     out: ["value"],
   },
   switch: { in: ["in1", "in2"], out: ["value"] },
+  "output-switch": { in: ["in"], out: ["out1", "out2"] },
   // "select" (CV) is deliberately absent here - control-rate, same reasoning
   // as C++ PortTables' isControlOnlyInput (see nodes/MultiplexerNode.h).
   multiplexer: { in: ["in1", "in2", "in3", "in4", "in5", "in6", "in7", "in8", "in9", "in10", "in11", "in12", "in13", "in14", "in15", "in16"], out: ["value"] },
+  // "select" (CV) deliberately absent, same reasoning as multiplexer above.
+  "output-multiplexer": { in: ["in"], out: ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8", "out9", "out10", "out11", "out12", "out13", "out14", "out15", "out16"] },
   
   
   
@@ -1371,6 +1398,7 @@ const WAVE_TYPE_LABELS = {
   sawtooth: "Sawtooth",
   noise: "Noise",
   "pink-noise": "Pink Noise",
+  supersaw: "SuperSaw",
 };
 
 const WAVE_ICON_ATTRS = 'viewBox="0 0 18 12" width="18" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
@@ -1400,6 +1428,14 @@ const WAVE_TYPE_BUTTONS = [
     id: "pink-noise",
     className: "osc-wave-btn-pink-noise",
     icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 L3,2 L4,9 L6,4 L7,10 L9,3 L10,7 L12,1 L13,8 L15,5 L17,9"/></svg>`,
+  },
+];
+
+const FM_WAVE_TYPE_BUTTONS = [
+  ...WAVE_TYPE_BUTTONS,
+  {
+    id: "supersaw",
+    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,10 L5,4 L5,10 L9,4 L9,10 L13,4 L13,10 L17,4"/><path d="M1,8 L5,2 L5,8 L9,2 L9,8 L13,2 L13,8 L17,2" opacity=".55"/></svg>`,
   },
 ];
 
@@ -1437,7 +1473,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold"];
 
 
 
@@ -1761,6 +1797,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "output-switch") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button") || e.target.closest("label")) return;
+      e.stopPropagation();
+      openOutputSwitchSettings(id);
+    });
+  }
+
   if (type === "linked-input") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -1833,6 +1877,16 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button") || e.target.closest("input")) return;
       e.stopPropagation();
       openMultiplexerSettings(id);
+    });
+  }
+
+  let outputMultiplexerSwitchBody = null;
+
+  if (type === "output-multiplexer") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button") || e.target.closest("input")) return;
+      e.stopPropagation();
+      openOutputMultiplexerSettings(id);
     });
   }
 
@@ -1978,12 +2032,7 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "clock") {
     clockStates.set(id, {
-      cvVolts: 0,
-      bpm: 0,
-      minBpm: 0,
-      maxBpm: 240,
       pulseMs: 100,
-      roundBpm: false,
       tickTimer: null,
       offTimer: null,
     });
@@ -2075,6 +2124,8 @@ function createWidget(type, label, x, y, forcedId) {
       fmIndex: 0,
       feedback: 0,
       dutyCycle: center,
+      superSawDetune: center,
+      superSawMix: center,
     };
     fmOscillatorStates.set(id, fmOscState);
     audioEngine.createNode(id, "fm-oscillator", {
@@ -2086,6 +2137,8 @@ function createWidget(type, label, x, y, forcedId) {
       fmIndex: fmOscState.fmIndex,
       feedback: fmOscState.feedback,
       dutyCycle: fmOscState.dutyCycle,
+      superSawDetune: fmOscState.superSawDetune,
+      superSawMix: fmOscState.superSawMix,
     });
 
     const body = document.createElement("div");
@@ -2093,7 +2146,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     const waveButtons = document.createElement("div");
     waveButtons.className = "osc-wave-buttons";
-    WAVE_TYPE_BUTTONS.forEach((w) => {
+    FM_WAVE_TYPE_BUTTONS.forEach((w) => {
       const btn = document.createElement("button");
       btn.className = "osc-wave-btn";
       if (w.className) btn.classList.add(w.className);
@@ -2352,7 +2405,6 @@ function createWidget(type, label, x, y, forcedId) {
       
       coeffStride: 4,
       global: false,
-      bypass: false,
     };
     filterStates.set(id, { ...filterDefaults });
     audioEngine.createNode(id, type, { ...filterDefaults });
@@ -2465,6 +2517,54 @@ function createWidget(type, label, x, y, forcedId) {
     selector.addEventListener("pointercancel", stopDragging);
     body.appendChild(selector);
     multiplexerSwitchBody = body;
+  }
+
+  if (type === "output-multiplexer") {
+    outputMultiplexerStates.set(id, {
+      outputCount: 2,
+      manualSelect: 0,
+      activeIndex: 0,
+      cvVolts: null,
+    });
+    audioEngine.createNode(id, "output-multiplexer", { select: 0 });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body switch-body multiplexer-switch-body";
+
+    const selector = document.createElement("div");
+    selector.className = "switch multiplexer-switch";
+    selector.setAttribute("role", "img");
+    selector.setAttribute("aria-label", "Aktiver Output-Multiplexer-Ausgang");
+    const track = document.createElement("span");
+    track.className = "switch-track";
+    const thumb = document.createElement("span");
+    thumb.className = "multiplexer-switch-thumb";
+    thumb.dataset.role = "output-multiplexer-switch-thumb";
+    selector.append(track, thumb);
+    let dragging = false;
+    selector.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || outputMultiplexerHasCvConnection(id)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      selector.setPointerCapture?.(e.pointerId);
+      setOutputMultiplexerManualIndex(id, e.clientY);
+    });
+    selector.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      setOutputMultiplexerManualIndex(id, e.clientY);
+    });
+    const stopDragging = (e) => {
+      dragging = false;
+      if (e.pointerId !== undefined && selector.hasPointerCapture?.(e.pointerId)) {
+        selector.releasePointerCapture(e.pointerId);
+      }
+    };
+    selector.addEventListener("pointerup", stopDragging);
+    selector.addEventListener("pointercancel", stopDragging);
+    body.appendChild(selector);
+    outputMultiplexerSwitchBody = body;
   }
 
   if (type === "lfo") {
@@ -2620,7 +2720,7 @@ function createWidget(type, label, x, y, forcedId) {
       cyclePos: 0,
       lastTick: null,
       timer: null,
-      syncPrevByVoice: new Map(),
+      resetPrevByVoice: new Map(),
     });
     audioEngine.createNode(id, "lfo", {
       waveType: "sine",
@@ -3103,6 +3203,42 @@ function createWidget(type, label, x, y, forcedId) {
 
   }
 
+  let outputSwitchBody = null;
+
+  if (type === "output-switch") {
+    outputSwitchStates.set(id, { cc: null, channel: null, selectOut2: false });
+    audioEngine.createNode(id, "output-switch", { selectOut2: false });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body switch-body";
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "switch";
+    const toggleInput = document.createElement("input");
+    toggleInput.type = "checkbox";
+    toggleInput.dataset.role = "output-switch-toggle";
+    toggleInput.addEventListener("mousedown", (e) => e.stopPropagation());
+    toggleInput.addEventListener("click", (e) => e.stopPropagation());
+    toggleInput.addEventListener("change", () => setOutputSwitchSelectOut2(id, toggleInput.checked));
+    const toggleTrack = document.createElement("span");
+    toggleTrack.className = "switch-track";
+    toggleLabel.appendChild(toggleInput);
+    toggleLabel.appendChild(toggleTrack);
+
+    const toggleText = document.createElement("span");
+    toggleText.dataset.role = "output-switch-select-label";
+    toggleText.textContent = "Out 1";
+
+    const ccLabel = document.createElement("div");
+    ccLabel.className = "button-cc-label";
+    ccLabel.dataset.role = "output-switch-cc-label";
+
+    body.appendChild(toggleLabel);
+    body.appendChild(toggleText);
+    body.appendChild(ccLabel);
+    outputSwitchBody = body;
+  }
+
   if (type === "const") {
     constStates.set(id, { value: 0 });
     audioEngine.createNode(id, "const", { value: 0 });
@@ -3148,6 +3284,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderMixerPorts(id, ports);
   } else if (type === "multiplexer") {
     renderMultiplexerPorts(id, ports);
+  } else if (type === "output-multiplexer") {
+    renderOutputMultiplexerPorts(id, ports);
   } else if (type === "hammond") {
     renderHammondPorts(id, ports);
   } else if (type === "step-arpeggiator") {
@@ -3317,30 +3455,6 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatDxEnvelopeValue(state, port.id);
         row.appendChild(valueSpan);
       }
-      if (type === "clock" && port.id === "tempo") {
-        const state = clockStates.get(id);
-
-        const slider = document.createElement("input");
-        slider.type = "range";
-        slider.className = "port-slider";
-        slider.min = "0";
-        slider.max = String(CV_MAX_VOLTS);
-        slider.step = "0.01";
-        slider.value = String(state.cvVolts);
-        slider.dataset.role = "clock-cv-slider";
-        slider.addEventListener("mousedown", (e) => e.stopPropagation());
-        slider.addEventListener("click", (e) => e.stopPropagation());
-        slider.addEventListener("input", () => {
-          deliverToWidget(id, port.id, parseFloat(slider.value));
-        });
-        row.appendChild(slider);
-
-        const valueSpan = document.createElement("span");
-        valueSpan.className = "port-value";
-        valueSpan.dataset.role = "clock-cv-value";
-        valueSpan.textContent = `${formatNumber(state.cvVolts)} V`;
-        row.appendChild(valueSpan);
-      }
       if (type === "lfo" && port.id === "oneShot") {
         const state = lfoStates.get(id);
         const switchLabel = document.createElement("label");
@@ -3379,6 +3493,27 @@ function createWidget(type, label, x, y, forcedId) {
         switchLabel.appendChild(toggle);
         switchLabel.appendChild(switchTrack);
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
+      }
+      if ((type === "filter" || type === "curtis-filter") && port.id === "filterType") {
+        const filterState = filterStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(filterTypeToCv(filterState.filterType, type === "curtis-filter"));
+        slider.dataset.role = "filter-type-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "filter-type-value";
+        valueSpan.textContent = filterTypeLabel(filterState.filterType, type === "curtis-filter");
+        row.appendChild(valueSpan);
       }
       if (type === "lfo" && port.id === "zeroPoint") {
         
@@ -3928,6 +4063,31 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatNumber(fmOscState.dutyCycle);
         row.appendChild(valueSpan);
       }
+      if (type === "fm-oscillator" && (port.id === "superSawDetune" || port.id === "superSawMix")) {
+        const fmOscState = fmOscillatorStates.get(id);
+        const role = port.id === "superSawDetune" ? "supersaw-detune" : "supersaw-mix";
+        row.dataset.role = `fm-oscillator-${role}-row`;
+        row.hidden = fmOscState.waveType !== "supersaw";
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fmOscState[port.id]);
+        slider.dataset.role = `fm-oscillator-${role}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, port.id, parseFloat(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `fm-oscillator-${role}-value`;
+        valueSpan.textContent = formatNumber(fmOscState[port.id]);
+        row.appendChild(valueSpan);
+      }
       if (type === "detune" && port.id === "amount") {
         const detuneState = detuneStates.get(id);
         const initialCents = Math.round(detuneAmountToCents(detuneState.amount) / DETUNE_CENTS_STEP) * DETUNE_CENTS_STEP;
@@ -4077,6 +4237,14 @@ function createWidget(type, label, x, y, forcedId) {
     const switchCcLabel = switchBody.querySelector('[data-role="switch-cc-label"]');
     if (switchCcLabel) switchContent.appendChild(switchCcLabel);
     el.appendChild(switchContent);
+  } else if (type === "output-switch") {
+    const outputSwitchContent = document.createElement("div");
+    outputSwitchContent.className = "switch-content";
+    outputSwitchContent.appendChild(ports);
+    outputSwitchContent.appendChild(outputSwitchBody);
+    const outputSwitchCcLabel = outputSwitchBody.querySelector('[data-role="output-switch-cc-label"]');
+    if (outputSwitchCcLabel) outputSwitchContent.appendChild(outputSwitchCcLabel);
+    el.appendChild(outputSwitchContent);
   } else if (type === "multiplexer") {
     const multiplexerContent = document.createElement("div");
     multiplexerContent.className = "switch-content multiplexer-content";
@@ -4092,6 +4260,21 @@ function createWidget(type, label, x, y, forcedId) {
     routing.appendChild(routingPath);
     multiplexerContent.appendChild(routing);
     el.appendChild(multiplexerContent);
+  } else if (type === "output-multiplexer") {
+    const outputMultiplexerContent = document.createElement("div");
+    outputMultiplexerContent.className = "switch-content output-multiplexer-content";
+    outputMultiplexerContent.appendChild(ports);
+    outputMultiplexerContent.appendChild(outputMultiplexerSwitchBody);
+    const routing = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    routing.classList.add("multiplexer-routing");
+    routing.setAttribute("aria-hidden", "true");
+    routing.setAttribute("fill", "none");
+    const routingPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    routingPath.dataset.role = "output-multiplexer-routing-path";
+    routingPath.setAttribute("fill", "none");
+    routing.appendChild(routingPath);
+    outputMultiplexerContent.appendChild(routing);
+    el.appendChild(outputMultiplexerContent);
   } else if (type === "knob") {
     ports.classList.add("knob-output-ports");
     el.appendChild(ports);
@@ -4130,16 +4313,21 @@ function createWidget(type, label, x, y, forcedId) {
 
   canvasContent.appendChild(el);
   if (type === "switch") updateSwitchVisual(id);
+  if (type === "output-switch") updateOutputSwitchVisual(id);
   if (type === "button") updateButtonVisual(id);
   if (type === "up-down-button") updateUpDownButtonVisual(id);
   if (audioMonitorStates.has(id)) updateAudioMonitorRangeVisual(id);
-  
-  
-  
+
+
+
   if (type !== "annotation" && type !== "knob") layoutPortsGrid(ports);
   if (type === "multiplexer") {
     updateMultiplexerVisual(id);
     requestAnimationFrame(() => updateMultiplexerRouting(id));
+  }
+  if (type === "output-multiplexer") {
+    updateOutputMultiplexerVisual(id);
+    requestAnimationFrame(() => updateOutputMultiplexerRouting(id));
   }
   if (type === "midi-in") updateMidiInControls(id);
   if (type === "adsr") updateAdsrSliders(id);
@@ -4162,6 +4350,7 @@ function removeWidget(id, force = false) {
   buttonStates.delete(id);
   upDownButtonStates.delete(id);
   switchStates.delete(id);
+  outputSwitchStates.delete(id);
   midiInStates.delete(id);
   midiVoiceSlotStates.delete(id);
   midiSplitStates.delete(id);
@@ -4190,6 +4379,7 @@ function removeWidget(id, force = false) {
   espEffectStates.delete(id);
   mixerStates.delete(id);
   multiplexerStates.delete(id);
+  outputMultiplexerStates.delete(id);
   adsrStates.delete(id);
   dxEnvelopeStates.delete(id);
   constStates.delete(id);
@@ -5990,6 +6180,106 @@ document.getElementById("switchSettingsSave").addEventListener("click", () => {
   closeSwitchSettings();
 });
 
+
+
+const outputSwitchStates = new Map();
+let outputSwitchMidiLearnTargetId = null;
+
+function updateOutputSwitchVisual(widgetId) {
+  const state = outputSwitchStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+
+  const toggle = el.querySelector('[data-role="output-switch-toggle"]');
+  if (toggle) toggle.checked = state.selectOut2;
+  const label = el.querySelector('[data-role="output-switch-select-label"]');
+  if (label) label.textContent = state.selectOut2 ? "Out 2" : "Out 1";
+  ["out1", "out2"].forEach((portId) => {
+    const row = el.querySelector(`.port-row-out:has(.port-dot[data-port-id="${portId}"])`);
+    if (!row) return;
+    row.classList.toggle("switch-selected", (portId === "out2") === state.selectOut2);
+  });
+  const ccLabel = el.querySelector('[data-role="output-switch-cc-label"]');
+  if (ccLabel) {
+    ccLabel.textContent =
+      state.cc === null ? "CC: –" : `CC ${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
+  }
+}
+
+function setOutputSwitchSelectOut2(widgetId, selectOut2) {
+  const state = outputSwitchStates.get(widgetId);
+  if (!state) return;
+  state.selectOut2 = !!selectOut2;
+  audioEngine.setParam(widgetId, "selectOut2", state.selectOut2);
+  updateOutputSwitchVisual(widgetId);
+  sendLiveParamUpdate(widgetId, { selectOut2: state.selectOut2 });
+}
+
+function routeMidiToOutputSwitches(data) {
+  if (data.type !== "midi" || data.midiType !== "control_change") return;
+
+  if (outputSwitchMidiLearnTargetId) {
+    const state = outputSwitchStates.get(outputSwitchMidiLearnTargetId);
+    if (state) {
+      state.cc = data.control;
+      state.channel = data.channel;
+      outputSwitchCcDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
+      outputSwitchLearnBtn.textContent = "Learn";
+      updateOutputSwitchVisual(outputSwitchMidiLearnTargetId);
+      sendLiveParamUpdate(outputSwitchMidiLearnTargetId, { cc: data.control, channel: data.channel });
+      savePresetNow();
+    }
+    outputSwitchMidiLearnTargetId = null;
+    return;
+  }
+
+  outputSwitchStates.forEach((state, widgetId) => {
+    if (state.cc === null || state.cc !== data.control || state.channel !== data.channel) return;
+    setOutputSwitchSelectOut2(widgetId, data.value >= 64);
+    markDirty();
+  });
+}
+
+const outputSwitchSettingsOverlay = document.getElementById("outputSwitchSettingsOverlay");
+const outputSwitchCcDisplay = document.getElementById("outputSwitchCcDisplay");
+const outputSwitchLearnBtn = document.getElementById("outputSwitchLearnBtn");
+let pendingOutputSwitchId = null;
+
+function openOutputSwitchSettings(widgetId) {
+  const state = outputSwitchStates.get(widgetId);
+  if (!state) return;
+  pendingOutputSwitchId = widgetId;
+  outputSwitchCcDisplay.value = state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
+  outputSwitchLearnBtn.textContent = "Learn";
+  outputSwitchMidiLearnTargetId = null;
+  outputSwitchSettingsOverlay.classList.remove("hidden");
+}
+
+function closeOutputSwitchSettings() {
+  outputSwitchSettingsOverlay.classList.add("hidden");
+  pendingOutputSwitchId = null;
+  outputSwitchMidiLearnTargetId = null;
+  outputSwitchLearnBtn.textContent = "Learn";
+}
+
+outputSwitchSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === outputSwitchSettingsOverlay) closeOutputSwitchSettings();
+});
+
+document.getElementById("outputSwitchSettingsCancel").addEventListener("click", closeOutputSwitchSettings);
+
+outputSwitchLearnBtn.addEventListener("click", () => {
+  if (!pendingOutputSwitchId) return;
+  outputSwitchMidiLearnTargetId = pendingOutputSwitchId;
+  outputSwitchLearnBtn.textContent = "Waiting for CC…";
+});
+
+document.getElementById("outputSwitchSettingsSave").addEventListener("click", () => {
+  closeOutputSwitchSettings();
+});
+
+
+
 const linkedInputSettingsOverlay = document.getElementById("linkedInputSettingsOverlay");
 const linkedInputNameInput = document.getElementById("linkedInputNameInput");
 const linkedInputNameError = document.getElementById("linkedInputNameError");
@@ -7403,6 +7693,7 @@ function refreshAllDualModeWidgets() {
     updateFmOscillatorIndexVisual(id);
     updateFmOscillatorFeedbackVisual(id);
     updateFmOscillatorDutyCycleVisual(id);
+    updateFmOscillatorSuperSawVisual(id);
   });
   hammondStates.forEach((_, id) => {
     if (!connections.some((c) => c.to.widgetId === id && c.to.portId === "amplitude")) {
@@ -8101,10 +8392,116 @@ function setLedActive(dot, active) {
 
 const clockStates = new Map();
 
-function clockBpm(cvVolts, minBpm, maxBpm, round) {
-  const bpm = minBpm + (cvVolts / CV_MAX_VOLTS) * (maxBpm - minBpm);
-  return round ? Math.round(bpm) : bpm;
+// Device-wide Master Clock (MasterClock.h on the firmware side) - every
+// Clock widget's pulse just taps this shared tempo, so they all stay in
+// sync; the browser mirrors it for display/preview only, the firmware is
+// authoritative (see the periodic "masterClock" WS broadcast handled by
+// applyMasterClockBroadcast() below).
+let masterClockBpm = 120;
+let masterClockMaxBpm = 240;
+let masterClockRoundBpm = false;
+let masterClockCc = null;
+let masterClockChannel = null;
+let masterClockLearnActive = false;
+
+function updateMasterClockBadge() {
+  const label = document.getElementById("masterClockBpmLabel");
+  if (label) label.textContent = formatNumber(masterClockBpm);
 }
+
+function updateMasterClockLearnUi() {
+  const ccDisplay = document.getElementById("masterClockCcDisplay");
+  if (ccDisplay) {
+    ccDisplay.value = masterClockCc === null ? "" : `${masterClockCc} (Ch ${masterClockChannel + 1})`;
+  }
+  const learnButton = document.getElementById("masterClockLearnButton");
+  if (learnButton && !masterClockLearnActive) learnButton.textContent = "Learn";
+}
+
+function restartAllClockTimers() {
+  clockStates.forEach((_, widgetId) => restartClockTimer(widgetId));
+}
+
+function setMasterClockBpm(bpm) {
+  let next = Math.max(0, Number(bpm) || 0);
+  if (masterClockRoundBpm) next = Math.round(next);
+  masterClockBpm = next;
+  updateMasterClockBadge();
+  restartAllClockTimers();
+}
+
+// Mirrors the periodic "masterClock" WS broadcast (synth_web_api.hpp's
+// broadcast_status_tick()) - keeps this tab (and every other open tab) in
+// sync with the firmware's authoritative state, including a Learn/Save done
+// from a different tab.
+function applyMasterClockBroadcast(data) {
+  masterClockMaxBpm = Number(data.maxBpm) || 240;
+  masterClockRoundBpm = data.round === true;
+  masterClockCc = typeof data.cc === "number" && data.cc >= 0 ? data.cc : null;
+  masterClockChannel = typeof data.channel === "number" && data.channel >= 0 ? data.channel : null;
+  setMasterClockBpm(data.bpm);
+  updateMasterClockLearnUi();
+}
+
+// Same "waiting for the next CC" pattern as routeMidiToKnobs/Buttons/
+// Switches, but for the single device-wide Master Clock rather than a
+// per-widget target.
+function routeMidiToMasterClock(data) {
+  if (data.type !== "midi" || data.midiType !== "control_change") return;
+  if (masterClockLearnActive) {
+    masterClockCc = data.control;
+    masterClockChannel = data.channel;
+    masterClockLearnActive = false;
+    updateMasterClockLearnUi();
+    sendLiveParamUpdate("@masterClock", { cc: masterClockCc, channel: masterClockChannel });
+    return;
+  }
+  if (masterClockCc === data.control && masterClockChannel === data.channel) {
+    setMasterClockBpm((data.value / 127) * masterClockMaxBpm);
+  }
+}
+
+const masterClockBadge = document.getElementById("masterClockBadge");
+const masterClockSettingsOverlay = document.getElementById("masterClockSettingsOverlay");
+const masterClockBpmInput = document.getElementById("masterClockBpmInput");
+const masterClockMaxBpmInput = document.getElementById("masterClockMaxBpmInput");
+const masterClockRoundBpmInput = document.getElementById("masterClockRoundBpmInput");
+const masterClockLearnButton = document.getElementById("masterClockLearnButton");
+
+function openMasterClockSettings() {
+  masterClockBpmInput.value = String(masterClockBpm);
+  masterClockMaxBpmInput.value = String(masterClockMaxBpm);
+  masterClockRoundBpmInput.checked = masterClockRoundBpm;
+  updateMasterClockLearnUi();
+  masterClockSettingsOverlay.classList.remove("hidden");
+}
+
+function closeMasterClockSettings() {
+  masterClockSettingsOverlay.classList.add("hidden");
+  masterClockLearnActive = false;
+  updateMasterClockLearnUi();
+}
+
+masterClockBadge?.addEventListener("click", openMasterClockSettings);
+masterClockSettingsOverlay?.addEventListener("click", (e) => {
+  if (e.target === masterClockSettingsOverlay) closeMasterClockSettings();
+});
+document.getElementById("masterClockSettingsCancel")?.addEventListener("click", closeMasterClockSettings);
+masterClockLearnButton?.addEventListener("click", () => {
+  masterClockLearnActive = true;
+  masterClockLearnButton.textContent = "Waiting…";
+});
+document.getElementById("masterClockSettingsSave")?.addEventListener("click", () => {
+  masterClockRoundBpm = masterClockRoundBpmInput.checked;
+  masterClockMaxBpm = Math.max(1, Number(masterClockMaxBpmInput.value) || 240);
+  setMasterClockBpm(masterClockBpmInput.value);
+  sendLiveParamUpdate("@masterClock", {
+    bpm: masterClockBpm,
+    maxBpm: masterClockMaxBpm,
+    round: masterClockRoundBpm,
+  });
+  closeMasterClockSettings();
+});
 
 function stopClockTimer(widgetId) {
   const state = clockStates.get(widgetId);
@@ -8124,11 +8521,7 @@ function updateClockVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   const bpmLabel = el.querySelector('[data-role="clock-bpm-label"]');
-  if (bpmLabel) bpmLabel.textContent = `${formatNumber(state.bpm)} BPM`;
-  const slider = el.querySelector('[data-role="clock-cv-slider"]');
-  if (slider) slider.value = String(state.cvVolts);
-  const cvLabel = el.querySelector('[data-role="clock-cv-value"]');
-  if (cvLabel) cvLabel.textContent = `${formatNumber(state.cvVolts)} V`;
+  if (bpmLabel) bpmLabel.textContent = `${formatNumber(masterClockBpm)} BPM`;
 }
 
 function fireClockPulse(widgetId) {
@@ -8156,9 +8549,9 @@ function restartClockTimer(widgetId) {
 
   stopClockTimer(widgetId);
   updateClockVisual(widgetId);
-  if (state.bpm <= 0) return;
+  if (masterClockBpm <= 0) return;
 
-  const intervalMs = 60000 / state.bpm;
+  const intervalMs = 60000 / masterClockBpm;
   state.tickTimer = setInterval(() => fireClockPulse(widgetId), intervalMs);
 }
 
@@ -8546,7 +8939,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
-  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
+  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   "linked-input", "linked-output",
 ]);
 
@@ -8748,9 +9141,6 @@ requestAnimationFrame(tickAudioMonitors);
 
 const clockSettingsOverlay = document.getElementById("clockSettingsOverlay");
 const clockPulseMsInput = document.getElementById("clockPulseMsInput");
-const clockMinBpmInput = document.getElementById("clockMinBpmInput");
-const clockMaxBpmInput = document.getElementById("clockMaxBpmInput");
-const clockRoundBpmInput = document.getElementById("clockRoundBpmInput");
 let pendingClockId = null;
 
 function openClockSettings(widgetId) {
@@ -8758,9 +9148,6 @@ function openClockSettings(widgetId) {
   if (!state) return;
   pendingClockId = widgetId;
   clockPulseMsInput.value = state.pulseMs;
-  clockMinBpmInput.value = state.minBpm;
-  clockMaxBpmInput.value = state.maxBpm;
-  clockRoundBpmInput.checked = state.roundBpm === true;
   clockSettingsOverlay.classList.remove("hidden");
 }
 
@@ -8781,37 +9168,16 @@ document.getElementById("clockSettingsSave").addEventListener("click", () => {
   if (state) {
     let ms = parseFloatFlexible(clockPulseMsInput.value);
     if (Number.isNaN(ms) || ms <= 0) ms = 100;
-    let minBpm = parseFloatFlexible(clockMinBpmInput.value);
-    let maxBpm = parseFloatFlexible(clockMaxBpmInput.value);
-    if (Number.isNaN(minBpm) || minBpm < 0) minBpm = 0;
-    if (Number.isNaN(maxBpm) || maxBpm < 0) maxBpm = 240;
-    if (maxBpm < minBpm) maxBpm = minBpm;
     state.pulseMs = ms;
-    state.minBpm = minBpm;
-    state.maxBpm = maxBpm;
-    state.roundBpm = clockRoundBpmInput.checked === true;
-    state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
-    restartClockTimer(pendingClockId);
-    // Live-push only, no savePresetNow() here - these four fields never
-    // change this widget's ports/topology (unlike e.g. Mixer's inputCount
-    // or Step Arpeggiator's stepCount, whose own settings-Save DOES call
+    // Live-push only, no savePresetNow() here - pulseMs never changes this
+    // widget's ports/topology (unlike e.g. Mixer's inputCount or Step
+    // Arpeggiator's stepCount, whose own settings-Save DOES call
     // savePresetNow() directly, justifiably: a graph rebuild is already
     // unavoidable there). A plain parameter change must never force a
     // rebuild/audio dropout on its own - see markDirty()'s comment. Reaches
     // the saved preset file next time something actually persists (Save
     // Preset, or any add/remove elsewhere), same as every other parameter.
-    sendLiveParamUpdateThrottled(pendingClockId, {
-      minBpm: state.minBpm,
-      maxBpm: state.maxBpm,
-      pulseMs: state.pulseMs,
-      // Sent as 0/1, not a JS boolean: Graph::applyLiveParams' generic path
-      // (cJSON_IsNumber -> setFloatFieldByName) only fires for JSON numbers
-      // - a literal true/false would need its own cJSON_IsBool special
-      // case there (see e.g. the Lfo "oneShot"/Filter "bypass" branches),
-      // which nodes::clock::setParam's existing `value >= 0.5f` check
-      // already makes unnecessary.
-      roundBpm: state.roundBpm ? 1 : 0,
-    });
+    sendLiveParamUpdateThrottled(pendingClockId, { pulseMs: state.pulseMs });
   }
   closeClockSettings();
 });
@@ -9211,6 +9577,27 @@ function updateFmOscillatorDutyCycleVisual(widgetId) {
   if (valueSpan) valueSpan.textContent = formatNumber(state.dutyCycle);
 }
 
+function updateFmOscillatorSuperSawVisual(widgetId) {
+  const state = fmOscillatorStates.get(widgetId);
+  if (!state) return;
+  const visible = state.waveType === "supersaw";
+  [
+    ["superSawDetune", "supersaw-detune"],
+    ["superSawMix", "supersaw-mix"],
+  ].forEach(([param, role]) => {
+    const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === param);
+    const row = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-row"]`);
+    if (row) row.hidden = !visible;
+    const slider = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-slider"]`);
+    if (slider) {
+      slider.value = String(state[param]);
+      slider.disabled = connected;
+    }
+    const valueSpan = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-value"]`);
+    if (valueSpan) valueSpan.textContent = formatNumber(state[param]);
+  });
+}
+
 function setFmOscillatorWaveType(widgetId, waveType) {
   const state = fmOscillatorStates.get(widgetId);
   if (!state) return;
@@ -9218,6 +9605,7 @@ function setFmOscillatorWaveType(widgetId, waveType) {
   audioEngine.setParam(widgetId, "waveType", waveType);
   updateFmOscillatorWaveButtons(widgetId);
   updateFmOscillatorDutyCycleVisual(widgetId);
+  updateFmOscillatorSuperSawVisual(widgetId);
   sendLiveParamUpdate(widgetId, { waveType });
 }
 
@@ -9228,6 +9616,11 @@ function setFmOscillatorWaveType(widgetId, waveType) {
 function mapWaveformValue(value) {
   const idx = clamp(Math.floor(value / (CV_MAX_VOLTS / WAVE_TYPE_BUTTONS.length)), 0, WAVE_TYPE_BUTTONS.length - 1);
   return WAVE_TYPE_BUTTONS[idx].id;
+}
+
+function mapFmWaveformValue(value) {
+  const idx = clamp(Math.floor(value / (CV_MAX_VOLTS / FM_WAVE_TYPE_BUTTONS.length)), 0, FM_WAVE_TYPE_BUTTONS.length - 1);
+  return FM_WAVE_TYPE_BUTTONS[idx].id;
 }
 
 
@@ -9506,18 +9899,21 @@ function setEspEqFilterType(widgetId, filterType) {
 }
 
 const FILTER_TYPE_LABELS = {
+  none: "None",
   lowpass: "Lowpass",
   highpass: "Highpass",
   bandpass: "Bandpass",
 };
 
 const FILTER_TYPE_BUTTONS = [
+  { id: "none", label: "None" },
   { id: "lowpass", label: "LP" },
   { id: "highpass", label: "HP" },
   { id: "bandpass", label: "BP" },
 ];
 
 const CURTIS_FILTER_TYPE_LABELS = {
+  none: "None",
   lp24: "24 dB Lowpass",
   lp12: "12 dB Lowpass",
   bp12: "12 dB Bandpass",
@@ -9525,11 +9921,32 @@ const CURTIS_FILTER_TYPE_LABELS = {
 };
 
 const CURTIS_FILTER_TYPE_BUTTONS = [
+  { id: "none", label: "None" },
   { id: "lp24", label: "LP24" },
   { id: "lp12", label: "LP12" },
   { id: "bp12", label: "BP12" },
   { id: "hp12", label: "HP12" },
 ];
+
+function filterTypeDefinitions(curtis) {
+  return curtis ? CURTIS_FILTER_TYPE_BUTTONS : FILTER_TYPE_BUTTONS;
+}
+
+function filterTypeFromCv(volts, curtis) {
+  const definitions = filterTypeDefinitions(curtis);
+  const index = clamp(Math.floor(clamp(Number(volts) || 0, 0, CV_MAX_VOLTS) / (CV_MAX_VOLTS / definitions.length)), 0, definitions.length - 1);
+  return definitions[index].id;
+}
+
+function filterTypeToCv(filterType, curtis) {
+  const definitions = filterTypeDefinitions(curtis);
+  const index = Math.max(0, definitions.findIndex((entry) => entry.id === filterType));
+  return ((index + 0.5) * CV_MAX_VOLTS) / definitions.length;
+}
+
+function filterTypeLabel(filterType, curtis) {
+  return (curtis ? CURTIS_FILTER_TYPE_LABELS : FILTER_TYPE_LABELS)[filterType] || "None";
+}
 
 function setFilterType(widgetId, filterType) {
   const state = filterStates.get(widgetId);
@@ -9576,8 +9993,17 @@ function updateFilterVisual(widgetId) {
 
   const globalToggle = el.querySelector('[data-role="filter-global-switch"]');
   if (globalToggle) globalToggle.checked = state.global === true;
-  const bypassToggle = el.querySelector(`[data-role="${el.dataset.widgetType}-bypass-switch"]`);
-  if (bypassToggle) bypassToggle.checked = state.bypass === true;
+  const typeConnected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "filterType");
+  el.querySelectorAll(".filter-type-btn").forEach((btn) => {
+    btn.disabled = typeConnected;
+  });
+  const typeSlider = el.querySelector('[data-role="filter-type-slider"]');
+  if (typeSlider) {
+    typeSlider.value = String(filterTypeToCv(state.filterType, el.dataset.widgetType === "curtis-filter"));
+    typeSlider.disabled = typeConnected;
+  }
+  const typeValue = el.querySelector('[data-role="filter-type-value"]');
+  if (typeValue) typeValue.textContent = filterTypeLabel(state.filterType, el.dataset.widgetType === "curtis-filter");
 
   
   
@@ -10000,9 +10426,9 @@ function isReverbType(type) {
 
 // Types whose "bypass" flows through the generic effectCvStates/
 // makeEffectCvEngine machinery below (reverb/reverb-light already did;
-// delay gets bypass the same way). Filter/CurtisFilter/Chorus/the ESP
-// effects have their OWN state maps (filterStates/chorusStates/
-// espEffectStates) and do NOT go through this engine - see hasBypass()
+// delay gets bypass the same way). Chorus/the ESP
+// effects have their OWN state maps (chorusStates/espEffectStates) and do
+// NOT go through this engine - see hasBypass()
 // below for the full cross-type set used by the shared toggle-switch UI.
 function isEffectCvBypassType(type) {
   return isReverbType(type) || type === "delay";
@@ -10010,15 +10436,13 @@ function isEffectCvBypassType(type) {
 
 // Every widget type that gets a Bypass toggle switch (see the port-row
 // loop below and BYPASS_STATE_MAPS just after it) - reverb/reverb-light/
-// delay share effectCvStates via isEffectCvBypassType(); filter/curtis-
-// filter/chorus/the 5 ESP effects each keep their own state map. EspMixer
+// delay share effectCvStates via isEffectCvBypassType(); chorus/the 5 ESP
+// effects each keep their own state map. EspMixer
 // deliberately excluded (2-input mixer, no single dry signal - see the
 // backend plan).
 function hasBypass(type) {
   return (
     isEffectCvBypassType(type) ||
-    type === "filter" ||
-    type === "curtis-filter" ||
     type === "bitcrusher" ||
     type === "chorus" ||
     type === "esp-eq" ||
@@ -10035,7 +10459,6 @@ function hasBypass(type) {
 // need a type-by-type if/else at every call site.
 function bypassStateMapFor(type) {
   if (isEffectCvBypassType(type)) return effectCvStates;
-  if (type === "filter" || type === "curtis-filter") return filterStates;
   if (type === "bitcrusher") return bitcrusherStates;
   if (type === "chorus") return chorusStates;
   return espEffectStates;
@@ -10412,6 +10835,131 @@ function updateMultiplexerRouting(widgetId) {
   );
 }
 
+
+
+const OUTPUT_MULTIPLEXER_MIN_OUTPUTS = 2;
+const OUTPUT_MULTIPLEXER_MAX_OUTPUTS = 16;
+const outputMultiplexerStates = new Map();
+
+function outputMultiplexerHasCvConnection(widgetId) {
+  return connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "select");
+}
+
+function setOutputMultiplexerManualIndex(widgetId, clientY) {
+  const state = outputMultiplexerStates.get(widgetId);
+  const selector = document.getElementById(widgetId)?.querySelector(".multiplexer-switch");
+  if (!state || !selector || outputMultiplexerHasCvConnection(widgetId)) return;
+  const rect = selector.getBoundingClientRect();
+  if (rect.height <= 0) return;
+  const fraction = clamp((clientY - rect.top) / rect.height, 0, 0.999999);
+  const idx = clamp(Math.floor(fraction * state.outputCount), 0, state.outputCount - 1);
+  if (idx === state.manualSelect && idx === state.activeIndex) return;
+  state.manualSelect = idx;
+  sendLiveParamUpdateThrottled(widgetId, { select: idx });
+  outputMultiplexerSetActiveIndex(widgetId, idx);
+}
+
+function renderOutputMultiplexerPorts(widgetId, portsEl) {
+  const state = outputMultiplexerStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  portsEl.appendChild(createPortRow(widgetId, { id: "in", label: "In" }, "in", "output-multiplexer"));
+  portsEl.appendChild(createPortRow(widgetId, { id: "select", label: "Select (CV)" }, "in", "output-multiplexer"));
+
+  for (let i = 1; i <= state.outputCount; i += 1) {
+    const row = createPortRow(widgetId, { id: `out${i}`, label: `Out ${i}` }, "out", "output-multiplexer");
+    row.classList.add("mux-out-row");
+    row.dataset.muxIndex = String(i - 1);
+    if (i - 1 === state.activeIndex) row.classList.add("active");
+    portsEl.appendChild(row);
+  }
+  layoutPortsGrid(portsEl);
+}
+
+// Sets live-active output index from connected "select" CV, refreshes the
+// highlighted port row + selector - mirrors multiplexerSetActiveIndex(),
+// minus the "value" republish (OutputMultiplexer has no scalar ControlRoute
+// output, only real audio-rate out1..out16 ports).
+function outputMultiplexerSetActiveIndex(widgetId, idx) {
+  const state = outputMultiplexerStates.get(widgetId);
+  if (!state) return;
+  const nextIndex = clamp(Math.round(Number(idx) || 0), 0, Math.max(0, state.outputCount - 1));
+  const changed = state.activeIndex !== nextIndex;
+  state.activeIndex = nextIndex;
+  if (changed) audioEngine.setParam(widgetId, "select", state.activeIndex);
+  updateOutputMultiplexerVisual(widgetId);
+}
+
+function updateOutputMultiplexerVisual(widgetId) {
+  const state = outputMultiplexerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const cvConnected = outputMultiplexerHasCvConnection(widgetId);
+  const selector = el.querySelector(".multiplexer-switch");
+  if (selector) selector.classList.toggle("cv-connected", cvConnected);
+  if (cvConnected && Number.isFinite(state.cvVolts)) {
+    state.activeIndex = multiplexerSelectFromCv(state.cvVolts, state.outputCount);
+  }
+  el.querySelectorAll(".mux-out-row").forEach((row) => {
+    row.classList.toggle("active", parseInt(row.dataset.muxIndex, 10) === state.activeIndex);
+  });
+
+  const thumb = el.querySelector('[data-role="output-multiplexer-switch-thumb"]');
+  const firstOutputRow = el.querySelector(".mux-out-row");
+  if (thumb && firstOutputRow) {
+    const rowHeight = firstOutputRow.offsetHeight || 26;
+    thumb.style.transform = `translateY(${state.activeIndex * rowHeight}px)`;
+  }
+  updateOutputMultiplexerRouting(widgetId);
+}
+
+// Mirror of updateMultiplexerRouting(), geometrically inverted: the fixed
+// endpoint is the single "in" port dot (left edge) instead of the single
+// output dot (right edge), and the moving endpoint is still the selector
+// thumb - the bezier-path math itself is untouched, only which DOM element
+// feeds `start` vs `output` swaps.
+function updateOutputMultiplexerRouting(widgetId) {
+  const el = document.getElementById(widgetId);
+  const content = el?.querySelector(".output-multiplexer-content");
+  const path = el?.querySelector('[data-role="output-multiplexer-routing-path"]');
+  const activeRow = el?.querySelector(".mux-out-row.active");
+  const thumb = el?.querySelector('[data-role="output-multiplexer-switch-thumb"]');
+  const inputDot = el?.querySelector('.port-row-in .port-dot[data-port-id="in"]');
+  if (!content || !path || !activeRow || !thumb || !inputDot) return;
+  if (content.clientWidth <= 0 || content.clientHeight <= 0) {
+    path.removeAttribute("d");
+    return;
+  }
+
+  const contentRect = content.getBoundingClientRect();
+  const scaleX = content.offsetWidth ? contentRect.width / content.offsetWidth : 1;
+  const scaleY = content.offsetHeight ? contentRect.height / content.offsetHeight : 1;
+  const localPoint = (rect, xFraction, yFraction) => ({
+    x: (rect.left + rect.width * xFraction - contentRect.left) / scaleX,
+    y: (rect.top + rect.height * yFraction - contentRect.top) / scaleY,
+  });
+  const start = localPoint(inputDot.getBoundingClientRect(), 0.5, 0.5);
+  const output = localPoint(thumb.getBoundingClientRect(), 0, 0.5);
+  const bendX = Math.max(start.x + 12, output.x - 24);
+  const direction = Math.sign(output.y - start.y) || 1;
+  const radius = Math.min(8, Math.abs(output.y - start.y) / 2, Math.max(0, (output.x - start.x) / 4));
+  const width = content.clientWidth || 1;
+  const height = content.clientHeight || 1;
+
+  const svg = path.closest("svg");
+  if (svg) {
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  }
+  path.setAttribute(
+    "d",
+    `M ${start.x} ${start.y} H ${bendX - radius} ` +
+      `Q ${bendX} ${start.y} ${bendX} ${start.y + direction * radius} ` +
+      `V ${output.y - direction * radius} ` +
+      `Q ${bendX} ${output.y} ${bendX + radius} ${output.y} H ${output.x}`
+  );
+}
+
 // Hammond drawbar sliders sit on the 0-10V CV domain (like every other port
 // in this engine, including Oscillator's own "gain"), but the value label
 // shows the friendlier 0-8 physical-register reading - same "volts -> mapped"
@@ -10696,10 +11244,14 @@ function updateStepArpPulseTimeVisual(widgetId) {
 // Resolved BPM of the internal fallback clock - pure function of state, safe
 // to call before the widget is even in the DOM (see buildStepArpIoLine's
 // initial "rate" row text, same reasoning as formatStepArpPulseTime above).
+// Unrelated to the device-wide Master Clock (main.js's masterClockBpm) -
+// this is Step Arpeggiator's own "rate" fallback, only used while its
+// "clock" input is itself unwired (see StepArpeggiatorNode.h).
 function stepArpRateBpm(widgetId) {
   const state = stepArpStates.get(widgetId);
   if (!state) return 0;
-  return clockBpm(state.clockCvVolts, 0, state.clockMaxBpm, state.clockRoundBpm);
+  const bpm = (state.clockCvVolts / CV_MAX_VOLTS) * state.clockMaxBpm;
+  return state.clockRoundBpm ? Math.round(bpm) : bpm;
 }
 
 // Local "rate" slider drag - see buildStepArpIoLine. Same wired-cable-wins
@@ -11298,6 +11850,65 @@ document.getElementById("multiplexerSettingsSave").addEventListener("click", () 
     savePresetNow();
   }
   closeMultiplexerSettings();
+});
+
+
+
+const outputMultiplexerSettingsOverlay = document.getElementById("outputMultiplexerSettingsOverlay");
+const outputMultiplexerCountInput = document.getElementById("outputMultiplexerCountInput");
+let pendingOutputMultiplexerId = null;
+
+function openOutputMultiplexerSettings(widgetId) {
+  const state = outputMultiplexerStates.get(widgetId);
+  if (!state) return;
+  pendingOutputMultiplexerId = widgetId;
+  outputMultiplexerCountInput.value = state.outputCount;
+  outputMultiplexerSettingsOverlay.classList.remove("hidden");
+}
+
+function closeOutputMultiplexerSettings() {
+  outputMultiplexerSettingsOverlay.classList.add("hidden");
+  pendingOutputMultiplexerId = null;
+}
+
+outputMultiplexerSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === outputMultiplexerSettingsOverlay) closeOutputMultiplexerSettings();
+});
+
+document.getElementById("outputMultiplexerSettingsCancel").addEventListener("click", closeOutputMultiplexerSettings);
+
+document.getElementById("outputMultiplexerSettingsSave").addEventListener("click", () => {
+  if (!pendingOutputMultiplexerId) return;
+  const state = outputMultiplexerStates.get(pendingOutputMultiplexerId);
+  if (state) {
+    let count = parseInt(outputMultiplexerCountInput.value, 10);
+    if (Number.isNaN(count)) count = OUTPUT_MULTIPLEXER_MIN_OUTPUTS;
+    count = clamp(count, OUTPUT_MULTIPLEXER_MIN_OUTPUTS, OUTPUT_MULTIPLEXER_MAX_OUTPUTS);
+
+    if (count < state.outputCount) {
+      for (let i = count + 1; i <= state.outputCount; i += 1) {
+        removeConnectionsForPort(pendingOutputMultiplexerId, `out${i}`, "out");
+      }
+    }
+    state.outputCount = count;
+    if (state.manualSelect > count - 1) state.manualSelect = count - 1;
+    // outputCount changes the number of allocated outPorts[] buffers on the
+    // firmware side (see GraphBuilder.h) - a live setParam can't grow that,
+    // only a full preset rebuild can, hence savePresetNow() below instead of
+    // a sendLiveParamUpdate here (same reasoning as Mixer/Multiplexer's own
+    // inputCount, which also requires a rebuild rather than a live push).
+
+    const el = document.getElementById(pendingOutputMultiplexerId);
+    const portsEl = el ? el.querySelector(".widget-ports") : null;
+    if (portsEl) renderOutputMultiplexerPorts(pendingOutputMultiplexerId, portsEl);
+
+    outputMultiplexerSetActiveIndex(pendingOutputMultiplexerId, connections.some((c) => c.to.widgetId === pendingOutputMultiplexerId && c.to.portId === "select")
+      ? state.activeIndex
+      : state.manualSelect);
+    drawConnections();
+    savePresetNow();
+  }
+  closeOutputMultiplexerSettings();
 });
 
 
@@ -13474,25 +14085,6 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "clock" && portId === "tempo") {
-    const state = clockStates.get(widgetId);
-    if (state) {
-      const num = Number(value);
-      state.cvVolts = Number.isNaN(num) ? 0 : clamp(num, 0, CV_MAX_VOLTS);
-      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
-      restartClockTimer(widgetId);
-      // restartClockTimer() above only rebuilds this browser tab's own local
-      // preview timer (see fireClockPulse) - matches nodes::clock::setParam's
-      // "cvVolts" field (ParamDispatch.h) so the REAL engine's ClockState
-      // updates live too, same as every other live-drag control here (e.g.
-      // LFO's "rate" case right below). markDirty() alone (the previous only
-      // call here) just schedules a debounced full-preset autosave - too
-      // slow/no-op for "drag the tempo slider, hear it change immediately".
-      sendLiveParamUpdateThrottled(widgetId, { cvVolts: state.cvVolts });
-      markDirty();
-    }
-  }
-
   if (el.dataset.widgetType === "lfo" && portId === "rate") {
     const state = lfoStates.get(widgetId);
     if (state) {
@@ -13546,28 +14138,28 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
-  if (el.dataset.widgetType === "lfo" && portId === "sync") {
+  if (el.dataset.widgetType === "lfo" && portId === "reset") {
     const state = lfoStates.get(widgetId);
     if (state) {
       const above = Number(value) >= GATE_THRESHOLD_VOLTS;
-      if (!state.syncPrevByVoice) state.syncPrevByVoice = new Map();
+      if (!state.resetPrevByVoice) state.resetPrevByVoice = new Map();
       const voiceKey = voiceIndex ?? "global";
-      const wasAbove = state.syncPrevByVoice.get(voiceKey) === true;
+      const wasAbove = state.resetPrevByVoice.get(voiceKey) === true;
       if (above && !wasAbove) {
         audioEngine.resetLfoPhase(widgetId, voiceIndex);
         state.cyclePos = 0;
-        state.lastTick = performance.now(); 
+        state.lastTick = performance.now();
         if (state.oneShot) {
-          
-          
+
+
           state.oneShotDone = false;
           state.oneShotAccum = 0;
         }
-        tickLfo(widgetId); 
+        tickLfo(widgetId);
       }
-      state.syncPrevByVoice.set(voiceKey, above);
+      state.resetPrevByVoice.set(voiceKey, above);
     }
-    const dot = el.querySelector('.port-row-in [data-port-id="sync"]');
+    const dot = el.querySelector('.port-row-in [data-port-id="reset"]');
     setLedActive(dot, Number(value) >= GATE_THRESHOLD_VOLTS);
   }
 
@@ -13759,6 +14351,17 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "fm-oscillator" && (portId === "superSawDetune" || portId === "superSawMix")) {
+    const state = fmOscillatorStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state[portId] = clamp(Number.isNaN(num) ? CV_MAX_VOLTS / 2 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, portId, state[portId]);
+      updateFmOscillatorSuperSawVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+    }
+  }
+
   if (el.dataset.widgetType === "fm-oscillator" && portId === "gate") {
     if (voiceIndex !== undefined) {
       audioEngine.setVoiceParam(widgetId, voiceIndex, "gate", Number(value));
@@ -13772,7 +14375,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   if (el.dataset.widgetType === "fm-oscillator" && portId === "waveform") {
     const num = Number(value);
     if (!Number.isNaN(num)) {
-      setFmOscillatorWaveType(widgetId, mapWaveformValue(num));
+      setFmOscillatorWaveType(widgetId, mapFmWaveformValue(num));
     }
   }
 
@@ -14105,6 +14708,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "filterType") {
+    setFilterType(widgetId, filterTypeFromCv(value, el.dataset.widgetType === "curtis-filter"));
+  }
+
   
   
   if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "global") {
@@ -14156,16 +14763,6 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
       audioEngine.setParam(widgetId, "bypass", state.bypass);
       updateEffectCvVisual(widgetId);
-      sendLiveParamUpdate(widgetId, { bypass: state.bypass });
-    }
-  }
-
-  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "bypass") {
-    const state = filterStates.get(widgetId);
-    if (state) {
-      state.bypass = Number(value) >= GATE_THRESHOLD_VOLTS;
-      audioEngine.setParam(widgetId, "bypass", state.bypass);
-      updateFilterVisual(widgetId);
       sendLiveParamUpdate(widgetId, { bypass: state.bypass });
     }
   }
@@ -14746,7 +15343,9 @@ function routeMidiToSoundFontPlayer(data) {
 function applyFilterWidgetParams(id, params, curtis = false) {
   const state = filterStates.get(id);
   if (!state || !params) return;
-  state.filterType = params.filterType || (curtis ? "lp24" : "lowpass");
+  const allowedTypes = filterTypeDefinitions(curtis).map((entry) => entry.id);
+  const requestedType = params.bypass === true ? "none" : params.filterType;
+  state.filterType = allowedTypes.includes(requestedType) ? requestedType : (curtis ? "lp24" : "lowpass");
   state.cutoff = params.cutoff ?? 5;
   state.cutoffMinHz = params.cutoffMinHz ?? 20;
   state.cutoffMaxHz = params.cutoffMaxHz ?? 20000;
@@ -14757,7 +15356,6 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
   state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
   state.global = params.global === true;
-  state.bypass = params.bypass === true;
   audioEngine.setParam(id, "filterType", state.filterType);
   audioEngine.setParam(id, "cutoffMinHz", state.cutoffMinHz);
   audioEngine.setParam(id, "cutoffMaxHz", state.cutoffMaxHz);
@@ -14769,7 +15367,6 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   audioEngine.setParam(id, "cutoff", state.cutoff);
   audioEngine.setParam(id, "resonance", state.resonance);
   audioEngine.setParam(id, "global", state.global);
-  audioEngine.setParam(id, "bypass", state.bypass);
   updateFilterVisual(id);
 }
 
@@ -15002,6 +15599,22 @@ const WIDGET_ENGINES = {
       }
     },
   },
+  "output-switch": {
+    getParams: (id) => {
+      const state = outputSwitchStates.get(id);
+      return state ? { cc: state.cc, channel: state.channel, selectOut2: state.selectOut2 } : {};
+    },
+    applyParams: (id, params) => {
+      const state = outputSwitchStates.get(id);
+      if (state && params) {
+        state.cc = params.cc ?? null;
+        state.channel = params.channel ?? null;
+        state.selectOut2 = params.selectOut2 === true;
+        audioEngine.setParam(id, "selectOut2", state.selectOut2);
+        updateOutputSwitchVisual(id);
+      }
+    },
+  },
   multiplier: {
     getParams: (id) => {
       const state = multiplierStates.get(id);
@@ -15088,26 +15701,12 @@ const WIDGET_ENGINES = {
   clock: {
     getParams: (id) => {
       const state = clockStates.get(id);
-      return state
-        ? {
-            cvVolts: state.cvVolts,
-            minBpm: state.minBpm,
-            maxBpm: state.maxBpm,
-            pulseMs: state.pulseMs,
-            roundBpm: state.roundBpm === true,
-          }
-        : {};
+      return state ? { pulseMs: state.pulseMs } : {};
     },
     applyParams: (id, params) => {
       const state = clockStates.get(id);
       if (!state || !params) return;
-      state.cvVolts = params.cvVolts ?? (params.raw != null ? (params.raw / 127) * CV_MAX_VOLTS : 0);
-      state.cvVolts = clamp(state.cvVolts, 0, CV_MAX_VOLTS);
-      state.minBpm = params.minBpm ?? 0;
-      state.maxBpm = params.maxBpm ?? 240;
       state.pulseMs = params.pulseMs ?? 100;
-      state.roundBpm = params.roundBpm === true;
-      state.bpm = clockBpm(state.cvVolts, state.minBpm, state.maxBpm, state.roundBpm);
       restartClockTimer(id);
     },
   },
@@ -15132,7 +15731,7 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => {
       const state = lfoStates.get(id);
       if (!state || !params) return;
-      state.waveType = params.waveType || "sine";
+      state.waveType = params.waveType === "supersaw" ? "sine" : (params.waveType || "sine");
       state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
       state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
       state.amplitude = params.amplitude ?? CV_MAX_VOLTS;
@@ -15176,7 +15775,7 @@ const WIDGET_ENGINES = {
       const state = oscillatorStates.get(id);
       if (!state || !params) return;
       const center = CV_MAX_VOLTS / 2;
-      state.waveType = params.waveType || "sine";
+      state.waveType = params.waveType === "supersaw" ? "sine" : (params.waveType || "sine");
       state.amplitude = params.amplitude ?? 1;
       state.tuneVolts = params.tune ?? center;
       state.gain = params.gain ?? CV_MAX_VOLTS;
@@ -15205,19 +15804,23 @@ const WIDGET_ENGINES = {
         fmIndex: state.fmIndex,
         feedback: state.feedback,
         dutyCycle: state.dutyCycle,
+        superSawDetune: state.superSawDetune,
+        superSawMix: state.superSawMix,
       };
     },
     applyParams: (id, params) => {
       const state = fmOscillatorStates.get(id);
       if (!state || !params) return;
       const center = CV_MAX_VOLTS / 2;
-      state.waveType = params.waveType || "sine";
+      state.waveType = FM_WAVE_TYPE_BUTTONS.some((wave) => wave.id === params.waveType) ? params.waveType : "sine";
       state.amplitude = params.amplitude ?? 1;
       state.tuneVolts = params.tune ?? center;
       state.gain = params.gain ?? CV_MAX_VOLTS;
       state.fmIndex = params.fmIndex ?? 0;
       state.feedback = params.feedback ?? 0;
       state.dutyCycle = params.dutyCycle ?? center;
+      state.superSawDetune = params.superSawDetune ?? center;
+      state.superSawMix = params.superSawMix ?? center;
       state.pitchCv = center;
       audioEngine.setParam(id, "waveType", state.waveType);
       audioEngine.setParam(id, "amplitude", 0, 0);
@@ -15225,12 +15828,15 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "fmIndex", state.fmIndex);
       audioEngine.setParam(id, "feedback", state.feedback);
       audioEngine.setParam(id, "dutyCycle", state.dutyCycle);
+      audioEngine.setParam(id, "superSawDetune", state.superSawDetune);
+      audioEngine.setParam(id, "superSawMix", state.superSawMix);
       recomputeFmOscillatorFreq(id, undefined);
       updateFmOscillatorTuneVisual(id);
       updateFmOscillatorGainVisual(id);
       updateFmOscillatorIndexVisual(id);
       updateFmOscillatorFeedbackVisual(id);
       updateFmOscillatorDutyCycleVisual(id);
+      updateFmOscillatorSuperSawVisual(id);
       updateFmOscillatorWaveButtons(id);
     },
   },
@@ -15485,6 +16091,23 @@ const WIDGET_ENGINES = {
       const portsEl = el ? el.querySelector(".widget-ports") : null;
       if (portsEl) renderMultiplexerPorts(id, portsEl);
       multiplexerSetActiveIndex(id, state.manualSelect);
+    },
+  },
+  "output-multiplexer": {
+    getParams: (id) => {
+      const state = outputMultiplexerStates.get(id);
+      return state ? { outputCount: state.outputCount, select: state.manualSelect } : {};
+    },
+    applyParams: (id, params) => {
+      const state = outputMultiplexerStates.get(id);
+      if (!state || !params) return;
+      state.outputCount = clamp(params.outputCount || 2, OUTPUT_MULTIPLEXER_MIN_OUTPUTS, OUTPUT_MULTIPLEXER_MAX_OUTPUTS);
+      state.manualSelect = clamp(parseInt(params.select, 10) || 0, 0, state.outputCount - 1);
+      audioEngine.setParam(id, "select", state.manualSelect);
+      const el = document.getElementById(id);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderOutputMultiplexerPorts(id, portsEl);
+      outputMultiplexerSetActiveIndex(id, state.manualSelect);
     },
   },
   adsr: {
@@ -16571,6 +17194,8 @@ function connectWs() {
       if (incomingName !== (currentPresetName || "")) {
         loadPresetByName(incomingName, { activate: false });
       }
+    } else if (data.type === "masterClock") {
+      applyMasterClockBroadcast(data);
     } else if (data.type === "midi") {
       appendLog(`[${data.time}] ${data.port}: ${data.message}`);
       routeMidiToWidgets(data);
@@ -16578,7 +17203,9 @@ function connectWs() {
       routeMidiToButtons(data);
       routeMidiToUpDownButtons(data);
       routeMidiToSwitches(data);
+      routeMidiToOutputSwitches(data);
       routeMidiToSoundFontPlayer(data);
+      routeMidiToMasterClock(data);
       flashMidiActivity();
     } else if (data.type === "midi-error") {
       appendLog(`MIDI error: ${data.error}`);
@@ -16627,7 +17254,11 @@ function connectWs() {
 
 connectWs();
 
-
+// One-shot hydration on page load - the WS "masterClock" broadcast only
+// fires on a subsequent change (see broadcast_status_tick()'s comment), so a
+// freshly-opened tab needs this to learn the device's current bpm/mapping
+// instead of showing the JS defaults until something happens to change.
+fetch("/api/masterclock").then((r) => r.json()).then(applyMasterClockBroadcast).catch(() => {});
 
 
 

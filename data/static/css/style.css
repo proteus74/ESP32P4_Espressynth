@@ -361,6 +361,30 @@ button:hover {
   border-bottom-color: var(--accent);
 }
 
+.master-clock-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.35rem 0 0.35rem 0.6rem;
+  padding: 0.3rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.master-clock-badge:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.master-clock-badge-icon {
+  font-size: 0.9rem;
+}
+
 .mem-stats {
   display: flex;
   align-items: center;
@@ -2940,6 +2964,73 @@ body.show-node-cpu .widget-cpu-badge {
   border-radius: 2px;
   background: #cbd5e1;
   transition: none;
+}
+
+/* Output Switch widget: mirror of Switch's own layout above, just
+   highlighting the selected OUTPUT row instead of an input row. */
+.widget-instance[data-widget-type="output-switch"] {
+  min-width: 205px;
+}
+
+.switch-content .port-row-out.switch-selected {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.switch-content .port-row-out.switch-selected .port-label {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Output Multiplexer widget: mirror of Multiplexer's own layout above, just
+   with the roles inverted - many OUTPUT rows (out1..outN, highlighted via
+   .mux-out-row.active) instead of many input rows, and a single fixed "in"
+   port instead of a single fixed output. Deliberately its own class (not
+   reusing .multiplexer-content) since it still wants its output labels
+   visible/normally positioned, unlike Multiplexer's own single anonymous
+   output. */
+.widget-instance[data-widget-type="output-multiplexer"] {
+  min-width: 190px;
+}
+
+.output-multiplexer-content {
+  position: relative;
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.output-multiplexer-content .widget-ports {
+  padding-right: 0;
+  z-index: 2;
+}
+
+.output-multiplexer-content .switch-body {
+  pointer-events: none;
+  right: 50%;
+  transform: translateX(50%);
+}
+
+.output-multiplexer-content .multiplexer-switch {
+  pointer-events: auto;
+  cursor: ns-resize;
+}
+
+.output-multiplexer-content .multiplexer-switch.cv-connected {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.output-multiplexer-content .multiplexer-switch .switch-track::before {
+  display: none;
+}
+
+.mux-out-row.active {
+  background: rgba(56, 189, 248, 0.14);
+  border-radius: 0.25rem;
+}
+
+.mux-out-row.active > .port-label {
+  color: var(--accent);
+  font-weight: bold;
 }
 
 .port-row-out {

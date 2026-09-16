@@ -43,7 +43,9 @@
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
+#include "nodes/OutputMultiplexerNode.h"
 #include "nodes/OutputNodes.h"
+#include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
 #include "nodes/SwitchNode.h"
@@ -144,7 +146,8 @@ inline bool hasStereoOutput(NodeType type)
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::Detune || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
-           type == NodeType::StepArpeggiator || type == NodeType::Pan;
+           type == NodeType::StepArpeggiator || type == NodeType::Pan || type == NodeType::OutputSwitch ||
+           type == NodeType::OutputMultiplexer;
 }
 
 inline bool requiresInputBlockBuffers(NodeType type)
@@ -538,6 +541,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::Multiplexer:
         nodes::multiplexer::build(inst, p);
         break;
+    case NodeType::OutputMultiplexer:
+        nodes::outputmultiplexer::build(inst, p);
+        break;
     case NodeType::Bitcrusher:
         nodes::bitcrusher::build(inst, p);
         break;
@@ -591,6 +597,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::Switch:
         nodes::switchnode::build(inst, p);
+        break;
+    case NodeType::OutputSwitch:
+        nodes::outputswitch::build(inst, p);
         break;
     default:
         break;
@@ -866,6 +875,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.link = allocateNodeState<LinkState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.link == nullptr);
                 break;
+            case NodeType::OutputMultiplexer:
+                inst.outputMux = allocateNodeState<OutputMultiplexerState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.outputMux == nullptr);
+                break;
             default:
                 break;
             }
@@ -895,6 +908,39 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 if (!linkBusesAllocated)
                 {
                     ESP_LOGE(kGraphBuilderTag, "Link bus buffer allocation failed");
+                    g->destroy();
+                    g->widgetCount = 0;
+                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                    return g;
+                }
+            }
+            if (w.type == NodeType::OutputMultiplexer)
+            {
+                // Ports 0/1 are outL/outR (allocated above via
+                // hasStereoOutput); only ports 2..outputMuxCount-1 need their
+                // own buffer here, mirroring the linkBuses block above but
+                // sized from this instance's configured output count instead
+                // of a fixed constant (see OutputMultiplexerState::outPorts
+                // in NodeState.h).
+                const uint8_t count = doc.widgets[i].params.outputMuxCount < 2
+                                          ? 2
+                                          : (doc.widgets[i].params.outputMuxCount > 16 ? 16 : doc.widgets[i].params.outputMuxCount);
+                bool outputMuxBuffersAllocated = true;
+                for (int e = 0; e < count - 2; ++e)
+                {
+                    inst.outputMux->outPorts[e] = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
+                    if (inst.outputMux->outPorts[e] != nullptr)
+                    {
+                        ++blockBufferCount;
+                    }
+                    else
+                    {
+                        outputMuxBuffersAllocated = false;
+                    }
+                }
+                if (!outputMuxBuffersAllocated)
+                {
+                    ESP_LOGE(kGraphBuilderTag, "OutputMultiplexer buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
                     g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;

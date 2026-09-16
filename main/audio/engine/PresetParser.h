@@ -34,9 +34,11 @@ struct WidgetParams
     // fm-oscillator only - FmOscillatorState::dutyCycleCv (0-10V, 5V =
     // classic 50% square, only audible when waveType==Square).
     float dutyCycle = 5.0f;
+    float superSawDetune = 5.0f;
+    float superSawMix = 5.0f;
     // lfo - amplitude is 0-10V peak swing (see LfoState); zeroPointFixed
     // selects fixed (zeroPoint) vs auto (amplitude/2) center; oneShot plays
-    // one cycle per sync edge then freezes (see NodeInstance's Lfo case).
+    // one cycle per reset edge then freezes (see NodeInstance's Lfo case).
     // lfoGlobal is the "global" port's UI-toggle fallback (see LfoState::
     // global), only consulted when the port itself has no DSP-edge/
     // ControlRoute wired.
@@ -83,9 +85,6 @@ struct WidgetParams
     // filterGlobal is the "global" port's UI-toggle fallback (see
     // FilterState::global), same pattern as gainGlobal.
     bool filterGlobal = false;
-    // filterBypass is the "bypass" port's UI-toggle fallback (see
-    // FilterState::bypass), shared by Filter+CurtisFilter same as filterGlobal.
-    bool filterBypass = false;
     // esp-eq: one stereo band, filter type switchable (peak/shelf/hi-lo-pass)
     EqFilterKind eqFilterType = EqFilterKind::Peak;
     float eqFrequency = 1000.0f;
@@ -123,6 +122,13 @@ struct WidgetParams
     // MultiplexerState::manualSelect).
     uint8_t multiplexerSelect = 0;
     float multiplexerSoftFadeMs = 5.0f;
+    // output-multiplexer - mirror of multiplexer, but the CV/slider picks
+    // which OUTPUT (of outputMuxCount) receives the single audio input;
+    // every other output holds its own last value (persisted per-output in
+    // outputMuxHeld - see OutputMultiplexerState/nodes/OutputMultiplexerNode.h).
+    uint8_t outputMuxCount = 2;
+    uint8_t outputMuxSelect = 0;
+    float outputMuxHeld[16] = {}; // NodeState.h's kOutputMultiplexerMaxOutputs
     // chorus
     float rate = 1.5f, offset = 0.02f, depth = 0.003f;
     bool chorusBypass = false;
@@ -154,10 +160,9 @@ struct WidgetParams
     char linkId[24] = {};
     char linkName[48] = {};
     char sourceLinkId[24] = {};
-    // clock - "cvVolts" is raw CV (0-10V), scaled linearly between minBpm/
-    // maxBpm (see ClockState); pulseMs is the pulse width in ms.
-    float clockCvVolts = 0.0f, clockMinBpm = 0.0f, clockMaxBpm = 240.0f, clockPulseMs = 100.0f;
-    bool clockRoundBpm = false;
+    // clock - pulse width in ms; tempo itself comes from the device-wide
+    // synth::masterClock() (MasterClock.h), not from the preset.
+    float clockPulseMs = 100.0f;
     // sample-hold - manual threshold, overridden by a connected Threshold CV.
     float sampleHoldThreshold = 5.0f;
     // midi-in
@@ -224,6 +229,15 @@ struct WidgetParams
     bool switchSelectIn2 = false;
     float switchIn1Default = 0.0f;
     float switchIn2Default = 0.0f;
+    // output-switch - mirror of switch, but selectOut2 picks which OUTPUT
+    // receives the single audio input; the other output holds its own last
+    // value (persisted in outputSwitchHeld1/2 - see OutputSwitchState/
+    // nodes/OutputSwitchNode.h), not a fixed configured fallback.
+    int16_t outputSwitchCc = -1;
+    int8_t outputSwitchChannel = -1;
+    bool outputSwitchSelectOut2 = false;
+    float outputSwitchHeld1 = 0.0f;
+    float outputSwitchHeld2 = 0.0f;
     // wave-player
     char sampleFile[40] = {};
     int rootNoteMidi = 60; // C4 (scientific pitch notation, A4=69)

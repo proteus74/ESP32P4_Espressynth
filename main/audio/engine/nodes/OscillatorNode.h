@@ -185,6 +185,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
+    const float kInvSampleRate = 1.0f / kSampleRate;
     auto &s = inst.osc;
     // pitchCv (port 1) and tune (port 2): a genuine DSP edge
     // (audioConnectedPortMask) now re-evaluates hz every sample below - true
@@ -355,7 +356,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // Phase increment precomputed once for the whole block (plan item 2):
     // advance() would otherwise redo this same `hz * invSampleRate` multiply
     // on every sample even though hz is constant for the entire block here.
-    const float phaseIncrement = hz / kSampleRate;
+    const float phaseIncrement = hz * kInvSampleRate;
     const uint32_t phaseIncrementInt = PhaseOsc::toPhaseInt(phaseIncrement);
     // P2 (fm-plan.md section 3): amplitude actively ramping (ADSR attack/
     // decay) rather than block-constant - if tagged a whole-block linear
@@ -393,6 +394,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         break;
     case WaveType::PinkNoise:
         renderSelectedFastLoop<WaveType::PinkNoise>(ctx, frames, feedbackActive);
+        break;
+    case WaveType::SuperSaw:
+        // Defensive only: parsing/live updates reject SuperSaw for WaveGen.
+        renderSelectedFastLoop<WaveType::Sine>(ctx, frames, feedbackActive);
         break;
     }
 }

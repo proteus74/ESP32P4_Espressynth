@@ -75,6 +75,11 @@ struct FmOscillatorState
     // dutyThresholdInt in DspPrimitives.h). Read once per block, same
     // un-smoothed substitution pattern as fmIndexCv above.
     float dutyCycleCv = 5.0f;
+    // SuperSaw-only controls (ports 9/10). Center voice remains phaseGen;
+    // these six compact accumulators hold the three detuned voice pairs.
+    float superSawDetuneCv = 5.0f;
+    float superSawMixCv = 5.0f;
+    uint32_t superSawSidePhase[6] = {};
 };
 
 struct LfoState
@@ -91,7 +96,7 @@ struct LfoState
     // behavior exactly (halfSwing=5, center=5).
     float amplitude = 10.0f;
     // Phase offset in degrees (-180..180, see LFO_SLIDER_CONFIG in main.js) -
-    // added on every evaluation (not written into phaseGen itself), so a sync
+    // added on every evaluation (not written into phaseGen itself), so a
     // reset (phaseGen.resetPhase() -> phase_=0) automatically lands exactly
     // at this offset - see processNodeBlock's Lfo case.
     float phaseOffsetDeg = 0.0f;
@@ -103,18 +108,18 @@ struct LfoState
     // instead of a CV signal; zeroPointFixed/zeroPoint are ignored in this
     // mode (center is always 0V). See LfoNode.h::render().
     bool bipolar = false;
-    // Rising-edge state for the "sync" input (control-rate, see PortTables) -
+    // Rising-edge state for the "reset" input (control-rate, see PortTables) -
     // a rising edge across kGateThresholdVolts restarts phaseGen from 0 (see
     // processNodeBlock's Lfo case).
-    bool syncPrev = false;
-    // One-shot: once armed by a sync edge, plays exactly one full cycle then
-    // freezes (stops advancing) until the next sync edge re-arms it.
+    bool resetPrev = false;
+    // One-shot: once armed by a reset edge, plays exactly one full cycle then
+    // freezes (stops advancing) until the next reset edge re-arms it.
     // oneShotDone starts true so a freshly loaded/booted preset with oneShot
     // already enabled doesn't fire a phantom cycle before the first real
-    // sync - see processNodeBlock's Lfo case.
+    // reset - see processNodeBlock's Lfo case.
     bool oneShot = false;
     bool oneShotDone = true;
-    float oneShotAccum = 0.0f; // unwrapped phase accumulated since the last sync edge
+    float oneShotAccum = 0.0f; // unwrapped phase accumulated since the last reset edge
     // Global/per-voice switch: false (default, old behavior) = each voice
     // renders its own independent phase. true = voice 0 is authoritative, all
     // other voices of this widget simply mirror its already rendered output
@@ -266,28 +271,20 @@ struct PanState
     float pan = 5.0f;
 };
 
-// Free-running BPM pulse generator - mirrors main.js's Clock widget
-// (fireClockPulse/restartClockTimer), but sample-accurate instead of per-JS
-// setInterval. cvVolts (0-10V, "tempo" input) scales linearly between
-// minBpm/maxBpm (see NodeInstance.cpp), phaseSec is the phase accumulator
-// (0..period duration) instead of a FreeRTOS timer - hence does not drift
-// and needs no periodic task switch.
+// Free-running pulse generator, one per Clock-type node instance - mirrors
+// main.js's Clock widget (fireClockPulse/restartClockTimer), but
+// sample-accurate instead of per-JS setInterval. bpm itself is NOT stored
+// here anymore: every instance reads the single device-wide
+// synth::masterClock() (MasterClock.h) so all Clock outputs stay in tempo
+// with each other; only pulseMs (this instance's own pulse width) and the
+// phase accumulator are per-instance. phaseSec is 0..period duration instead
+// of a FreeRTOS timer - hence does not drift and needs no periodic task
+// switch.
 struct ClockState
 {
-    float cvVolts = 0.0f;
-    float minBpm = 0.0f;
-    float maxBpm = 240.0f;
     float pulseMs = 100.0f;
     float phaseSec = 0.0f;
     bool pulseActive = false;
-    // "sync" (Port-Index 1, control-only, see PortTables.h) - a rising edge
-    // restarts phaseSec from 0 (see ClockNode.h's render()), letting an
-    // external trigger resync the beat instead of drifting relative to it.
-    bool syncPrev = false;
-    // Settings-dialog toggle: snaps the CV-mapped BPM to the nearest whole
-    // number before use (see ClockNode.h's render()) - off by default
-    // (existing fractional-BPM behavior unchanged).
-    bool roundBpm = false;
 };
 
 // Samples "in" exactly once for each below-to-at/above-threshold transition
@@ -320,6 +317,29 @@ struct MultiplexerState
     uint8_t fadeTo = 0;
     uint32_t fadeSamples = 0;
     uint32_t fadePosition = 0;
+};
+
+// Mirror image of MultiplexerState: one audio input routed to whichever of
+// up to kOutputMultiplexerMaxOutputs outputs is currently selected (same
+// "select" CV convention as MultiplexerState::manualSelect/inputCount, just
+// applied to the output side) - see nodes/OutputMultiplexerNode.h. No
+// soft-fade (unlike Multiplexer): the point of this node is that every
+// non-selected output holds its own last value rather than crossfading, so
+// switching the active output is instantaneous. held[] is per-output,
+// updated every sample while that output is active and frozen otherwise -
+// persisted into the preset (WidgetParams::outputMuxHeld) so a reload shows
+// the same values a viewer/downstream node last saw, not silence.
+constexpr uint8_t kOutputMultiplexerMaxOutputs = 16;
+struct OutputMultiplexerState
+{
+    uint8_t outputCount = 2;
+    uint8_t manualSelect = 0;
+    uint8_t activeIndex = 0;
+    float held[kOutputMultiplexerMaxOutputs] = {};
+    // Ports 0/1 are this instance's own outL/outR (see outputPortBuffer() in
+    // NodeInstance.h); this array holds ports 2.. only - same split LinkState
+    // ::busOut uses for AudioOutputLink/AudioInputLink's extra buses.
+    float *outPorts[kOutputMultiplexerMaxOutputs - 2] = {};
 };
 
 // ChorusState is defined (state + render/build/destroy/setParam logic
@@ -384,6 +404,22 @@ struct SwitchState
     // In 2" to a deliberate value instead of silence/0.
     float in1Default = 0.0f;
     float in2Default = 0.0f;
+};
+
+// Mirror image of SwitchState: one audio input routed to whichever of two
+// outputs is currently selected (same MIDI-CC-learnable toggle convention as
+// SwitchState::selectIn2/cc/channel) - see nodes/OutputSwitchNode.h. held1/
+// held2 freeze the NON-selected output at its own last value instead of the
+// fixed configured fallback Switch's in1Default/in2Default use - persisted
+// into the preset (WidgetParams::outputSwitchHeld1/2) so a reload shows the
+// same values a downstream node last saw, not 0V.
+struct OutputSwitchState
+{
+    int16_t cc = -1;
+    int8_t channel = -1;
+    bool selectOut2 = false;
+    float held1 = 0.0f;
+    float held2 = 0.0f;
 };
 
 // Per-voice one-shot sample playback. sampleData/frameCount/channels point

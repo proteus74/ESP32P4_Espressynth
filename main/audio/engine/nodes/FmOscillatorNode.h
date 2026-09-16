@@ -33,17 +33,14 @@ namespace nodes::fmoscillator
 
 namespace
 {
-// Same 0-10V/6-band mapping as nodes::oscillator::waveTypeFromCv() - kept as
-// its own copy here (anonymous-namespace helpers aren't reachable across
-// node files, and each node file stays self-contained, see repo convention
-// in nodes/ArithmeticNodes.h's header comment).
+// FM alone has seven equal CV bands; WaveGen/LFO retain their six-band map.
 inline WaveType waveTypeFromCv(float volts)
 {
-    int idx = static_cast<int>(volts / (cv::kMaxVolts / 6.0f));
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 7.0f));
     if (idx < 0)
         idx = 0;
-    if (idx > 5)
-        idx = 5;
+    if (idx > 6)
+        idx = 6;
     switch (idx)
     {
     case 0: return WaveType::Sine;
@@ -51,7 +48,8 @@ inline WaveType waveTypeFromCv(float volts)
     case 2: return WaveType::Triangle;
     case 3: return WaveType::Sawtooth;
     case 4: return WaveType::Noise;
-    default: return WaveType::PinkNoise;
+    case 5: return WaveType::PinkNoise;
+    default: return WaveType::SuperSaw;
     }
 }
 
@@ -64,6 +62,94 @@ constexpr float kFmIndexMaxPhaseDeviation = 4.0f;
 // One full cycle at 10V. Uses previous raw carrier sample, before amplitude
 // and gain, so output level does not change feedback timbre.
 constexpr float kSelfFeedbackMaxPhaseDeviation = 1.0f;
+
+constexpr float kSuperSawCents[6] = {-28.0f, -14.0f, -7.0f, 7.0f, 14.0f, 28.0f};
+
+struct SuperSawLoopCtx
+{
+    NodeInstance *inst;
+    FmOscillatorState *state;
+    const float *ampBuf;
+    const float *gainBuf;
+    const float *fmInBuf;
+    float ampScalar;
+    float baseAmp;
+    float ampConstantValue;
+    float gainTarget;
+    float pitchCvConst;
+    float tuneVoltsConst;
+    float centerVolts;
+    float invSampleRate;
+    float phaseOffsetScale;
+    float feedbackAmount;
+    float centerWeight;
+    float sideWeight;
+    float outputScale;
+    float ratios[6];
+    uint32_t increments[7];
+    bool pitchNeedsAudioRate;
+    bool tuneNeedsAudioRate;
+    bool ampConstantForBlock;
+    bool gainFed;
+    bool gainConverged;
+    bool fmActive;
+    bool feedbackActive;
+};
+
+template <bool AudioRatePitch, bool ConstantOutput>
+IRAM_ATTR inline void renderSuperSawLoop(SuperSawLoopCtx &c, size_t frames)
+{
+    auto &s = *c.state;
+    float previous = s.feedbackSample;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        uint32_t audioRateIncrements[7];
+        const uint32_t *increments = c.increments;
+        if constexpr (AudioRatePitch)
+        {
+            const float pitchCv = c.pitchNeedsAudioRate ? noderender::portSample(*c.inst, 1, i) : c.pitchCvConst;
+            const float tuneVolts = c.tuneNeedsAudioRate ? noderender::portSample(*c.inst, 2, i) : c.tuneVoltsConst;
+            const float cycles = cv::hzFromPitchCv(pitchCv + (tuneVolts - c.centerVolts)) * c.invSampleRate;
+            audioRateIncrements[0] = PhaseOsc::toPhaseInt(cycles);
+            for (size_t voice = 0; voice < 6; ++voice)
+                audioRateIncrements[voice + 1] = PhaseOsc::toPhaseInt(cycles * c.ratios[voice]);
+            increments = audioRateIncrements;
+        }
+
+        float phaseOffset = c.fmActive ? c.fmInBuf[i] * c.phaseOffsetScale : 0.0f;
+        if (c.feedbackActive)
+            phaseOffset += previous * c.feedbackAmount;
+        const uint32_t phaseOffsetInt = PhaseOsc::toPhaseOffsetInt(phaseOffset);
+
+        float sample = PhaseOsc::sawSampleAt(s.phaseGen.phaseInt() + phaseOffsetInt) * c.centerWeight;
+        s.phaseGen.advancePhaseOnly(increments[0], 1);
+        float sideSum = 0.0f;
+        for (size_t voice = 0; voice < 6; ++voice)
+        {
+            sideSum += PhaseOsc::sawSampleAt(s.superSawSidePhase[voice] + phaseOffsetInt);
+            s.superSawSidePhase[voice] += increments[voice + 1];
+        }
+        sample += sideSum * c.sideWeight;
+        if (c.feedbackActive)
+            previous = sample;
+
+        if constexpr (ConstantOutput)
+        {
+            c.inst->outL[i] = sample * c.outputScale;
+        }
+        else
+        {
+            const float amp = c.ampConstantForBlock
+                                  ? c.ampConstantValue
+                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+            const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
+                                             : (c.gainConverged ? c.gainTarget : s.gainSmooth.process(c.gainTarget));
+            c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        }
+    }
+    if (c.feedbackActive)
+        s.feedbackSample = previous;
+}
 
 // Same FastLoopCtx/renderFastLoop<W> pattern as nodes::oscillator - the
 // no-FM-patched fast path is byte-identical to a plain Oscillator's, so it
@@ -287,6 +373,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
+    const float kInvSampleRate = 1.0f / kSampleRate;
     auto &s = inst.fmOsc;
     constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
     // Cleared unconditionally up front, same reasoning as AdsrNode.h's
@@ -301,10 +388,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // reasoning (a genuine DSP edge re-evaluates hz every sample; a
     // ControlRoute-only or unconnected value only needs one evaluation per
     // block).
-    const bool pitchAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
-    const bool pitchControlRamping = (inst.controlRampPortMask & static_cast<uint8_t>(1u << 1)) != 0;
+    const bool pitchAudioFed = (inst.audioConnectedPortMask & synth::portBit(1)) != 0;
+    const bool pitchControlRamping = (inst.controlRampPortMask & synth::portBit(1)) != 0;
     const bool pitchControlFed = controlPortConnected(inst, 1);
-    const bool tuneAudioFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool tuneAudioFed = (inst.audioConnectedPortMask & synth::portBit(2)) != 0;
     float constantPitchCv = kCenterVolts;
     const bool pitchAudioConstant = pitchAudioFed && audioPortConstantForBlock(inst, 1, frames, constantPitchCv);
     const bool pitchNeedsAudioRate = (pitchAudioFed && !pitchAudioConstant) || pitchControlRamping;
@@ -322,18 +409,18 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // fmIn changes phase per sample, but does not make carrier pitch
     // audio-rate. Keeping those concerns separate lets the common
     // constant-pitch FM case retain the precomputed-increment fast path.
-    const bool fmInFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+    const bool fmInFed = (inst.audioConnectedPortMask & synth::portBit(5)) != 0;
     const bool needsAudioRatePitch = pitchNeedsAudioRate || tuneNeedsAudioRate;
 
     // "waveform" (port 3): control-only, one evaluation per block, same
     // reasoning as Oscillator's.
-    const bool waveFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool waveFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & synth::portBit(3)) != 0;
     const WaveType wave = waveFed ? waveTypeFromCv(portSample(inst, 3, 0)) : s.wave;
 
     // "fmIndex" (port 6): control-only, one evaluation per block - a
     // connected CV substitutes the widget's own fmIndexCv outright, same
     // pattern as "tune" above.
-    const bool fmIndexFed = controlPortConnected(inst, 6) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 6)) != 0;
+    const bool fmIndexFed = controlPortConnected(inst, 6) || (inst.audioConnectedPortMask & synth::portBit(6)) != 0;
     const float fmIndexCv = fmIndexFed ? portSample(inst, 6, 0) : s.fmIndexCv;
     const float indexAmount = fmIndexCv * cv::kInvMaxVolts * kFmIndexMaxPhaseDeviation;
 
@@ -341,15 +428,18 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // pattern as "fmIndex" above. Only compute its fixed-point threshold for
     // Square; every other waveform ignores it and keeps the default. 5V
     // (center) = classic 50% square, matching dutyCycleCv's default.
-    // NOTE: port 8 needs the full-width synth::portBit() here, not the
-    // `static_cast<uint8_t>(1u << n)` pattern used for ports 0-7 elsewhere
-    // in this function - 1u<<8 = 256 doesn't fit uint8_t (would silently
-    // truncate to 0, i.e. "never connected").
+    // Full-width portBit() is required for this and the SuperSaw ports.
     const bool dutyCycleFed = controlPortConnected(inst, 8) || (inst.audioConnectedPortMask & synth::portBit(8)) != 0;
     const float dutyCycleCv = dutyCycleFed ? portSample(inst, 8, 0) : s.dutyCycleCv;
     const uint32_t dutyThresholdInt = wave == WaveType::Square
                                           ? PhaseOsc::dutyThresholdFromUnit(dutyCycleCv * cv::kInvMaxVolts)
                                           : 0x80000000u;
+    const bool superSawDetuneFed = controlPortConnected(inst, 9) ||
+                                   (inst.audioConnectedPortMask & synth::portBit(9)) != 0;
+    const bool superSawMixFed = controlPortConnected(inst, 10) ||
+                                (inst.audioConnectedPortMask & synth::portBit(10)) != 0;
+    const float superSawDetuneCv = superSawDetuneFed ? portSample(inst, 9, 0) : s.superSawDetuneCv;
+    const float superSawMixCv = superSawMixFed ? portSample(inst, 10, 0) : s.superSawMixCv;
     // Unpatched and patched-but-silent fmIn both use the pure-carrier path.
     // The block scan exits on the first changed sample, so an active audio
     // modulator normally costs only a couple of comparisons. Silent blocks
@@ -364,7 +454,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const bool fmActive = fmInCarriesSignal && phaseModulatable;
     const float phaseOffsetScale = indexAmount * cv::kInvAudioPeakVolts;
     const bool feedbackFed =
-        controlPortConnected(inst, 7) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 7)) != 0;
+        controlPortConnected(inst, 7) || (inst.audioConnectedPortMask & synth::portBit(7)) != 0;
     const float feedbackCv = feedbackFed ? portSample(inst, 7, 0) : s.feedbackCv;
     const float feedbackAmount = cv::vcaGain(feedbackCv, false) * kSelfFeedbackMaxPhaseDeviation;
     const bool feedbackActive = feedbackAmount != 0.0f && phaseModulatable;
@@ -374,10 +464,11 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 
     // "gain" (port 4): identical to Oscillator's - real audio-rate port,
     // per-sample-smoothed only in the unwired case.
-    const bool gainFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    const bool gainFed = (inst.audioConnectedPortMask & synth::portBit(4)) != 0;
     const float gainTarget = cv::vcaGain(s.gainCv, false);
     constexpr float kSilentGain = 1e-4f;
-    if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
+    const bool gainSilent = !gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain;
+    if (gainSilent && wave != WaveType::SuperSaw)
     {
         memset(inst.outL, 0, frames * sizeof(float));
         inst.outIsConstant = true;
@@ -416,6 +507,105 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         else ++enginestats::current.fmAmpAudioRate;
     }
 
+    if (wave == WaveType::SuperSaw)
+    {
+        ++enginestats::current.fmSuperSawActive;
+        float detune = superSawDetuneCv * cv::kInvMaxVolts;
+        if (detune < 0.0f) detune = 0.0f;
+        if (detune > 1.0f) detune = 1.0f;
+        float mix = superSawMixCv * cv::kInvMaxVolts;
+        if (mix < 0.0f) mix = 0.0f;
+        if (mix > 1.0f) mix = 1.0f;
+        const float norm = 1.0f / (1.0f + 6.0f * mix);
+
+        SuperSawLoopCtx ctx{};
+        ctx.inst = &inst;
+        ctx.state = &s;
+        ctx.ampBuf = ampBuf;
+        ctx.gainBuf = gainBuf;
+        ctx.fmInBuf = fmInBuf;
+        ctx.ampScalar = ampScalar;
+        ctx.baseAmp = baseAmp;
+        ctx.ampConstantValue = ampConstantValue;
+        ctx.gainTarget = gainTarget;
+        ctx.pitchCvConst = pitchCvConst;
+        ctx.tuneVoltsConst = tuneVoltsConst;
+        ctx.centerVolts = kCenterVolts;
+        ctx.invSampleRate = kInvSampleRate;
+        ctx.phaseOffsetScale = phaseOffsetScale;
+        ctx.feedbackAmount = feedbackAmount;
+        ctx.centerWeight = norm;
+        ctx.sideWeight = mix * norm;
+        ctx.outputScale = ampConstantValue * gainTarget * cv::kAudioPeakVolts;
+        ctx.pitchNeedsAudioRate = pitchNeedsAudioRate;
+        ctx.tuneNeedsAudioRate = tuneNeedsAudioRate;
+        ctx.ampConstantForBlock = ampConstantForBlock;
+        ctx.gainFed = gainFed;
+        ctx.gainConverged = gainConverged;
+        ctx.fmActive = fmActive;
+        ctx.feedbackActive = feedbackActive;
+        for (size_t voice = 0; voice < 6; ++voice)
+            ctx.ratios[voice] = exp2f(kSuperSawCents[voice] * detune / 1200.0f);
+
+        if (detune == 0.0f)
+        {
+            const uint32_t centerPhase = s.phaseGen.phaseInt();
+            for (uint32_t &phase : s.superSawSidePhase)
+                phase = centerPhase;
+        }
+
+        if (!needsAudioRatePitch)
+        {
+            const float cycles = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts)) * kInvSampleRate;
+            ctx.increments[0] = PhaseOsc::toPhaseInt(cycles);
+            for (size_t voice = 0; voice < 6; ++voice)
+                ctx.increments[voice + 1] = PhaseOsc::toPhaseInt(cycles * ctx.ratios[voice]);
+        }
+
+        const bool silent = !feedbackActive && (gainSilent || (ampConstantForBlock && ampConstantValue == 0.0f));
+        if (silent)
+        {
+            if (needsAudioRatePitch)
+            {
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    const float pitchCv = pitchNeedsAudioRate ? portSample(inst, 1, i) : pitchCvConst;
+                    const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
+                    const float cycles = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * kInvSampleRate;
+                    s.phaseGen.advancePhaseOnly(PhaseOsc::toPhaseInt(cycles), 1);
+                    for (size_t voice = 0; voice < 6; ++voice)
+                        s.superSawSidePhase[voice] += PhaseOsc::toPhaseInt(cycles * ctx.ratios[voice]);
+                }
+            }
+            else
+            {
+                s.phaseGen.advancePhaseOnly(ctx.increments[0], frames);
+                for (size_t voice = 0; voice < 6; ++voice)
+                    s.superSawSidePhase[voice] += ctx.increments[voice + 1] * static_cast<uint32_t>(frames);
+            }
+            if (!gainFed && !gainConverged)
+                for (size_t i = 0; i < frames; ++i) s.gainSmooth.process(gainTarget);
+            memset(inst.outL, 0, frames * sizeof(float));
+            inst.outIsConstant = true;
+            inst.outConstantValue = 0.0f;
+            ++enginestats::current.fmSilentSkipped;
+            return;
+        }
+
+        const bool constantOutput = ampConstantForBlock && gainConverged && !gainFed;
+        if (needsAudioRatePitch)
+        {
+            if (constantOutput) renderSuperSawLoop<true, true>(ctx, frames);
+            else renderSuperSawLoop<true, false>(ctx, frames);
+        }
+        else
+        {
+            if (constantOutput) renderSuperSawLoop<false, true>(ctx, frames);
+            else renderSuperSawLoop<false, false>(ctx, frames);
+        }
+        return;
+    }
+
     if (needsAudioRatePitch)
     {
         if (modulationActive)
@@ -435,7 +625,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 float phaseOffset = fmActive ? fmInBuf[i] * phaseOffsetScale : 0.0f;
                 if (feedbackActive)
                     phaseOffset += s.feedbackSample * feedbackAmount;
-                const float sample = s.phaseGen.processWithIncrement(wave, hz / kSampleRate, phaseOffset, dutyThresholdInt);
+                const float sample = s.phaseGen.processWithIncrement(wave, hz * kInvSampleRate, phaseOffset, dutyThresholdInt);
                 if (feedbackActive)
                     s.feedbackSample = sample;
                 inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
@@ -455,7 +645,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                                       : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
                 const float gainMul = gainFed ? cv::vcaGain(gainBuf[i], false)
                                               : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
-                const float sample = s.phaseGen.processWithIncrement(wave, hz / kSampleRate, 0.0f, dutyThresholdInt);
+                const float sample = s.phaseGen.processWithIncrement(wave, hz * kInvSampleRate, 0.0f, dutyThresholdInt);
                 inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
             }
         }
@@ -463,7 +653,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     }
 
     const float hz = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts));
-    const float phaseIncrement = hz / kSampleRate;
+    const float phaseIncrement = hz * kInvSampleRate;
     const uint32_t phaseIncrementInt = PhaseOsc::toPhaseInt(phaseIncrement);
 
     // P1 (documentation/fm-plan.md section 3, "Stumme Modulatoren billiger
@@ -537,6 +727,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     case WaveType::PinkNoise:
         renderSelectedFastLoop<WaveType::PinkNoise>(ctx, frames, fmActive, feedbackActive);
         break;
+    case WaveType::SuperSaw:
+        break;
     }
 }
 
@@ -550,6 +742,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.fmIndexCv = p.fmIndex;
     s.feedbackCv = p.oscillatorFeedback;
     s.dutyCycleCv = p.dutyCycle;
+    s.superSawDetuneCv = p.superSawDetune;
+    s.superSawMixCv = p.superSawMix;
     // Same cutoff/reason as Oscillator's gainSmooth - see NodeState.h.
     s.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 }
@@ -591,13 +785,24 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.dutyCycleCv = value;
         return true;
     }
+    if (strcmp(name, "superSawDetune") == 0)
+    {
+        s.superSawDetuneCv = value;
+        return true;
+    }
+    if (strcmp(name, "superSawMix") == 0)
+    {
+        s.superSawMixCv = value;
+        return true;
+    }
     if (strcmp(name, "gate") == 0)
     {
         const bool gateNow = value > cv::kGateThresholdVolts;
-        if (gateNow && !s.gatePrev && s.wave != WaveType::Noise &&
-            s.wave != WaveType::PinkNoise)
+        if (gateNow && !s.gatePrev)
         {
             s.phaseGen.resetPhase();
+            for (uint32_t &phase : s.superSawSidePhase)
+                phase = 0u;
             s.feedbackSample = 0.0f;
         }
         s.gatePrev = gateNow;
@@ -608,7 +813,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"));
+    out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"), true);
     // Same key/domain/default as nodes::oscillator::parsePreset() - see
     // main.js's WIDGET_ENGINES["fm-oscillator"].
     out.tuneVolts = presetparser::getFloat(p, "tune", 5.0f);
@@ -617,6 +822,8 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.fmIndex = presetparser::getFloat(p, "fmIndex", 0.0f);
     out.oscillatorFeedback = presetparser::getFloat(p, "feedback", 0.0f);
     out.dutyCycle = presetparser::getFloat(p, "dutyCycle", 5.0f);
+    out.superSawDetune = presetparser::getFloat(p, "superSawDetune", 5.0f);
+    out.superSawMix = presetparser::getFloat(p, "superSawMix", 5.0f);
 }
 
 } // namespace nodes::fmoscillator

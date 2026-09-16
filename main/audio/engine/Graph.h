@@ -1101,6 +1101,22 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                 // works as expected instead of needing a momentary press.
                 sw.selectIn2 = ccValue >= 64;
             }
+            else if (widgets[w].type == NodeType::OutputSwitch)
+            {
+                NodeInstance &osInst = instances[widgets[w].instanceBase];
+                OutputSwitchState &os = osInst.outputSwitch;
+                if (os.cc < 0 || static_cast<uint8_t>(os.cc) != ccNumber)
+                {
+                    continue;
+                }
+                if (os.channel < 0 || static_cast<uint8_t>(os.channel) != ccChannel0)
+                {
+                    continue;
+                }
+                // Same direct CC-to-output mapping as Switch's own
+                // selectIn2 above, just picking the output side instead.
+                os.selectOut2 = ccValue >= 64;
+            }
             else if (widgets[w].type == NodeType::MidiIn)
             {
                 // Sustain pedal, CC64: >=64 down / <64 up, same convention
@@ -1375,7 +1391,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         if ((slot.type == NodeType::Oscillator || slot.type == NodeType::Lfo || slot.type == NodeType::FmOscillator) &&
             strcmp(key, "waveType") == 0 && cJSON_IsString(item))
         {
-            const WaveType wave = waveTypeFromString(item->valuestring);
+            const WaveType wave = waveTypeFromString(item->valuestring, slot.type == NodeType::FmOscillator);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 NodeInstance &inst = instances[slot.instanceBase + v];
@@ -1760,6 +1776,30 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].switchState.in2Default = value;
             }
         }
+        else if (slot.type == NodeType::OutputSwitch && strcmp(key, "cc") == 0)
+        {
+            const int16_t cc = cJSON_IsNumber(item) ? static_cast<int16_t>(item->valueint) : -1;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].outputSwitch.cc = cc;
+            }
+        }
+        else if (slot.type == NodeType::OutputSwitch && strcmp(key, "channel") == 0)
+        {
+            const int8_t ch = cJSON_IsNumber(item) ? static_cast<int8_t>(item->valueint) : -1;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].outputSwitch.channel = ch;
+            }
+        }
+        else if (slot.type == NodeType::OutputSwitch && strcmp(key, "selectOut2") == 0 && cJSON_IsBool(item))
+        {
+            const bool sel = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].outputSwitch.selectOut2 = sel;
+            }
+        }
         else if (slot.type == NodeType::Lfo && strcmp(key, "zeroPointFixed") == 0 && cJSON_IsBool(item))
         {
             const bool fixed = cJSON_IsTrue(item);
@@ -1820,22 +1860,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 instances[slot.instanceBase + v].reverbLight->bypass = bypass;
-            }
-        }
-        else if (slot.type == NodeType::Filter && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
-        {
-            const bool bypass = cJSON_IsTrue(item);
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].filter->bypass = bypass;
-            }
-        }
-        else if (slot.type == NodeType::CurtisFilter && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
-        {
-            const bool bypass = cJSON_IsTrue(item);
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].curtisFilter->bypass = bypass;
             }
         }
         else if (slot.type == NodeType::Delay && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
@@ -2093,6 +2117,18 @@ inline void Graph::destroy()
                 }
                 heap_caps_free(inst.link);
                 inst.link = nullptr;
+            }
+            break;
+        case NodeType::OutputMultiplexer:
+            if (inst.outputMux != nullptr)
+            {
+                for (float *&buf : inst.outputMux->outPorts)
+                {
+                    heap_caps_free(buf);
+                    buf = nullptr;
+                }
+                heap_caps_free(inst.outputMux);
+                inst.outputMux = nullptr;
             }
             break;
         default:

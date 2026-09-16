@@ -89,6 +89,10 @@
 <div class="page-tabs">
   <button class="page-tab active" data-page="generator">Sound Generation</button>
   <button class="page-tab" data-page="fx">FX &amp; Output</button>
+  <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
+    <span class="master-clock-badge-icon">⏱️</span>
+    <span id="masterClockBpmLabel">120</span> BPM
+  </button>
   <div class="mem-stats" id="memStats">
     <div class="preset-load-progress hidden" id="presetLoadProgress">
       <span class="preset-load-progress-label" id="presetLoadProgressLabel">Loading preset…</span>
@@ -383,6 +387,24 @@
   </div>
 </div>
 
+<div id="outputSwitchSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Output Switch Settings</h3>
+    <label class="modal-field">
+      <span>Learned CC Number</span>
+      <input type="text" id="outputSwitchCcDisplay" readonly placeholder="– none yet –">
+    </label>
+    <div class="modal-field">
+      <button id="outputSwitchLearnBtn" class="btn-secondary">Learn</button>
+    </div>
+    <p class="modal-hint">Press-Flanke (CC-Wert &gt;= 64) schaltet um (Out 1 &lt;-&gt; Out 2), latching. Der nicht ausgewählte Ausgang hält seinen letzten Wert.</p>
+    <div class="modal-actions">
+      <button id="outputSwitchSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="outputSwitchSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="linkedInputSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Linked Input Settings</h3>
@@ -484,21 +506,38 @@
       <span>Pulse Duration (ms)</span>
       <input type="text" inputmode="decimal" id="clockPulseMsInput" value="100">
     </label>
-    <label class="modal-field">
-      <span>Minimum BPM at 0 V</span>
-      <input type="number" min="0" step="0.1" inputmode="decimal" id="clockMinBpmInput" value="0">
-    </label>
-    <label class="modal-field">
-      <span>Maximum BPM at 10 V</span>
-      <input type="number" min="0" step="0.1" inputmode="decimal" id="clockMaxBpmInput" value="240">
-    </label>
-    <label class="modal-field modal-field-checkbox">
-      <input type="checkbox" id="clockRoundBpmInput">
-      <span>Whole BPM only</span>
-    </label>
     <div class="modal-actions">
       <button id="clockSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="clockSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="masterClockSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Master Clock Settings</h3>
+    <label class="modal-field">
+      <span>Current BPM</span>
+      <input type="number" min="0" step="0.1" inputmode="decimal" id="masterClockBpmInput" value="120">
+    </label>
+    <label class="modal-field">
+      <span>Maximum BPM (at MIDI CC value 127)</span>
+      <input type="number" min="1" step="0.1" inputmode="decimal" id="masterClockMaxBpmInput" value="240">
+    </label>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="masterClockRoundBpmInput">
+      <span>Whole BPM only</span>
+    </label>
+    <div class="modal-field">
+      <span>MIDI Controller</span>
+      <div class="knob-settings-cc">
+        <input type="text" id="masterClockCcDisplay" readonly placeholder="-">
+        <button type="button" id="masterClockLearnButton" class="btn-secondary">Learn</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="masterClockSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="masterClockSettingsSave">Save</button>
     </div>
   </div>
 </div>
@@ -582,6 +621,21 @@
     <div class="modal-actions">
       <button id="multiplexerSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="multiplexerSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="outputMultiplexerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Output Multiplexer Settings</h3>
+    <label class="modal-field">
+      <span>Number of Outputs (2–16)</span>
+      <input type="number" id="outputMultiplexerCountInput" min="2" max="16" value="2">
+    </label>
+    <p class="modal-hint">Kein Fade - Umschalten ist instantan. Nicht ausgewählte Ausgänge halten ihren letzten Wert.</p>
+    <div class="modal-actions">
+      <button id="outputMultiplexerSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="outputMultiplexerSettingsSave">Save</button>
     </div>
   </div>
 </div>

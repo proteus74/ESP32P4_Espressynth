@@ -8,7 +8,7 @@
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
 
-// Free-running LFO (sine/square/triangle/sawtooth/noise) with sync/one-shot/
+// Free-running LFO (sine/square/triangle/sawtooth/noise) with reset/one-shot/
 // global modes. LfoState (value member) stays in NodeState.h.
 namespace nodes::lfo
 {
@@ -34,7 +34,7 @@ inline void render(NodeInstance &inst, size_t frames)
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = inst.lfo;
     // "global" (port 2, control-only - see isControlOnlyInput): same
-    // dual-source-fed check as sync/oneShot below. >=kGateThresholdVolts
+    // dual-source-fed check as reset/oneShot below. >=kGateThresholdVolts
     // (or the "Global" UI toggle when unconnected) makes voice 0 of this
     // widget authoritative - every other voice just mirrors voice 0's
     // already-rendered output instead of computing its own phase (see
@@ -74,7 +74,7 @@ inline void render(NodeInstance &inst, size_t frames)
     const float clampLo = s.bipolar ? -cv::kAudioPeakVolts : 0.0f;
     const float clampHi = s.bipolar ? cv::kAudioPeakVolts : cv::kMaxVolts;
     // "zeroPoint" (port 3, control-only - see isControlOnlyInput): same
-    // dual-source-fed check as sync/oneShot/global above. A connected CV
+    // dual-source-fed check as reset/oneShot/global above. A connected CV
     // SUBSTITUTES the "Fixed Zero Point" slider's own zeroPoint outright
     // (same pattern as Oscillator's tuneVolts), read once per block like
     // every other control-only input here - a center-shift has no need for
@@ -84,28 +84,28 @@ inline void render(NodeInstance &inst, size_t frames)
     const float zeroPointVolts = zeroPointFed ? portSample(inst, 3, 0) : s.zeroPoint;
     const float center = s.bipolar ? 0.0f : (s.zeroPointFixed ? zeroPointVolts : halfSwing);
     // Degrees -> 0..1 fraction, added on every phaseGen evaluation (see
-    // PhaseOsc::currentSample/process) - so a sync reset
+    // PhaseOsc::currentSample/process) - so a reset
     // (phaseGen.resetPhase() below) automatically lands exactly at this
     // offset, without resetPhase() itself needing to know about it.
     const float phaseOffset = s.phaseOffsetDeg / 360.0f;
-    // Sync (port 0) and One Shot (port 1), both control-rate: a port counts
+    // Reset (port 0) and One Shot (port 1), both control-rate: a port counts
     // as "fed" via either a ControlRoute (Knob/Button by paramName -
     // controlConnectedPortMask) or a genuine DSP edge (wired directly from
     // another node's output - audioConnectedPortMask), same dual-source
     // check as every other control-only input (see Oscillator's
     // pitchCv/tune). When One Shot's port is unconnected, its UI toggle
     // (s.oneShot) is the fallback - matches Reverb's bypass pattern.
-    const bool syncFed = controlPortConnected(inst, 0) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
-    const float syncVal = syncFed ? portSample(inst, 0, 0) : 0.0f;
-    const bool syncAbove = syncVal >= cv::kGateThresholdVolts;
-    const bool syncEdge = syncFed && syncAbove && !s.syncPrev;
-    if (syncFed)
+    const bool resetFed = controlPortConnected(inst, 0) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
+    const float resetVal = resetFed ? portSample(inst, 0, 0) : 0.0f;
+    const bool resetAbove = resetVal >= cv::kGateThresholdVolts;
+    const bool resetEdge = resetFed && resetAbove && !s.resetPrev;
+    if (resetFed)
     {
-        s.syncPrev = syncAbove;
+        s.resetPrev = resetAbove;
     }
     const bool oneShotFed = controlPortConnected(inst, 1) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     const bool oneShotOn = oneShotFed ? (portSample(inst, 1, 0) >= cv::kGateThresholdVolts) : s.oneShot;
-    if (syncEdge)
+    if (resetEdge)
     {
         s.phaseGen.resetPhase();
         if (oneShotOn)
@@ -118,10 +118,10 @@ inline void render(NodeInstance &inst, size_t frames)
     // One Shot forces the per-sample path unconditionally (it must freeze
     // mid-block the instant a full cycle completes - the fast interpolated
     // Sine path below only samples phaseGen at the two block boundaries and
-    // can't represent that). Any sync edge also forces per-sample even for
-    // a Sine wave, so the interpolated path can't "swallow" a sync pulse
+    // can't represent that). Any reset edge also forces per-sample even for
+    // a Sine wave, so the interpolated path can't "swallow" a reset pulse
     // landing mid-block.
-    if (s.wave != WaveType::Sine || syncEdge || oneShotOn)
+    if (s.wave != WaveType::Sine || resetEdge || oneShotOn)
     {
         for (size_t i = 0; i < frames; ++i)
         {
@@ -129,7 +129,7 @@ inline void render(NodeInstance &inst, size_t frames)
             {
                 // Frozen (from an earlier sample this block, or an earlier
                 // block entirely): the phase isn't advancing anymore, so
-                // the waveform value is now constant until the next sync
+                // the waveform value is now constant until the next reset
                 // edge re-arms it. Compute it once and fill the rest of
                 // the block directly instead of recomputing the identical
                 // value every remaining sample (plan section 5: "One-Shot-

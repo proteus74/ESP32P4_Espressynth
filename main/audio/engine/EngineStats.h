@@ -60,6 +60,7 @@ struct BlockCounters
     // (fmActive) resp. active self feedback (feedbackActive) this block.
     uint32_t fmModActive = 0;
     uint32_t fmFeedbackActive = 0;
+    uint32_t fmSuperSawActive = 0;
 
     // DX-envelope block paths. These distinguish the cheap sustain/idle
     // fill from a full linear-ramp block and the uncommon boundary block
