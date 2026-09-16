@@ -30,4 +30,8 @@ Icons beim LFO auch schöner machen Und auch die Buttons müssen irgendwie ander
 Beim VCA auch die Buttons kleiner und das Gain muss da irgendwie anders gemacht werden. 
 
 
+DADSR implementieren.
+
+Buttons dürfen auch Werte über 10 Volt haben. 
+
 MIT license. 

@@ -20,6 +20,8 @@
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/CvInNode.h"
+#include "nodes/CvOutNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -127,6 +129,12 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Clock:
         nodes::clock::parsePreset(p, out);
+        break;
+    case NodeType::CvIn:
+        nodes::cvin::parsePreset(p, out);
+        break;
+    case NodeType::CvOut:
+        nodes::cvout::parsePreset(p, out);
         break;
     case NodeType::SampleHold:
         nodes::samplehold::parsePreset(p, out);

@@ -75,7 +75,10 @@ inline bool request_preset_name(const char *name) {
     PresetChangedMsg msg{};
     presetpaths::pathForName(name, msg.path, sizeof(msg.path));
     presetpaths::writeLastMarker(name);
-    return xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS;
+    s_engine.beginPresetLoad();
+    if (xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS) return true;
+    s_engine.cancelPresetLoad();
+    return false;
 }
 
 /** @brief Requests the unnamed current.json preset. */
@@ -84,7 +87,10 @@ inline bool request_current_preset() {
     PresetChangedMsg msg{};
     snprintf(msg.path, sizeof(msg.path), "%s", presetpaths::unnamedPath());
     presetpaths::writeLastMarker("");
-    return xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS;
+    s_engine.beginPresetLoad();
+    if (xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS) return true;
+    s_engine.cancelPresetLoad();
+    return false;
 }
 
 /**

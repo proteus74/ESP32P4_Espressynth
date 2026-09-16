@@ -131,7 +131,33 @@ async function applyWm8960Availability() {
   }
 }
 
+async function applyCvIoAvailability() {
+  let ads1115 = false;
+  let gp8413 = false;
+  try {
+    const res = await fetch("/api/version");
+    const data = await res.json();
+    ads1115 = data.ads1115 === true;
+    gp8413 = data.gp8413 === true;
+  } catch (err) {
+    ads1115 = false;
+    gp8413 = false;
+  }
+  const cat = WIDGET_CATEGORIES.find((c) => c.label === "External Hardware");
+  if (cat) {
+    if (!ads1115) {
+      const idx = cat.types.indexOf("cv-in");
+      if (idx >= 0) cat.types.splice(idx, 1);
+    }
+    if (!gp8413) {
+      const idx = cat.types.indexOf("cv-out");
+      if (idx >= 0) cat.types.splice(idx, 1);
+    }
+  }
+}
+
 applyWm8960Availability();
+applyCvIoAvailability();
 
 document.getElementById("menubarLogo").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -814,6 +840,21 @@ const WIDGET_TYPES = {
     inputs: [],
     outputs: [{ id: "pulse", label: "Pulse" }],
   },
+  "cv-in": {
+    label: "CV In",
+    icon: "🔌",
+    // Port/address/channel picked in a settings modal from the live boot-time I2C scan
+    // (see openCvInSettings) - no live value simulation client-side, same reasoning as
+    // Clock never calling audioEngine.createNode().
+    inputs: [],
+    outputs: [{ id: "value", label: "Value" }],
+  },
+  "cv-out": {
+    label: "CV Out",
+    icon: "🔌",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [],
+  },
   oscillator: {
     label: "WaveGen",
     icon: "〰️",
@@ -1274,6 +1315,7 @@ const WIDGET_CATEGORIES = [
   { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out", "linked-input", "linked-output"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
+  { label: "External Hardware", types: ["cv-in", "cv-out"] },
 ];
 
 
@@ -1564,7 +1606,7 @@ const FX_PAGE_TYPES = [
   "midi-in", "adsr",
   "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
   "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
-  "usb-out", "es8311-out", "wm8960-out",
+  "usb-out", "es8311-out", "wm8960-out", "cv-out",
 ];
 
 
@@ -1573,7 +1615,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold", "cv-in"];
 
 
 
@@ -2213,6 +2255,22 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "cv-in") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openCvInSettings(id);
+    });
+  }
+
+  if (type === "cv-out") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openCvOutSettings(id);
+    });
+  }
+
   if (type === "mixer") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -2397,6 +2455,22 @@ function createWidget(type, label, x, y, forcedId) {
     bpmLabel.textContent = "0 BPM";
 
     body.appendChild(bpmLabel);
+    el.appendChild(body);
+  }
+
+  if (type === "cv-in" || type === "cv-out") {
+    const stateMap = type === "cv-in" ? cvInStates : cvOutStates;
+    stateMap.set(id, { port: -1, address: 0, channel: 0 });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body cv-io-body";
+
+    const label = document.createElement("div");
+    label.className = "cv-io-label";
+    label.dataset.role = "cv-io-label";
+    label.textContent = "Not configured";
+
+    body.appendChild(label);
     el.appendChild(body);
   }
 
@@ -8744,6 +8818,181 @@ function setLedActive(dot, active) {
 
 
 const clockStates = new Map();
+
+// External Hardware (CV In/Out) - port/address/channel per instance, set via the settings
+// modal from the live boot-time I2C scan (see openCvInSettings/openCvOutSettings below).
+// port: -1 = never configured.
+const cvInStates = new Map();
+const cvOutStates = new Map();
+
+async function fetchI2cDevices() {
+  try {
+    const res = await fetch("/api/system/i2c");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.devices) ? data.devices : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function updateCvIoLabel(widgetId) {
+  const state = cvInStates.get(widgetId) || cvOutStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  const label = el?.querySelector('[data-role="cv-io-label"]');
+  if (!label || !state) return;
+  label.textContent =
+    state.port >= 0
+      ? `I2C${state.port} @ 0x${state.address.toString(16).toUpperCase()} ch${state.channel + 1}`
+      : "Not configured";
+}
+
+const cvInSettingsOverlay = document.getElementById("cvInSettingsOverlay");
+const cvInDeviceSelect = document.getElementById("cvInDeviceSelect");
+const cvInChannelSelect = document.getElementById("cvInChannelSelect");
+let pendingCvInId = null;
+
+async function openCvInSettings(widgetId) {
+  const state = cvInStates.get(widgetId);
+  if (!state) return;
+  pendingCvInId = widgetId;
+
+  const devices = (await fetchI2cDevices()).filter((d) => d.name === "ADS1115");
+  cvInDeviceSelect.innerHTML = "";
+  devices.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = `${d.bus}:${d.address}`;
+    opt.textContent = `I2C${d.bus} @ ${d.address}`;
+    cvInDeviceSelect.appendChild(opt);
+  });
+  if (devices.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No ADS1115 found";
+    cvInDeviceSelect.appendChild(opt);
+  }
+  const currentKey = state.port >= 0 ? `${state.port}:0x${state.address.toString(16).padStart(2, "0").toUpperCase()}` : "";
+  if ([...cvInDeviceSelect.options].some((o) => o.value === currentKey)) cvInDeviceSelect.value = currentKey;
+  cvInChannelSelect.value = String(state.channel || 0);
+  cvInSettingsOverlay.classList.remove("hidden");
+}
+
+function closeCvInSettings() {
+  cvInSettingsOverlay.classList.add("hidden");
+  pendingCvInId = null;
+}
+
+document.getElementById("cvInSettingsCancel").addEventListener("click", closeCvInSettings);
+
+document.getElementById("cvInSettingsSave").addEventListener("click", () => {
+  if (!pendingCvInId) return;
+  const state = cvInStates.get(pendingCvInId);
+  const [portStr, addressStr] = (cvInDeviceSelect.value || "").split(":");
+  if (!state || portStr === undefined || portStr === "" || !addressStr) {
+    showToast("Select an ADS1115 device first");
+    return;
+  }
+  state.port = parseInt(portStr, 10);
+  state.address = parseInt(addressStr, 16);
+  state.channel = parseInt(cvInChannelSelect.value, 10) || 0;
+  updateCvIoLabel(pendingCvInId);
+  savePresetNow();
+  closeCvInSettings();
+});
+
+const cvOutSettingsOverlay = document.getElementById("cvOutSettingsOverlay");
+const cvOutDeviceSelect = document.getElementById("cvOutDeviceSelect");
+const cvOutChannelSelect = document.getElementById("cvOutChannelSelect");
+let pendingCvOutId = null;
+
+async function openCvOutSettings(widgetId) {
+  const state = cvOutStates.get(widgetId);
+  if (!state) return;
+  pendingCvOutId = widgetId;
+
+  const devices = (await fetchI2cDevices()).filter((d) => d.name === "GP8413");
+  cvOutDeviceSelect.innerHTML = "";
+  devices.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = `${d.bus}:${d.address}`;
+    opt.textContent = `I2C${d.bus} @ ${d.address}`;
+    cvOutDeviceSelect.appendChild(opt);
+  });
+  if (devices.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No GP8413 found";
+    cvOutDeviceSelect.appendChild(opt);
+  }
+  const currentKey = state.port >= 0 ? `${state.port}:0x${state.address.toString(16).padStart(2, "0").toUpperCase()}` : "";
+  if ([...cvOutDeviceSelect.options].some((o) => o.value === currentKey)) cvOutDeviceSelect.value = currentKey;
+  cvOutChannelSelect.value = String(state.channel || 0);
+  cvOutSettingsOverlay.classList.remove("hidden");
+}
+
+function closeCvOutSettings() {
+  cvOutSettingsOverlay.classList.add("hidden");
+  pendingCvOutId = null;
+}
+
+document.getElementById("cvOutSettingsCancel").addEventListener("click", closeCvOutSettings);
+
+document.getElementById("cvOutSettingsSave").addEventListener("click", () => {
+  if (!pendingCvOutId) return;
+  const state = cvOutStates.get(pendingCvOutId);
+  const [portStr, addressStr] = (cvOutDeviceSelect.value || "").split(":");
+  if (!state || portStr === undefined || portStr === "" || !addressStr) {
+    showToast("Select a GP8413 device first");
+    return;
+  }
+  const port = parseInt(portStr, 10);
+  const address = parseInt(addressStr, 16);
+  const channel = parseInt(cvOutChannelSelect.value, 10) || 0;
+
+  // Uniqueness rule (CV Out only, per user decision - reading the same ADC channel twice via
+  // two CV In widgets is harmless, but two CV Out widgets writing the same DAC channel is a
+  // real conflict - only one device can drive that physical output). Enforced client-side
+  // only: compare config VALUES across every other existing CV Out instance, not widget type
+  // (contrast with OUTPUT_SINGLETON_TYPES, which blocks by type, not by config).
+  const conflict = [...cvOutStates.entries()].some(
+    ([wid, other]) => wid !== pendingCvOutId && other.port === port && other.address === address && other.channel === channel
+  );
+  if (conflict) {
+    showToast(`I2C${port} @ 0x${address.toString(16).toUpperCase()} channel ${channel + 1} is already used by another CV Out`);
+    return;
+  }
+
+  state.port = port;
+  state.address = address;
+  state.channel = channel;
+  updateCvIoLabel(pendingCvOutId);
+  savePresetNow();
+  closeCvOutSettings();
+});
+
+function updateCvStatusDisplay(entries) {
+  if (!Array.isArray(entries)) return;
+  const missingIds = new Set(entries.map((e) => e && e[0]).filter(Boolean));
+  document
+    .querySelectorAll('.widget-instance[data-widget-type="cv-in"], .widget-instance[data-widget-type="cv-out"]')
+    .forEach((el) => {
+      const badge = el.querySelector('[data-role="cv-missing"]');
+      if (badge && !missingIds.has(el.id)) badge.remove();
+    });
+  missingIds.forEach((widgetId) => {
+    const el = document.getElementById(widgetId);
+    const header = el ? el.querySelector(".widget-instance-header") : null;
+    if (!header || header.querySelector('[data-role="cv-missing"]')) return;
+    const badge = document.createElement("span");
+    badge.className = "widget-device-missing-badge";
+    badge.dataset.role = "cv-missing";
+    badge.textContent = "❗";
+    badge.title = "Device not responding";
+    const closeBtn = header.querySelector(".widget-instance-close");
+    if (closeBtn) header.insertBefore(badge, closeBtn);
+    else header.appendChild(badge);
+  });
+}
 
 // Device-wide Master Clock (MasterClock.h on the firmware side) - every
 // Clock widget's pulse just taps this shared tempo, so they all stay in
@@ -16233,6 +16482,34 @@ const WIDGET_ENGINES = {
       restartClockTimer(id);
     },
   },
+  "cv-in": {
+    getParams: (id) => {
+      const state = cvInStates.get(id);
+      return state ? { port: state.port, address: state.address, channel: state.channel } : {};
+    },
+    applyParams: (id, params) => {
+      const state = cvInStates.get(id);
+      if (!state || !params) return;
+      state.port = typeof params.port === "number" ? params.port : -1;
+      state.address = typeof params.address === "number" ? params.address : 0;
+      state.channel = params.channel === 1 ? 1 : 0;
+      updateCvIoLabel(id);
+    },
+  },
+  "cv-out": {
+    getParams: (id) => {
+      const state = cvOutStates.get(id);
+      return state ? { port: state.port, address: state.address, channel: state.channel } : {};
+    },
+    applyParams: (id, params) => {
+      const state = cvOutStates.get(id);
+      if (!state || !params) return;
+      state.port = typeof params.port === "number" ? params.port : -1;
+      state.address = typeof params.address === "number" ? params.address : 0;
+      state.channel = params.channel === 1 ? 1 : 0;
+      updateCvIoLabel(id);
+    },
+  },
   lfo: {
     getParams: (id) => {
       const state = lfoStates.get(id);
@@ -17834,6 +18111,8 @@ function connectWs() {
       updateMemStatsDisplay(data.psFreeKb, data.psTotalKb, data.sysFreeKb, data.sysTotalKb);
     } else if (data.type === "nodeCpu") {
       updateNodeCpuDisplay(data.w);
+    } else if (data.type === "cvStatus") {
+      updateCvStatusDisplay(data.w);
     } else if (data.type === "voicesCapped") {
       handleVoicesCapped(data.requested, data.effective, data.reason);
     } else if (data.type === "midiDevices") {

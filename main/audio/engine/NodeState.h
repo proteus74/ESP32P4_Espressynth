@@ -287,6 +287,28 @@ struct ClockState
     bool pulseActive = false;
 };
 
+// CV In (ADS1115) / CV Out (GP8413) - External Hardware widgets. Port/address/channel are
+// resolved once in build() into a Feature::IO slot index (see nodes/CvInNode.h/CvOutNode.h);
+// re-resolving here would need a FreeRTOS include in this otherwise plain-POD state header,
+// so only the small resolved int is cached. CvInState::lastVolts is only updated when the
+// I2C bus manager's latest sample also reports found=true, so one dropped transaction doesn't
+// snap the output to 0 - see NodeInstance::ioDeviceFound for the separate found/missing signal.
+struct CvInState
+{
+    int8_t port = -1;
+    uint8_t address = 0;
+    uint8_t channel = 0;
+    int8_t slotIndex = -1; // Feature::IO::resolve_cv_in_slot() result, -1 = unconfigured
+    float lastVolts = 0.0f;
+};
+struct CvOutState
+{
+    int8_t port = -1;
+    uint8_t address = 0;
+    uint8_t channel = 0;
+    int8_t slotIndex = -1; // Feature::IO::resolve_cv_out_slot() result, -1 = unconfigured
+};
+
 // Samples "in" exactly once for each below-to-at/above-threshold transition
 // on "trigger", then keeps that CV at "out" until the next transition.
 struct SampleHoldState

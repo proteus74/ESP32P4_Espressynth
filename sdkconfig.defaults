@@ -83,6 +83,8 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_30=y
 
 # --- Boot splash screen (main/features/display/display_lvgl.hpp): the embedded splash PNG is
 # decoded via LVGL's bundled lodepng, read through a stdio-backed LVGL filesystem driver

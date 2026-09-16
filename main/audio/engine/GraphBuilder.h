@@ -25,8 +25,11 @@
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
+#include "nodes/CvInNode.h"
+#include "nodes/CvOutNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/ConstNode.h"
+#include "features/io/i2c_bus_manager.hpp"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -532,6 +535,12 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::Clock:
         nodes::clock::build(inst, p);
         break;
+    case NodeType::CvIn:
+        nodes::cvin::build(inst, p);
+        break;
+    case NodeType::CvOut:
+        nodes::cvout::build(inst, p);
+        break;
     case NodeType::SampleHold:
         nodes::samplehold::build(inst, p);
         break;
@@ -560,7 +569,7 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         nodes::delay::build(inst, p, psram);
         break;
     case NodeType::Reverb:
-        nodes::reverb::buildReverb(inst, p, psram);
+        nodes::reverb::buildReverb(inst, p, psramFallbacks);
         break;
     case NodeType::ReverbLight:
         nodes::reverb::buildReverbLight(inst, p, psramFallbacks);
@@ -653,6 +662,33 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             }
         }
         soundfont::sweepFileCache(keepSoundFonts, keepCount);
+    }
+
+    // Tell the Core-0 I2C bus manager exactly which CV In/Out channels this preset actually
+    // wires up - it only issues real I2C transactions for these (see i2c_bus_manager.hpp's
+    // active-mask comment), never wastefully polling/writing an address+channel nothing in
+    // the graph references. Replaced wholesale (not merged) on every build, so switching to a
+    // preset without a given CV widget immediately stops touching that channel.
+    {
+        uint16_t cvInMask = 0;
+        uint32_t cvOutMask = 0;
+        for (uint16_t i = 0; i < doc.widgetCount; ++i)
+        {
+            const WidgetParams &wp = doc.widgets[i].params;
+            if (wp.cvIoPort < 0) continue; // never configured via the settings modal
+            if (doc.widgets[i].type == NodeType::CvIn)
+            {
+                const int8_t slot = Feature::IO::resolve_cv_in_slot(wp.cvIoPort, wp.cvIoAddress, wp.cvIoChannel);
+                if (slot >= 0) cvInMask |= static_cast<uint16_t>(1u << slot);
+            }
+            else if (doc.widgets[i].type == NodeType::CvOut)
+            {
+                const int8_t slot = Feature::IO::resolve_cv_out_slot(wp.cvIoPort, wp.cvIoAddress, wp.cvIoChannel);
+                if (slot >= 0) cvOutMask |= static_cast<uint32_t>(1u << slot);
+            }
+        }
+        Feature::IO::set_active_cv_in_mask(cvInMask);
+        Feature::IO::set_active_cv_out_mask(cvOutMask);
     }
 
     Graph *g = Graph::allocate();

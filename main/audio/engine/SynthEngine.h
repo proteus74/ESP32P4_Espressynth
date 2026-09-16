@@ -107,6 +107,25 @@ public:
                    : 0.0f;
     }
 
+    // CV In/Out "device responding" status, for the web UI's missing-device badge (see
+    // synth_web_api.hpp's cvStatus broadcast). Deliberately its OWN scan in taskLoop() below,
+    // NOT piggybacked on the widgetLoad* profiler above: that one rotates one widget per
+    // block (fine for a slow debug percentage), far too slow for a badge that should appear
+    // within a poll cycle or two. A full scan of every widget every block is cheap here (no
+    // esp_timer_get_time() calls, just a handful of comparisons/copies at kMaxWidgets=64).
+    uint16_t cvStatusCount() const { return cvStatusCount_.load(std::memory_order_relaxed); }
+    bool cvStatusAt(uint16_t i, char *idOut, size_t idOutSize, bool *foundOut) const
+    {
+        if (i >= cvStatusCount_.load(std::memory_order_relaxed) || idOut == nullptr || idOutSize == 0 ||
+            foundOut == nullptr)
+        {
+            return false;
+        }
+        snprintf(idOut, idOutSize, "%s", cvStatusIds_[i]);
+        *foundOut = cvStatusFound_[i].load(std::memory_order_relaxed);
+        return true;
+    }
+
     // P0 baseline diagnostics (documentation/native-synth-optimization-plan-
     // 2026-09-09.md, sections 7/8): the block-level phase breakdown inside
     // Graph::renderBlock (percent of block budget, EMA-smoothed) that the
@@ -202,6 +221,14 @@ public:
     uint32_t renderOverrunCount() const { return renderOverrunCount_.load(std::memory_order_relaxed); }
     uint32_t midiDropCount() const { return midiDropCount_.load(std::memory_order_relaxed); }
     uint16_t activeSoundFontVoices() const { return activeSoundFontVoices_.load(std::memory_order_relaxed); }
+    bool presetLoadActive() const { return presetLoadActive_.load(std::memory_order_acquire); }
+    uint8_t presetLoadProgress() const { return presetLoadProgress_.load(std::memory_order_relaxed); }
+    void beginPresetLoad()
+    {
+        presetLoadProgress_.store(5, std::memory_order_relaxed);
+        presetLoadActive_.store(true, std::memory_order_release);
+    }
+    void cancelPresetLoad() { presetLoadActive_.store(false, std::memory_order_release); }
     struct MidiVoiceUsageSnapshot
     {
         uint16_t active = 0;
@@ -586,6 +613,10 @@ private:
     const Graph *widgetLoadGraph_ = nullptr;
     uint32_t widgetLoadGeneration_ = 0;
 
+    char cvStatusIds_[synth::kMaxWidgets][24] = {};
+    std::atomic<bool> cvStatusFound_[synth::kMaxWidgets] = {};
+    std::atomic<uint16_t> cvStatusCount_{0};
+
     // P0 baseline diagnostics snapshots (see phaseSnapshot()/
     // blockStatsSnapshot() above) - published once per block from the render
     // task alongside the widget-load sweep, read by any task.
@@ -627,6 +658,10 @@ private:
     std::atomic<uint32_t> renderOverrunCount_{0};
     std::atomic<uint32_t> midiDropCount_{0};
     std::atomic<uint16_t> activeSoundFontVoices_{0};
+    // Loader stages, not byte-exact file progress: SoundFont/WAV parsing has
+    // no useful byte callback. Read only by the display task.
+    std::atomic<bool> presetLoadActive_{false};
+    std::atomic<uint8_t> presetLoadProgress_{0};
     std::atomic<uint32_t> midiVoiceUsagePacked_{0};
     std::atomic<uint32_t> presetChangeSequence_{0};
     std::atomic<uint32_t> underrunResetSequence_{0};
@@ -930,6 +965,7 @@ inline bool SynthEngine::applyOutputParam(const char *widgetId, cJSON *params)
 
 inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling, bool allowPreFree, bool forcePreFree)
 {
+    presetLoadProgress_.store(15, std::memory_order_relaxed); // reading preset JSON
     const uint32_t reloadGeneration = memorydiag::beginReload();
     PresetDoc *doc = readPresetFile(path, reloadGeneration);
     if (doc == nullptr)
@@ -971,6 +1007,7 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
 
     uint16_t requestedVoices = 0;
     uint16_t effectiveVoices = 0;
+    presetLoadProgress_.store(35, std::memory_order_relaxed); // graph allocation, SoundFont/WAV loading
     Graph *newGraph = GraphBuilder::build(*doc, &requestedVoices, &effectiveVoices, voiceCeiling);
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::GraphBuilt);
     ESP_LOGI(kSynthEngineTag, "Preset loaded: %u widgets, %u connections", doc->widgetCount, doc->connectionCount);
@@ -996,6 +1033,7 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
     destroyPresetDoc(doc);
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::PresetDocFreed);
     memorydiag::finishReload(reloadGeneration, newGraph != nullptr);
+    if (newGraph != nullptr) presetLoadProgress_.store(90, std::memory_order_relaxed);
     return newGraph;
 }
 
@@ -1069,6 +1107,7 @@ inline void SynthEngine::loaderTaskLoop()
             {
                 cpuReloadPending_.store(false, std::memory_order_relaxed);
             }
+            if (gotMsg) cancelPresetLoad();
             continue;
         }
 
@@ -1211,6 +1250,23 @@ inline void SynthEngine::taskLoop()
             widgetLoadGeneration_ = liveGraph_->widgetLoadGeneration;
         }
 
+        // CV In/Out device status for the web UI's missing-device badge - unconditional every
+        // block (unlike the profiler sweep above), so a device dropping out shows up within a
+        // poll cycle or two rather than waiting for the next full profiler rotation.
+        {
+            uint16_t cvN = 0;
+            for (uint16_t i = 0; i < liveGraph_->widgetCount && cvN < synth::kMaxWidgets; ++i)
+            {
+                const NodeType t = liveGraph_->widgets[i].type;
+                if (t != NodeType::CvIn && t != NodeType::CvOut) continue;
+                memcpy(cvStatusIds_[cvN], liveGraph_->widgets[i].id, sizeof(cvStatusIds_[cvN]));
+                cvStatusFound_[cvN].store(liveGraph_->instances[liveGraph_->widgets[i].instanceBase].ioDeviceFound,
+                                           std::memory_order_relaxed);
+                ++cvN;
+            }
+            cvStatusCount_.store(cvN, std::memory_order_relaxed);
+        }
+
         // P0 baseline diagnostics: published every block (a handful of plain
         // stores, same cost class as the phase timing itself) - see
         // phaseSnapshot()/blockStatsSnapshot() above. enginestats::lastBlock
@@ -1341,6 +1397,8 @@ inline void SynthEngine::taskLoop()
             snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", pendingPresetPath_);
             setCurrentPresetNameFromPath(currentPresetPath_);
             presetChangeSequence_.fetch_add(1, std::memory_order_release);
+            presetLoadProgress_.store(100, std::memory_order_relaxed);
+            presetLoadActive_.store(false, std::memory_order_release);
             presetReloadUs = esp_timer_get_time() - swapStartUs;
             outputFadeState_ = OutputFadeState::FadingIn;
             // A freshly swapped-in graph deserves a fresh read on whether it

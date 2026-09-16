@@ -282,6 +282,27 @@ inline void broadcast_status_tick() {
         snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset), "]}");
         broadcast_json(node_cpu_json);
     }
+
+    // CV In/Out missing-device badge feed - only ever lists widgets CURRENTLY not found (an
+    // empty "w" array means everything is fine and clears every badge client-side), so this
+    // stays tiny in the common case instead of listing every configured CV widget every tick.
+    static char cv_status_json[512];
+    int cv_offset = snprintf(cv_status_json, sizeof(cv_status_json), "{\"type\":\"cvStatus\",\"w\":[");
+    const uint16_t cv_count = engine().cvStatusCount();
+    bool cv_first = true;
+    for (uint16_t i = 0; i < cv_count && cv_offset > 0 && static_cast<size_t>(cv_offset) < sizeof(cv_status_json);
+         ++i) {
+        char widget_id[24];
+        bool found = true;
+        if (!engine().cvStatusAt(i, widget_id, sizeof(widget_id), &found) || found) continue;
+        cv_offset += snprintf(cv_status_json + cv_offset, sizeof(cv_status_json) - static_cast<size_t>(cv_offset),
+                               "%s[\"%s\",false]", cv_first ? "" : ",", widget_id);
+        cv_first = false;
+    }
+    if (cv_offset > 0 && static_cast<size_t>(cv_offset) < sizeof(cv_status_json)) {
+        snprintf(cv_status_json + cv_offset, sizeof(cv_status_json) - static_cast<size_t>(cv_offset), "]}");
+        broadcast_json(cv_status_json);
+    }
 }
 
 namespace {
@@ -1041,9 +1062,21 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[224];
-    snprintf(json, sizeof(json), "{\"version\":\"%s\",\"wm8960\":%s,\"gitVersion\":\"%s\"}", FIRMWARE_VERSION,
+    char json[256];
+    snprintf(json, sizeof(json),
+             "{\"version\":\"%s\",\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gitVersion\":\"%s\"}",
+             FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_APP_ADS1115_SUPPORT)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_APP_GP8413_SUPPORT)
              "true",
 #else
              "false",

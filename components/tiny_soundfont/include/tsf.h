@@ -263,6 +263,14 @@ TSFDEF float tsf_channel_get_tuning(tsf* f, int channel);
 #define TSF_RENDER_EFFECTSAMPLEBLOCK 64
 #endif
 
+// Optional cooperative yield hook for long SoundFont sample conversion.
+#ifndef TSF_LOAD_YIELD_INTERVAL
+#define TSF_LOAD_YIELD_INTERVAL 0
+#endif
+#ifndef TSF_LOAD_YIELD
+#define TSF_LOAD_YIELD() ((void)0)
+#endif
+
 // When using tsf_render_short, to do the conversion a buffer of a fixed size is
 // allocated on the stack. On low memory platforms this could be made smaller.
 // Increasing this above 512 should not have a significant impact on performance.
@@ -996,8 +1004,16 @@ static int tsf_load_samples(void** pRawBuffer, float** pFloatBuffer, unsigned in
 	*pSmplCount = chunkSmpl->size / (unsigned int)sizeof(short);
 	*pFloatBuffer = (float*)TSF_MALLOC(*pSmplCount * sizeof(float));
 	if (!*pFloatBuffer || !stream->read(stream->data, *pFloatBuffer, chunkSmpl->size)) return 0;
+	unsigned int yieldCount = 0;
 	for (res = *pFloatBuffer, out = res + *pSmplCount, in = (short*)res + *pSmplCount; out != res;)
+	{
 		*(--out) = (float)(*(--in) / 32767.0);
+		if (TSF_LOAD_YIELD_INTERVAL && ++yieldCount >= TSF_LOAD_YIELD_INTERVAL)
+		{
+			yieldCount = 0;
+			TSF_LOAD_YIELD();
+		}
+	}
 	return 1;
 	#endif
 }

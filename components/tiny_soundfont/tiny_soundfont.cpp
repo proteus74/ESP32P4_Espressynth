@@ -1,11 +1,13 @@
 // TinySoundFont upstream commit 853a0a171759f1ddba0de1442133a75912bbeffa.
-// Upstream header is kept unmodified in include/tsf.h; allocation is routed to
-// ESP-IDF's capability heap so large decoded SF2 sample banks use PSRAM.
+// Allocation is routed to ESP-IDF's capability heap so large decoded SF2 sample
+// banks use PSRAM. The local header adds a cooperative conversion-yield hook.
 
 #include <cstdlib>
 #include <cstring>
 
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace
 {
@@ -54,5 +56,7 @@ void *tsfPsramRealloc(void *ptr, size_t size)
 #define TSF_REALLOC tsfPsramRealloc
 #define TSF_FREE tsfPsramFree
 #define TSF_RENDER_EFFECTSAMPLEBLOCK 128
+#define TSF_LOAD_YIELD_INTERVAL 8192
+#define TSF_LOAD_YIELD() vTaskDelay(pdMS_TO_TICKS(1))
 #define TSF_IMPLEMENTATION
 #include "tsf.h"

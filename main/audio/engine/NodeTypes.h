@@ -66,6 +66,8 @@ enum class NodeType : uint8_t
     StepArpeggiator,
     OutputSwitch,
     OutputMultiplexer,
+    CvIn,
+    CvOut,
     Unknown,
 };
 
@@ -241,6 +243,10 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::OutputSwitch;
     if (strcmp(typeStr, "output-multiplexer") == 0)
         return NodeType::OutputMultiplexer;
+    if (strcmp(typeStr, "cv-in") == 0)
+        return NodeType::CvIn;
+    if (strcmp(typeStr, "cv-out") == 0)
+        return NodeType::CvOut;
     return NodeType::Unknown;
 }
 

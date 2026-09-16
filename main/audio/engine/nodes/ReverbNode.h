@@ -401,7 +401,7 @@ inline void renderReverbLight(NodeInstance &inst, size_t frames)
 // Freeverb-style tuned comb/allpass lengths (samples @ 44.1kHz, scaled to
 // the engine's actual sample rate). Right-channel lengths get a fixed
 // "stereo spread" offset - see ReverbState's comment for why.
-inline void buildReverb(NodeInstance &inst, const WidgetParams &p, bool psram)
+inline void buildReverb(NodeInstance &inst, const WidgetParams &p, uint16_t &psramFallbacks)
 {
     static constexpr uint32_t kCombLen44k[ReverbState::kCombs] = {1116, 1188, 1277, 1356, 1422, 1496, 1557, 1617};
     static constexpr uint32_t kAllpassLen44k[ReverbState::kAllpasses] = {556, 441, 341, 225};
@@ -439,8 +439,23 @@ inline void buildReverb(NodeInstance &inst, const WidgetParams &p, bool psram)
     {
         const uint32_t lenL = static_cast<uint32_t>(static_cast<float>(kCombLen44k[c]) * scaleF + 0.5f);
         const uint32_t lenR = lenL + kStereoSpread;
-        inst.reverb->combsL[c].initSamples(lenL, psram);
-        inst.reverb->combsR[c].initSamples(lenR, psram);
+        // Internal-RAM-first, same reasoning/pattern as buildReverbLight() - a comb/allpass/
+        // pre-delay buffer here is a dense per-sample-accessed hot buffer (Tier 4.2 of
+        // .claude/plans/schaue-die-die-ganze-zany-moore.md flagged full Reverb's ~52
+        // PSRAM-accesses/sample as the densest PSRAM hotspot in the whole graph). Falls back to
+        // PSRAM only if it doesn't fit - counted the same as every other allocation so a
+        // preset dense enough to force this shows up in the existing "output-PSRAM fallbacks"
+        // diagnostic instead of silently degrading.
+        if (!inst.reverb->combsL[c].initSamples(lenL, false))
+        {
+            inst.reverb->combsL[c].initSamples(lenL, true);
+            ++psramFallbacks;
+        }
+        if (!inst.reverb->combsR[c].initSamples(lenR, false))
+        {
+            inst.reverb->combsR[c].initSamples(lenR, true);
+            ++psramFallbacks;
+        }
         float g = powf(10.0f, -3.0f * static_cast<float>(lenL) / (static_cast<float>(synth::kSampleRate) * sizeSec));
         if (g > 0.98f)
             g = 0.98f;
@@ -452,8 +467,16 @@ inline void buildReverb(NodeInstance &inst, const WidgetParams &p, bool psram)
     {
         const uint32_t lenL = static_cast<uint32_t>(static_cast<float>(kAllpassLen44k[a]) * scaleF + 0.5f);
         const uint32_t lenR = lenL + kStereoSpread;
-        inst.reverb->allpassesL[a].initSamples(lenL, psram);
-        inst.reverb->allpassesR[a].initSamples(lenR, psram);
+        if (!inst.reverb->allpassesL[a].initSamples(lenL, false))
+        {
+            inst.reverb->allpassesL[a].initSamples(lenL, true);
+            ++psramFallbacks;
+        }
+        if (!inst.reverb->allpassesR[a].initSamples(lenR, false))
+        {
+            inst.reverb->allpassesR[a].initSamples(lenR, true);
+            ++psramFallbacks;
+        }
     }
 
     // damping (0..1) -> lowpass cutoff: 0 = bright/no damping (20kHz), 1 =
@@ -466,8 +489,16 @@ inline void buildReverb(NodeInstance &inst, const WidgetParams &p, bool psram)
     // Pre-delay buffer is always allocated at the full 200ms max so live
     // preDelayMs updates (setParamReverb) never need to reallocate.
     const uint32_t preDelayCapacity = static_cast<uint32_t>(0.2f * static_cast<float>(synth::kSampleRate)) + 1;
-    inst.reverb->preDelayL.initSamples(preDelayCapacity, psram);
-    inst.reverb->preDelayR.initSamples(preDelayCapacity, psram);
+    if (!inst.reverb->preDelayL.initSamples(preDelayCapacity, false))
+    {
+        inst.reverb->preDelayL.initSamples(preDelayCapacity, true);
+        ++psramFallbacks;
+    }
+    if (!inst.reverb->preDelayR.initSamples(preDelayCapacity, false))
+    {
+        inst.reverb->preDelayR.initSamples(preDelayCapacity, true);
+        ++psramFallbacks;
+    }
     inst.reverb->preDelaySamples =
         static_cast<uint32_t>(p.reverbPreDelayMs * 0.001f * static_cast<float>(synth::kSampleRate));
 }

@@ -163,6 +163,13 @@ struct WidgetParams
     // clock - pulse width in ms; tempo itself comes from the device-wide
     // synth::masterClock() (MasterClock.h), not from the preset.
     float clockPulseMs = 100.0f;
+    // cv-in / cv-out (External Hardware) - which I2C ADC/DAC channel this widget talks to,
+    // chosen once via the settings modal from the live boot-time scan
+    // (Feature::IO::I2CDeviceRegistry), never live-updated (see nodes/CvInNode.h/
+    // CvOutNode.h - structural, set only in build()). -1 = placed but never configured.
+    int8_t cvIoPort = -1;
+    uint8_t cvIoAddress = 0;
+    uint8_t cvIoChannel = 0;
     // sample-hold - manual threshold, overridden by a connected Threshold CV.
     float sampleHoldThreshold = 5.0f;
     // midi-in

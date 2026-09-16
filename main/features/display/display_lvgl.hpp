@@ -15,6 +15,7 @@
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "eez_ui_bridge.hpp"
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     // JC1060P470C 7": JD9165 panel, GT911 touch, natively landscape (no rotation).
     #include "esp_lcd_jd9165.h"
@@ -88,8 +89,8 @@ constexpr size_t FRAME_BUFFER_COUNT = 2;
 constexpr size_t FRAME_BUFFER_COUNT = 3;
 #endif
 static esp_lcd_panel_handle_t s_panel = nullptr;
-static SemaphoreHandle_t s_dpi_vsync = nullptr;
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+static SemaphoreHandle_t s_dpi_vsync = nullptr;
 static void* s_frame_buffers[FRAME_BUFFER_COUNT] = {};
 static ppa_client_handle_t s_ppa_srm_client = nullptr;
 #endif
@@ -467,6 +468,7 @@ void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
+#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
                             esp_lcd_dpi_panel_event_data_t* event_data,
                             void* user_ctx) {
@@ -480,6 +482,7 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
     xSemaphoreGiveFromISR(s_dpi_vsync, &high_task_woken);
     return high_task_woken == pdTRUE;
 }
+#endif
 
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
@@ -490,21 +493,13 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     // rectangle into the panel's own continuously-scanned framebuffer at the given offset -
     // this is what actually cuts the PSRAM traffic per flush (previously a full 1024x600x2B
     // frame every redraw, regardless of how much of the screen actually changed).
-    // Waiting for the following VSYNC keeps the DPI engine from scanning the rectangle while
-    // it's still being written (tearing), same as the old full-frame path.
-    if (s_dpi_vsync != nullptr) {
-        while (xSemaphoreTake(s_dpi_vsync, 0) == pdTRUE) {
-        }
-    }
+    // Intentionally unsynchronized: faster page rebuilds at the cost of possible tearing.
 
     const esp_err_t draw_result = esp_lcd_panel_draw_bitmap(
         s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
     if (draw_result != ESP_OK) {
         ESP_LOGE("FeatureLVGL", "Display frame switch failed: %s",
                  esp_err_to_name(draw_result));
-    } else if (s_dpi_vsync != nullptr &&
-               xSemaphoreTake(s_dpi_vsync, pdMS_TO_TICKS(200)) != pdTRUE) {
-        ESP_LOGW("FeatureLVGL", "Timed out waiting for display VSYNC");
     }
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
@@ -662,7 +657,7 @@ void show_splash_screen(lv_display_t* display) {
 }
 #endif // CONFIG_APP_ENABLE_LITTLEFS
 
-void create_ui() {
+[[maybe_unused]] void create_ui() {
     lv_obj_t* screen = lv_screen_active();
     lv_display_t* display = lv_obj_get_display(screen);
     const int screen_width = lv_display_get_horizontal_resolution(display);
@@ -782,6 +777,9 @@ inline void finish_startup_screen() {
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
     constexpr const char* TAG = "FeatureLVGL";
     if (s_splash_background == nullptr) {
+        lvgl_port_lock(0);
+        Feature::EEZUI::start();
+        lvgl_port_unlock();
         return;
     }
 
@@ -810,8 +808,10 @@ inline void finish_startup_screen() {
     }
 
     lvgl_port_lock(0);
-    create_ui();
-    lv_obj_move_foreground(s_splash_background);
+    Feature::EEZUI::start();
+    // Paint populated labels behind the still-opaque splash before its first
+    // transparent frame can reveal the generated EEZ placeholder texts.
+    lv_refr_now(nullptr);
     lv_obj_fade_out(s_splash_background, kSplashFadeMs, 0);
     lvgl_port_unlock();
 
@@ -825,6 +825,10 @@ inline void finish_startup_screen() {
     lvgl_port_unlock();
 
     ESP_LOGI(TAG, "Splash: fade complete; LVGL status UI ready");
+#else
+    lvgl_port_lock(0);
+    Feature::EEZUI::start();
+    lvgl_port_unlock();
 #endif
 }
 
@@ -952,6 +956,7 @@ inline esp_err_t init() {
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_client_config, &s_ppa_srm_client), TAG,
                         "PPA SRM client registration failed");
 #endif
+#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     s_dpi_vsync = xSemaphoreCreateBinary();
     if (s_dpi_vsync == nullptr) {
         ESP_LOGE(TAG, "Could not create DSI VSYNC semaphore");
@@ -965,6 +970,7 @@ inline esp_err_t init() {
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_register_event_callbacks(
                             panel, &dpi_callbacks, nullptr),
                         TAG, "DSI callback registration failed");
+#endif
 
     if (CurrentBoard::PIN_BACKLIGHT != GPIO_NUM_NC) {
         ESP_RETURN_ON_ERROR(gpio_set_level(CurrentBoard::PIN_BACKLIGHT, 1), TAG,
@@ -1007,7 +1013,7 @@ inline esp_err_t init() {
     }
 
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
-    // Partial mode: a small strip buffer (1/10 of screen height) instead of a full
+    // Partial mode: a strip buffer (2/10 of screen height) instead of a full
     // 1024x600x2B (~1.2MB) frame buffer. flush_cb() above now draws only the changed
     // rectangle via esp_lcd_panel_draw_bitmap()'s partial-rect support, so most UI updates
     // (a label, the touch popup, button feedback) write a small fraction of what a full
@@ -1016,7 +1022,7 @@ inline esp_err_t init() {
     // higher voice counts (see project notes). Only this board's flush_cb is partial-rect-
     // aware; other boards keep the full-frame path below untouched.
     const size_t draw_buffer_size = CurrentBoard::DISPLAY_NATIVE_WIDTH *
-                                    (CurrentBoard::DISPLAY_NATIVE_HEIGHT / 10) *
+                                    (CurrentBoard::DISPLAY_NATIVE_HEIGHT / 5) *
                                     sizeof(lv_color16_t);
     const lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_PARTIAL;
 #else
@@ -1153,6 +1159,7 @@ inline esp_err_t init() {
     }
 #endif
 
+    Feature::EEZUI::init();
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
     {
         struct stat splash_st {};
@@ -1167,13 +1174,6 @@ inline esp_err_t init() {
     }
 #endif
 
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
-    if (s_splash_background == nullptr) {
-        create_ui();
-    }
-#else
-    create_ui();
-#endif
     lvgl_port_unlock();
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)

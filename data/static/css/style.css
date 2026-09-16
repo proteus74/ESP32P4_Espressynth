@@ -684,6 +684,19 @@ body.show-node-cpu .widget-cpu-badge {
   color: #f87171;
 }
 
+/* CV In/Out missing-device badge - always visible (unlike .widget-cpu-badge, not an opt-in
+   debug overlay), toggled by updateCvStatusDisplay() in main.js from the "cvStatus" WS
+   broadcast. */
+.widget-device-missing-badge {
+  display: inline;
+  font-size: 0.75rem;
+  color: #f87171;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+  margin-right: 0.3rem;
+}
+
 /* Workspace: Canvas */
 
 .workspace {
@@ -1825,6 +1838,19 @@ body.show-node-cpu .widget-cpu-badge {
 .clock-bpm-label {
   font-family: monospace;
   font-size: 0.85rem;
+  color: var(--text);
+}
+
+.cv-io-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.3rem 0.5rem;
+}
+
+.cv-io-label {
+  font-family: monospace;
+  font-size: 0.78rem;
   color: var(--text);
 }
 

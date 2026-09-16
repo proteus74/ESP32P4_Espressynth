@@ -745,6 +745,44 @@
   </div>
 </div>
 
+<div id="cvInSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>CV In Settings</h3>
+    <label class="modal-field"><span>ADS1115 Device</span><select id="cvInDeviceSelect"></select></label>
+    <label class="modal-field">
+      <span>Channel</span>
+      <select id="cvInChannelSelect">
+        <option value="0">Channel 1 (AIN0)</option>
+        <option value="1">Channel 2 (AIN1)</option>
+      </select>
+    </label>
+    <p class="modal-hint">Only devices found during the last boot-time I2C scan are listed.</p>
+    <div class="modal-actions">
+      <button id="cvInSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="cvInSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="cvOutSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>CV Out Settings</h3>
+    <label class="modal-field"><span>GP8413 Device</span><select id="cvOutDeviceSelect"></select></label>
+    <label class="modal-field">
+      <span>Channel</span>
+      <select id="cvOutChannelSelect">
+        <option value="0">Channel 1</option>
+        <option value="1">Channel 2</option>
+      </select>
+    </label>
+    <p class="modal-hint">Each (port, address, channel) combination may only be used by one CV Out widget.</p>
+    <div class="modal-actions">
+      <button id="cvOutSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="cvOutSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="soundFontPlayerSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>SoundFont Player Settings</h3>

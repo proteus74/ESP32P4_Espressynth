@@ -13,6 +13,11 @@
     "features/synth/SamplePaths.cpp"
     "features/synth/MemoryDiagnostics.cpp"
     "features/io/i2c_device_registry.cpp"
+    "features/display/eez_ui_bridge.cpp"
+    "../eezstudio/src/ui/images.c"
+    "../eezstudio/src/ui/screens.c"
+    "../eezstudio/src/ui/styles.c"
+    "../eezstudio/src/ui/ui.c"
 )
 
 set(COMPONENT_ADD_INCLUDEDIRS
@@ -23,6 +28,7 @@ set(COMPONENT_ADD_INCLUDEDIRS
     "cli"
     "audio/engine"
     "features/synth"
+    "../eezstudio/src/ui"
 )
 
 # NOTE: REQUIRES is resolved before Kconfig, so it cannot depend on CONFIG_ options

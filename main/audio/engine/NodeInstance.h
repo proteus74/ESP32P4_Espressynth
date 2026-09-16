@@ -258,6 +258,8 @@ struct NodeInstance
         ClockState clock;
         SampleHoldState sampleHold;
         OutputSwitchState outputSwitch;
+        CvInState cvIn;
+        CvOutState cvOut;
     };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
@@ -325,6 +327,12 @@ struct NodeInstance
     // by DX Envelope to advance its scheduler while avoiding redundant
     // sample-buffer writes. False is the safe fallback for every topology.
     bool outputMetadataOnly = false;
+
+    // Set every block by CvIn/CvOut's own render() (nodes/CvInNode.h/CvOutNode.h) from what
+    // the Core-0 I2C bus manager most recently reported (see features/io/i2c_bus_manager.hpp).
+    // Meaningless (stays true) for every other NodeType. Defaults true so a freshly built
+    // instance doesn't flash the "missing" badge before the bus manager's first poll cycle.
+    bool ioDeviceFound = true;
 
     NodeInstance() : emptyInlineState(0) {}
 
@@ -402,6 +410,12 @@ struct NodeInstance
             break;
         case NodeType::OutputSwitch:
             new (&outputSwitch) OutputSwitchState();
+            break;
+        case NodeType::CvIn:
+            new (&cvIn) CvInState();
+            break;
+        case NodeType::CvOut:
+            new (&cvOut) CvOutState();
             break;
         default:
             emptyInlineState = 0;
