@@ -17,6 +17,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
 #include "nodes/SampleHoldNode.h"
@@ -143,6 +144,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::parsePreset(p, out);
+        break;
+    case NodeType::Pan:
+        nodes::pan::parsePreset(p, out);
         break;
     case NodeType::Chorus:
         nodes::chorus::parsePreset(p, out);

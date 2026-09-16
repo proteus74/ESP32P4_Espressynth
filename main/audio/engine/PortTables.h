@@ -263,6 +263,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "gain")) return 3;
         if (is(portName, "mix")) return 4;
         return -1;
+    case NodeType::Pan:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "pan")) return 1;
+        return -1;
     case NodeType::SampleHold:
         if (is(portName, "in")) return 0;
         if (is(portName, "trigger")) return 1;
@@ -568,6 +572,12 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return is(portName, "out") ? 0 : -1;
     case NodeType::WaveFolder:
         return is(portName, "out") ? 0 : -1;
+    case NodeType::Pan:
+        if (is(portName, "out1"))
+            return 0;
+        if (is(portName, "out2"))
+            return 1;
+        return -1;
     case NodeType::SampleHold:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Chorus:
@@ -684,6 +694,8 @@ inline int audioInPortCount(NodeType type)
         return 3;
     case NodeType::WaveFolder:
         return 5;
+    case NodeType::Pan:
+        return 2; // "in" + "pan"
     case NodeType::SampleHold:
         return 3; // "in" + "trigger" + "threshold", all audio-rate
     case NodeType::Chorus:

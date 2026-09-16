@@ -31,6 +31,7 @@ enum class NodeType : uint8_t
     ValueMapper,
     Bitcrusher,
     WaveFolder,
+    Pan,
     Chorus,
     Delay,
     Reverb,
@@ -166,6 +167,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Bitcrusher;
     if (strcmp(typeStr, "wave-folder") == 0)
         return NodeType::WaveFolder;
+    if (strcmp(typeStr, "pan") == 0)
+        return NodeType::Pan;
     if (strcmp(typeStr, "chorus") == 0)
         return NodeType::Chorus;
     if (strcmp(typeStr, "delay") == 0)

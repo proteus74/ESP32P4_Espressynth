@@ -22,6 +22,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
 #include "nodes/SampleHoldNode.h"
@@ -143,7 +144,7 @@ inline bool hasStereoOutput(NodeType type)
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::Detune || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
-           type == NodeType::StepArpeggiator;
+           type == NodeType::StepArpeggiator || type == NodeType::Pan;
 }
 
 inline bool requiresInputBlockBuffers(NodeType type)
@@ -542,6 +543,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::build(inst, p);
+        break;
+    case NodeType::Pan:
+        nodes::pan::build(inst, p);
         break;
     case NodeType::Chorus:
         nodes::chorus::build(inst, p, psram);

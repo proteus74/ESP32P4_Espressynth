@@ -260,6 +260,12 @@ struct WaveFolderState
     float mix = 10.0f;
 };
 
+// Equal-power stereo pan. Centre (5V) = hard center, see PanNode.h.
+struct PanState
+{
+    float pan = 5.0f;
+};
+
 // Free-running BPM pulse generator - mirrors main.js's Clock widget
 // (fireClockPulse/restartClockTimer), but sample-accurate instead of per-JS
 // setInterval. cvVolts (0-10V, "tempo" input) scales linearly between

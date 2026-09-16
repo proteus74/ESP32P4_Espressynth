@@ -244,6 +244,7 @@ struct NodeInstance
         GainState gain;
         BitcrusherState bitcrusher;
         WaveFolderState waveFolder;
+        PanState pan;
         MixerState mixer;
         MultiplexerState multiplexer;
         AudioOutState audioOut;
@@ -350,6 +351,9 @@ struct NodeInstance
             break;
         case NodeType::WaveFolder:
             new (&waveFolder) WaveFolderState();
+            break;
+        case NodeType::Pan:
+            new (&pan) PanState();
             break;
         case NodeType::Mixer:
             new (&mixer) MixerState();

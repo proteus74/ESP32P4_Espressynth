@@ -2367,6 +2367,49 @@ export class AudioEngine {
         };
         return entry;
       }
+      case "pan": {
+        // Equal-power pan law, mirrors the firmware PanNode.h sin/cos split.
+        // ScriptProcessor has one output pin with 2 channels; a splitter +
+        // per-channel gain gives out1/out2 their own connectable node, same
+        // shape as chorus's separate delayL/delayR.
+        const inputMerger = ctx.createChannelMerger(2);
+        const processor = ctx.createScriptProcessor(256, 2, 2);
+        const panSource = ctx.createConstantSource();
+        panSource.offset.value = clampRange(Number(params.pan ?? CV_MAX_VOLTS / 2), 0, CV_MAX_VOLTS);
+        panSource.connect(inputMerger, 0, 1);
+        panSource.start();
+        inputMerger.connect(processor);
+        const splitter = ctx.createChannelSplitter(2);
+        processor.connect(splitter);
+        const out1 = ctx.createGain();
+        const out2 = ctx.createGain();
+        splitter.connect(out1, 0);
+        splitter.connect(out2, 1);
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          splitter,
+          out1,
+          out2,
+          panSource,
+          panValue: panSource.offset.value,
+          panConnectionCount: 0,
+        };
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const panCv = event.inputBuffer.getChannelData(1);
+          const outL = event.outputBuffer.getChannelData(0);
+          const outR = event.outputBuffer.getChannelData(1);
+          for (let i = 0; i < outL.length; i += 1) {
+            const phase = clampRange(panCv[i], 0, CV_MAX_VOLTS) / CV_MAX_VOLTS * (Math.PI / 2);
+            const dry = input[i];
+            outL[i] = dry * Math.cos(phase);
+            outR[i] = dry * Math.sin(phase);
+          }
+        };
+        return entry;
+      }
       case "sample-hold": {
         // ChannelMerger keeps In, Trigger and Threshold independent. A
         // ScriptProcessor has just one input, so connecting directly to it
@@ -3110,6 +3153,13 @@ export class AudioEngine {
         entry.thresholdSource.stop();
         entry.thresholdSource.disconnect();
       }
+      if (entry.panSource) {
+        entry.panSource.stop();
+        entry.panSource.disconnect();
+      }
+      if (entry.splitter) entry.splitter.disconnect();
+      if (entry.out1) entry.out1.disconnect();
+      if (entry.out2) entry.out2.disconnect();
       if (entry.inputMerger) entry.inputMerger.disconnect();
       if (entry.delayL) entry.delayL.disconnect();
       if (entry.delayR) entry.delayR.disconnect();
@@ -3754,6 +3804,12 @@ export class AudioEngine {
         }
         break;
       }
+      case "pan":
+        if (paramName === "pan") {
+          entry.panValue = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          if (entry.panConnectionCount === 0) applyRampValue(entry.panSource.offset, entry.panValue);
+        }
+        break;
       case "sample-hold":
         if (paramName === "threshold") {
           entry.threshold = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
@@ -4014,6 +4070,8 @@ export class AudioEngine {
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
     if (entry.type === "bitcrusher" && port === "out") return entry.processor;
     if (entry.type === "wave-folder" && port === "out") return entry.processor;
+    if (entry.type === "pan" && port === "out1") return entry.out1;
+    if (entry.type === "pan" && port === "out2") return entry.out2;
     if (entry.type === "sample-hold" && port === "out") return entry.processor;
     if (entry.type === "chorus" && port === "left") return entry.delayL;
     if (entry.type === "chorus" && port === "right") return entry.delayR;
@@ -4111,6 +4169,7 @@ export class AudioEngine {
     if (entry.type === "detune" && port === "cv") return entry.cvIn;
     if (entry.type === "bitcrusher" && port === "in") return entry.processor;
     if (entry.type === "wave-folder" && ["in", "drive", "symmetry", "gain", "mix"].includes(port)) return entry.inputMerger;
+    if (entry.type === "pan" && (port === "in" || port === "pan")) return entry.inputMerger;
     if (entry.type === "sample-hold" && (port === "in" || port === "trigger" || port === "threshold")) return entry.inputMerger;
     if (entry.type === "chorus" && port === "in") return entry.inputNode;
     if (entry.type === "delay") {
@@ -4195,6 +4254,23 @@ export class AudioEngine {
         if (inputIndex === 2 && --toEntry.thresholdConnectionCount <= 0) {
           toEntry.thresholdConnectionCount = 0;
           toEntry.thresholdSource.connect(toEntry.inputMerger, 0, 2);
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "pan") {
+      const inputIndex = { in: 0, pan: 1 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        if (inputIndex === 1 && toEntry.panConnectionCount++ === 0) {
+          toEntry.panSource.disconnect(toEntry.inputMerger, 0, 1);
+        }
+        from.connect(toEntry.inputMerger, 0, inputIndex);
+      } catch (err) {
+        if (inputIndex === 1 && --toEntry.panConnectionCount <= 0) {
+          toEntry.panConnectionCount = 0;
+          toEntry.panSource.connect(toEntry.inputMerger, 0, 1);
         }
       }
       return;
@@ -4405,6 +4481,20 @@ export class AudioEngine {
         if (inputIndex === 2 && --toEntry.thresholdConnectionCount <= 0) {
           toEntry.thresholdConnectionCount = 0;
           toEntry.thresholdSource.connect(toEntry.inputMerger, 0, 2);
+        }
+      } catch (err) {
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "pan") {
+      const inputIndex = { in: 0, pan: 1 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        from.disconnect(toEntry.inputMerger, 0, inputIndex);
+        if (inputIndex === 1 && --toEntry.panConnectionCount <= 0) {
+          toEntry.panConnectionCount = 0;
+          toEntry.panSource.connect(toEntry.inputMerger, 0, 1);
         }
       } catch (err) {
       }

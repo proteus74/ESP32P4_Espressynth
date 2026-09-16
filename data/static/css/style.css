@@ -1298,7 +1298,8 @@ body.show-node-cpu .widget-cpu-badge {
 .widget-instance[data-widget-type="hammond"] .port-row-in > .port-label,
 .widget-instance[data-widget-type="detune"] .port-row-in > .port-label,
 .widget-instance[data-widget-type="frequency-divider"] .port-row-in > .port-label,
-.widget-instance[data-widget-type="gain"] .port-row-in > .port-label {
+.widget-instance[data-widget-type="gain"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="pan"] .port-row-in > .port-label {
   flex-basis: 72px;
 }
 
@@ -1315,7 +1316,8 @@ body.show-node-cpu .widget-cpu-badge {
   flex-basis: 78px;
 }
 
-.widget-instance[data-widget-type="detune"] .port-slider {
+.widget-instance[data-widget-type="detune"] .port-slider,
+.widget-instance[data-widget-type="pan"] .port-slider {
   flex-basis: 110px;
   width: 110px;
 }

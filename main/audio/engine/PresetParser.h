@@ -112,6 +112,8 @@ struct WidgetParams
     // wave-folder - all four controls are raw 0-10V CV values.
     float waveFolderDrive = 0.0f, waveFolderSymmetry = 5.0f;
     float waveFolderGain = 10.0f, waveFolderMix = 10.0f;
+    // pan - single CV, centre (5V) = hard center.
+    float panCv = 5.0f;
     // mixer/multiplier/adder
     uint8_t inputCount = 2;
     float mixerGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};

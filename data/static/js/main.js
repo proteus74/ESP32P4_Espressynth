@@ -1003,6 +1003,18 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  pan: {
+    label: "Pan",
+    icon: "⇄",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "pan", label: "Pan" },
+    ],
+    outputs: [
+      { id: "out1", label: "Out1" },
+      { id: "out2", label: "Out2" },
+    ],
+  },
   "sample-hold": {
     label: "S&H",
     icon: "⌁",
@@ -1164,7 +1176,7 @@ const WIDGET_CATEGORIES = [
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
-  { label: "Effects", types: ["bitcrusher", "wave-folder", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
+  { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out", "linked-input", "linked-output"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
 ];
@@ -1267,6 +1279,7 @@ const AUDIO_PORTS = {
   chorus: { in: ["in"], out: ["left", "right"] },
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
+  pan: { in: ["in", "pan"], out: ["out1", "out2"] },
   "sample-hold": { in: ["in", "trigger", "threshold"], out: ["out"] },
   
   
@@ -1409,11 +1422,11 @@ const LFO_POLARITY_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder", "pan",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
-  "bitcrusher", "wave-folder", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
+  "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
   "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
 ];
@@ -2553,6 +2566,12 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, { ...state });
   }
 
+  if (type === "pan") {
+    const state = { pan: CV_MAX_VOLTS / 2 };
+    panStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
   if (type === "sample-hold") {
     const state = { threshold: CV_MAX_VOLTS / 2 };
     sampleHoldStates.set(id, state);
@@ -3598,6 +3617,27 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = `wave-folder-${port.id}-value`;
         row.appendChild(valueSpan);
       }
+      if (type === "pan" && port.id === "pan") {
+        const state = panStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state.pan);
+        slider.dataset.role = "pan-pan-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setPanParam(id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "pan-pan-value";
+        valueSpan.textContent = formatPanValue(state.pan);
+        row.appendChild(valueSpan);
+      }
       if (type === "chorus" && ["rate", "depth", "offset"].includes(port.id)) {
         const chorusState = chorusStates.get(id);
         const cfg = CHORUS_SLIDER_CONFIG[port.id];
@@ -4106,6 +4146,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "step-arpeggiator") updateStepArpVisual(id);
   if (type === "sample-hold") updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
+  if (type === "pan") updatePanVisual(id);
   refreshWiredSliderLocks();
   savePresetNow();
   return el;
@@ -4161,6 +4202,7 @@ function removeWidget(id, force = false) {
   chorusStates.delete(id);
   bitcrusherStates.delete(id);
   waveFolderStates.delete(id);
+  panStates.delete(id);
   sampleHoldStates.delete(id);
   effectCvStates.delete(id);
   stepArpStopInternalClock(id);
@@ -4333,6 +4375,7 @@ function layoutPortsGrid(portsEl) {
   const isMidiIn = portsEl.closest('[data-widget-type="midi-in"]') !== null;
   const isAudioInputLink = portsEl.closest('[data-widget-type="audio-input-link"]') !== null;
   const isDetune = portsEl.closest('[data-widget-type="detune"]') !== null;
+  const isPan = portsEl.closest('[data-widget-type="pan"]') !== null;
 
   outRows.forEach((row) => {
     row.style.position = "";
@@ -4370,13 +4413,13 @@ function layoutPortsGrid(portsEl) {
     ? -(portsEl.previousElementSibling?.offsetHeight || 0)
     : paddingTop + outputRowStart * rowHeight;
   const outputCenterOffset = isAudioInputLink ? Math.max(0, (rowHeight - 14) / 2) : 0;
-  const outputRowCount = outputRowStart + outRows.length + (isDetune ? 1 : 0);
+  const outputRowCount = outputRowStart + outRows.length + ((isDetune || isPan) ? 1 : 0);
   portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowCount)}px`;
   outRows.forEach((row, i) => {
     row.style.position = "absolute";
-    // DeTune has a slider on its second input row. Keep second output label
-    // below that row instead of painting "Tune Down" over the slider/value.
-    const outputIndex = isDetune && i === 1 ? 2 : i;
+    // DeTune/Pan have a slider on their second input row. Keep second output
+    // label below that row instead of painting it over the slider/value.
+    const outputIndex = (isDetune || isPan) && i === 1 ? 2 : i;
     row.style.top = `${outputTop + outputCenterOffset + outputIndex * rowHeight}px`;
     row.style.right = "0";
   });
@@ -8502,7 +8545,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
-  "mixer", "bitcrusher", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
+  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer",
   "linked-input", "linked-output",
 ]);
 
@@ -9800,6 +9843,7 @@ function renderMidiSplitPorts(widgetId, portsEl) {
 const chorusStates = new Map();
 const bitcrusherStates = new Map();
 const waveFolderStates = new Map();
+const panStates = new Map();
 const sampleHoldStates = new Map();
 
 const WAVE_FOLDER_SLIDER_PORTS = ["drive", "symmetry", "gain", "mix"];
@@ -9830,6 +9874,32 @@ function setWaveFolderParam(widgetId, portId, value) {
   audioEngine.setParam(widgetId, portId, state[portId]);
   updateWaveFolderVisual(widgetId);
   sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+}
+
+function formatPanValue(value) {
+  const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  const pct = Math.round((volts - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2) * 100);
+  if (pct === 0) return "C";
+  return pct < 0 ? `${-pct}% L` : `${pct}% R`;
+}
+
+function updatePanVisual(widgetId) {
+  const state = panStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const slider = el.querySelector('[data-role="pan-pan-slider"]');
+  if (slider) slider.value = String(state.pan);
+  const value = el.querySelector('[data-role="pan-pan-value"]');
+  if (value) value.textContent = formatPanValue(state.pan);
+}
+
+function setPanParam(widgetId, value) {
+  const state = panStates.get(widgetId);
+  if (!state) return;
+  state.pan = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, "pan", state.pan);
+  updatePanVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { pan: state.pan });
 }
 
 function updateSampleHoldVisual(widgetId) {
@@ -12988,6 +13058,7 @@ function drawConnections() {
   });
   sampleHoldStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
   waveFolderStates.forEach((_, widgetId) => updateWaveFolderVisual(widgetId));
+  panStates.forEach((_, widgetId) => updatePanVisual(widgetId));
   refreshWiredSliderLocks();
 }
 
@@ -14072,6 +14143,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   if (el.dataset.widgetType === "wave-folder" && WAVE_FOLDER_SLIDER_PORTS.includes(portId)) {
     setWaveFolderParam(widgetId, portId, Number(value));
+  }
+
+  if (el.dataset.widgetType === "pan" && portId === "pan") {
+    setPanParam(widgetId, Number(value));
   }
 
   if (isEffectCvBypassType(el.dataset.widgetType) && portId === "bypass") {
@@ -15575,6 +15650,19 @@ const WIDGET_ENGINES = {
       state.mix = clamp(Number(params.mix ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS);
       WAVE_FOLDER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
       updateWaveFolderVisual(id);
+    },
+  },
+  pan: {
+    getParams: (id) => {
+      const state = panStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = panStates.get(id);
+      if (!state || !params) return;
+      state.pan = clamp(Number(params.pan ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(id, "pan", state.pan);
+      updatePanVisual(id);
     },
   },
   "sample-hold": {

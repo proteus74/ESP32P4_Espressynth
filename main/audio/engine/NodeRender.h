@@ -17,6 +17,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
 #include "nodes/SampleHoldNode.h"
@@ -152,6 +153,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::render(inst, frames);
+        break;
+    case NodeType::Pan:
+        nodes::pan::render(inst, frames);
         break;
     case NodeType::Chorus:
         nodes::chorus::render(inst, frames);
