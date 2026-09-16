@@ -2525,6 +2525,7 @@ function createWidget(type, label, x, y, forcedId) {
       manualSelect: 0,
       activeIndex: 0,
       cvVolts: null,
+      lastValue: null,
     });
     audioEngine.createNode(id, "output-multiplexer", { select: 0 });
 
@@ -3206,7 +3207,7 @@ function createWidget(type, label, x, y, forcedId) {
   let outputSwitchBody = null;
 
   if (type === "output-switch") {
-    outputSwitchStates.set(id, { cc: null, channel: null, selectOut2: false });
+    outputSwitchStates.set(id, { cc: null, channel: null, selectOut2: false, lastValue: null });
     audioEngine.createNode(id, "output-switch", { selectOut2: false });
 
     const body = document.createElement("div");
@@ -6213,6 +6214,11 @@ function setOutputSwitchSelectOut2(widgetId, selectOut2) {
   audioEngine.setParam(widgetId, "selectOut2", state.selectOut2);
   updateOutputSwitchVisual(widgetId);
   sendLiveParamUpdate(widgetId, { selectOut2: state.selectOut2 });
+  // Deliberately no propagate() here: flipping the switch must not push the
+  // CURRENT "in" value onto the newly active output - the just-activated
+  // output should keep showing whatever it last actually received (matches
+  // the firmware's held1/held2 freeze), not jump to a value it never saw.
+  // Only an actual change on "in" (below) is ever allowed to propagate.
 }
 
 function routeMidiToOutputSwitches(data) {
@@ -10878,9 +10884,14 @@ function renderOutputMultiplexerPorts(widgetId, portsEl) {
 }
 
 // Sets live-active output index from connected "select" CV, refreshes the
-// highlighted port row + selector - mirrors multiplexerSetActiveIndex(),
-// minus the "value" republish (OutputMultiplexer has no scalar ControlRoute
-// output, only real audio-rate out1..out16 ports).
+// highlighted port row + selector - mirrors multiplexerSetActiveIndex().
+// Deliberately does NOT re-propagate the current "in" value to the newly
+// active output: that would overwrite the output's own held value with
+// whatever happens to be on "in" right now, even though nothing actually
+// changed there - the newly active output must keep showing whatever it
+// last actually received (matches the firmware's held[] freeze). Only a
+// genuine change on "in" (see deliverToWidget's "output-multiplexer" case)
+// may ever propagate.
 function outputMultiplexerSetActiveIndex(widgetId, idx) {
   const state = outputMultiplexerStates.get(widgetId);
   if (!state) return;
@@ -14082,6 +14093,32 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         state.values[idx] = Number.isNaN(num) ? 0 : num;
         if (idx === state.activeIndex) publishMultiplexerValue(widgetId);
       }
+    }
+  }
+
+  // Mirror of the switch/multiplexer cases above, inverted: a single scalar
+  // "in" value re-propagated to whichever OUTPUT is currently selected, but
+  // ONLY on an actual change (num !== state.lastValue) - flipping the
+  // selection itself must never re-emit the current "in" value onto the
+  // newly active output (see outputMultiplexerSetActiveIndex/
+  // setOutputSwitchSelectOut2), or switching away and back would leak the
+  // OTHER output's most recent value onto this one instead of leaving it
+  // showing whatever it last genuinely received.
+  if (el.dataset.widgetType === "output-switch" && portId === "in") {
+    const state = outputSwitchStates.get(widgetId);
+    const num = Number(value);
+    if (state && !Number.isNaN(num) && num !== state.lastValue) {
+      state.lastValue = num;
+      propagate(widgetId, state.selectOut2 ? "out2" : "out1", num);
+    }
+  }
+
+  if (el.dataset.widgetType === "output-multiplexer" && portId === "in") {
+    const state = outputMultiplexerStates.get(widgetId);
+    const num = Number(value);
+    if (state && !Number.isNaN(num) && num !== state.lastValue) {
+      state.lastValue = num;
+      propagate(widgetId, `out${state.activeIndex + 1}`, num);
     }
   }
 

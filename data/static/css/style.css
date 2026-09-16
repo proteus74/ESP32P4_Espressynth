@@ -3007,6 +3007,11 @@ body.show-node-cpu .widget-cpu-badge {
   pointer-events: none;
   right: 50%;
   transform: translateX(50%);
+  /* Sits behind the out1..outN labels (z-index: 2 on .widget-ports above) -
+     unlike Multiplexer's own thumb, which only ever overlaps its single
+     always-empty output label, this thumb tracks alongside real "Out N"
+     text and must not paint over it. */
+  z-index: 1;
 }
 
 .output-multiplexer-content .multiplexer-switch {
