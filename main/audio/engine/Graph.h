@@ -102,6 +102,8 @@ struct ControlRoute
         MidiVelocity,
         MidiRaw,
         MidiPitchCv, // MidiIn's "pitchCv" output: 1V/oct CV, see CvConventions.h
+        MidiAftertouch, // MidiIn's "aftertouch" output: channel pressure (0xD), linear 0-10V
+        MidiPitchBend,  // MidiIn's "pitchBend" output: pitch-bend wheel (0xE), 5V-centered, per-widget range
         Knob,        // Knob's "voltage" output (0-10V, mapped)
         KnobCc,      // Knob's "cc" output (raw 0-127, unmapped)
         Const,       // Const's scalar "value" output
@@ -539,6 +541,13 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::MidiRaw:
             // Raw MIDI routes are dispatched once from handleMidiEvent(),
             // never through scalar note/gate route delivery.
+            break;
+        case ControlRoute::Kind::MidiAftertouch:
+        case ControlRoute::Kind::MidiPitchBend:
+            // Delivered directly from handleMidiEvent's 0xD/0xE branches via
+            // pushControlRouteValue() - event-driven, independent of note
+            // timing, updates every active voice instance of the target at
+            // once. Never reached here.
             break;
         case ControlRoute::Kind::Knob:
         case ControlRoute::Kind::KnobCc:
@@ -1153,6 +1162,63 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         return;
     }
 
+    // Channel-pressure (Aftertouch, CIN 0xD): event-driven and independent
+    // of note timing - unlike deliverNoteControlRoutes (which only fires ON
+    // note-on/off for ONE resolved voice), this must reach EVERY currently
+    // active voice instance of whatever's connected downstream, because a
+    // real channel-pressure message affects the whole MIDI channel, not one
+    // note. Fixed linear 0-10V mapping, same convention as MidiVelocity
+    // (cv::velocityToVoltage) - not configurable per widget, so computed
+    // once outside the per-widget loop. pushControlRouteValue() already
+    // fans out to every ControlRoute from this source AND every instance of
+    // each route's target (Graph.h:303).
+    if (event.codeIndex == 0xD)
+    {
+        const uint8_t eventChannel0 = event.status & 0x0F;
+        const float atVolts = cv::velocityToVoltage(static_cast<float>(event.data1));
+        for (uint16_t w = 0; w < widgetCount; ++w)
+        {
+            if (widgets[w].type != NodeType::MidiIn) continue;
+            const MidiInState &m = instances[widgets[w].instanceBase].midiIn;
+            if (m.channel >= 0 && static_cast<uint8_t>(m.channel) != eventChannel0) continue;
+            pushControlRouteValue(*this, w, ControlRoute::Kind::MidiAftertouch, atVolts);
+        }
+        return;
+    }
+
+    // Pitch bend (CIN 0xE): same event-driven/all-instances delivery as
+    // aftertouch above, but the bend RANGE is per-MidiIn-widget config
+    // (MidiInState::pitchBendRangeCents), so the volts computation happens
+    // INSIDE the loop - each matching source widget may have a different
+    // configured range, unlike aftertouch's fixed mapping. Deliberately a
+    // SEPARATE output, not blended into pitchCv - 5V = no bend, matching
+    // pitchCv's own 5V-at-note-60 center; cents convert trivially since cv's
+    // convention is exactly 1200 cents/volt.
+    if (event.codeIndex == 0xE)
+    {
+        const uint8_t eventChannel0 = event.status & 0x0F;
+        const int16_t bend = static_cast<int16_t>(((event.data2 & 0x7F) << 7 | (event.data1 & 0x7F)) - 8192);
+        for (uint16_t w = 0; w < widgetCount; ++w)
+        {
+            if (widgets[w].type != NodeType::MidiIn) continue;
+            const MidiInState &m = instances[widgets[w].instanceBase].midiIn;
+            if (m.channel >= 0 && static_cast<uint8_t>(m.channel) != eventChannel0) continue;
+            float bendVolts = (cv::kMaxVolts / 2.0f) +
+                               (static_cast<float>(bend) / 8192.0f) * (m.pitchBendRangeCents / 1200.0f);
+            if (bendVolts < 0.0f) bendVolts = 0.0f;
+            if (bendVolts > cv::kMaxVolts) bendVolts = cv::kMaxVolts;
+            if (m.pitchBendQuantizeCents)
+            {
+                // Snap to the nearest whole cent (1/1200 V) so the output
+                // always lands on a voltage matching an exact pitch step,
+                // instead of a smooth in-between value.
+                bendVolts = roundf(bendVolts * 1200.0f) / 1200.0f;
+            }
+            pushControlRouteValue(*this, w, ControlRoute::Kind::MidiPitchBend, bendVolts);
+        }
+        return;
+    }
+
     // Only note on/off drive the graph beyond this point (CIN 0x9 note-on,
     // 0x8 note-off; a note-on with velocity 0 is a note-off, matching the
     // USB-MIDI/mido convention already used elsewhere in this codebase).
@@ -1354,6 +1420,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         {
             const float value = static_cast<float>(item->valuedouble);
             instances[slot.instanceBase].midiIn.glideTime = value < 0.0f ? 0.0f : (value > 2.0f ? 2.0f : value);
+            continue;
+        }
+        if (slot.type == NodeType::MidiIn && strcmp(key, "pitchBendQuantizeCents") == 0 && cJSON_IsBool(item))
+        {
+            instances[slot.instanceBase].midiIn.pitchBendQuantizeCents = cJSON_IsTrue(item);
             continue;
         }
 
@@ -1587,6 +1658,15 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 instances[slot.instanceBase + v].midiIn.channel = ch;
+            }
+        }
+        else if (slot.type == NodeType::MidiIn && strcmp(key, "pitchBendRangeCents") == 0 && cJSON_IsNumber(item))
+        {
+            const float value = static_cast<float>(item->valuedouble);
+            const float clamped = value < 1.0f ? 1.0f : (value > 6000.0f ? 6000.0f : value);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].midiIn.pitchBendRangeCents = clamped;
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "cc") == 0)

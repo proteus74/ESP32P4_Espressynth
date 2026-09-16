@@ -29,6 +29,7 @@
     <div class="dropdown">
       <button>Undo</button>
       <button>Copy</button>
+      <button id="menuPresetDescription">Preset Description</button>
     </div>
   </div>
   <div class="menu-item">
@@ -79,6 +80,10 @@
   <span class="app-title">ESPRESSYNTH</span>
 
   <div class="header-right">
+    <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
+      <span class="master-clock-badge-icon">⏱️</span>
+      <span id="masterClockBpmLabel">120</span> BPM
+    </button>
     <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
     <span id="midiNoDevice" class="midi-name">No device</span>
     <div id="midiDeviceList" class="midi-device-list"></div>
@@ -88,11 +93,7 @@
 
 <div class="page-tabs">
   <button class="page-tab active" data-page="generator">Sound Generation</button>
-  <button class="page-tab" data-page="fx">FX &amp; Output</button>
-  <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
-    <span class="master-clock-badge-icon">⏱️</span>
-    <span id="masterClockBpmLabel">120</span> BPM
-  </button>
+  <button class="page-tab" data-page="fx">FX &amp; Masteroutput</button>
   <div class="mem-stats" id="memStats">
     <div class="preset-load-progress hidden" id="presetLoadProgress">
       <span class="preset-load-progress-label" id="presetLoadProgressLabel">Loading preset…</span>
@@ -246,6 +247,32 @@
     <div class="modal-actions">
       <button id="saveAsCancel" class="btn-secondary">Cancel</button>
       <button id="saveAsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="presetDescriptionOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Preset Description</h3>
+    <label class="modal-field">
+      <span>Title</span>
+      <input type="text" id="presetDescriptionTitleInput" placeholder="Preset title">
+    </label>
+    <label class="modal-field">
+      <span>Short Description</span>
+      <input type="text" id="presetDescriptionShortInput" placeholder="One-line summary">
+    </label>
+    <label class="modal-field">
+      <span>Long Description</span>
+      <textarea id="presetDescriptionLongInput" rows="6" placeholder="Details, notes, how to use this preset…"></textarea>
+    </label>
+    <label class="modal-field">
+      <span>Author</span>
+      <input type="text" id="presetDescriptionAuthorInput" placeholder="Your name">
+    </label>
+    <div class="modal-actions">
+      <button id="presetDescriptionCancel" class="btn-secondary">Cancel</button>
+      <button id="presetDescriptionSave">Save</button>
     </div>
   </div>
 </div>
@@ -407,7 +434,7 @@
 
 <div id="linkedInputSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
-    <h3>Linked Input Settings</h3>
+    <h3>Link In Settings</h3>
     <label class="modal-field">
       <span>Link Name</span>
       <input type="text" id="linkedInputNameInput" maxlength="47">
@@ -422,7 +449,7 @@
 
 <div id="linkedOutputSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
-    <h3>Linked Output Settings</h3>
+    <h3>Link Out Settings</h3>
     <label class="modal-field">
       <span>Source</span>
       <select id="linkedOutputSourceSelect"></select>
@@ -447,6 +474,11 @@
         <option value="steal-oldest">Steal oldest voice</option>
         <option value="ignore">Ignore new note</option>
       </select>
+    </label>
+    <label class="modal-field"><span>Pitch Bend Range (cents)</span><input type="text" inputmode="decimal" id="midiInPitchBendRangeInput" value="200"></label>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="midiInPitchBendQuantizeInput">
+      <span>Quantize to cents (snap to exact pitch steps)</span>
     </label>
     <div class="modal-actions">
       <button id="midiInSettingsCancel" class="btn-secondary">Cancel</button>

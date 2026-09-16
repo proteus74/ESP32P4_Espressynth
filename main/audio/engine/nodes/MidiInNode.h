@@ -17,6 +17,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.midiIn.overflowMode = p.overflowMode;
     inst.midiIn.glide = p.glide;
     inst.midiIn.glideTime = p.glideTime;
+    inst.midiIn.pitchBendRangeCents = p.midiInPitchBendRangeCents;
+    inst.midiIn.pitchBendQuantizeCents = p.midiInPitchBendQuantizeCents;
 }
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
@@ -27,6 +29,8 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.overflowMode = overflowModeFromString(presetparser::getString(p, "overflowMode", "steal-oldest"));
     out.glide = presetparser::getBool(p, "glide", false);
     out.glideTime = presetparser::getFloat(p, "glideTime", 0.0f);
+    out.midiInPitchBendRangeCents = presetparser::getFloat(p, "pitchBendRangeCents", 200.0f);
+    out.midiInPitchBendQuantizeCents = presetparser::getBool(p, "pitchBendQuantizeCents", false);
 }
 
 } // namespace nodes::midiin

@@ -375,6 +375,14 @@ struct MidiInState
     OverflowMode overflowMode = OverflowMode::StealOldest;
     bool glide = false;
     float glideTime = 0.0f;
+    // Pitch-bend range in cents (MIDI-standard default: 200 = 2 semitones).
+    // Cents, not percent - matches cv's 1V/octave = 1200 cents/volt exactly.
+    float pitchBendRangeCents = 200.0f;
+    // When on, the pitch-bend CV snaps to the nearest whole cent (nearest
+    // 1/1200 V) instead of a continuous voltage - so it always lands on a
+    // voltage that means an exact number of cents, matching pitchCv's own
+    // discrete-note steps, rather than a smooth in-between value.
+    bool pitchBendQuantizeCents = false;
     bool sustainPedalDown = false; // runtime only - CC64 state, never persisted/loaded
 };
 

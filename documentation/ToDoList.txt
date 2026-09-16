@@ -11,8 +11,7 @@ Clock sollte doch irgendwie einen Frequency Ausgang haben, der dann in den LFO g
 Anbindung von EEZ Studio 
 Drum Sequencer 
 
-Modulationsrat muss noch mit ein und Pitch Band 
-
+ 
 
 i2c Display und SPI Display 
 
@@ -34,7 +33,5 @@ Icons beim LFO auch schöner machen Und auch die Buttons müssen irgendwie ander
 
 Beim VCA auch die Buttons kleiner und das Gain muss da irgendwie anders gemacht werden. 
 
-Schalter bei MIDI-In, ob auf Pitch reagiert werden soll und dementsprechend soll dann am Pitch auch eine andere Frequenz rauskommen. 
-Aftertouch am Midi?
 
 MIT license. 

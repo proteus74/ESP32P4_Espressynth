@@ -1053,6 +1053,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 kind = ControlRoute::Kind::MidiGate;
             else if (strcmp(cd.fromPort, "velocity") == 0)
                 kind = ControlRoute::Kind::MidiVelocity;
+            else if (strcmp(cd.fromPort, "aftertouch") == 0)
+                kind = ControlRoute::Kind::MidiAftertouch;
+            else if (strcmp(cd.fromPort, "pitchBend") == 0)
+                kind = ControlRoute::Kind::MidiPitchBend;
             else if (strcmp(cd.fromPort, "midi") == 0 && toType == NodeType::SoundFontPlayer && strcmp(cd.toPort, "midi") == 0)
                 kind = ControlRoute::Kind::MidiRaw;
             // MidiSplit's single "midi" input - one wire standing in for what
@@ -1275,10 +1279,18 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             initial = g->instances[g->widgets[route.sourceWidget].instanceBase].constant.value;
         }
+        else if (route.kind == ControlRoute::Kind::MidiPitchBend)
+        {
+            // "no bend" = 5V (matches pitchCv's own 5V-at-note-60 center).
+            // Without this a target reads fully-bent-down (0V) until the
+            // first real pitch-bend message arrives.
+            initial = cv::kMaxVolts / 2.0f;
+        }
         else
         {
-            // MidiFrequency/Gate/Velocity etc. - no note is playing yet at
-            // build time, so 0 (silence/gate-off) is already correct.
+            // MidiFrequency/Gate/Velocity/Aftertouch etc. - no note is
+            // playing yet at build time, so 0 (silence/gate-off) is already
+            // correct.
             continue;
         }
         for (uint16_t v = 0; v < targetWidget.instanceCount; ++v)

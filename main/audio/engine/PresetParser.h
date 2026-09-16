@@ -171,6 +171,8 @@ struct WidgetParams
     OverflowMode overflowMode = OverflowMode::StealOldest;
     bool glide = false;
     float glideTime = 0.0f;
+    float midiInPitchBendRangeCents = 200.0f;
+    bool midiInPitchBendQuantizeCents = false;
     // midi-split
     uint8_t midiSplitZoneCount = 0; // starts empty - no zone until the user adds one
     int8_t midiSplitZoneFrom[4] = {0, 0, 0, 0};

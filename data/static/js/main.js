@@ -534,6 +534,44 @@ document.getElementById("saveAsSave").addEventListener("click", async () => {
   }
 });
 
+const presetDescriptionOverlay = document.getElementById("presetDescriptionOverlay");
+const presetDescriptionTitleInput = document.getElementById("presetDescriptionTitleInput");
+const presetDescriptionShortInput = document.getElementById("presetDescriptionShortInput");
+const presetDescriptionLongInput = document.getElementById("presetDescriptionLongInput");
+const presetDescriptionAuthorInput = document.getElementById("presetDescriptionAuthorInput");
+
+function openPresetDescriptionModal() {
+  presetDescriptionTitleInput.value = presetDescription.title || currentPresetName || "New";
+  presetDescriptionShortInput.value = presetDescription.description;
+  presetDescriptionLongInput.value = presetDescription.longDescription;
+  presetDescriptionAuthorInput.value = presetDescription.author;
+  presetDescriptionOverlay.classList.remove("hidden");
+  presetDescriptionTitleInput.focus();
+}
+
+function closePresetDescriptionModal() {
+  presetDescriptionOverlay.classList.add("hidden");
+}
+
+document.getElementById("presetDescriptionCancel").addEventListener("click", closePresetDescriptionModal);
+
+document.getElementById("presetDescriptionSave").addEventListener("click", () => {
+  presetDescription = {
+    title: presetDescriptionTitleInput.value.trim(),
+    description: presetDescriptionShortInput.value.trim(),
+    longDescription: presetDescriptionLongInput.value,
+    author: presetDescriptionAuthorInput.value.trim(),
+  };
+  closePresetDescriptionModal();
+  savePresetNow();
+});
+
+document.getElementById("menuPresetDescription").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  openPresetDescriptionModal();
+});
+
 
 
 function exportPresetToFile() {
@@ -606,6 +644,8 @@ const WIDGET_TYPES = {
     outputs: [
       { id: "midi", label: "MIDI" },
       { id: "pitchCv", label: "Pitch" },
+      { id: "aftertouch", label: "Aftertouch" },
+      { id: "pitchBend", label: "Pitch Bend" },
       { id: "note", label: "Note (0–127)" },
       { id: "velocity", label: "Velocity" },
       { id: "gate", label: "Gate" },
@@ -1128,13 +1168,13 @@ const WIDGET_TYPES = {
     outputs: Array.from({ length: LINK_BUS_COUNT }, (_, i) => ({ id: `out${i + 1}`, label: "" })),
   },
   "linked-input": {
-    label: "Linked Input",
+    label: "Link In",
     icon: "📥",
     inputs: [{ id: "in", label: "In" }],
     outputs: [],
   },
   "linked-output": {
-    label: "Linked Output",
+    label: "Link Out",
     icon: "📤",
     inputs: [],
     outputs: [{ id: "out", label: "Out" }],
@@ -1953,7 +1993,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "midi-in") {
-    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0 });
+    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0, pitchBendRangeCents: 200, pitchBendQuantizeCents: false });
     midiVoiceSlotStates.set(id, {
       slots: [{ note: null, heldSince: 0, held: false }],
       holdCounter: 0,
@@ -5595,9 +5635,6 @@ function closeKnobSettings() {
   midiLearnTargetId = null;
 }
 
-knobSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === knobSettingsOverlay) closeKnobSettings();
-});
 
 document.getElementById("knobSettingsCancel").addEventListener("click", closeKnobSettings);
 
@@ -5778,9 +5815,6 @@ function closeButtonSettings() {
   buttonLearnBtn.textContent = "Learn";
 }
 
-buttonSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === buttonSettingsOverlay) closeButtonSettings();
-});
 
 document.getElementById("buttonSettingsCancel").addEventListener("click", closeButtonSettings);
 
@@ -5987,9 +6021,6 @@ function closeUpDownButtonSettings() {
   upDownButtonLearnDownBtn.textContent = "Learn";
 }
 
-upDownButtonSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === upDownButtonSettingsOverlay) closeUpDownButtonSettings();
-});
 
 document.getElementById("upDownButtonSettingsCancel").addEventListener("click", closeUpDownButtonSettings);
 
@@ -6152,9 +6183,6 @@ function closeSwitchSettings() {
   switchLearnBtn.textContent = "Learn";
 }
 
-switchSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === switchSettingsOverlay) closeSwitchSettings();
-});
 
 document.getElementById("switchSettingsCancel").addEventListener("click", closeSwitchSettings);
 
@@ -6268,9 +6296,6 @@ function closeOutputSwitchSettings() {
   outputSwitchLearnBtn.textContent = "Learn";
 }
 
-outputSwitchSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === outputSwitchSettingsOverlay) closeOutputSwitchSettings();
-});
 
 document.getElementById("outputSwitchSettingsCancel").addEventListener("click", closeOutputSwitchSettings);
 
@@ -6305,9 +6330,6 @@ function closeLinkedInputSettings() {
   pendingLinkedInputId = null;
 }
 
-linkedInputSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === linkedInputSettingsOverlay) closeLinkedInputSettings();
-});
 
 document.getElementById("linkedInputSettingsCancel").addEventListener("click", closeLinkedInputSettings);
 
@@ -6376,9 +6398,6 @@ function closeLinkedOutputSettings() {
   pendingLinkedOutputId = null;
 }
 
-linkedOutputSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === linkedOutputSettingsOverlay) closeLinkedOutputSettings();
-});
 
 document.getElementById("linkedOutputSettingsCancel").addEventListener("click", closeLinkedOutputSettings);
 
@@ -6405,6 +6424,8 @@ const MIDI_IN_MAX_VOICES = 16;
 const midiInSettingsOverlay = document.getElementById("midiInSettingsOverlay");
 const midiInChannelSelect = document.getElementById("midiInChannelSelect");
 const midiInOverflowModeSelect = document.getElementById("midiInOverflowModeSelect");
+const midiInPitchBendRangeInput = document.getElementById("midiInPitchBendRangeInput");
+const midiInPitchBendQuantizeInput = document.getElementById("midiInPitchBendQuantizeInput");
 let pendingMidiInId = null;
 
 function midiInVoiceLimit(widgetId) {
@@ -6533,6 +6554,8 @@ function openMidiInSettings(widgetId) {
   midiInOverflowModeSelect.value = state.overflowMode;
   midiInOverflowModeSelect.disabled = fxMidiIn;
   midiInOverflowModeSelect.closest(".modal-field")?.classList.toggle("disabled", fxMidiIn);
+  midiInPitchBendRangeInput.value = state.pitchBendRangeCents ?? 200;
+  midiInPitchBendQuantizeInput.checked = state.pitchBendQuantizeCents === true;
   midiInSettingsOverlay.classList.remove("hidden");
 }
 
@@ -6541,9 +6564,6 @@ function closeMidiInSettings() {
   pendingMidiInId = null;
 }
 
-midiInSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === midiInSettingsOverlay) closeMidiInSettings();
-});
 
 document.getElementById("midiInSettingsCancel").addEventListener("click", closeMidiInSettings);
 
@@ -6556,6 +6576,13 @@ document.getElementById("midiInSettingsSave").addEventListener("click", () => {
     state.overflowMode = isFxMidiIn(pendingMidiInId) || midiInOverflowModeSelect.value === "ignore"
       ? "ignore"
       : "steal-oldest";
+    const cents = parseFloatFlexible(midiInPitchBendRangeInput.value);
+    state.pitchBendRangeCents = Number.isNaN(cents) ? 200 : clamp(cents, 1, 6000);
+    state.pitchBendQuantizeCents = midiInPitchBendQuantizeInput.checked === true;
+    sendLiveParamUpdate(pendingMidiInId, {
+      pitchBendRangeCents: state.pitchBendRangeCents,
+      pitchBendQuantizeCents: state.pitchBendQuantizeCents,
+    });
     savePresetNow();
   }
   closeMidiInSettings();
@@ -6805,9 +6832,6 @@ function closeMidiSplitSettings() {
   midiSplitReleaseTimers.clear();
 }
 
-midiSplitSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === midiSplitSettingsOverlay) closeMidiSplitSettings();
-});
 
 document.getElementById("midiSplitSettingsCancel").addEventListener("click", closeMidiSplitSettings);
 
@@ -7298,9 +7322,6 @@ function closeWavePlayerSettings() {
   pendingWavePlayerId = null;
 }
 
-wavePlayerSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === wavePlayerSettingsOverlay) closeWavePlayerSettings();
-});
 
 document.getElementById("wavePlayerSettingsCancel").addEventListener("click", closeWavePlayerSettings);
 
@@ -7460,9 +7481,6 @@ function closeSoundFontPlayerSettings() {
   pendingSoundFontPlayerId = null;
 }
 
-soundFontPlayerSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === soundFontPlayerSettingsOverlay) closeSoundFontPlayerSettings();
-});
 document.getElementById("soundFontPlayerSettingsCancel").addEventListener("click", closeSoundFontPlayerSettings);
 soundFontPlayerFileSelect.addEventListener("change", refreshSoundFontModalPreview);
 document.getElementById("soundFontPlayerSettingsSave").addEventListener("click", () => {
@@ -7919,9 +7937,6 @@ function closeMultiplierSettings() {
   pendingMultiplierId = null;
 }
 
-multiplierSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === multiplierSettingsOverlay) closeMultiplierSettings();
-});
 
 document.getElementById("multiplierSettingsCancel").addEventListener("click", closeMultiplierSettings);
 
@@ -8031,9 +8046,6 @@ function closeAdderSettings() {
   pendingAdderId = null;
 }
 
-adderSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === adderSettingsOverlay) closeAdderSettings();
-});
 
 document.getElementById("adderSettingsCancel").addEventListener("click", closeAdderSettings);
 
@@ -8286,9 +8298,6 @@ function closeValueMapperSettings() {
   pendingValueMapperId = null;
 }
 
-valueMapperSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === valueMapperSettingsOverlay) closeValueMapperSettings();
-});
 
 document.getElementById("valueMapperSettingsCancel").addEventListener("click", closeValueMapperSettings);
 
@@ -8595,9 +8604,6 @@ function setLfoMaxRate(widgetId, maxRate) {
   sendLiveParamUpdateThrottled(widgetId, { maxRate: state.maxRate, rate: state.rate });
 }
 
-lfoSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === lfoSettingsOverlay) closeLfoSettings();
-});
 document.getElementById("lfoSettingsCancel").addEventListener("click", closeLfoSettings);
 document.getElementById("lfoSettingsSave").addEventListener("click", () => {
   if (pendingLfoId !== null) setLfoMaxRate(pendingLfoId, lfoMaxRateInput.value);
@@ -9162,9 +9168,6 @@ function closeClockSettings() {
   pendingClockId = null;
 }
 
-clockSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === clockSettingsOverlay) closeClockSettings();
-});
 
 document.getElementById("clockSettingsCancel").addEventListener("click", closeClockSettings);
 
@@ -9268,9 +9271,6 @@ function closeStepArpSettings() {
   pendingStepArpId = null;
 }
 
-stepArpSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === stepArpSettingsOverlay) closeStepArpSettings();
-});
 
 document.getElementById("stepArpSettingsCancel").addEventListener("click", closeStepArpSettings);
 
@@ -10076,9 +10076,6 @@ function closeFilterSettings() {
   pendingFilterId = null;
 }
 
-filterSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === filterSettingsOverlay) closeFilterSettings();
-});
 
 document.getElementById("filterSettingsCancel").addEventListener("click", closeFilterSettings);
 
@@ -10613,9 +10610,6 @@ function closeEffectCvSettings() {
   pendingEffectCvType = null;
 }
 
-effectCvSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === effectCvSettingsOverlay) closeEffectCvSettings();
-});
 
 document.getElementById("effectCvSettingsCancel").addEventListener("click", closeEffectCvSettings);
 document.getElementById("effectCvSettingsSave").addEventListener("click", () => {
@@ -11715,9 +11709,6 @@ function closeHammondSettings() {
   pendingHammondId = null;
 }
 
-hammondSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === hammondSettingsOverlay) closeHammondSettings();
-});
 
 document.getElementById("hammondSettingsCancel").addEventListener("click", closeHammondSettings);
 
@@ -11769,9 +11760,6 @@ function closeMixerSettings() {
   pendingMixerId = null;
 }
 
-mixerSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === mixerSettingsOverlay) closeMixerSettings();
-});
 
 document.getElementById("mixerSettingsCancel").addEventListener("click", closeMixerSettings);
 
@@ -11822,9 +11810,6 @@ function closeMultiplexerSettings() {
   pendingMultiplexerId = null;
 }
 
-multiplexerSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === multiplexerSettingsOverlay) closeMultiplexerSettings();
-});
 
 document.getElementById("multiplexerSettingsCancel").addEventListener("click", closeMultiplexerSettings);
 
@@ -11882,9 +11867,6 @@ function closeOutputMultiplexerSettings() {
   pendingOutputMultiplexerId = null;
 }
 
-outputMultiplexerSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === outputMultiplexerSettingsOverlay) closeOutputMultiplexerSettings();
-});
 
 document.getElementById("outputMultiplexerSettingsCancel").addEventListener("click", closeOutputMultiplexerSettings);
 
@@ -12276,9 +12258,6 @@ function closeDxEnvelopeSettings() {
   pendingDxEnvelopeId = null;
 }
 
-dxEnvelopeSettingsOverlay.addEventListener("click", (event) => {
-  if (event.target === dxEnvelopeSettingsOverlay) closeDxEnvelopeSettings();
-});
 document.getElementById("dxEnvelopeSettingsCancel").addEventListener("click", closeDxEnvelopeSettings);
 document.getElementById("dxEnvelopeSettingsSave").addEventListener("click", () => {
   const state = dxEnvelopeStates.get(pendingDxEnvelopeId);
@@ -12643,9 +12622,6 @@ function closeAdsrSettings() {
   pendingAdsrId = null;
 }
 
-adsrSettingsOverlay.addEventListener("click", (e) => {
-  if (e.target === adsrSettingsOverlay) closeAdsrSettings();
-});
 
 document.getElementById("adsrSettingsCancel").addEventListener("click", closeAdsrSettings);
 
@@ -15238,7 +15214,14 @@ function testMidiInGlide(widgetId) {
 
 function routeMidiToWidgets(data) {
   if (data.type !== "midi") return;
-  if (data.midiType !== "note_on" && data.midiType !== "note_off" && data.midiType !== "control_change") return;
+  if (
+    data.midiType !== "note_on" &&
+    data.midiType !== "note_off" &&
+    data.midiType !== "control_change" &&
+    data.midiType !== "aftertouch" &&
+    data.midiType !== "pitchwheel"
+  )
+    return;
 
   
   
@@ -15337,6 +15320,13 @@ function routeMidiToWidgets(data) {
         propagate(id, "gate", GATE_OFF_VOLTS, voiceIndex);
         if (releasedNote !== null) deliverMidiSplitZones(id, releasedNote, 0, false, voiceIndex);
       });
+    } else if (data.midiType === "aftertouch") {
+      propagate(id, "aftertouch", (data.value / 127) * CV_MAX_VOLTS);
+    } else if (data.midiType === "pitchwheel") {
+      const cents = state.pitchBendRangeCents ?? 200;
+      let cv = clamp(CV_MAX_VOLTS / 2 + (data.value / 8192) * (cents / 1200), 0, CV_MAX_VOLTS);
+      if (state.pitchBendQuantizeCents) cv = Math.round(cv * 1200) / 1200;
+      propagate(id, "pitchBend", cv);
     }
   });
 }
@@ -15449,6 +15439,8 @@ const WIDGET_ENGINES = {
       if (isFxMidiIn(id)) state.overflowMode = "ignore";
       state.glide = state.glide === true;
       state.glideTime = clamp(Number(state.glideTime) || 0, 0, 2);
+      state.pitchBendRangeCents = clamp(Number(state.pitchBendRangeCents) || 200, 1, 6000);
+      state.pitchBendQuantizeCents = state.pitchBendQuantizeCents === true;
       resizeVoiceSlots(id, state.voices);
       updateMidiInControls(id);
     },
@@ -16392,12 +16384,17 @@ function serializePreset() {
 
   return {
     schemaVersion: SCHEMA_VERSION,
+    title: presetDescription.title,
+    description: presetDescription.description,
+    longDescription: presetDescription.longDescription,
+    author: presetDescription.author,
     pages: { generator: serializePage("generator"), fx: serializePage("fx") },
   };
 }
 
 
 let currentPresetName = null;
+let presetDescription = { title: "", description: "", longDescription: "", author: "" };
 
 async function saveToServer(name) {
   try {
@@ -16501,6 +16498,7 @@ function handleNewPreset() {
   
   
   currentPresetName = null;
+  presetDescription = { title: "", description: "", longDescription: "", author: "" };
   loadInitTemplate();
   refreshPresetMenu();
 }
@@ -16721,6 +16719,12 @@ function fitPageToView() {
 }
 
 async function applyPresetData(data, { fitToView = false } = {}) {
+  presetDescription = {
+    title: typeof data.title === "string" ? data.title : "",
+    description: typeof data.description === "string" ? data.description : "",
+    longDescription: typeof data.longDescription === "string" ? data.longDescription : "",
+    author: typeof data.author === "string" ? data.author : "",
+  };
   const pageData = normalizePresetData(data);
   let removedAudioToValueWidgets = false;
   ["generator", "fx"].forEach((name) => {
