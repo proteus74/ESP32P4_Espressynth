@@ -22,6 +22,8 @@
 #include "nodes/ClockNode.h"
 #include "nodes/CvInNode.h"
 #include "nodes/CvOutNode.h"
+#include "nodes/DigitalInNode.h"
+#include "nodes/DigitalOutNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -83,6 +85,12 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::CvOut:
         nodes::cvout::render(inst, frames);
+        break;
+    case NodeType::DigitalIn:
+        nodes::digitalin::render(inst, frames);
+        break;
+    case NodeType::DigitalOut:
+        nodes::digitalout::render(inst, frames);
         break;
     case NodeType::SampleHold:
         nodes::samplehold::render(inst, frames);

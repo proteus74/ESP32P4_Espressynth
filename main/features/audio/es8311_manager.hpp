@@ -177,7 +177,7 @@ inline esp_err_t init() {
     i2c_cfg.port            = i2c_port;
     i2c_cfg.addr            = ES8311_CODEC_DEFAULT_ADDR;
     i2c_cfg.bus_handle      = i2c_bus;
-    i2c_cfg.clock_speed_hz  = Board::I2C_BUS_FREQ_HZ;
+    i2c_cfg.clock_speed_hz  = Board::i2c_bus_frequency_hz(i2c_port);
     const audio_codec_ctrl_if_t* ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
 
     const audio_codec_gpio_if_t* gpio_if = audio_codec_new_gpio();

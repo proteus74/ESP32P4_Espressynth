@@ -48,7 +48,7 @@ struct WidgetSlot
     bool renderWhenIdle = false;
     // True (default, safe fallback) unless GraphBuilder::build()'s
     // reachability post-pass proves no edge-path leads from this widget to
-    // any hardware sink or an active monitor tap - see that pass's comment
+    // any audio/CV hardware sink or an active monitor tap - see that pass's comment
     // (plan section 3, P2: "Nur vom Ausgang oder einem aktiven Monitor
     // benötigte Teilgraphen rendern"). Graph::renderBlock skips a widget
     // entirely (render + its own outgoing edges) when this is false; safe

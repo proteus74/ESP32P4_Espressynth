@@ -170,6 +170,10 @@ struct WidgetParams
     int8_t cvIoPort = -1;
     uint8_t cvIoAddress = 0;
     uint8_t cvIoChannel = 0;
+    // digital-in / digital-out (External Hardware) - which configured GPIO
+    // (Feature::IO::gpioSettings()) this widget talks to, chosen via the settings modal,
+    // never live-updated (structural, set only in build()). -1 = placed but never configured.
+    int8_t gpioPin = -1;
     // sample-hold - manual threshold, overridden by a connected Threshold CV.
     float sampleHoldThreshold = 5.0f;
     // midi-in

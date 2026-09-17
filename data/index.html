@@ -151,81 +151,121 @@
 <div id="toast" class="toast hidden"></div>
 
 <div id="settingsOverlay" class="modal-overlay hidden">
-  <div class="modal">
+  <div class="modal modal-wide">
     <h3>Settings</h3>
 
-    <h4 class="modal-section-title">Device</h4>
-    <label class="modal-field">
-      <span>Device Name</span>
-      <input type="text" id="deviceNameInput" maxlength="31" placeholder="ESPRESSYNTH">
-    </label>
-
-    <h4 class="modal-section-title">Preset Navigation (MIDI Learn)</h4>
-    <div class="modal-cc-learn-row">
-      <label class="modal-field modal-cc-field">
-        <span>Previous Preset</span>
-        <input type="text" id="presetPrevCcDisplay" readonly placeholder="– none yet –">
-      </label>
-      <button id="presetPrevLearnBtn" type="button" class="btn-secondary">Learn</button>
-    </div>
-    <div class="modal-cc-learn-row">
-      <label class="modal-field modal-cc-field">
-        <span>Next Preset</span>
-        <input type="text" id="presetNextCcDisplay" readonly placeholder="– none yet –">
-      </label>
-      <button id="presetNextLearnBtn" type="button" class="btn-secondary">Learn</button>
-    </div>
-
-    <h4 class="modal-section-title">Ethernet</h4>
-    <label class="modal-field modal-field-checkbox">
-      <input type="checkbox" id="ethDhcpInput" checked>
-      <span>DHCP</span>
-    </label>
-    <div class="modal-field-group" id="ethStaticFields" hidden>
-      <div class="modal-field-row">
+    <div class="settings-grid">
+      <div class="settings-section">
+        <h4 class="modal-section-title">Device</h4>
         <label class="modal-field">
-          <span>IP Address</span>
-          <input type="text" id="ethIpInput" placeholder="192.168.1.62">
-        </label>
-        <label class="modal-field">
-          <span>Subnet Mask</span>
-          <input type="text" id="ethMaskInput" placeholder="255.255.255.0">
+          <span>Device Name</span>
+          <input type="text" id="deviceNameInput" maxlength="31" placeholder="ESPRESSYNTH">
         </label>
       </div>
-      <div class="modal-field-row">
-        <label class="modal-field">
-          <span>Gateway</span>
-          <input type="text" id="ethGwInput" placeholder="192.168.1.1">
-        </label>
-        <label class="modal-field">
-          <span>DNS</span>
-          <input type="text" id="ethDnsInput" placeholder="8.8.8.8">
-        </label>
-      </div>
-    </div>
 
-    <div id="wifiSettingsSection">
-      <h4 class="modal-section-title">Wi-Fi</h4>
-      <label class="modal-field modal-field-checkbox">
-        <input type="checkbox" id="wifiEnabledInput">
-        <span>Enable Wi-Fi station</span>
-      </label>
-      <div class="modal-field-row">
-        <label class="modal-field">
-          <span>SSID</span>
-          <input type="text" id="wifiSsidInput" maxlength="32" autocomplete="off">
-        </label>
-        <label class="modal-field">
-          <span>Password</span>
-          <input type="password" id="wifiPasswordInput" maxlength="64" placeholder="Leave blank to keep saved password" autocomplete="new-password">
-        </label>
-      </div>
-      <div class="modal-field">
-        <div class="modal-actions modal-inline-actions">
-          <button id="wifiScan" type="button" class="btn-secondary">Scan Networks</button>
-          <span id="wifiStatus" class="modal-field-readout">Wi-Fi disabled</span>
+      <div class="settings-section">
+        <h4 class="modal-section-title">Preset Navigation (MIDI Learn)</h4>
+        <div class="modal-cc-learn-row">
+          <label class="modal-field modal-cc-field">
+            <span>Previous Preset</span>
+            <input type="text" id="presetPrevCcDisplay" readonly placeholder="– none yet –">
+          </label>
+          <button id="presetPrevLearnBtn" type="button" class="btn-secondary">Learn</button>
         </div>
-        <div id="wifiNetworks" class="wifi-network-list" hidden></div>
+        <div class="modal-cc-learn-row">
+          <label class="modal-field modal-cc-field">
+            <span>Next Preset</span>
+            <input type="text" id="presetNextCcDisplay" readonly placeholder="– none yet –">
+          </label>
+          <button id="presetNextLearnBtn" type="button" class="btn-secondary">Learn</button>
+        </div>
+      </div>
+
+      <div class="settings-section settings-section-full">
+        <h4 class="modal-section-title">GPIO</h4>
+        <div id="gpioEntryList" class="gpio-entry-list"></div>
+        <div id="gpioAddRow" class="modal-field-row">
+          <label class="modal-field">
+            <span>Pin</span>
+            <select id="gpioAddPinSelect"></select>
+          </label>
+          <label class="modal-field">
+            <span>Direction</span>
+            <select id="gpioAddDirectionSelect">
+              <option id="gpioAddDirectionIn" value="in">Input</option>
+              <option id="gpioAddDirectionOut" value="out">Output</option>
+            </select>
+          </label>
+          <label class="modal-field">
+            <span>Pull</span>
+            <select id="gpioAddPullSelect">
+              <option value="none">No pull</option>
+              <option value="up">Pull-up</option>
+              <option value="down">Pull-down</option>
+            </select>
+          </label>
+          <label class="modal-field modal-field-checkbox">
+            <input type="checkbox" id="gpioAddInvertInput">
+            <span>Inverted</span>
+          </label>
+          <button id="gpioAddBtn" type="button" class="btn-secondary">Add</button>
+        </div>
+        <p id="gpioAddDisabledHint" class="modal-hint" hidden>Enable "GPIO Digital Input"/"GPIO Digital Output" in menuconfig to add pins.</p>
+      </div>
+
+      <div class="settings-section">
+        <h4 class="modal-section-title">Ethernet</h4>
+        <label class="modal-field modal-field-checkbox">
+          <input type="checkbox" id="ethDhcpInput" checked>
+          <span>DHCP</span>
+        </label>
+        <div class="modal-field-group" id="ethStaticFields" hidden>
+          <div class="modal-field-row">
+            <label class="modal-field">
+              <span>IP Address</span>
+              <input type="text" id="ethIpInput" placeholder="192.168.1.62">
+            </label>
+            <label class="modal-field">
+              <span>Subnet Mask</span>
+              <input type="text" id="ethMaskInput" placeholder="255.255.255.0">
+            </label>
+          </div>
+          <div class="modal-field-row">
+            <label class="modal-field">
+              <span>Gateway</span>
+              <input type="text" id="ethGwInput" placeholder="192.168.1.1">
+            </label>
+            <label class="modal-field">
+              <span>DNS</span>
+              <input type="text" id="ethDnsInput" placeholder="8.8.8.8">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section" id="wifiSettingsSection">
+        <h4 class="modal-section-title">Wi-Fi</h4>
+        <label class="modal-field modal-field-checkbox">
+          <input type="checkbox" id="wifiEnabledInput">
+          <span>Enable Wi-Fi station</span>
+        </label>
+        <div class="modal-field-row">
+          <label class="modal-field">
+            <span>SSID</span>
+            <input type="text" id="wifiSsidInput" maxlength="32" autocomplete="off">
+          </label>
+          <label class="modal-field">
+            <span>Password</span>
+            <input type="password" id="wifiPasswordInput" maxlength="64" placeholder="Leave blank to keep saved password" autocomplete="new-password">
+          </label>
+        </div>
+        <div class="modal-field">
+          <div class="modal-actions modal-inline-actions">
+            <button id="wifiScan" type="button" class="btn-secondary">Scan Networks</button>
+            <span id="wifiStatus" class="modal-field-readout">Wi-Fi disabled</span>
+          </div>
+          <div id="wifiNetworks" class="wifi-network-list" hidden></div>
+        </div>
       </div>
     </div>
 
@@ -783,6 +823,30 @@
   </div>
 </div>
 
+<div id="digitalInSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Digital In Settings</h3>
+    <label class="modal-field"><span>GPIO Pin</span><select id="digitalInPinSelect"></select></label>
+    <p class="modal-hint">Only pins configured as Digital Input in Settings &rarr; GPIO are listed.</p>
+    <div class="modal-actions">
+      <button id="digitalInSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="digitalInSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="digitalOutSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Digital Out Settings</h3>
+    <label class="modal-field"><span>GPIO Pin</span><select id="digitalOutPinSelect"></select></label>
+    <p class="modal-hint">Only pins configured as Digital Output in Settings &rarr; GPIO are listed. Each pin may only be used by one Digital Out widget.</p>
+    <div class="modal-actions">
+      <button id="digitalOutSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="digitalOutSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="soundFontPlayerSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>SoundFont Player Settings</h3>
@@ -989,6 +1053,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260916-link-labels-6"></script>
+<script type="module" src="/static/js/main.js?v=20260917-cv-ws-1"></script>
 </body>
 </html>

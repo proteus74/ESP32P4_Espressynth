@@ -315,6 +315,7 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Chorus:
         return is(portName, "in") ? 0 : -1;
     case NodeType::CvOut:
+    case NodeType::DigitalOut:
         return is(portName, "in") ? 0 : -1;
     case NodeType::Delay:
         // "time"/"feedback"/"mix" are real, but control-only audio-rate
@@ -663,6 +664,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Clock:
         return is(portName, "pulse") ? 0 : -1;
     case NodeType::CvIn:
+    case NodeType::DigitalIn:
         return is(portName, "value") ? 0 : -1;
     case NodeType::StepArpeggiator:
         if (is(portName, "cv"))
@@ -677,6 +679,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::CvOut:
+    case NodeType::DigitalOut:
     case NodeType::Unknown:
     default:
         return -1;
@@ -758,6 +761,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Wm8960Out:
         return 4;
     case NodeType::CvOut:
+    case NodeType::DigitalOut:
         return 1; // "in"
     case NodeType::VuMeter:
     case NodeType::Spectrum:
@@ -829,7 +833,8 @@ inline bool hasNoOutputs(NodeType type)
 {
     return type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
-           type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::CvOut;
+           type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::CvOut ||
+           type == NodeType::DigitalOut;
     // Note: Button/UpDownButton/Switch are deliberately NOT listed here even
     // though they may have no *audio* output port - hasNoOutputs() gates the
     // voiced/global BFS sink check, and these types still produce a value

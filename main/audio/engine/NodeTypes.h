@@ -68,6 +68,8 @@ enum class NodeType : uint8_t
     OutputMultiplexer,
     CvIn,
     CvOut,
+    DigitalIn,
+    DigitalOut,
     Unknown,
 };
 
@@ -247,6 +249,10 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::CvIn;
     if (strcmp(typeStr, "cv-out") == 0)
         return NodeType::CvOut;
+    if (strcmp(typeStr, "digital-in") == 0)
+        return NodeType::DigitalIn;
+    if (strcmp(typeStr, "digital-out") == 0)
+        return NodeType::DigitalOut;
     return NodeType::Unknown;
 }
 

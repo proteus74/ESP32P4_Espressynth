@@ -1062,7 +1062,7 @@ inline esp_err_t init() {
     touch_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GSL3680_ADDRESS;
     touch_io_config.lcd_cmd_bits = 8;
 #endif
-    touch_io_config.scl_speed_hz = 400000;
+    touch_io_config.scl_speed_hz = Board::i2c_bus_frequency_hz(0);
     touch_io_config.control_phase_bytes = 1;
     touch_io_config.flags.disable_control_phase = 1;
     // Never let a missing/unresponsive touch controller block the LVGL task
@@ -1105,7 +1105,8 @@ inline esp_err_t init() {
     lv_indev_set_type(touch_indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(touch_indev, touch_read_cb);
     lv_indev_set_display(touch_indev, display);
-    ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d)",
+    lv_timer_set_period(lv_indev_get_read_timer(touch_indev), 50);
+    ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d, 20 polls/s)",
              CurrentBoard::PIN_TOUCH_RST, CurrentBoard::PIN_TOUCH_INT);
 
 #if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \

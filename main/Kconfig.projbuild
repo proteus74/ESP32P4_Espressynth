@@ -77,6 +77,10 @@ endchoice
 
 menu "Application Features"
 
+    config APP_ENABLE_SYNTH
+        bool
+        default y
+
     menu "I2C Subsystem"
 
         config APP_ENABLE_I2C
@@ -104,7 +108,36 @@ menu "Application Features"
                 config I2C0_PIN_SCL
                     int "I2C0 SCL GPIO"
                     default 8
+
+                choice APP_I2C0_SPEED
+                    prompt "I2C0 Bus Speed"
+                    default APP_I2C0_SPEED_50KHZ
+                    help
+                        Clock used by every device attached to I2C0. All
+                        devices and the physical bus must support the selected
+                        speed.
+
+                    config APP_I2C0_SPEED_50KHZ
+                        bool "50 kHz"
+                    config APP_I2C0_SPEED_100KHZ
+                        bool "100 kHz"
+                    config APP_I2C0_SPEED_200KHZ
+                        bool "200 kHz"
+                    config APP_I2C0_SPEED_400KHZ
+                        bool "400 kHz"
+                    config APP_I2C0_SPEED_1MHZ
+                        bool "1 MHz"
+                endchoice
             endif
+
+            config APP_I2C0_SPEED_HZ
+                int
+                default 50000 if APP_I2C0_SPEED_50KHZ
+                default 100000 if APP_I2C0_SPEED_100KHZ
+                default 200000 if APP_I2C0_SPEED_200KHZ
+                default 400000 if APP_I2C0_SPEED_400KHZ
+                default 1000000 if APP_I2C0_SPEED_1MHZ
+                default 50000
 
             config APP_ENABLE_I2C1
                 bool "Enable I2C Port 1"
@@ -122,57 +155,90 @@ menu "Application Features"
                 config I2C1_PIN_SCL
                     int "I2C1 SCL GPIO"
                     default -1
-            endif
 
-            config APP_ADS1115_SUPPORT
-                bool "ADS1115 Support (2Ch 15 Bit ADC)"
-                default n
-                help
-                    Optional external ADS1115 2-channel ADC (I2C, addresses
-                    0x48-0x4B depending on ADDR pin wiring). Enables a boot-time
-                    address scan and a minimal driver skeleton
-                    (features/io/ads1115_driver.hpp) - not yet wired into the
-                    synth engine. Detected devices show up in the boot log and
-                    the web UI's Info panel.
-
-            if APP_ADS1115_SUPPORT
-                config APP_ADS1115_SEARCH_I2C0
-                    bool "Search on I2C Port 0"
-                    default n
+                choice APP_I2C1_SPEED
+                    prompt "I2C1 Bus Speed"
+                    default APP_I2C1_SPEED_50KHZ
                     help
-                        Probe I2C bus 0 at boot (see "Enable I2C Port 0" above -
-                        must also be enabled).
+                        Clock used by every device attached to I2C1. All
+                        devices and the physical bus must support the selected
+                        speed.
 
-                config APP_ADS1115_SEARCH_I2C1
-                    bool "Search on I2C Port 1"
-                    default n
-                    help
-                        Probe I2C bus 1 at boot (see "Enable I2C Port 1" above -
-                        must also be enabled). Independent of "Search on I2C
-                        Port 0" - both may be enabled at once.
+                    config APP_I2C1_SPEED_50KHZ
+                        bool "50 kHz"
+                    config APP_I2C1_SPEED_100KHZ
+                        bool "100 kHz"
+                    config APP_I2C1_SPEED_200KHZ
+                        bool "200 kHz"
+                    config APP_I2C1_SPEED_400KHZ
+                        bool "400 kHz"
+                    config APP_I2C1_SPEED_1MHZ
+                        bool "1 MHz"
+                endchoice
             endif
 
-            config APP_GP8413_SUPPORT
-                bool "GP8413 Support (2Ch 15 Bit DAC)"
-                default n
-                help
-                    Optional external GP8413 2-channel 15-bit DAC (I2C,
-                    addresses 0x58-0x5F depending on A0/A1/A2 pin wiring).
-                    Enables a boot-time address scan and a minimal driver
-                    skeleton (features/io/gp8413_driver.hpp) - not yet wired
-                    into the synth engine.
-
-            if APP_GP8413_SUPPORT
-                config APP_GP8413_SEARCH_I2C0
-                    bool "Search on I2C Port 0"
-                    default n
-
-                config APP_GP8413_SEARCH_I2C1
-                    bool "Search on I2C Port 1"
-                    default n
-            endif
+            config APP_I2C1_SPEED_HZ
+                int
+                default 50000 if APP_I2C1_SPEED_50KHZ
+                default 100000 if APP_I2C1_SPEED_100KHZ
+                default 200000 if APP_I2C1_SPEED_200KHZ
+                default 400000 if APP_I2C1_SPEED_400KHZ
+                default 1000000 if APP_I2C1_SPEED_1MHZ
+                default 50000
 
         endif
+
+    endmenu
+
+    menu "External Hardware"
+
+        config APP_ADS1115_SUPPORT
+            bool "DFRobot ADS1115 0-10V Support (external CV ADC)"
+            default n
+            depends on APP_ENABLE_I2C
+            help
+                Enables two-channel CV input support. At startup, every
+                enabled I2C bus is searched for DFRobot DFR1184 modules at
+                addresses 0x48-0x4B.
+
+        if APP_ADS1115_SUPPORT
+            config APP_ADS1115_POLL_RATE_HZ
+                int "ADS1115 target polls per second per active channel"
+                range 1 125
+                default 20
+                help
+                    Scheduler target from 1 to 125 polls per second per active
+                    channel. The DFRobot DFR1184 controller exposes channel
+                    selection and voltage data, but no command for configuring
+                    the internal ADS1115 sample rate.
+        endif
+
+        config APP_GP8413_SUPPORT
+            bool "DFRobot GP8413 Support (2Ch 15 Bit DAC)"
+            default n
+            depends on APP_ENABLE_I2C
+            help
+                Enables two-channel 0-10V CV output support. At startup,
+                every enabled I2C bus is searched for GP8413 modules at
+                addresses 0x58-0x5F.
+
+        config APP_ENABLE_GPIO_INPUT
+            bool "Enable GPIO Digital Input"
+            default n
+            help
+                Enables user-configurable GPIO pins as Digital Input widgets
+                (optional pull-up/pull-down). Which physical pins are used is
+                chosen at runtime in the Settings dialog, not here - this
+                flag only compiles the capability in.
+
+        config APP_ENABLE_GPIO_OUTPUTS
+            bool "Enable GPIO Digital Output"
+            default n
+            help
+                Enables user-configurable GPIO pins as Digital Output
+                widgets. Which physical pins are used is chosen at runtime
+                in the Settings dialog, not here - this flag only compiles
+                the capability in.
 
     endmenu
 
@@ -409,72 +475,30 @@ menu "Application Features"
                     stays safely under it with room for the driver's own
                     alignment rounding. Not a value chosen for its latency.
 
-            config APP_ENABLE_SYNTH
-                bool "Enable Node-Graph Synth Engine"
-                default n
-                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
-                help
-                    Polyphonic node-graph synth engine (oscillators, filters,
-                    ADSR, effects, WAV/SoundFont playback), rendering to
-                    whichever codec(s) are enabled above at 44.1 kHz. Board-
-                    agnostic - depends only on the codec(s), not on the
-                    selected board. For the browser patch-editor UI, also
-                    enable "Web Server" and "LittleFS" below; for note input,
-                    enable a MIDI transport (USB Host/Device MIDI or BLE
-                    MIDI).
+            menu "Synth Engine"
 
-            config AUDIO_SYNTH_MAX_VOICES
-                int "Maximum graph-polyphony voices"
-                range 1 32
-                default 16
-                depends on APP_ENABLE_SYNTH
-                help
-                    Compile-time ceiling for polyphonic graph expansion.
-                    Presets may request fewer voices, and the runtime builder
-                    can reduce this count further when internal RAM does not
-                    fit. Higher values increase Graph metadata in PSRAM and
-                    per-voice node buffers/state, primarily in internal RAM.
+                config AUDIO_SYNTH_MAX_VOICES
+                    int "Maximum voices"
+                    range 1 32
+                    default 16
+                    help
+                        Compile-time ceiling for polyphonic graph expansion.
+                        Presets may request fewer voices, and the runtime builder
+                        can reduce this count further when internal RAM does not
+                        fit. Higher values increase Graph metadata in PSRAM and
+                        per-voice node buffers/state, primarily in internal RAM.
 
-            config AUDIO_SYNTH_BLOCK_SIZE
-                int "Synth engine render block size (samples)"
-                range 16 1024
-                default 128
-                depends on APP_ENABLE_SYNTH
-                help
-                    Background: the node-graph synth engine (SynthEngine.h)
-                    runs a dedicated render task that works in fixed-size
-                    chunks called "blocks", not sample by sample -- each loop
-                    iteration it walks the whole node graph (oscillators,
-                    filters, envelopes, effects, ...) once per block to
-                    produce this many samples, then blocking-writes that
-                    block to the codec (or USB speaker mix). This option is
-                    synth::kBlockSize in SynthConfig.h, i.e. how many samples
-                    one such iteration produces.
+                config AUDIO_SYNTH_BLOCK_SIZE
+                    int "Render Block Size"
+                    range 16 1024
+                    default 128
+                    help
+                        Number of samples rendered per node-graph pass. At
+                        44.1 kHz, 128 samples correspond to about 2.9 ms.
+                        Smaller blocks reduce latency but increase scheduling
+                        and graph-walk overhead.
 
-                    Formula (fixed 44.1kHz sample rate):
-                        block_time_ms = AUDIO_SYNTH_BLOCK_SIZE / 44100 * 1000
-
-                    Default 128 samples ~= 2.9 ms/block -- that is both the
-                    engine's per-block real-time CPU budget (see
-                    audioCoreLoadPercent() / "top"'s audio-core load, which
-                    is measured against exactly this budget -- >=100% means
-                    a block took longer to render than it takes to play,
-                    i.e. underrun risk) and roughly its contribution to
-                    end-to-end output latency: a MIDI note-on can only affect
-                    audio from the start of the *next* block, so on average
-                    it waits half a block, up to a full block in the worst
-                    case, before it's heard.
-
-                    Smaller values shrink that latency contribution but
-                    raise overhead, since fixed per-block costs (node graph
-                    walk/dispatch, control-rate parameter smoothing,
-                    envelope/LFO updates, ...) then repeat more often per
-                    second of audio; larger values do the opposite -- more
-                    efficient per sample, but coarser timing. Independent of
-                    AUDIO_I2S_DMA_DESC_NUM/AUDIO_I2S_DMA_FRAME_NUM above,
-                    which set the codec's I2S DMA buffering downstream of
-                    this -- total output latency is roughly the sum of both
-                    stages.
+            endmenu
 
             config USB_DEV_ENABLE_UAC2
                 bool "Enable USB Sound Card (UAC2, via USB Device Composite)"

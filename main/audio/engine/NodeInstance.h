@@ -260,6 +260,8 @@ struct NodeInstance
         OutputSwitchState outputSwitch;
         CvInState cvIn;
         CvOutState cvOut;
+        DigitalInState digitalIn;
+        DigitalOutState digitalOut;
     };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
@@ -330,8 +332,12 @@ struct NodeInstance
 
     // Set every block by CvIn/CvOut's own render() (nodes/CvInNode.h/CvOutNode.h) from what
     // the Core-0 I2C bus manager most recently reported (see features/io/i2c_bus_manager.hpp).
-    // Meaningless (stays true) for every other NodeType. Defaults true so a freshly built
-    // instance doesn't flash the "missing" badge before the bus manager's first poll cycle.
+    // DigitalIn/DigitalOut's render() (nodes/DigitalInNode.h/DigitalOutNode.h) repurposes it to
+    // mean "pin is still configured for this direction in Feature::IO::gpioSettings()" instead
+    // - also refreshed every block (not just at build()) so removing/re-typing a pin in the
+    // Settings dialog shows up within one render block, no graph rebuild needed. Meaningless
+    // (stays true) for every other NodeType. Defaults true so a freshly built instance doesn't
+    // flash the "missing" badge before the first render() call.
     bool ioDeviceFound = true;
 
     NodeInstance() : emptyInlineState(0) {}
@@ -416,6 +422,12 @@ struct NodeInstance
             break;
         case NodeType::CvOut:
             new (&cvOut) CvOutState();
+            break;
+        case NodeType::DigitalIn:
+            new (&digitalIn) DigitalInState();
+            break;
+        case NodeType::DigitalOut:
+            new (&digitalOut) DigitalOutState();
             break;
         default:
             emptyInlineState = 0;

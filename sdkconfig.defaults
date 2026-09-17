@@ -18,6 +18,18 @@
 
 CONFIG_IDF_TARGET="esp32p4"
 
+# Conservative default for I2C0. I2C1 uses the same choice default when enabled.
+CONFIG_APP_I2C0_SPEED_50KHZ=y
+
+# External CV hardware. Enabled drivers search every enabled I2C bus at startup.
+CONFIG_APP_ADS1115_SUPPORT=y
+CONFIG_APP_GP8413_SUPPORT=y
+
+# Digital In/Out (raw GPIO) widgets - which physical pins are used is chosen at runtime in
+# the Settings dialog, not here.
+CONFIG_APP_ENABLE_GPIO_INPUT=y
+CONFIG_APP_ENABLE_GPIO_OUTPUTS=y
+
 # --- Compiler optimization: ESP-IDF defaults to "Debug (-Og)". Measured on real hardware
 # (main/audio/engine/SynthEngine.h's render task): a trivial 4-voice patch (one oscillator +
 # one ADSR per voice) already overran its ~2.9ms block budget continuously at -Og (render alone

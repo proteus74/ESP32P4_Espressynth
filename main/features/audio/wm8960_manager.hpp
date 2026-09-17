@@ -58,20 +58,7 @@ constexpr gpio_num_t WM8960_PIN_DOUT   = static_cast<gpio_num_t>(CONFIG_ONBOARD_
 constexpr gpio_num_t WM8960_PIN_BUTTON = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_WM8960_PIN_BUTTON);
 
 constexpr bool wm8960_pin_is_reserved(gpio_num_t pin) {
-    if (pin == GPIO_NUM_NC) return false;
-#if defined(CONFIG_APP_ENABLE_USB_DEVICE)
-    if (pin == GPIO_NUM_26 || pin == GPIO_NUM_27) return true;
-#endif
-    if (Board::pin_in_list(pin, CurrentBoard::RESERVED_PINS)) return true;
-#if defined(CONFIG_APP_ENABLE_I2C0)
-    if (pin == static_cast<gpio_num_t>(CONFIG_I2C0_PIN_SDA) ||
-        pin == static_cast<gpio_num_t>(CONFIG_I2C0_PIN_SCL)) return true;
-#endif
-#if defined(CONFIG_APP_ENABLE_I2C1)
-    if (pin == static_cast<gpio_num_t>(CONFIG_I2C1_PIN_SDA) ||
-        pin == static_cast<gpio_num_t>(CONFIG_I2C1_PIN_SCL)) return true;
-#endif
-    return false;
+    return Board::is_pin_reserved(pin);
 }
 
 static_assert(!wm8960_pin_is_reserved(WM8960_PIN_BCLK),
@@ -455,7 +442,7 @@ inline esp_err_t init() {
     }
     s_wm8960.i2c_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     s_wm8960.i2c_config.device_address  = WM8960_ADDR;
-    s_wm8960.i2c_config.scl_speed_hz    = Board::I2C_BUS_FREQ_HZ;
+    s_wm8960.i2c_config.scl_speed_hz    = Board::i2c_bus_frequency_hz(i2c_port);
     esp_err_t err = i2c_master_bus_add_device(i2c_bus, &s_wm8960.i2c_config, &s_wm8960.handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add WM8960 I2C device (addr 0x%02x): %s", WM8960_ADDR, esp_err_to_name(err));
@@ -580,7 +567,7 @@ inline esp_err_t init() {
     // yet, and on a WM8960 wired in over jumper leads those wires often run right alongside the
     // I2C SDA/SCL pair to the same board -- a plausible source of exactly the kind of random,
     // no-fixed-pattern I2C write failures the diagnostics above have been catching, unrelated to
-    // bus speed (whole bus dropped to 50 kHz for this test, see Board::I2C_BUS_FREQ_HZ) or task
+    // configured bus speed (see I2C Subsystem Kconfig) or task
     // scheduling (the very first scan in Board::init() can already miss the device, before
     // anything else is even running).
     //

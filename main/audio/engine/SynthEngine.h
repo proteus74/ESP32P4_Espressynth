@@ -17,6 +17,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "CvConventions.h"
 #include "DeviceSettings.h"
 #include "DspPrimitives.h"
 #include "EngineStats.h"
@@ -107,22 +108,27 @@ public:
                    : 0.0f;
     }
 
-    // CV In/Out "device responding" status, for the web UI's missing-device badge (see
-    // synth_web_api.hpp's cvStatus broadcast). Deliberately its OWN scan in taskLoop() below,
+    // CV In/Out "device responding" status AND Digital In/Out "pin configured" status +
+    // Digital In's live HIGH/LOW level, for the web UI's missing-device badge and Digital In's
+    // on-widget level readout (see synth_web_api.hpp's cvStatus broadcast). Deliberately its
+    // OWN scan in taskLoop() below,
     // NOT piggybacked on the widgetLoad* profiler above: that one rotates one widget per
     // block (fine for a slow debug percentage), far too slow for a badge that should appear
     // within a poll cycle or two. A full scan of every widget every block is cheap here (no
     // esp_timer_get_time() calls, just a handful of comparisons/copies at kMaxWidgets=64).
     uint16_t cvStatusCount() const { return cvStatusCount_.load(std::memory_order_relaxed); }
-    bool cvStatusAt(uint16_t i, char *idOut, size_t idOutSize, bool *foundOut) const
+    bool cvStatusAt(uint16_t i, char *idOut, size_t idOutSize, bool *foundOut,
+                    bool *isInputOut, float *voltsOut) const
     {
         if (i >= cvStatusCount_.load(std::memory_order_relaxed) || idOut == nullptr || idOutSize == 0 ||
-            foundOut == nullptr)
+            foundOut == nullptr || isInputOut == nullptr || voltsOut == nullptr)
         {
             return false;
         }
         snprintf(idOut, idOutSize, "%s", cvStatusIds_[i]);
         *foundOut = cvStatusFound_[i].load(std::memory_order_relaxed);
+        *isInputOut = cvStatusIsInput_[i].load(std::memory_order_relaxed);
+        *voltsOut = cvStatusVolts_[i].load(std::memory_order_relaxed);
         return true;
     }
 
@@ -615,6 +621,8 @@ private:
 
     char cvStatusIds_[synth::kMaxWidgets][24] = {};
     std::atomic<bool> cvStatusFound_[synth::kMaxWidgets] = {};
+    std::atomic<bool> cvStatusIsInput_[synth::kMaxWidgets] = {};
+    std::atomic<float> cvStatusVolts_[synth::kMaxWidgets] = {};
     std::atomic<uint16_t> cvStatusCount_{0};
 
     // P0 baseline diagnostics snapshots (see phaseSnapshot()/
@@ -1258,10 +1266,20 @@ inline void SynthEngine::taskLoop()
             for (uint16_t i = 0; i < liveGraph_->widgetCount && cvN < synth::kMaxWidgets; ++i)
             {
                 const NodeType t = liveGraph_->widgets[i].type;
-                if (t != NodeType::CvIn && t != NodeType::CvOut) continue;
+                if (t != NodeType::CvIn && t != NodeType::CvOut &&
+                    t != NodeType::DigitalIn && t != NodeType::DigitalOut) continue;
                 memcpy(cvStatusIds_[cvN], liveGraph_->widgets[i].id, sizeof(cvStatusIds_[cvN]));
-                cvStatusFound_[cvN].store(liveGraph_->instances[liveGraph_->widgets[i].instanceBase].ioDeviceFound,
-                                           std::memory_order_relaxed);
+                const NodeInstance &inst = liveGraph_->instances[liveGraph_->widgets[i].instanceBase];
+                cvStatusFound_[cvN].store(inst.ioDeviceFound, std::memory_order_relaxed);
+                cvStatusIsInput_[cvN].store(t == NodeType::CvIn || t == NodeType::DigitalIn,
+                                            std::memory_order_relaxed);
+                // DigitalIn's live level is reported through the same "volts" slot as CV In
+                // (0/cv::kMaxVolts = LOW/HIGH) so the browser's existing cvStatus consumer needs
+                // no new wire format - see synth_web_api.hpp's broadcast_cv_status_tick().
+                float volts = 0.0f;
+                if (t == NodeType::CvIn) volts = inst.cvIn.lastVolts;
+                else if (t == NodeType::DigitalIn) volts = inst.digitalIn.lastLevel ? cv::kMaxVolts : 0.0f;
+                cvStatusVolts_[cvN].store(volts, std::memory_order_relaxed);
                 ++cvN;
             }
             cvStatusCount_.store(cvN, std::memory_order_relaxed);

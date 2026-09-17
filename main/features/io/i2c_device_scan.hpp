@@ -53,11 +53,14 @@ inline void scan_ads1115(int port) {
     }
     for (int i = 0; i < count; ++i) {
         const uint8_t addr = found[i];
-        ESP_LOGI(SCAN_TAG, "ADS1115: found on I2C%d at 0x%02X", port, addr);
-        I2CDeviceRegistry::add("ADS1115", static_cast<uint8_t>(port), addr);
+        ESP_LOGI(SCAN_TAG, "ADS1115: probing I2C%d address 0x%02X", port, addr);
         Ads1115Slot& slot = s_ads1115[port][addr - 0x48];
-        if (slot.driver.init(bus, addr) == ESP_OK) {
+        if (slot.driver.init(bus, addr, Board::i2c_bus_frequency_hz(port)) == ESP_OK) {
             slot.present = true;
+            I2CDeviceRegistry::add("ADS1115", static_cast<uint8_t>(port), addr);
+            ESP_LOGI(SCAN_TAG,
+                     "DFRobot ADS1115 0-10V: ready on I2C%d at 0x%02X (2 channels)",
+                     port, addr);
         } else {
             ESP_LOGW(SCAN_TAG, "ADS1115: found but driver init failed on I2C%d at 0x%02X", port, addr);
         }
@@ -78,11 +81,21 @@ inline void scan_gp8413(int port) {
     }
     for (int i = 0; i < count; ++i) {
         const uint8_t addr = found[i];
-        ESP_LOGI(SCAN_TAG, "GP8413: found on I2C%d at 0x%02X", port, addr);
-        I2CDeviceRegistry::add("GP8413", static_cast<uint8_t>(port), addr);
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+        if (port == 0 && addr == 0x5D) {
+            ESP_LOGW(SCAN_TAG,
+                     "GP8413: skipping I2C0 0x5D; address is reserved by the JC1060 GT911 touch controller");
+            continue;
+        }
+#endif
+        ESP_LOGI(SCAN_TAG, "GP8413: probing I2C%d address 0x%02X", port, addr);
         Gp8413Slot& slot = s_gp8413[port][addr - 0x58];
-        if (slot.driver.init(bus, addr) == ESP_OK) {
+        if (slot.driver.init(bus, addr, Board::i2c_bus_frequency_hz(port)) == ESP_OK) {
             slot.present = true;
+            I2CDeviceRegistry::add("GP8413", static_cast<uint8_t>(port), addr);
+            ESP_LOGI(SCAN_TAG,
+                     "DFRobot GP8413: ready on I2C%d at 0x%02X (2 channels, 0-10V range set)",
+                     port, addr);
         } else {
             ESP_LOGW(SCAN_TAG, "GP8413: found but driver init failed on I2C%d at 0x%02X", port, addr);
         }
@@ -106,18 +119,22 @@ inline GP8413Driver* gp8413(int port, uint8_t address) {
 }
 
 inline void scan_configured_devices() {
-#if defined(CONFIG_APP_ADS1115_SEARCH_I2C0)
+    I2CDeviceRegistry::clear();
+    ESP_LOGI(SCAN_TAG, "Scanning enabled I2C buses for external hardware");
+#if defined(CONFIG_APP_ENABLE_I2C0) && defined(CONFIG_APP_ADS1115_SUPPORT)
     scan_ads1115(0);
 #endif
-#if defined(CONFIG_APP_ADS1115_SEARCH_I2C1)
-    scan_ads1115(1);
-#endif
-#if defined(CONFIG_APP_GP8413_SEARCH_I2C0)
+#if defined(CONFIG_APP_ENABLE_I2C0) && defined(CONFIG_APP_GP8413_SUPPORT)
     scan_gp8413(0);
 #endif
-#if defined(CONFIG_APP_GP8413_SEARCH_I2C1)
+#if defined(CONFIG_APP_ENABLE_I2C1) && defined(CONFIG_APP_ADS1115_SUPPORT)
+    scan_ads1115(1);
+#endif
+#if defined(CONFIG_APP_ENABLE_I2C1) && defined(CONFIG_APP_GP8413_SUPPORT)
     scan_gp8413(1);
 #endif
+    ESP_LOGI(SCAN_TAG, "External I2C scan complete: %u device(s) ready",
+             static_cast<unsigned>(I2CDeviceRegistry::count()));
 }
 
 } // namespace Feature::IO

@@ -7,44 +7,6 @@ const SOUNDFONT_DEFAULT_MAX_BANK = 128;
 const audioEngine = new AudioEngine();
 window.audioEngine = audioEngine; // debug: inspect from DevTools console (module scope isn't global)
 
-let midiEventSocket = null;
-let midiEventReconnectTimer = null;
-
-function handleMidiEvent(data) {
-  routeMidiToKnobs(data);
-  routeMidiToButtons(data);
-  routeMidiToUpDownButtons(data);
-  routeMidiToSwitches(data);
-  routeMidiToOutputSwitches(data);
-  routeMidiToMasterClock(data);
-  routeMidiToPresetNav(data);
-  if (data.type === "masterClock") { applyMasterClockBroadcast(data); return; }
-  if (data.type !== "midi" || !["note_on", "note_off"].includes(data.midiType)) return;
-  previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
-}
-
-function connectMidiEventStream() {
-  if (midiEventSocket?.readyState === WebSocket.OPEN || midiEventSocket?.readyState === WebSocket.CONNECTING) return;
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  midiEventSocket = new WebSocket(`${protocol}//${location.host}/ws`);
-  midiEventSocket.addEventListener("message", (event) => {
-    try {
-      handleMidiEvent(JSON.parse(event.data));
-    } catch {
-      // Ignore non-JSON diagnostic frames.
-    }
-  });
-  midiEventSocket.addEventListener("close", () => {
-    midiEventSocket = null;
-    clearTimeout(midiEventReconnectTimer);
-    midiEventReconnectTimer = setTimeout(connectMidiEventStream, 2000);
-  });
-}
-
-connectMidiEventStream();
-
-
-
 const menuItems = document.querySelectorAll(".menu-item:not(.menu-item-static)");
 
 menuItems.forEach((item) => {
@@ -131,18 +93,32 @@ async function applyWm8960Availability() {
   }
 }
 
+// Populated by applyCvIoAvailability() below - the Settings dialog's GPIO section reuses
+// these (via cvIoAvailabilityReady) instead of a second /api/version round trip, so its
+// Direction picker only ever offers a direction the firmware was actually built with.
+let gpioInputAvailable = false;
+let gpioOutputsAvailable = false;
+
 async function applyCvIoAvailability() {
   let ads1115 = false;
   let gp8413 = false;
+  let gpioInput = false;
+  let gpioOutputs = false;
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
     ads1115 = data.ads1115 === true;
     gp8413 = data.gp8413 === true;
+    gpioInput = data.gpioInput === true;
+    gpioOutputs = data.gpioOutputs === true;
   } catch (err) {
     ads1115 = false;
     gp8413 = false;
+    gpioInput = false;
+    gpioOutputs = false;
   }
+  gpioInputAvailable = gpioInput;
+  gpioOutputsAvailable = gpioOutputs;
   const cat = WIDGET_CATEGORIES.find((c) => c.label === "External Hardware");
   if (cat) {
     if (!ads1115) {
@@ -153,11 +129,19 @@ async function applyCvIoAvailability() {
       const idx = cat.types.indexOf("cv-out");
       if (idx >= 0) cat.types.splice(idx, 1);
     }
+    if (!gpioInput) {
+      const idx = cat.types.indexOf("digital-in");
+      if (idx >= 0) cat.types.splice(idx, 1);
+    }
+    if (!gpioOutputs) {
+      const idx = cat.types.indexOf("digital-out");
+      if (idx >= 0) cat.types.splice(idx, 1);
+    }
   }
 }
 
 applyWm8960Availability();
-applyCvIoAvailability();
+const cvIoAvailabilityReady = applyCvIoAvailability();
 
 document.getElementById("menubarLogo").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -409,6 +393,103 @@ const wifiScanButton = document.getElementById("wifiScan");
 const wifiStatus = document.getElementById("wifiStatus");
 const wifiNetworks = document.getElementById("wifiNetworks");
 const deviceNameInput = document.getElementById("deviceNameInput");
+const gpioEntryList = document.getElementById("gpioEntryList");
+const gpioAddPinSelect = document.getElementById("gpioAddPinSelect");
+const gpioAddDirectionSelect = document.getElementById("gpioAddDirectionSelect");
+const gpioAddPullSelect = document.getElementById("gpioAddPullSelect");
+const gpioAddInvertInput = document.getElementById("gpioAddInvertInput");
+const gpioAddBtn = document.getElementById("gpioAddBtn");
+let pendingGpioEntries = [];
+let gpioReservedPins = [];
+
+async function fetchGpioInfo() {
+  try {
+    const res = await fetch("/api/system/gpio");
+    if (!res.ok) return { minPin: 0, maxPin: -1, reserved: [] };
+    return await res.json();
+  } catch (err) {
+    return { minPin: 0, maxPin: -1, reserved: [] };
+  }
+}
+
+const gpioAddRow = document.getElementById("gpioAddRow");
+const gpioAddDisabledHint = document.getElementById("gpioAddDisabledHint");
+const gpioAddDirectionIn = document.getElementById("gpioAddDirectionIn");
+const gpioAddDirectionOut = document.getElementById("gpioAddDirectionOut");
+
+// Only offers a direction the firmware was actually built with (CONFIG_APP_ENABLE_GPIO_INPUT/
+// _OUTPUTS, see gpioInputAvailable/gpioOutputsAvailable above) - matches how the canvas
+// widget picker hides Digital In/Out under the same two flags (applyCvIoAvailability).
+function updateGpioDirectionOptions() {
+  gpioAddDirectionIn.hidden = !gpioInputAvailable;
+  gpioAddDirectionOut.hidden = !gpioOutputsAvailable;
+  const bothDisabled = !gpioInputAvailable && !gpioOutputsAvailable;
+  gpioAddRow.hidden = bothDisabled;
+  gpioAddDisabledHint.hidden = !bothDisabled;
+  if (gpioAddDirectionSelect.value === "in" && !gpioInputAvailable) gpioAddDirectionSelect.value = "out";
+  else if (gpioAddDirectionSelect.value === "out" && !gpioOutputsAvailable) gpioAddDirectionSelect.value = "in";
+}
+
+function renderGpioAddPinOptions() {
+  const taken = new Set([...gpioReservedPins, ...pendingGpioEntries.map((e) => e.pin)]);
+  const info = gpioAddPinSelect.dataset.range ? JSON.parse(gpioAddPinSelect.dataset.range) : { minPin: 0, maxPin: -1 };
+  gpioAddPinSelect.innerHTML = "";
+  for (let pin = info.minPin; pin <= info.maxPin; ++pin) {
+    if (taken.has(pin)) continue;
+    const opt = document.createElement("option");
+    opt.value = String(pin);
+    opt.textContent = `GPIO${pin}`;
+    gpioAddPinSelect.appendChild(opt);
+  }
+  if (gpioAddPinSelect.options.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No free pins";
+    gpioAddPinSelect.appendChild(opt);
+  }
+}
+
+function renderGpioEntryList() {
+  gpioEntryList.replaceChildren();
+  pendingGpioEntries.forEach((entry, idx) => {
+    const row = document.createElement("div");
+    row.className = "gpio-entry-row";
+    const label = document.createElement("span");
+    const dir = entry.direction === "out" ? "Output" : "Input";
+    const pull = entry.direction === "in" && entry.pull && entry.pull !== "none" ? `, ${entry.pull === "up" ? "pull-up" : "pull-down"}` : "";
+    const invert = entry.invert ? ", inverted" : "";
+    label.textContent = `GPIO${entry.pin} - ${dir}${pull}${invert}`;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn-secondary";
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", () => {
+      pendingGpioEntries.splice(idx, 1);
+      renderGpioEntryList();
+      renderGpioAddPinOptions();
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    gpioEntryList.appendChild(row);
+  });
+}
+
+gpioAddBtn.addEventListener("click", () => {
+  const pin = parseInt(gpioAddPinSelect.value, 10);
+  if (!Number.isFinite(pin)) {
+    showToast("No free GPIO pin available");
+    return;
+  }
+  pendingGpioEntries.push({
+    pin,
+    direction: gpioAddDirectionSelect.value,
+    pull: gpioAddPullSelect.value,
+    invert: gpioAddInvertInput.checked,
+  });
+  gpioAddInvertInput.checked = false;
+  renderGpioEntryList();
+  renderGpioAddPinOptions();
+});
 
 function updateStaticFieldsVisibility() {
   ethStaticFields.hidden = ethDhcpInput.checked;
@@ -423,6 +504,21 @@ function renderWifiStatus(data) {
 }
 
 ethDhcpInput.addEventListener("change", updateStaticFieldsVisibility);
+
+let loadedNetworkSnapshot = null;
+
+function currentNetworkSnapshot() {
+  return JSON.stringify({
+    ethDhcp: ethDhcpInput.checked,
+    ethIp: ethIpInput.value.trim(),
+    ethMask: ethMaskInput.value.trim(),
+    ethGw: ethGwInput.value.trim(),
+    ethDns: ethDnsInput.value.trim(),
+    wifiEnabled: wifiEnabledInput.checked,
+    wifiSsid: wifiSsidInput.value.trim(),
+    wifiPassword: wifiPasswordInput.value,
+  });
+}
 
 async function openSettings() {
   settingsOverlay.classList.remove("hidden");
@@ -441,6 +537,12 @@ async function openSettings() {
   } catch (err) {
     appendLog(`Could not load network settings: ${err.message}`);
   }
+  // Baseline to detect whether the user actually touched Ethernet/Wi-Fi before Save - there is
+  // no /api/settings/network backend yet (GET above always fails, silently kept at whatever
+  // the fields already showed), so without this check every Save would try (and fail) to POST
+  // network settings even when this section was never opened/touched, showing a confusing
+  // error for an unrelated Device/GPIO save.
+  loadedNetworkSnapshot = currentNetworkSnapshot();
   try {
     const res = await fetch("/api/settings/device");
     const data = await res.json();
@@ -452,6 +554,20 @@ async function openSettings() {
     updatePresetNavLearnUi();
   } catch (err) {
     appendLog(`Could not load device settings: ${err.message}`);
+  }
+  try {
+    await cvIoAvailabilityReady;
+    updateGpioDirectionOptions();
+    const gpioRes = await fetch("/api/settings/gpio");
+    const gpioData = await gpioRes.json();
+    pendingGpioEntries = Array.isArray(gpioData.entries) ? gpioData.entries.map((e) => ({ ...e })) : [];
+    const info = await fetchGpioInfo();
+    gpioReservedPins = Array.isArray(info.reserved) ? info.reserved : [];
+    gpioAddPinSelect.dataset.range = JSON.stringify({ minPin: info.minPin || 0, maxPin: info.maxPin ?? -1 });
+    renderGpioEntryList();
+    renderGpioAddPinOptions();
+  } catch (err) {
+    appendLog(`Could not load GPIO settings: ${err.message}`);
   }
   updateStaticFieldsVisibility();
   ethDhcpInput.focus();
@@ -511,6 +627,16 @@ wifiScanButton.addEventListener("click", async () => {
 
 document.getElementById("settingsSave").addEventListener("click", async () => {
   sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
+  sendLiveParamUpdate("@gpioSettings", { entries: pendingGpioEntries });
+
+  // No /api/settings/network backend exists yet (see openSettings' loadedNetworkSnapshot
+  // comment) - only attempt it, and only surface its failure, when Ethernet/Wi-Fi were
+  // actually touched, so a Device/GPIO-only Save doesn't show an unrelated network error.
+  if (currentNetworkSnapshot() === loadedNetworkSnapshot) {
+    closeSettings();
+    showToast("Saved");
+    return;
+  }
   const body = {
     ethDhcp: ethDhcpInput.checked,
     ethIp: ethIpInput.value.trim(),
@@ -852,6 +978,21 @@ const WIDGET_TYPES = {
   "cv-out": {
     label: "CV Out",
     icon: "🔌",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [],
+  },
+  "digital-in": {
+    label: "Digital In",
+    icon: "🔲",
+    // Pin picked in a settings modal from the user-configured GPIO table (Settings dialog,
+    // see openDigitalInSettings) - no live value simulation client-side, same reasoning as
+    // cv-in above.
+    inputs: [],
+    outputs: [{ id: "value", label: "Value" }],
+  },
+  "digital-out": {
+    label: "Digital Out",
+    icon: "🔲",
     inputs: [{ id: "in", label: "In" }],
     outputs: [],
   },
@@ -1315,7 +1456,7 @@ const WIDGET_CATEGORIES = [
   { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out", "linked-input", "linked-output"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
-  { label: "External Hardware", types: ["cv-in", "cv-out"] },
+  { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out"] },
 ];
 
 
@@ -1606,7 +1747,7 @@ const FX_PAGE_TYPES = [
   "midi-in", "adsr",
   "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
   "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
-  "usb-out", "es8311-out", "wm8960-out", "cv-out",
+  "usb-out", "es8311-out", "wm8960-out",
 ];
 
 
@@ -1615,7 +1756,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold", "cv-in"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold", "cv-in", "cv-out", "digital-in", "digital-out"];
 
 
 
@@ -2271,6 +2412,22 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "digital-in") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openDigitalInSettings(id);
+    });
+  }
+
+  if (type === "digital-out") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openDigitalOutSettings(id);
+    });
+  }
+
   if (type === "mixer") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -2468,6 +2625,22 @@ function createWidget(type, label, x, y, forcedId) {
     const label = document.createElement("div");
     label.className = "cv-io-label";
     label.dataset.role = "cv-io-label";
+    label.textContent = "Not configured";
+
+    body.appendChild(label);
+    el.appendChild(body);
+  }
+
+  if (type === "digital-in" || type === "digital-out") {
+    const stateMap = type === "digital-in" ? digitalInStates : digitalOutStates;
+    stateMap.set(id, { pin: -1, found: true });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body cv-io-body";
+
+    const label = document.createElement("div");
+    label.className = "cv-io-label";
+    label.dataset.role = "gpio-io-label";
     label.textContent = "Not configured";
 
     body.appendChild(label);
@@ -8825,6 +8998,148 @@ const clockStates = new Map();
 const cvInStates = new Map();
 const cvOutStates = new Map();
 
+// External Hardware (Digital In/Out) - which configured GPIO (Settings dialog -> GPIO) this
+// widget talks to, set via the settings modal (see openDigitalInSettings/
+// openDigitalOutSettings below). pin: -1 = never configured. lastLevel: last HIGH/LOW seen
+// via the cvStatus broadcast, used to show a live level on the widget itself (updateGpioIoLabel).
+// found: whether `pin` is still a configured GPIO in Settings -> GPIO as of the last cvStatus
+// tick (~every 50ms, see main.cpp) - false once the user removes that pin from Settings while
+// this widget still references it, matching the firmware's live re-check in
+// DigitalInNode.h/DigitalOutNode.h's render() (no graph rebuild needed to notice the removal).
+const digitalInStates = new Map();
+const digitalOutStates = new Map();
+
+function updateGpioIoLabel(widgetId) {
+  const state = digitalInStates.get(widgetId) || digitalOutStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  const label = el?.querySelector('[data-role="gpio-io-label"]');
+  if (!label || !state) return;
+  if (state.pin < 0) {
+    label.textContent = "Not configured";
+    return;
+  }
+  if (state.found === false) {
+    label.textContent = `GPIO${state.pin} - no longer configured`;
+    return;
+  }
+  label.textContent = state.lastLevel === undefined || state.lastLevel === null
+    ? `GPIO${state.pin}`
+    : `GPIO${state.pin} - ${state.lastLevel ? "HIGH" : "LOW"}`;
+}
+
+const digitalInSettingsOverlay = document.getElementById("digitalInSettingsOverlay");
+const digitalInPinSelect = document.getElementById("digitalInPinSelect");
+let pendingDigitalInId = null;
+
+async function openDigitalInSettings(widgetId) {
+  const state = digitalInStates.get(widgetId);
+  if (!state) return;
+  pendingDigitalInId = widgetId;
+
+  const info = await fetchGpioInfo();
+  const pins = (Array.isArray(info.configured) ? info.configured : []).filter((e) => e.direction === "in");
+  digitalInPinSelect.innerHTML = "";
+  pins.forEach((e) => {
+    const opt = document.createElement("option");
+    opt.value = String(e.pin);
+    opt.textContent = `GPIO${e.pin}${e.pull && e.pull !== "none" ? ` (${e.pull === "up" ? "pull-up" : "pull-down"})` : ""}`;
+    digitalInPinSelect.appendChild(opt);
+  });
+  if (pins.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No Digital Input pins configured";
+    digitalInPinSelect.appendChild(opt);
+  }
+  if (state.pin >= 0 && [...digitalInPinSelect.options].some((o) => o.value === String(state.pin))) {
+    digitalInPinSelect.value = String(state.pin);
+  }
+  digitalInSettingsOverlay.classList.remove("hidden");
+}
+
+function closeDigitalInSettings() {
+  digitalInSettingsOverlay.classList.add("hidden");
+  pendingDigitalInId = null;
+}
+
+document.getElementById("digitalInSettingsCancel").addEventListener("click", closeDigitalInSettings);
+
+document.getElementById("digitalInSettingsSave").addEventListener("click", () => {
+  if (!pendingDigitalInId) return;
+  const state = digitalInStates.get(pendingDigitalInId);
+  const pin = parseInt(digitalInPinSelect.value, 10);
+  if (!state || !Number.isFinite(pin)) {
+    showToast("Select a GPIO pin first");
+    return;
+  }
+  state.pin = pin;
+  updateGpioIoLabel(pendingDigitalInId);
+  savePresetNow();
+  closeDigitalInSettings();
+});
+
+const digitalOutSettingsOverlay = document.getElementById("digitalOutSettingsOverlay");
+const digitalOutPinSelect = document.getElementById("digitalOutPinSelect");
+let pendingDigitalOutId = null;
+
+async function openDigitalOutSettings(widgetId) {
+  const state = digitalOutStates.get(widgetId);
+  if (!state) return;
+  pendingDigitalOutId = widgetId;
+
+  const info = await fetchGpioInfo();
+  const pins = (Array.isArray(info.configured) ? info.configured : []).filter((e) => e.direction === "out");
+  digitalOutPinSelect.innerHTML = "";
+  pins.forEach((e) => {
+    const opt = document.createElement("option");
+    opt.value = String(e.pin);
+    opt.textContent = `GPIO${e.pin}`;
+    digitalOutPinSelect.appendChild(opt);
+  });
+  if (pins.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No Digital Output pins configured";
+    digitalOutPinSelect.appendChild(opt);
+  }
+  if (state.pin >= 0 && [...digitalOutPinSelect.options].some((o) => o.value === String(state.pin))) {
+    digitalOutPinSelect.value = String(state.pin);
+  }
+  digitalOutSettingsOverlay.classList.remove("hidden");
+}
+
+function closeDigitalOutSettings() {
+  digitalOutSettingsOverlay.classList.add("hidden");
+  pendingDigitalOutId = null;
+}
+
+document.getElementById("digitalOutSettingsCancel").addEventListener("click", closeDigitalOutSettings);
+
+document.getElementById("digitalOutSettingsSave").addEventListener("click", () => {
+  if (!pendingDigitalOutId) return;
+  const state = digitalOutStates.get(pendingDigitalOutId);
+  const pin = parseInt(digitalOutPinSelect.value, 10);
+  if (!state || !Number.isFinite(pin)) {
+    showToast("Select a GPIO pin first");
+    return;
+  }
+
+  // Uniqueness rule (Digital Out only, same reasoning as CV Out): two Digital Out widgets
+  // driving the same physical pin is a real conflict.
+  const conflict = [...digitalOutStates.entries()].some(
+    ([wid, other]) => wid !== pendingDigitalOutId && other.pin === pin
+  );
+  if (conflict) {
+    showToast(`GPIO${pin} is already used by another Digital Out`);
+    return;
+  }
+
+  state.pin = pin;
+  updateGpioIoLabel(pendingDigitalOutId);
+  savePresetNow();
+  closeDigitalOutSettings();
+});
+
 async function fetchI2cDevices() {
   try {
     const res = await fetch("/api/system/i2c");
@@ -8972,13 +9287,28 @@ document.getElementById("cvOutSettingsSave").addEventListener("click", () => {
 
 function updateCvStatusDisplay(entries) {
   if (!Array.isArray(entries)) return;
-  const missingIds = new Set(entries.map((e) => e && e[0]).filter(Boolean));
+  const missingIds = new Set(entries.filter((e) => e && e[1] === false).map((e) => e[0]));
   document
-    .querySelectorAll('.widget-instance[data-widget-type="cv-in"], .widget-instance[data-widget-type="cv-out"]')
+    .querySelectorAll(
+      '.widget-instance[data-widget-type="cv-in"], .widget-instance[data-widget-type="cv-out"], ' +
+      '.widget-instance[data-widget-type="digital-in"], .widget-instance[data-widget-type="digital-out"]'
+    )
     .forEach((el) => {
       const badge = el.querySelector('[data-role="cv-missing"]');
       if (badge && !missingIds.has(el.id)) badge.remove();
     });
+  // Refresh every Digital In/Out widget's own "no longer configured" label (not just the small
+  // ❗ badge above) - every configured widget is covered by this tick regardless of whether it
+  // appears in `entries`: Digital In is always sent (see SynthEngine.h's cvStatus scan), Digital
+  // Out only when missing, so "not in entries" reliably means "still configured" for both.
+  for (const [widgetId, state] of digitalInStates) {
+    state.found = !missingIds.has(widgetId);
+    updateGpioIoLabel(widgetId);
+  }
+  for (const [widgetId, state] of digitalOutStates) {
+    state.found = !missingIds.has(widgetId);
+    updateGpioIoLabel(widgetId);
+  }
   missingIds.forEach((widgetId) => {
     const el = document.getElementById(widgetId);
     const header = el ? el.querySelector(".widget-instance-header") : null;
@@ -8991,6 +9321,25 @@ function updateCvStatusDisplay(entries) {
     const closeBtn = header.querySelector(".widget-instance-close");
     if (closeBtn) header.insertBefore(badge, closeBtn);
     else header.appendChild(badge);
+  });
+  entries.forEach((entry) => {
+    if (!entry || typeof entry[0] !== "string" || !Number.isFinite(entry[2])) return;
+    // Digital In's live level shows directly on the widget's own label (unlike CV In, which
+    // has no such per-widget readout) - entry[2] carries 0/CV_MAX_VOLTS = LOW/HIGH, same
+    // wire format CV In's volts already use (see SynthEngine.h's cvStatus scan).
+    const digitalInState = digitalInStates.get(entry[0]);
+    if (digitalInState) {
+      digitalInState.lastLevel = entry[2] >= CV_MAX_VOLTS * 0.5;
+      updateGpioIoLabel(entry[0]);
+    }
+    connections
+      .filter((connection) => connection.from.widgetId === entry[0] && connection.from.portId === "value")
+      .forEach((connection) => {
+        const target = document.getElementById(connection.to.widgetId);
+        if (target && (target.dataset.widgetType === "debug" || target.dataset.widgetType === "voltmeter")) {
+          deliverToWidget(connection.to.widgetId, connection.to.portId, entry[2]);
+        }
+      });
   });
 }
 
@@ -14187,6 +14536,29 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
       ]);
     }
 
+    // Bottom/top output into a side input: use the two endpoint corridors
+    // directly. Routing around both widgets creates a large box-shaped loop.
+    if (fromDirection.y !== 0 && toDirection.x !== 0) {
+      return roundedOrthogonalPath([
+        p1,
+        fromLead,
+        { x: toLead.x, y: fromLead.y },
+        toLead,
+        p2,
+      ]);
+    }
+
+    // Side output into a top/bottom input: mirrored case above.
+    if (fromDirection.x !== 0 && toDirection.y !== 0) {
+      return roundedOrthogonalPath([
+        p1,
+        fromLead,
+        { x: fromLead.x, y: toLead.y },
+        toLead,
+        p2,
+      ]);
+    }
+
     // Widgets are stacked, overlap, or their ports face a non-standard edge.
     // Route around their shared top/bottom outside edge.  Crucially, leads
     // stay in path: no branch may replace them with a vertical line at jack.
@@ -16510,6 +16882,30 @@ const WIDGET_ENGINES = {
       updateCvIoLabel(id);
     },
   },
+  "digital-in": {
+    getParams: (id) => {
+      const state = digitalInStates.get(id);
+      return state ? { pin: state.pin } : {};
+    },
+    applyParams: (id, params) => {
+      const state = digitalInStates.get(id);
+      if (!state || !params) return;
+      state.pin = typeof params.pin === "number" ? params.pin : -1;
+      updateGpioIoLabel(id);
+    },
+  },
+  "digital-out": {
+    getParams: (id) => {
+      const state = digitalOutStates.get(id);
+      return state ? { pin: state.pin } : {};
+    },
+    applyParams: (id, params) => {
+      const state = digitalOutStates.get(id);
+      if (!state || !params) return;
+      state.pin = typeof params.pin === "number" ? params.pin : -1;
+      updateGpioIoLabel(id);
+    },
+  },
   lfo: {
     getParams: (id) => {
       const state = lfoStates.get(id);
@@ -18103,6 +18499,9 @@ function connectWs() {
       routeMidiToSoundFontPlayer(data);
       routeMidiToMasterClock(data);
       routeMidiToPresetNav(data);
+      if (["note_on", "note_off"].includes(data.midiType)) {
+        previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
+      }
       flashMidiActivity();
     } else if (data.type === "midi-error") {
       appendLog(`MIDI error: ${data.error}`);

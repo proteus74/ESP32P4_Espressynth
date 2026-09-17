@@ -159,7 +159,7 @@ inline void init() {
     Feature::IO::scan_configured_devices();
 
 #if defined(CONFIG_APP_ADS1115_SUPPORT) || defined(CONFIG_APP_GP8413_SUPPORT)
-    Feature::IO::i2c_bus_manager_init();
+    ESP_ERROR_CHECK(Feature::IO::i2c_bus_manager_init());
 #endif
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE)

@@ -81,6 +81,16 @@ constexpr gpio_num_t PIN_ETH_MDC          = GPIO_NUM_31;
 constexpr gpio_num_t PIN_ETH_MDIO         = GPIO_NUM_52;
 constexpr gpio_num_t PIN_ETH_PHY_RST      = GPIO_NUM_51;
 constexpr int        ETH_PHY_ADDR         = 1;
+// RMII data/clock pins - hardcoded directly in ethernet_manager.hpp's emac_config (not
+// Kconfig-selectable), so listed here as fixed constants purely so RESERVED_PINS below can
+// include them.
+constexpr gpio_num_t PIN_ETH_RMII_CLK     = GPIO_NUM_50;
+constexpr gpio_num_t PIN_ETH_RMII_TX_EN   = GPIO_NUM_49;
+constexpr gpio_num_t PIN_ETH_RMII_TXD0    = GPIO_NUM_34;
+constexpr gpio_num_t PIN_ETH_RMII_TXD1    = GPIO_NUM_35;
+constexpr gpio_num_t PIN_ETH_RMII_CRS_DV  = GPIO_NUM_28;
+constexpr gpio_num_t PIN_ETH_RMII_RXD0    = GPIO_NUM_29;
+constexpr gpio_num_t PIN_ETH_RMII_RXD1    = GPIO_NUM_30;
 
 // USB Host (USB 2.0 High-Speed Type-C, no on-board hub)
 constexpr bool       HAS_USB_HOST         = true;
@@ -112,6 +122,8 @@ constexpr gpio_num_t RESERVED_PINS[] = {
     PIN_SDMMC_CLK, PIN_SDMMC_CMD, PIN_SDMMC_D0, PIN_SDMMC_D1, PIN_SDMMC_D2, PIN_SDMMC_D3,
     PIN_SDMMC_PWR_EN,
     PIN_ETH_MDC, PIN_ETH_MDIO, PIN_ETH_PHY_RST,
+    PIN_ETH_RMII_CLK, PIN_ETH_RMII_TX_EN, PIN_ETH_RMII_TXD0, PIN_ETH_RMII_TXD1,
+    PIN_ETH_RMII_CRS_DV, PIN_ETH_RMII_RXD0, PIN_ETH_RMII_RXD1,
     PIN_USB_HUB_RST, PIN_USB_HOST_PWR_EN,
 };
 

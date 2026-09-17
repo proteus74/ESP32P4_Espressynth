@@ -3379,6 +3379,30 @@ body.show-node-cpu .widget-cpu-badge {
   margin-top: 0;
 }
 
+/* Settings dialog only (id-scoped via #settingsOverlay in the grid rule below) - every other
+   modal (CV In/Out, Digital In/Out, Button, ...) stays at the default 480px .modal width;
+   only Settings has enough independent sections to benefit from a 2-column layout. */
+.modal-wide {
+  width: min(1800px, 95vw);
+  max-width: 95vw;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 3rem;
+}
+
+.settings-section-full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .modal-title-row {
   display: flex;
   align-items: flex-start;
@@ -4020,6 +4044,27 @@ input[type="range"].port-slider + .port-value {
 
 .wifi-network-row:hover {
   background: #313948;
+}
+
+.gpio-entry-list {
+  max-height: 156px;
+  overflow-y: auto;
+  border: 1px solid #3f4655;
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+}
+
+.gpio-entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 6px 8px;
+  border-bottom: 1px solid #343a46;
+}
+
+.gpio-entry-row:last-child {
+  border-bottom: 0;
 }
 
 /* Connection-lost overlay: above every other modal (z-index) since nothing

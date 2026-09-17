@@ -27,6 +27,8 @@
 #include "nodes/ClockNode.h"
 #include "nodes/CvInNode.h"
 #include "nodes/CvOutNode.h"
+#include "nodes/DigitalInNode.h"
+#include "nodes/DigitalOutNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/ConstNode.h"
 #include "features/io/i2c_bus_manager.hpp"
@@ -540,6 +542,12 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::CvOut:
         nodes::cvout::build(inst, p);
+        break;
+    case NodeType::DigitalIn:
+        nodes::digitalin::build(inst, p);
+        break;
+    case NodeType::DigitalOut:
+        nodes::digitalout::build(inst, p);
         break;
     case NodeType::SampleHold:
         nodes::samplehold::build(inst, p);
@@ -1736,7 +1744,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
 
     // Subgraph pruning (plan section 3, P2: "Nur vom Ausgang oder einem
     // aktiven Monitor benötigte Teilgraphen rendern"): a widget no edge-path
-    // leads from to any of the three hardware sinks or an active monitor tap
+    // leads to any audio/CV hardware sink or an active monitor tap
     // produces output nobody ever reads - Graph::renderBlock (see
     // WidgetSlot::needed) skips it, and its own outgoing edges, entirely.
     // Computed as reverse reachability from the sinks/monitor-tap sources
@@ -1759,6 +1767,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         if (g->usbOutWidget >= 0) needed[g->usbOutWidget] = true;
         if (g->es8311OutWidget >= 0) needed[g->es8311OutWidget] = true;
         if (g->wm8960OutWidget >= 0) needed[g->wm8960OutWidget] = true;
+        for (uint16_t w = 0; w < g->widgetCount; ++w)
+        {
+            if (g->widgets[w].type == NodeType::CvIn || g->widgets[w].type == NodeType::CvOut ||
+                g->widgets[w].type == NodeType::DigitalIn || g->widgets[w].type == NodeType::DigitalOut)
+            {
+                needed[w] = true;
+            }
+        }
         for (uint16_t e = 0; e < g->edgeCount; ++e)
         {
             if (g->edges[e].monitorTap)

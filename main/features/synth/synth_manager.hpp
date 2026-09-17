@@ -17,6 +17,7 @@
 #include "SynthEngine.h"
 #include "UsbMidiEvent.h"
 #include "features/filesystem/littlefs_manager.hpp"
+#include "features/io/gpio_manager.hpp"
 
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
     #include "features/audio/es8311_manager.hpp"
@@ -530,6 +531,8 @@ inline esp_err_t init() {
     // the render task starts so the first Clock-node render already sees it.
     synth::loadMasterClockFromFs();
     synth::loadDeviceSettingsFromFs();
+    Feature::IO::loadGpioSettingsFromFs();
+    Feature::IO::apply_gpio_settings(); // gpio_config() every configured pin before any preset's DigitalIn/DigitalOut render()s
 
     // Core 0, low priority - same placement as SynthEngine's "preset_loader" task just below
     // (SynthEngine.h): pure background filesystem work, must never land on core 1, which

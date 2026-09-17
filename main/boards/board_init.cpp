@@ -53,8 +53,16 @@ void i2c_scan_bus(const char* bus_name, i2c_master_bus_handle_t bus_handle) {
     int device_count = 0;
     for (uint16_t addr = 0x08; addr <= 0x77; ++addr) {
         if (i2c_master_probe(bus_handle, addr, 20) == ESP_OK) {
-            found_len += static_cast<size_t>(std::snprintf(found + found_len, sizeof(found) - found_len,
-                                                            "%s0x%02X", device_count == 0 ? "" : ", ", addr));
+            if (found_len < sizeof(found) - 1) {
+                const int written = std::snprintf(found + found_len, sizeof(found) - found_len,
+                                                  "%s0x%02X", device_count == 0 ? "" : ", ", addr);
+                if (written > 0) {
+                    const size_t remaining = sizeof(found) - found_len;
+                    found_len += static_cast<size_t>(written) < remaining
+                                     ? static_cast<size_t>(written)
+                                     : remaining - 1;
+                }
+            }
             ++device_count;
         }
     }
@@ -93,7 +101,9 @@ esp_err_t init() {
             ESP_LOGE(TAG, "Failed to initialize I2C0 bus: %s", esp_err_to_name(ret));
             return ret;
         }
-        ESP_LOGI(TAG, "I2C0 master initialized (SDA:GPIO%d SCL:GPIO%d)", CONFIG_I2C0_PIN_SDA, CONFIG_I2C0_PIN_SCL);
+        ESP_LOGI(TAG, "I2C0 master initialized (SDA:GPIO%d SCL:GPIO%d, %luHz)",
+                 CONFIG_I2C0_PIN_SDA, CONFIG_I2C0_PIN_SCL,
+                 static_cast<unsigned long>(i2c_bus_frequency_hz(0)));
         i2c_scan_bus("I2C0", s_i2c_bus_handle[0]);
     }
 #endif
@@ -116,7 +126,9 @@ esp_err_t init() {
             ESP_LOGE(TAG, "Failed to initialize I2C1 bus: %s", esp_err_to_name(ret));
             return ret;
         }
-        ESP_LOGI(TAG, "I2C1 master initialized (SDA:GPIO%d SCL:GPIO%d)", CONFIG_I2C1_PIN_SDA, CONFIG_I2C1_PIN_SCL);
+        ESP_LOGI(TAG, "I2C1 master initialized (SDA:GPIO%d SCL:GPIO%d, %luHz)",
+                 CONFIG_I2C1_PIN_SDA, CONFIG_I2C1_PIN_SCL,
+                 static_cast<unsigned long>(i2c_bus_frequency_hz(1)));
         i2c_scan_bus("I2C1", s_i2c_bus_handle[1]);
     }
 #endif

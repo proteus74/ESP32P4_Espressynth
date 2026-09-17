@@ -4,7 +4,8 @@
 
 namespace Feature::IO {
 
-constexpr size_t MAX_DETECTED_I2C_DEVICES = 8;
+// Two buses, each with four ADS1115 and eight GP8413 addresses.
+constexpr size_t MAX_DETECTED_I2C_DEVICES = 24;
 
 struct DetectedI2CDevice {
     char name[16] = {};   // "ADS1115" / "GP8413"

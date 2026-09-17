@@ -22,6 +22,8 @@
 #include "nodes/ClockNode.h"
 #include "nodes/CvInNode.h"
 #include "nodes/CvOutNode.h"
+#include "nodes/DigitalInNode.h"
+#include "nodes/DigitalOutNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -135,6 +137,12 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::CvOut:
         nodes::cvout::parsePreset(p, out);
+        break;
+    case NodeType::DigitalIn:
+        nodes::digitalin::parsePreset(p, out);
+        break;
+    case NodeType::DigitalOut:
+        nodes::digitalout::parsePreset(p, out);
         break;
     case NodeType::SampleHold:
         nodes::samplehold::parsePreset(p, out);

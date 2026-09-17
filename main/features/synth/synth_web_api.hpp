@@ -28,7 +28,11 @@
 #include "PresetPaths.h"
 #include "SamplePaths.h"
 #include "UsbMidiEvent.h"
+#include "driver/gpio.h"
+#include "soc/soc_caps.h"
+
 #include "features/filesystem/littlefs_manager.hpp"
+#include "features/io/gpio_manager.hpp"
 #include "features/io/i2c_device_registry.h"
 #include "features/sd_card/sd_card_manager.hpp"
 #include "features/web/web_server.hpp"
@@ -66,10 +70,8 @@ constexpr size_t kUploadSafetyMarginBytes = 4096; // headroom below reported fre
 constexpr size_t kMaxWsClients = 12; // must cover Feature::Web::begin()'s config.max_open_sockets
 
 struct BroadcastWork {
-    // 1536: enough for the largest message sent today (nodeCpu, up to kMaxWidgets=64 entries)
-    // with headroom - broadcast_json() otherwise silently discards a too-long message
-    // (truncation guard below) instead of truncating it.
-    char json[1536];
+    // CV status can contain one live-voltage entry per widget.
+    char json[4096];
 };
 
 void broadcast_work(void *arg) {
@@ -123,6 +125,37 @@ inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
     const UsbMidiEvent event = from_transport(status, data1, data2);
     char json[256];
     if (event.toJson(json, sizeof(json), static_cast<uint32_t>(esp_timer_get_time() / 1000), "MIDI") > 0) {
+        broadcast_json(json);
+    }
+}
+
+/** Broadcasts live CV input values and CV device state at the UI refresh rate. */
+inline void broadcast_cv_status_tick() {
+    if (Feature::Web::handle() == nullptr) return;
+
+    static char json[4096];
+    int offset = snprintf(json, sizeof(json), "{\"type\":\"cvStatus\",\"w\":[");
+    const uint16_t count = engine().cvStatusCount();
+    if (count == 0) return;
+
+    bool first = true;
+    for (uint16_t i = 0; i < count && offset > 0 && static_cast<size_t>(offset) < sizeof(json); ++i) {
+        char widget_id[24];
+        bool found = true;
+        bool is_input = false;
+        float volts = 0.0f;
+        if (!engine().cvStatusAt(i, widget_id, sizeof(widget_id), &found, &is_input, &volts) ||
+            (!is_input && found)) continue;
+        offset += is_input
+            ? snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset),
+                       "%s[\"%s\",%s,%.4f]", first ? "" : ",", widget_id,
+                       found ? "true" : "false", static_cast<double>(volts))
+            : snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset),
+                       "%s[\"%s\",false]", first ? "" : ",", widget_id);
+        first = false;
+    }
+    if (offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
         broadcast_json(json);
     }
 }
@@ -283,26 +316,6 @@ inline void broadcast_status_tick() {
         broadcast_json(node_cpu_json);
     }
 
-    // CV In/Out missing-device badge feed - only ever lists widgets CURRENTLY not found (an
-    // empty "w" array means everything is fine and clears every badge client-side), so this
-    // stays tiny in the common case instead of listing every configured CV widget every tick.
-    static char cv_status_json[512];
-    int cv_offset = snprintf(cv_status_json, sizeof(cv_status_json), "{\"type\":\"cvStatus\",\"w\":[");
-    const uint16_t cv_count = engine().cvStatusCount();
-    bool cv_first = true;
-    for (uint16_t i = 0; i < cv_count && cv_offset > 0 && static_cast<size_t>(cv_offset) < sizeof(cv_status_json);
-         ++i) {
-        char widget_id[24];
-        bool found = true;
-        if (!engine().cvStatusAt(i, widget_id, sizeof(widget_id), &found) || found) continue;
-        cv_offset += snprintf(cv_status_json + cv_offset, sizeof(cv_status_json) - static_cast<size_t>(cv_offset),
-                               "%s[\"%s\",false]", cv_first ? "" : ",", widget_id);
-        cv_first = false;
-    }
-    if (cv_offset > 0 && static_cast<size_t>(cv_offset) < sizeof(cv_status_json)) {
-        snprintf(cv_status_json + cv_offset, sizeof(cv_status_json) - static_cast<size_t>(cv_offset), "]}");
-        broadcast_json(cv_status_json);
-    }
 }
 
 namespace {
@@ -1062,9 +1075,10 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[256];
+    char json[320];
     snprintf(json, sizeof(json),
-             "{\"version\":\"%s\",\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gitVersion\":\"%s\"}",
+             "{\"version\":\"%s\",\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
+             "\"gpioOutputs\":%s,\"gitVersion\":\"%s\"}",
              FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
              "true",
@@ -1081,6 +1095,16 @@ esp_err_t version_handler(httpd_req_t *req) {
 #else
              "false",
 #endif
+#if defined(CONFIG_APP_ENABLE_GPIO_INPUT)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_APP_ENABLE_GPIO_OUTPUTS)
+             "true",
+#else
+             "false",
+#endif
              desc->version);
     httpd_resp_sendstr(req, json);
     return ESP_OK;
@@ -1088,7 +1112,7 @@ esp_err_t version_handler(httpd_req_t *req) {
 
 esp_err_t i2c_devices_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
-    char json[512];
+    char json[1536];
     int len = snprintf(json, sizeof(json), "{\"devices\":[");
     const size_t count = Feature::IO::I2CDeviceRegistry::count();
     for (size_t i = 0; i < count && len > 0 && static_cast<size_t>(len) < sizeof(json); ++i) {
@@ -1103,6 +1127,58 @@ esp_err_t i2c_devices_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "]}");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// ---- /api/system/gpio, /api/settings/gpio ----
+
+// Valid pin range + reserved pins (Board::is_pin_reserved / WM8960) + this device's currently
+// configured Digital In/Out pins (GpioSettings.h) - the Settings dialog computes "free" pins
+// as validRange minus reserved minus configured-by-a-different-pin. Static/compile-time data
+// plus one small dynamic list - cheap enough for a plain GET, same reasoning as
+// i2c_devices_handler/masterclock_handler.
+esp_err_t gpio_info_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[2048]; // reserved[] can list every SoC pin, configured[] up to kMaxGpioEntries
+    int len = snprintf(json, sizeof(json), "{\"minPin\":0,\"maxPin\":%d,\"reserved\":[",
+                        SOC_GPIO_PIN_COUNT - 1);
+    bool first = true;
+    for (int pin = 0; pin < SOC_GPIO_PIN_COUNT; ++pin) {
+        const auto gpio = static_cast<gpio_num_t>(pin);
+        if (!GPIO_IS_VALID_GPIO(gpio) || !Feature::IO::is_pin_reserved_for_gpio_settings(gpio)) continue;
+        len += snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "%s%d", first ? "" : ",", pin);
+        first = false;
+    }
+    len += snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "],\"configured\":[");
+    first = true;
+    const auto &gs = Feature::IO::gpioSettings();
+    for (uint8_t i = 0; i < gs.count; ++i) {
+        len += snprintf(json + len, sizeof(json) - static_cast<size_t>(len),
+                         "%s{\"pin\":%d,\"direction\":\"%s\",\"pull\":\"%s\",\"invert\":%s}", first ? "" : ",",
+                         gs.entries[i].pin,
+                         gs.entries[i].direction == Feature::IO::GpioDirection::Output ? "out" : "in",
+                         gs.entries[i].pull == Feature::IO::GpioPull::Up ? "up" :
+                         gs.entries[i].pull == Feature::IO::GpioPull::Down ? "down" : "none",
+                         gs.entries[i].invert ? "true" : "false");
+        first = false;
+    }
+    snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "]}");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// One-shot hydration for the Settings dialog's GPIO section (GpioSettings.h) - same "plain
+// GET, no WS handshake race" reasoning as device_settings_handler above. Saved via the
+// "@gpioSettings" paramUpdate branch in the /ws handler below, not a POST here.
+esp_err_t gpio_settings_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    char json[1536]; // up to kMaxGpioEntries entries
+    const int n = Feature::IO::formatGpioSettingsJson(json, sizeof(json));
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
     httpd_resp_sendstr(req, json);
     return ESP_OK;
 }
@@ -1260,6 +1336,41 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsNumber(nextChannel)) ds.nextChannel = nextChannel->valueint;
                     synth::saveDeviceSettingsToFs();
                     handled_locally = true;
+                } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@gpioSettings") == 0 &&
+                           cJSON_IsObject(params)) {
+                    // GPIO pin table (GpioSettings.h) - engine-global, not a graph widget, same
+                    // "save right here off the render task" reasoning as @masterClock above.
+                    // gpio_config() itself is a fast, non-blocking register op - safe to call
+                    // directly on the httpd worker thread, same class of call as Board::init()'s
+                    // own gpio_config() at boot.
+                    auto &gs = Feature::IO::gpioSettings();
+                    cJSON *entries = cJSON_GetObjectItemCaseSensitive(params, "entries");
+                    if (cJSON_IsArray(entries)) {
+                        gs.count = 0;
+                        cJSON *entry;
+                        cJSON_ArrayForEach(entry, entries) {
+                            if (gs.count >= Feature::IO::kMaxGpioEntries) break;
+                            cJSON *pin = cJSON_GetObjectItemCaseSensitive(entry, "pin");
+                            cJSON *dir = cJSON_GetObjectItemCaseSensitive(entry, "direction");
+                            cJSON *pull = cJSON_GetObjectItemCaseSensitive(entry, "pull");
+                            cJSON *invert = cJSON_GetObjectItemCaseSensitive(entry, "invert");
+                            if (!cJSON_IsNumber(pin)) continue;
+                            Feature::IO::GpioEntry &e = gs.entries[gs.count++];
+                            e.pin = static_cast<int8_t>(pin->valueint);
+                            e.direction = (cJSON_IsString(dir) && strcmp(dir->valuestring, "out") == 0)
+                                              ? Feature::IO::GpioDirection::Output
+                                              : Feature::IO::GpioDirection::Input;
+                            e.pull = (cJSON_IsString(pull) && strcmp(pull->valuestring, "up") == 0)
+                                         ? Feature::IO::GpioPull::Up
+                                     : (cJSON_IsString(pull) && strcmp(pull->valuestring, "down") == 0)
+                                         ? Feature::IO::GpioPull::Down
+                                         : Feature::IO::GpioPull::None;
+                            e.invert = cJSON_IsTrue(invert);
+                        }
+                    }
+                    Feature::IO::apply_gpio_settings();
+                    Feature::IO::saveGpioSettingsToFs();
+                    handled_locally = true;
                 }
             } else if (cJSON_IsString(type) && strcmp(type->valuestring, "filesInfo") == 0) {
                 cJSON *volume_item = cJSON_GetObjectItemCaseSensitive(root, "volume");
@@ -1394,6 +1505,16 @@ inline void register_web_routes() {
         .uri = "/api/settings/device", .method = HTTP_GET, .handler = &device_settings_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &device_settings_uri);
+
+    static const httpd_uri_t gpio_info_uri = {
+        .uri = "/api/system/gpio", .method = HTTP_GET, .handler = &gpio_info_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &gpio_info_uri);
+
+    static const httpd_uri_t gpio_settings_uri = {
+        .uri = "/api/settings/gpio", .method = HTTP_GET, .handler = &gpio_settings_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &gpio_settings_uri);
 
     static const httpd_uri_t memory_diagnostics_uri = {
         .uri = "/api/diagnostics/memory", .method = HTTP_GET, .handler = &memory_diagnostics_handler,

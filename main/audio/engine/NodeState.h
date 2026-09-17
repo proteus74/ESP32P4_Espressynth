@@ -309,6 +309,23 @@ struct CvOutState
     int8_t slotIndex = -1; // Feature::IO::resolve_cv_out_slot() result, -1 = unconfigured
 };
 
+// Digital In/Out (raw GPIO) - External Hardware widgets. Pin is resolved once in build()
+// against Feature::IO::gpioSettings() (see nodes/DigitalInNode.h/DigitalOutNode.h). Unlike
+// CV, there's no bus-manager slot/mailbox indirection - render() calls
+// Feature::IO::gpio_read_level()/gpio_write_level() directly every block, since a GPIO
+// register op is cheap enough not to need a separate task (see features/io/gpio_manager.hpp).
+struct DigitalInState
+{
+    int8_t pin = -1;
+    bool lastLevel = false;
+    bool invert = false; // cached from Feature::IO::GpioSettings at build() time
+};
+struct DigitalOutState
+{
+    int8_t pin = -1;
+    bool invert = false; // cached from Feature::IO::GpioSettings at build() time
+};
+
 // Samples "in" exactly once for each below-to-at/above-threshold transition
 // on "trigger", then keeps that CV at "out" until the next transition.
 struct SampleHoldState
