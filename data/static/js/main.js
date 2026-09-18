@@ -4382,6 +4382,7 @@ function createWidget(type, label, x, y, forcedId) {
         const toggle = document.createElement("input");
         toggle.type = "checkbox";
         toggle.checked = state[port.id] === true;
+        toggle.dataset.role = `mda-piano-${port.id}-switch`;
         toggle.addEventListener("mousedown", (e) => e.stopPropagation());
         toggle.addEventListener("click", (e) => e.stopPropagation());
         toggle.addEventListener("change", () => {
@@ -8119,6 +8120,28 @@ const mdaPianoStates = new Map();
 const mdaPianoSettingsOverlay = document.getElementById("mdaPianoSettingsOverlay");
 const mdaPianoVoicesInput = document.getElementById("mdaPianoVoicesInput");
 let pendingMdaPianoId = null;
+
+const MDA_PIANO_CV_PARAMS = [
+  "voiceType", "drive", "tremWahMode", "tremWahDepth", "tremWahRate",
+  "choPhaMode", "choPhaDepth", "choPhaSpeed", "delayMode", "delayDepth",
+  "delayTime", "reverbDepth", "volume", "preGain", "gain",
+];
+
+function updateMdaPianoControls(widgetId) {
+  const state = mdaPianoStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  ["enableModWheel", "enablePitchWheel"].forEach((portId) => {
+    const input = el.querySelector(`[data-role="mda-piano-${portId}-switch"]`);
+    if (input) input.checked = state[portId] === true;
+  });
+  MDA_PIANO_CV_PARAMS.forEach((portId) => {
+    const slider = el.querySelector(`[data-role="mda-piano-${portId}-slider"]`);
+    const value = el.querySelector(`[data-role="mda-piano-${portId}-value"]`);
+    if (slider) slider.value = String(state[portId]);
+    if (value) value.textContent = formatNumber(state[portId]);
+  });
+}
 
 function openMdaPianoSettings(widgetId) {
   const state = mdaPianoStates.get(widgetId);
@@ -16189,6 +16212,22 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "mda-piano") {
+    const state = mdaPianoStates.get(widgetId);
+    if (state && ["enableModWheel", "enablePitchWheel"].includes(portId)) {
+      state[portId] = Number(value) >= 0.5;
+      updateMdaPianoControls(widgetId);
+      sendLiveParamUpdate(widgetId, { [portId]: state[portId] });
+    } else if (state && MDA_PIANO_CV_PARAMS.includes(portId)) {
+      const num = Number(value);
+      if (!Number.isNaN(num)) {
+        state[portId] = clamp(num, 0, CV_MAX_VOLTS);
+        updateMdaPianoControls(widgetId);
+        sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+      }
+    }
+  }
+
   if (el.dataset.widgetType === "oscillator" && portId === "waveform") {
     const num = Number(value);
     if (!Number.isNaN(num)) {
@@ -17555,6 +17594,25 @@ const WIDGET_ENGINES = {
       });
       refreshSoundFontPlayerMeta(id);
       updateSoundFontPlayerControls(id);
+    },
+  },
+  "mda-piano": {
+    getParams: (id) => {
+      const state = mdaPianoStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = mdaPianoStates.get(id);
+      if (!state || !params) return;
+      state.maxVoices = clamp(Math.round(Number(params.maxVoices) || 32), 4, 128);
+      state.enableModWheel = params.enableModWheel === true;
+      state.enablePitchWheel = params.enablePitchWheel === true;
+      MDA_PIANO_CV_PARAMS.forEach((portId) => {
+        const fallback = state[portId];
+        const value = Number(params[portId]);
+        state[portId] = clamp(Number.isNaN(value) ? fallback : value, 0, CV_MAX_VOLTS);
+      });
+      updateMdaPianoControls(id);
     },
   },
   "audio-out": {

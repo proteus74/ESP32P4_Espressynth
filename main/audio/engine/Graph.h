@@ -1459,9 +1459,12 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             }
         }
 
-        if (slot.type == NodeType::SoundFontPlayer && cJSON_IsBool(item) &&
+        const bool soundFontBool = slot.type == NodeType::SoundFontPlayer &&
             (strcmp(key, "enableCc") == 0 || strcmp(key, "enableModWheel") == 0 ||
-             strcmp(key, "enablePitchWheel") == 0))
+             strcmp(key, "enablePitchWheel") == 0);
+        const bool mdaPianoBool = slot.type == NodeType::MdaPiano &&
+            (strcmp(key, "enableModWheel") == 0 || strcmp(key, "enablePitchWheel") == 0);
+        if ((soundFontBool || mdaPianoBool) && cJSON_IsBool(item))
         {
             setFloatFieldByName(instances[slot.instanceBase], slot.type, key, cJSON_IsTrue(item) ? 1.0f : 0.0f);
             continue;
