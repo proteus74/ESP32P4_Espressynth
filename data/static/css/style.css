@@ -1977,18 +1977,8 @@ body.show-node-cpu .widget-cpu-badge {
   cursor: not-allowed;
 }
 
-.lfo-zero-mode-buttons,
-.lfo-polarity-buttons {
-  width: 220px;
+.lfo-zero-mode-buttons {
   align-self: center;
-}
-
-.lfo-zero-mode-buttons .filter-type-btn,
-.lfo-polarity-buttons .filter-type-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 0.16rem 0.35rem;
-  font-size: 0.7rem;
 }
 
 .osc-freq-label {

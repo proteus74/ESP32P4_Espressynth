@@ -48,7 +48,6 @@ struct WidgetParams
     float lfoPhaseDeg = 0.0f;
     bool lfoZeroPointFixed = false;
     float lfoZeroPoint = 5.0f;
-    bool lfoBipolar = false;
     bool lfoOneShot = false;
     bool lfoGlobal = false;
     // detune

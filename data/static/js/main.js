@@ -1069,6 +1069,7 @@ const WIDGET_TYPES = {
       { id: "amplitude", label: "Amplitude" },
       { id: "note", label: "Note (0–127)" },
       { id: "gate", label: "Gate" },
+      { id: "gain", label: "Gain" },
     ],
     outputs: [
       { id: "left", label: "Out L" },
@@ -1154,6 +1155,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "in", label: "In" },
       { id: "amount", label: "Gain" },
+      { id: "curve", label: "Curve" },
       { id: "global", label: "Global" },
     ],
     outputs: [{ id: "out", label: "Out" }],
@@ -1380,7 +1382,7 @@ const WIDGET_TYPES = {
       { id: "reset", label: "Reset" },
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
-      { id: "zeroPoint", label: "Zero Point" },
+      { id: "zeroPoint", label: "Offset" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -1466,7 +1468,7 @@ const AUDIO_PORTS = {
   
   
   
-  "wave-player": { in: ["amplitude"], out: ["left", "right"] },
+  "wave-player": { in: ["amplitude", "gain"], out: ["left", "right"] },
   "soundfont-player": { out: ["left", "right"] },
   
   
@@ -1730,14 +1732,23 @@ const WAVESHAPER_BUTTON_PLACEHOLDER = {
 
 const LFO_TYPE_BUTTONS = WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise" && w.id !== "pink-noise");
 
+// Same icon-button treatment as the oscillator/filter type buttons (shared
+// .osc-wave-btn styling) instead of plain text pills.
 const LFO_ZERO_MODE_BUTTONS = [
-  { id: "auto", label: "Auto" },
-  { id: "fixed", label: "Fixed" },
-];
-
-const LFO_POLARITY_BUTTONS = [
-  { id: "unipolar", label: "Unipolar" },
-  { id: "bipolar", label: "Bipolar" },
+  {
+    id: "auto",
+    title: "Auto: offset = half amplitude",
+    color: "#06b6d4",
+    glow: "rgba(6, 182, 212, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,50 Q 30,20 50,50 Q 70,80 90,50"/></svg>`,
+  },
+  {
+    id: "fixed",
+    title: "Fixed: offset set manually below",
+    color: "#f59e0b",
+    glow: "rgba(245, 158, 11, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,80 L 90,80" opacity=".55"/><path d="M 10,60 Q 30,30 50,60 Q 70,90 90,60"/></svg>`,
+  },
 ];
 
 
@@ -2225,7 +2236,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "wave-folder"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "wave-folder", "wave-player"]);
 
 function createWidget(type, label, x, y, forcedId) {
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
@@ -2879,9 +2890,9 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "wave-player") {
-    const wpState = { sampleFile: "", rootNoteMidi: 60 };
+    const wpState = { sampleFile: "", rootNoteMidi: 60, gain: CV_MAX_VOLTS };
     wavePlayerStates.set(id, wpState);
-    audioEngine.createNode(id, "wave-player", { sampleFile: wpState.sampleFile, rootNoteMidi: wpState.rootNoteMidi });
+    audioEngine.createNode(id, "wave-player", { sampleFile: wpState.sampleFile, rootNoteMidi: wpState.rootNoteMidi, gain: wpState.gain });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body wave-player-body";
@@ -2983,8 +2994,10 @@ function createWidget(type, label, x, y, forcedId) {
     curveButtons.className = "filter-type-buttons";
     GAIN_CURVE_BUTTONS.forEach((c) => {
       const btn = document.createElement("button");
-      btn.className = "filter-type-btn";
-      btn.textContent = c.label;
+      btn.className = "filter-type-btn osc-wave-btn";
+      btn.innerHTML = c.icon;
+      btn.style.setProperty("--wave-color", c.color);
+      btn.style.setProperty("--wave-glow", c.glow);
       btn.dataset.curve = c.id;
       btn.title = c.title;
       if (c.id === "linear") btn.classList.add("active");
@@ -3344,10 +3357,9 @@ function createWidget(type, label, x, y, forcedId) {
       rate: 2,
       maxRate: LFO_MAX_RATE_HZ,
       amplitude: 10,
-      phase: 0, 
+      phase: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
-      bipolar: false,
       oneShot: false,
       oneShotDone: true,
       oneShotAccum: 0,
@@ -3365,7 +3377,6 @@ function createWidget(type, label, x, y, forcedId) {
       phase: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
-      bipolar: false,
       oneShot: false,
       global: false,
     });
@@ -3402,10 +3413,12 @@ function createWidget(type, label, x, y, forcedId) {
     zeroModeButtons.className = "filter-type-buttons lfo-zero-mode-buttons";
     LFO_ZERO_MODE_BUTTONS.forEach((m) => {
       const btn = document.createElement("button");
-      btn.className = "filter-type-btn";
-      btn.textContent = m.label;
+      btn.className = "filter-type-btn osc-wave-btn";
+      btn.innerHTML = m.icon;
+      btn.style.setProperty("--wave-color", m.color);
+      btn.style.setProperty("--wave-glow", m.glow);
       btn.dataset.zeroMode = m.id;
-      btn.title = m.id === "fixed" ? "Zero point fixed adjustable" : "Zero point = half amplitude";
+      btn.title = m.title;
       if (m.id === "auto") btn.classList.add("active");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -3414,23 +3427,6 @@ function createWidget(type, label, x, y, forcedId) {
       zeroModeButtons.appendChild(btn);
     });
     body.appendChild(zeroModeButtons);
-
-    const polarityButtons = document.createElement("div");
-    polarityButtons.className = "filter-type-buttons lfo-polarity-buttons";
-    LFO_POLARITY_BUTTONS.forEach((m) => {
-      const btn = document.createElement("button");
-      btn.className = "filter-type-btn";
-      btn.textContent = m.label;
-      btn.dataset.polarity = m.id;
-      btn.title = m.id === "bipolar" ? "Audio-style +/-5V swing, centered 0V" : "CV-style 0-10V swing (default)";
-      if (m.id === "unipolar") btn.classList.add("active");
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        setLfoPolarity(id, m.id === "bipolar");
-      });
-      polarityButtons.appendChild(btn);
-    });
-    body.appendChild(polarityButtons);
 
     el.appendChild(body);
 
@@ -4271,6 +4267,30 @@ function createWidget(type, label, x, y, forcedId) {
         
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
       }
+      if (type === "wave-player" && port.id === "gain") {
+        const state = wavePlayerStates.get(id);
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state.gain ?? CV_MAX_VOLTS);
+        slider.dataset.role = "wave-player-gain-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "gain", parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "wave-player-gain-value";
+        valueSpan.textContent = formatNumber(state.gain ?? CV_MAX_VOLTS);
+        row.appendChild(valueSpan);
+      }
       if (type === "soundfont-player" && port.id === "gain") {
         const state = soundFontPlayerStates.get(id);
 
@@ -4804,7 +4824,29 @@ function createWidget(type, label, x, y, forcedId) {
         const valueSpan = document.createElement("span");
         valueSpan.className = "port-value";
         valueSpan.dataset.role = "gain-amount-value";
-        valueSpan.textContent = formatGainCvValue(gainState);
+        valueSpan.textContent = `${formatNumber(gainState.amount)} V`;
+        row.appendChild(valueSpan);
+      }
+      if (type === "gain" && port.id === "curve") {
+        const gainState = gainStates.get(id);
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(gainCurveToCv(gainState.curve));
+        slider.dataset.role = "gain-curve-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, "curve", Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "gain-curve-value";
+        valueSpan.textContent = gainState.curve === "exponential" ? "Exp" : "Lin";
         row.appendChild(valueSpan);
       }
       if (type === "lfo" && (port.id === "rate" || port.id === "amplitude" || port.id === "phase")) {
@@ -9721,7 +9763,7 @@ function tickLfo(widgetId) {
   
   
   const halfSwing = state.amplitude / 2;
-  const center = state.bipolar ? 0 : (state.zeroPointFixed ? state.zeroPoint : halfSwing);
+  const center = state.zeroPointFixed ? state.zeroPoint : halfSwing;
   
   
   
@@ -9746,9 +9788,7 @@ function tickLfo(widgetId) {
     }
   }
 
-  const value = state.bipolar
-    ? clamp(center + raw * halfSwing, -AUDIO_PEAK_VOLTS, AUDIO_PEAK_VOLTS)
-    : clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
+  const value = clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
   propagate(widgetId, "value", roundFloat(value, 4));
 }
 
@@ -9793,6 +9833,10 @@ function updateLfoZeroModeButtons(widgetId) {
   el.querySelectorAll(".lfo-zero-mode-buttons .filter-type-btn").forEach((btn) => {
     btn.classList.toggle("active", (btn.dataset.zeroMode === "fixed") === state.zeroPointFixed);
   });
+  // Auto mode computes the offset itself (half amplitude) - the manual
+  // Offset slider has nothing to do in that mode.
+  const slider = el.querySelector("[data-role='lfo-zeropoint-port-slider']");
+  if (slider) slider.disabled = !state.zeroPointFixed;
 }
 
 function setLfoZeroPointMode(widgetId, fixed) {
@@ -9802,29 +9846,6 @@ function setLfoZeroPointMode(widgetId, fixed) {
   audioEngine.setParam(widgetId, "zeroPointFixed", fixed);
   updateLfoZeroModeButtons(widgetId);
   sendLiveParamUpdate(widgetId, { zeroPointFixed: fixed });
-}
-
-function updateLfoPolarityButtons(widgetId) {
-  const state = lfoStates.get(widgetId);
-  const el = document.getElementById(widgetId);
-  if (!state || !el) return;
-  el.querySelectorAll(".lfo-polarity-buttons .filter-type-btn").forEach((btn) => {
-    btn.classList.toggle("active", (btn.dataset.polarity === "bipolar") === state.bipolar);
-  });
-  // Fixed Zero Point only means anything in unipolar mode - center is
-  // always 0V while bipolar (see LfoNode.h::render()).
-  el.querySelectorAll(".lfo-zero-mode-buttons .filter-type-btn, [data-role='lfo-zeropoint-port-slider']").forEach((elm) => {
-    elm.disabled = state.bipolar;
-  });
-}
-
-function setLfoPolarity(widgetId, bipolar) {
-  const state = lfoStates.get(widgetId);
-  if (!state) return;
-  state.bipolar = bipolar;
-  audioEngine.setParam(widgetId, "bipolar", bipolar);
-  updateLfoPolarityButtons(widgetId);
-  sendLiveParamUpdate(widgetId, { bipolar });
 }
 
 function setLfoZeroPoint(widgetId, volts) {
@@ -9880,7 +9901,6 @@ function updateLfoVisual(widgetId) {
   });
 
   updateLfoZeroModeButtons(widgetId);
-  updateLfoPolarityButtons(widgetId);
   const zpPortSlider = el.querySelector('[data-role="lfo-zeropoint-port-slider"]');
   if (zpPortSlider) zpPortSlider.value = String(state.zeroPoint);
   const zpPortValue = el.querySelector('[data-role="lfo-zeropoint-port-value"]');
@@ -10467,6 +10487,26 @@ function updateOscillatorGainVisual(widgetId) {
   }
 }
 
+function updateWavePlayerGainVisual(widgetId) {
+  const state = wavePlayerStates.get(widgetId);
+  if (!state) return;
+  const audioConnected = connections.some(
+    (c) =>
+      c.to.widgetId === widgetId &&
+      c.to.portId === "gain" &&
+      getPortKind(c.from.widgetId, c.from.portId, "out") === "audio"
+  );
+  const slider = document.querySelector(`#${widgetId} [data-role="wave-player-gain-slider"]`);
+  if (slider) {
+    slider.value = String(state.gain);
+    slider.disabled = audioConnected;
+  }
+  const valueSpan = document.querySelector(`#${widgetId} [data-role="wave-player-gain-value"]`);
+  if (valueSpan) {
+    valueSpan.textContent = formatNumber(state.gain);
+  }
+}
+
 function updateOscillatorFeedbackVisual(widgetId) {
   const state = oscillatorStates.get(widgetId);
   if (!state) return;
@@ -10868,10 +10908,35 @@ function setAudioInputLinkGain(widgetId, channel, value, sendLive = true) {
 
 const gainStates = new Map();
 
+// Same icon-button treatment as the oscillator/filter type buttons (shared
+// .osc-wave-btn styling) instead of plain text pills.
 const GAIN_CURVE_BUTTONS = [
-  { id: "linear", label: "Lin", title: "Linear: A = CV/10" },
-  { id: "exponential", label: "Exp", title: "Exponential: A = (10^(CV/10) - 1) / 9" },
+  {
+    id: "linear",
+    title: "Linear: A = CV/10",
+    color: "#06b6d4",
+    glow: "rgba(6, 182, 212, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,90 L 90,10"/></svg>`,
+  },
+  {
+    id: "exponential",
+    title: "Exponential: A = (10^(CV/10) - 1) / 9",
+    color: "#f59e0b",
+    glow: "rgba(245, 158, 11, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,90 Q 70,90 90,10"/></svg>`,
+  },
 ];
+
+// "curve" is a discrete 2-position 0-10V selector like filterType/slope: <5V
+// = linear, >=5V = exponential. gainCurveToCv parks the slider at the exact
+// endpoint for the selected curve rather than the segment's midpoint.
+function gainCurveFromCv(volts) {
+  return (Number(volts) || 0) >= CV_MAX_VOLTS / 2 ? "exponential" : "linear";
+}
+
+function gainCurveToCv(curve) {
+  return curve === "exponential" ? CV_MAX_VOLTS : 0;
+}
 
 function setGainCurve(widgetId, curve) {
   const state = gainStates.get(widgetId);
@@ -10897,31 +10962,24 @@ function setGainGlobal(widgetId, on) {
 
 
 
-function formatGainCvValue(state) {
-  const mapped = vcaAmountFromCvDisplay(state.amount, state.curve);
-  return `${formatNumber(state.amount)}V → A=${mapped.toFixed(2)}`;
-}
-
-
-
-
-function vcaAmountFromCvDisplay(volts, curve) {
-  const v = clamp(volts / CV_MAX_VOLTS, 0, 1);
-  return curve === "exponential" ? (10 ** v - 1) / 9 : v;
-}
 
 function updateGainVisual(widgetId) {
   const state = gainStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
+  const curveConnected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "curve");
   el.querySelectorAll(".gain-body .filter-type-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.curve === state.curve);
+    btn.disabled = curveConnected;
   });
-  
-  
-  
-  
-  
+  const curveSlider = el.querySelector('[data-role="gain-curve-slider"]');
+  if (curveSlider) {
+    curveSlider.value = String(gainCurveToCv(state.curve));
+    curveSlider.disabled = curveConnected;
+  }
+  const curveValue = el.querySelector('[data-role="gain-curve-value"]');
+  if (curveValue) curveValue.textContent = state.curve === "exponential" ? "Exp" : "Lin";
+
   const audioConnected = connections.some(
     (c) =>
       c.to.widgetId === widgetId &&
@@ -10935,7 +10993,7 @@ function updateGainVisual(widgetId) {
   }
   const valueSpan = el.querySelector('[data-role="gain-amount-value"]');
   if (valueSpan) {
-    valueSpan.textContent = formatGainCvValue(state);
+    valueSpan.textContent = `${formatNumber(state.amount)} V`;
   }
   const globalToggle = el.querySelector('[data-role="gain-global-switch"]');
   if (globalToggle) globalToggle.checked = state.global === true;
@@ -12155,8 +12213,7 @@ function updateOutputMultiplexerRouting(widgetId) {
 
 // Hammond drawbar sliders sit on the 0-10V CV domain (like every other port
 // in this engine, including Oscillator's own "gain"), but the value label
-// shows the friendlier 0-8 physical-register reading - same "volts -> mapped"
-// shape as formatGainCvValue() elsewhere in this file.
+// shows the friendlier 0-8 physical-register reading.
 // NOTE: HAMMOND_DRAWBAR_STEP_V (= CV_MAX_VOLTS / 8) is declared further down,
 // right after CV_MAX_VOLTS itself - CV_MAX_VOLTS isn't initialized yet at
 // this point in the module's top-to-bottom evaluation, and referencing it
@@ -12183,6 +12240,15 @@ function renderHammondPorts(widgetId, portsEl) {
     .filter((port) => !port.id.startsWith("drawbar"))
     .forEach((port) => {
       const row = createPortRow(widgetId, port, "in", "hammond");
+      if (port.id === "gain") {
+        // Same relocate-to-bottom/distinct-accent treatment as every other
+        // MAIN_GAIN_WIDGET_TYPES row - Hammond builds its own ports via
+        // renderHammondPorts instead of the generic def.inputs loop, so it
+        // has to tag this itself (see that loop's own gain-control-row
+        // comment above).
+        row.classList.add("gain-control-row");
+        row.dataset.role = "main-gain-control";
+      }
       if (port.id === "tune" || port.id === "gain") {
         const value = port.id === "tune" ? state.tuneVolts : state.gain;
         const slider = document.createElement("input");
@@ -15946,6 +16012,17 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "wave-player" && portId === "gain") {
+    const state = wavePlayerStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.gain = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "gain", state.gain);
+      updateWavePlayerGainVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { gain: state.gain });
+    }
+  }
+
   if (el.dataset.widgetType === "soundfont-player" && (portId === "bank" || portId === "program")) {
     const state = soundFontPlayerStates.get(widgetId);
     if (state) {
@@ -16023,6 +16100,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   
   
+  if (el.dataset.widgetType === "gain" && portId === "curve") {
+    setGainCurve(widgetId, gainCurveFromCv(value));
+  }
+
   if (el.dataset.widgetType === "gain" && portId === "global") {
     const state = gainStates.get(widgetId);
     if (state) {
@@ -17135,7 +17216,6 @@ const WIDGET_ENGINES = {
             phase: state.phase,
             zeroPointFixed: state.zeroPointFixed,
             zeroPoint: state.zeroPoint,
-            bipolar: state.bipolar,
             oneShot: state.oneShot,
             global: state.global,
           }
@@ -17151,7 +17231,6 @@ const WIDGET_ENGINES = {
       state.phase = clamp(params.phase ?? 0, -180, 180);
       state.zeroPointFixed = params.zeroPointFixed === true;
       state.zeroPoint = params.zeroPoint ?? 5;
-      state.bipolar = params.bipolar === true;
       state.oneShot = params.oneShot === true;
       state.global = params.global === true;
       
@@ -17165,7 +17244,6 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "phase", state.phase);
       audioEngine.setParam(id, "zeroPointFixed", state.zeroPointFixed);
       audioEngine.setParam(id, "zeroPoint", state.zeroPoint);
-      audioEngine.setParam(id, "bipolar", state.bipolar);
       audioEngine.setParam(id, "oneShot", state.oneShot);
       audioEngine.setParam(id, "global", state.global);
       updateLfoWaveButtons(id);
@@ -17296,16 +17374,19 @@ const WIDGET_ENGINES = {
   "wave-player": {
     getParams: (id) => {
       const state = wavePlayerStates.get(id);
-      return state ? { sampleFile: state.sampleFile, rootNoteMidi: state.rootNoteMidi } : {};
+      return state ? { sampleFile: state.sampleFile, rootNoteMidi: state.rootNoteMidi, gain: state.gain } : {};
     },
     applyParams: (id, params) => {
       const state = wavePlayerStates.get(id);
       if (!state || !params) return;
       state.sampleFile = typeof params.sampleFile === "string" ? params.sampleFile : "";
       state.rootNoteMidi = params.rootNoteMidi ?? 60;
+      state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
       audioEngine.setParam(id, "sampleFile", state.sampleFile);
       audioEngine.setParam(id, "rootNoteMidi", state.rootNoteMidi);
+      audioEngine.setParam(id, "gain", state.gain);
       updateWavePlayerLabel(id);
+      updateWavePlayerGainVisual(id);
     },
   },
   "soundfont-player": {

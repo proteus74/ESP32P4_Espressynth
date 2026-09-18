@@ -7,8 +7,8 @@
 // Eurorack-style Control-Voltage convention: all control-rate ports (gate/
 // velocity/knob output/pitch-CV/...) follow 0-10V instead of individual
 // ad-hoc scales (0-1, 0-127, 0/1, ...). Every DEDICATED CV input/output of an
-// audio-rate node also follows 0-10V: Lfo's "value" output (center 5V unless
-// switched to bipolar, see LfoState::bipolar), Adsr's "out" output
+// audio-rate node also follows 0-10V: Lfo's "value" output (center 5V by
+// default, or the widget's own Offset in "fixed" mode), Adsr's "out" output
 // (envelope*velocity*10V) and Oscillator's "amplitude" input (mapped back
 // to 0..1 via vcaGain()), so that e.g. an Adsr->Oscillator.amplitude cable
 // works exactly like any other CV cable.

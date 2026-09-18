@@ -434,6 +434,9 @@ inline void initWavePlayer(Graph &g, uint16_t widgetIndex, NodeInstance &inst, c
     inst.wavePlayer.position = 0.0f;
     inst.wavePlayer.playing = false;
     inst.wavePlayer.gatePrev = false;
+    inst.wavePlayer.gainCv = p.gain;
+    // Same cutoff/reason as Oscillator's/SoundFontPlayer's gainSmooth - see NodeState.h.
+    inst.wavePlayer.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 
     WaveSampleCache &cache = g.waveSampleCache[widgetIndex];
     if (!cache.attempted)

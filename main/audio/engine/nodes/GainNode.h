@@ -31,25 +31,31 @@ inline void render(NodeInstance &inst, size_t frames)
     // staircase function that modulates onto the signal as sidebands/
     // metallic sound.
     //
-    // "global" (Port-Index 2, control-only - see isControlOnlyInput): same
+    // "global" (Port-Index 3, control-only - see isControlOnlyInput): same
     // pattern as Lfo's "global". When active, makes voice 0 of this widget
     // authoritative for the gain - "in" (Port 0) always remains this voice's
-    // own signal, only "amount" (wired input port OR manual amountCv scalar)
+    // own signal, only "amount"/"curve" (wired input port OR manual scalar)
     // then comes from src instead of inst.
-    const bool modeFed = controlPortConnected(inst, 2) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
-    const bool globalActive = modeFed ? (portSample(inst, 2, 0) >= cv::kGateThresholdVolts) : s.global;
+    const bool modeFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool globalActive = modeFed ? (portSample(inst, 3, 0) >= cv::kGateThresholdVolts) : s.global;
     const NodeInstance &src = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
+    // "curve" (Port-Index 2, control-only) - discrete 2-position 0-10V
+    // selector, same pattern as Filter's "filterType"/"slope": <5V linear,
+    // >=5V exponential. Falls back to the manual/button-set
+    // GainState::exponential when unwired.
+    const bool curveFed = controlPortConnected(src, 2) || (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool exponential = curveFed ? (portSample(src, 2, 0) >= cv::kMaxVolts * 0.5f) : src.gain.exponential;
     if ((src.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0)
     {
         for (size_t i = 0; i < frames; ++i)
         {
-            const float amount = cv::vcaGain(src.inPorts[1][i], src.gain.exponential);
+            const float amount = cv::vcaGain(src.inPorts[1][i], exponential);
             inst.outL[i] = portSample(inst, 0, i) * amount;
         }
     }
     else
     {
-        const float target = cv::vcaGain(s.amountCv, s.exponential);
+        const float target = cv::vcaGain(s.amountCv, exponential);
         // Smoothing convergence stop (plan section 5, Gain/VCA row: same
         // pattern already applied to Oscillator/Hammond's gain - see
         // OscillatorNode.h): once the smoother has settled within epsilon

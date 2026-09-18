@@ -100,6 +100,14 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::SampleHold:
         return nodes::samplehold::setParam(inst, name, value);
 
+    case NodeType::WavePlayer:
+        if (paramDispatchIs(name, "gain"))
+        {
+            inst.wavePlayer.gainCv = value;
+            return true;
+        }
+        return false;
+
     case NodeType::SoundFontPlayer:
         if (paramDispatchIs(name, "bank"))
             return soundfont::setBankProgram(inst.soundFontPlayer, static_cast<int>(value + 0.5f),

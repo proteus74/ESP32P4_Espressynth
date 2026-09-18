@@ -46,6 +46,11 @@ inline void render(NodeInstance &inst, size_t frames)
         (portSample(inst, 1, 0) - static_cast<float>(s.rootNoteMidi)) / 12.0f);
     const bool ampConnected = controlPortConnected(inst, 0) ||
                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
+    // "gain" (Port-Index 3) - real audio-rate port, same cv::vcaGain
+    // convention/smoothing as Oscillator's/SoundFontPlayer's "gain" (see
+    // WavePlayerState::gainCv).
+    const bool gainFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const float gainTarget = cv::vcaGain(s.gainCv, false);
     const uint32_t lastFrame = s.frameCount - 1;
     // 20ms linear release fade - see WavePlayerState::fadeGain.
     const float fadeStep = 1.0f / (0.02f * kSampleRate);
@@ -89,7 +94,8 @@ inline void render(NodeInstance &inst, size_t frames)
         // fade from true silence (envelope 0..1 IS the amplitude), not
         // stack on top of an already-audible constant. fadeGain multiplies
         // on top either way, so gate-off never clicks.
-        const float amp = (ampConnected ? portSample(inst, 0, i) : 1.0f) * s.fadeGain * cv::kAudioPeakVolts;
+        const float gainMul = gainFed ? cv::vcaGain(portSample(inst, 3, i), false) : s.gainSmooth.process(gainTarget);
+        const float amp = (ampConnected ? portSample(inst, 0, i) : 1.0f) * s.fadeGain * gainMul * cv::kAudioPeakVolts;
         inst.outL[i] = (l0 + (l1 - l0) * frac) * amp;
         inst.outR[i] = (r0 + (r1 - r0) * frac) * amp;
 
@@ -122,6 +128,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
 {
     snprintf(out.sampleFile, sizeof(out.sampleFile), "%s", presetparser::getString(p, "sampleFile", ""));
     out.rootNoteMidi = presetparser::getInt(p, "rootNoteMidi", 60);
+    out.gain = presetparser::getFloat(p, "gain", 10.0f);
 }
 
 } // namespace nodes::waveplayer

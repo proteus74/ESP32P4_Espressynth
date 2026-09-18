@@ -1770,10 +1770,7 @@ export class AudioEngine {
         
         const amplitude = params.amplitude ?? CV_MAX_VOLTS;
         const halfSwing = amplitude / 2;
-        const bipolar = params.bipolar === true;
-        // Bipolar mode ignores zeroPointFixed/zeroPoint - center is always
-        // 0V (mirrors LfoNode.h::render()'s "s.bipolar ? 0.0f : ...").
-        const center = bipolar ? 0 : (params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing);
+        const center = params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing;
         const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, 50);
         const rate = clampRange(Number(params.rate ?? 2) || 0, 0, maxRate);
         const phase = params.phase ?? 0;
@@ -1835,7 +1832,6 @@ export class AudioEngine {
           lfoPhase: phase,
           lfoZeroPointFixed: params.zeroPointFixed === true,
           lfoZeroPoint: params.zeroPoint ?? 5,
-          lfoBipolar: bipolar,
           lfoOneShot: oneShot,
           lfoOneShotRunning: false,
           lfoOneShotTimer: null,
@@ -2859,16 +2855,19 @@ export class AudioEngine {
         const ampGain = ctx.createGain();
         ampGain.gain.value = 1;
         releaseGain.connect(ampGain);
-        // Fixed rescale to the audio domain's peak (mirrors WavePlayerNode.h's
-        // "* cv::kAudioPeakVolts") - kept as its own node, separate from
-        // ampGain, so a connected amplitude cable (which zeroes ampGain's own
-        // base value and drives it additively instead, see connectEdge()
-        // below) doesn't also wipe out this fixed scale.
-        const peakScale = ctx.createGain();
-        peakScale.gain.value = AUDIO_PEAK_VOLTS;
-        ampGain.connect(peakScale);
+        // Combines the fixed rescale to the audio domain's peak (mirrors
+        // WavePlayerNode.h's "* cv::kAudioPeakVolts") with the "gain" port's
+        // 0-10V CV, same one-node pattern as Oscillator's/Hammond's/FM-
+        // Oscillator's own outGain - kept separate from ampGain so a
+        // connected amplitude cable (which zeroes ampGain's own base value
+        // and drives it additively instead, see connectEdge() below) doesn't
+        // also wipe out this scale.
+        const outGain = ctx.createGain();
+        outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+        ampGain.connect(outGain);
+        const gainCv = this._createCvGainChain(ctx, "linear");
         const splitter = ctx.createChannelSplitter(2);
-        peakScale.connect(splitter);
+        outGain.connect(splitter);
         const leftOut = ctx.createGain();
         const rightOut = ctx.createGain();
         splitter.connect(leftOut, 0, 0);
@@ -2878,7 +2877,10 @@ export class AudioEngine {
           type,
           releaseGain,
           ampGain,
-          peakScale,
+          outGain,
+          gain: params.gain ?? CV_MAX_VOLTS,
+          gainCv,
+          gainCvActive: false,
           splitter,
           leftOut,
           rightOut,
@@ -3373,7 +3375,7 @@ export class AudioEngine {
   _setLfoRunning(entry, running) {
     if (!entry || !this.ctx) return;
     const halfSwing = entry.lfoAmplitude / 2;
-    const center = entry.lfoBipolar ? 0 : (entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing);
+    const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
     const heldValue = center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing;
     const now = this.ctx.currentTime;
     entry.lfoGain.gain.cancelScheduledValues(now);
@@ -3878,8 +3880,6 @@ export class AudioEngine {
           entry.lfoZeroPointFixed = value === true || value === 1;
         } else if (paramName === "zeroPoint") {
           entry.lfoZeroPoint = value;
-        } else if (paramName === "bipolar") {
-          entry.lfoBipolar = value === true || value === 1;
         } else if (paramName === "oneShot") {
           const enabled = value === true || value === 1;
           if (enabled !== entry.lfoOneShot) {
@@ -3893,9 +3893,9 @@ export class AudioEngine {
         } else if (paramName === "waveType") {
           entry.lfoOsc.type = value;
         }
-        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "bipolar" || paramName === "waveType") {
+        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType") {
           const halfSwing = entry.lfoAmplitude / 2;
-          const center = entry.lfoBipolar ? 0 : (entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing);
+          const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
           if (entry.lfoOneShot && !entry.lfoOneShotRunning) {
             applyRampValue(entry.lfoGain.gain, 0);
             applyRampValue(entry.centerOffset.offset, center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing);
@@ -4024,6 +4024,9 @@ export class AudioEngine {
           this._loadWavePlayerBuffer(entry);
         } else if (paramName === "amplitude") {
           applyRamp(entry.ampGain.gain);
+        } else if (paramName === "gain") {
+          entry.gain = value;
+          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         }
         break;
       case "reverb-light":
@@ -4462,7 +4465,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -4703,7 +4706,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {

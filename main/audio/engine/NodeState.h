@@ -102,12 +102,6 @@ struct LfoState
     float phaseOffsetDeg = 0.0f;
     bool zeroPointFixed = false; // false = auto (center = amplitude/2)
     float zeroPoint = 5.0f;      // 0-10V, used only when zeroPointFixed
-    // false (default) = unipolar CV convention (0-10V, see above). true =
-    // bipolar audio convention (center 0V, swing +/-cv::kAudioPeakVolts) -
-    // makes this Lfo behave like an audio-rate signal (see CvConventions.h)
-    // instead of a CV signal; zeroPointFixed/zeroPoint are ignored in this
-    // mode (center is always 0V). See LfoNode.h::render().
-    bool bipolar = false;
     // Rising-edge state for the "reset" input (control-rate, see PortTables) -
     // a rising edge across kGateThresholdVolts restarts phaseGen from 0 (see
     // processNodeBlock's Lfo case).
@@ -473,6 +467,14 @@ struct WavePlayerState
     // it, see processNodeBlock) - playback itself still runs to the
     // sample's natural end regardless of gate, only volume is shaped.
     float fadeGain = 1.0f;
+
+    // "gain" (real audio-rate port) - 0-10V CV, 10V = unchanged output
+    // signal, same cv::vcaGain convention as Oscillator's/SoundFontPlayer's
+    // "gain". Scales the finished stereo sample multiplicatively, on top of
+    // "amplitude" and fadeGain. gainSmooth: only smoothed PER SAMPLE in the
+    // unwired case, to avoid a block-constant jump.
+    float gainCv = 10.0f;
+    OnePoleLowpass gainSmooth;
 };
 
 struct tsf;

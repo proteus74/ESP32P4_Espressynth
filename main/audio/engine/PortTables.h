@@ -236,10 +236,15 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 0;
         if (is(portName, "amount"))
             return 1;
+        // "curve" - control-only 0-10V 2-position selector (<5V linear,
+        // >=5V exponential), same discrete-CV pattern as Filter's
+        // "filterType"/"slope".
+        if (is(portName, "curve"))
+            return 2;
         // "global" - same pattern as Lfo's "global" above (control-only,
         // see isControlOnlyInput), see GainState::global.
         if (is(portName, "global"))
-            return 2;
+            return 3;
         return -1;
     case NodeType::EspEq:
         if (is(portName, "inL"))
@@ -387,6 +392,10 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 1;
         if (is(portName, "gate"))
             return 2;
+        // "gain" - real audio-rate port (like Oscillator's/SoundFontPlayer's
+        // "gain"), scales the finished sample multiplicatively.
+        if (is(portName, "gain"))
+            return 3;
         return -1;
     case NodeType::SoundFontPlayer:
         if (is(portName, "bank")) return 0;
@@ -674,7 +683,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::CurtisFilter:
         return 6; // "in" + "filterType" + "slope" + "cutoff" + "resonance" + "global" (CV)
     case NodeType::Gain:
-        return 3; // "in" + "amount" (CV) + "global" (CV)
+        return 4; // "in" + "amount" (CV) + "curve" (CV) + "global" (CV)
     case NodeType::EspEq:
         return 2;
     case NodeType::Mixer:
@@ -733,7 +742,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Oscilloscope:
         return 2;
     case NodeType::WavePlayer:
-        return 3;
+        return 4; // "amplitude"+"note"+"gate"+"gain" (CV)
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
     case NodeType::Adsr:
@@ -858,7 +867,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Detune:
         return portIdx == 0; // "cv" - same reasoning as Oscillator's pitchCv
     case NodeType::Gain:
-        return portIdx == 2; // "global" - "amount" (index 1) stays real audio-rate
+        return portIdx == 2 || portIdx == 3; // "curve"+"global" - "amount" (index 1) stays real audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         return portIdx >= 1; // "filterType"+"slope"+"cutoff"+"resonance"+"global"
