@@ -89,8 +89,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.gain.global = p.gainGlobal;
     // Unlike Detune's amountSmooth (block rate) this smoother runs PER
     // SAMPLE (see render() above) - cutoff therefore against the real
-    // sample rate, same pattern as Reverb's damping filter (dampingL/
-    // dampingR). 300Hz = ~0.5ms time constant: fast enough to follow a
+    // sample rate, same pattern as ReverbLight's damping filter
+    // (dampingFilter). 300Hz = ~0.5ms time constant: fast enough to follow a
     // turned knob/slider without noticeable delay, but without the
     // block-constant corners that caused the metallic modulation sound.
     inst.gain.amountSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));

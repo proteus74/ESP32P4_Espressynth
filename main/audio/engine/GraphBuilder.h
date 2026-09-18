@@ -9,7 +9,6 @@
 #include "esp_log.h"
 
 #include "EspEqEffect.h"
-#include "EspAdditionalEffects.h"
 #include "Graph.h"
 #include "MemoryDiagnostics.h"
 #include "PortTables.h"
@@ -122,7 +121,7 @@ inline float *allocateBlockBuffer(bool preferPsram, uint16_t &psramFallbacks)
 }
 
 // Allocates one instance's type-specific big-state payload (see
-// NodeInstance.h's chorus/delay/reverb/reverbLight/espEffect comment) -
+// NodeInstance.h's chorus/delay/reverbLight comment) -
 // internal RAM first, PSRAM fallback, same policy/counter as
 // allocateBlockBuffer above. Default-constructed via placement-new (matches
 // how these were built as plain value members before this split).
@@ -157,9 +156,7 @@ inline bool hasStereoOutput(NodeType type)
 
 inline bool requiresInputBlockBuffers(NodeType type)
 {
-    return type == NodeType::EspEq || type == NodeType::EspAlc || type == NodeType::EspChannelConvert ||
-           type == NodeType::EspMixer || type == NodeType::EspSonic || type == NodeType::EspDrc ||
-           type == NodeType::EspMbc;
+    return type == NodeType::EspEq;
 }
 
 // Parses "zone<1-4><suffix>" (e.g. "zone2Gate") into a 0-based zone index
@@ -523,14 +520,6 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         initEspEq(*inst.espEq, p.eqFilterType, p.eqFrequency, p.eqQ, p.eqGainDb);
         inst.espEq->bypass = p.eqBypass;
         break;
-    case NodeType::EspAlc: initEspEffect(*inst.espEffect, EspEffectKind::Alc, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
-    case NodeType::EspChannelConvert: initEspEffect(*inst.espEffect, EspEffectKind::ChannelConvert, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
-    // EspMixer deliberately excluded - a 2-input mixer has no single dry
-    // signal to bypass to (see plan); s.bypass stays permanently false.
-    case NodeType::EspMixer: initEspEffect(*inst.espEffect, EspEffectKind::Mixer, p.espParam, 4); break;
-    case NodeType::EspSonic: initEspEffect(*inst.espEffect, EspEffectKind::Sonic, p.espParam, 2); inst.espEffect->bypass = p.espBypass; break;
-    case NodeType::EspDrc: initEspEffect(*inst.espEffect, EspEffectKind::Drc, p.espParam, 6); inst.espEffect->bypass = p.espBypass; break;
-    case NodeType::EspMbc: initEspEffect(*inst.espEffect, EspEffectKind::Mbc, p.espParam, 3); inst.espEffect->bypass = p.espBypass; break;
     case NodeType::Gain:
         nodes::gain::build(inst, p);
         break;
@@ -575,9 +564,6 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::Delay:
         nodes::delay::build(inst, p, psram);
-        break;
-    case NodeType::Reverb:
-        nodes::reverb::buildReverb(inst, p, psramFallbacks);
         break;
     case NodeType::ReverbLight:
         nodes::reverb::buildReverbLight(inst, p, psramFallbacks);
@@ -840,7 +826,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             }
             // Big-state payload (see NodeInstance.h) - only the one field
             // matching this instance's actual type gets allocated; applyParams
-            // below (Chorus/Delay/Reverb/ReverbLight/Esp* cases) dereferences
+            // below (Chorus/Delay/ReverbLight/... cases) dereferences
             // it, so this must happen first.
             bool stateAllocFailed = false;
             switch (w.type)
@@ -853,10 +839,6 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.delay = allocateNodeState<DelayState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.delay == nullptr);
                 break;
-            case NodeType::Reverb:
-                inst.reverb = allocateNodeState<ReverbState>(outputPsramFallbacks);
-                stateAllocFailed = (inst.reverb == nullptr);
-                break;
             case NodeType::ReverbLight:
                 inst.reverbLight = allocateNodeState<ReverbLightState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.reverbLight == nullptr);
@@ -864,15 +846,6 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             case NodeType::Hammond:
                 inst.hammond = allocateNodeState<HammondState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.hammond == nullptr);
-                break;
-            case NodeType::EspAlc:
-            case NodeType::EspChannelConvert:
-            case NodeType::EspMixer:
-            case NodeType::EspSonic:
-            case NodeType::EspDrc:
-            case NodeType::EspMbc:
-                inst.espEffect = allocateNodeState<EspEffectState>(outputPsramFallbacks);
-                stateAllocFailed = (inst.espEffect == nullptr);
                 break;
             case NodeType::Adsr:
                 inst.adsr = allocateNodeState<AdsrState>(outputPsramFallbacks);

@@ -59,7 +59,7 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         // Dry passthrough - mono "in" duplicated to both outputs, same as
         // the normal (non-bypassed) signal is always mono-sourced stereo
-        // here (chorus has no separate dry/wet mix, unlike Reverb/Delay).
+        // here (chorus has no separate dry/wet mix, unlike ReverbLight/Delay).
         for (size_t i = 0; i < frames; ++i)
         {
             const float x = portSample(inst, 0, i);

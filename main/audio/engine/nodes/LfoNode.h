@@ -94,7 +94,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // another node's output - audioConnectedPortMask), same dual-source
     // check as every other control-only input (see Oscillator's
     // pitchCv/tune). When One Shot's port is unconnected, its UI toggle
-    // (s.oneShot) is the fallback - matches Reverb's bypass pattern.
+    // (s.oneShot) is the fallback - matches ReverbLight's bypass pattern.
     const bool resetFed = controlPortConnected(inst, 0) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
     const float resetVal = resetFed ? portSample(inst, 0, 0) : 0.0f;
     const bool resetAbove = resetVal >= cv::kGateThresholdVolts;

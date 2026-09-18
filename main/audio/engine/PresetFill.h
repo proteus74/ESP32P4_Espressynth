@@ -7,7 +7,6 @@
 #include "cJSON.h"
 #include "CvConventions.h"
 
-#include "EspAdditionalEffects.h"
 #include "EspEqEffect.h"
 #include "PresetParser.h"
 #include "SoundFontPlayer.h"
@@ -108,24 +107,6 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::EspEq:
         parsePresetEspEq(p, out);
         break;
-    case NodeType::EspAlc:
-        parsePresetEspAlc(p, out);
-        break;
-    case NodeType::EspChannelConvert:
-        parsePresetEspChannelConvert(p, out);
-        break;
-    case NodeType::EspMixer:
-        parsePresetEspMixer(p, out);
-        break;
-    case NodeType::EspSonic:
-        parsePresetEspSonic(p, out);
-        break;
-    case NodeType::EspDrc:
-        parsePresetEspDrc(p, out);
-        break;
-    case NodeType::EspMbc:
-        parsePresetEspMbc(p, out);
-        break;
     case NodeType::Gain:
         nodes::gain::parsePreset(p, out);
         break;
@@ -174,9 +155,6 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Delay:
         nodes::delay::parsePreset(p, out);
-        break;
-    case NodeType::Reverb:
-        nodes::reverb::parsePresetReverb(p, out);
         break;
     case NodeType::ReverbLight:
         nodes::reverb::parsePresetReverbLight(p, out);

@@ -2153,38 +2153,6 @@ export class AudioEngine {
           responsePhase: new Float32Array(binCount),
         };
       }
-      case "esp-alc":
-      case "esp-channel-convert":
-      case "esp-sonic":
-      case "esp-drc":
-      case "esp-mbc": {
-        
-        
-        
-        const inputL = ctx.createGain();
-        const inputR = ctx.createGain();
-        const outputL = ctx.createGain();
-        const outputR = ctx.createGain();
-        inputL.connect(outputL);
-        inputR.connect(outputR);
-        if (type === "esp-alc") {
-          outputL.gain.value = 10 ** ((params.gainL ?? 0) / 20);
-          outputR.gain.value = 10 ** ((params.gainR ?? 0) / 20);
-        }
-        return { type, inputL, inputR, outputL, outputR };
-      }
-      case "esp-mixer": {
-        const inputMap = new Map();
-        const outputL = ctx.createGain();
-        const outputR = ctx.createGain();
-        ["in1L", "in1R", "in2L", "in2R"].forEach((port) => {
-          const gain = ctx.createGain();
-          gain.gain.value = port.startsWith("in1") ? 1 : 0;
-          gain.connect(port.endsWith("L") ? outputL : outputR);
-          inputMap.set(port, gain);
-        });
-        return { type, inputMap, outputL, outputR };
-      }
       case "mixer": {
         
         
@@ -2697,78 +2665,6 @@ export class AudioEngine {
           feedbackGainR: chanR.feedbackGain,
           dryGainR: chanR.dry,
           wetGainR: chanR.wet,
-          outputR: chanR.output,
-        };
-      }
-      case "reverb": {
-        
-        
-        
-        
-        
-        
-        
-        const buildChannel = () => {
-          const inputNode = ctx.createGain();
-          inputNode.gain.value = 1;
-
-          const preDelay = ctx.createDelay(0.2);
-          preDelay.delayTime.value = (params.preDelayMs ?? 0) / 1000;
-
-          const convolver = ctx.createConvolver();
-          convolver.buffer = this._generateImpulseResponse(ctx, this._roomSizeToSeconds(params.roomSize ?? 0.5));
-
-          const dampFilter = ctx.createBiquadFilter();
-          dampFilter.type = "lowpass";
-          dampFilter.frequency.value = this._dampingToHz(params.damping ?? 0.5);
-
-          const dry = ctx.createGain();
-          dry.gain.value = 10 ** ((params.dryLevelDb ?? 0) / 20);
-          const wet = ctx.createGain();
-          wet.gain.value = 10 ** ((params.wetLevelDb ?? -6) / 20);
-          const processed = ctx.createGain();
-          processed.gain.value = params.bypass ? 0 : 1;
-          const bypass = ctx.createGain();
-          bypass.gain.value = params.bypass ? 1 : 0;
-          const output = ctx.createGain();
-          output.gain.value = 1;
-
-          inputNode.connect(preDelay);
-          preDelay.connect(convolver);
-          convolver.connect(dampFilter);
-          dampFilter.connect(wet);
-          inputNode.connect(dry);
-          dry.connect(processed);
-          wet.connect(processed);
-          processed.connect(output);
-          inputNode.connect(bypass);
-          bypass.connect(output);
-
-          return { inputNode, preDelay, convolver, dampFilter, dry, wet, processed, bypass, output };
-        };
-        const chanL = buildChannel();
-        const chanR = buildChannel();
-        return {
-          type,
-          roomSize: params.roomSize ?? 0.5,
-          bypass: params.bypass === true,
-          inputNodeL: chanL.inputNode,
-          preDelayL: chanL.preDelay,
-          convolverL: chanL.convolver,
-          dampFilterL: chanL.dampFilter,
-          dryL: chanL.dry,
-          wetL: chanL.wet,
-          processedL: chanL.processed,
-          bypassL: chanL.bypass,
-          outputL: chanL.output,
-          inputNodeR: chanR.inputNode,
-          preDelayR: chanR.preDelay,
-          convolverR: chanR.convolver,
-          dampFilterR: chanR.dampFilter,
-          dryR: chanR.dry,
-          wetR: chanR.wet,
-          processedR: chanR.processed,
-          bypassR: chanR.bypass,
           outputR: chanR.output,
         };
       }
@@ -3821,15 +3717,6 @@ export class AudioEngine {
           entry.inputR.type = eqFilterTypeToBiquad(value);
         }
         break;
-      case "esp-channel-convert":
-      case "esp-sonic":
-      case "esp-drc":
-      case "esp-mbc":
-        break;
-      case "esp-alc":
-        if (paramName === "gainL") applyRampValue(entry.outputL.gain, 10 ** (value / 20));
-        if (paramName === "gainR") applyRampValue(entry.outputR.gain, 10 ** (value / 20));
-        break;
       case "frequency-divider":
         
         
@@ -3864,13 +3751,6 @@ export class AudioEngine {
           entry.amount = amount;
           applyRampValue(entry.deltaConst.offset, amount * DETUNE_MAX_VOLTS);
           applyRampValue(entry.negDeltaConst.offset, -amount * DETUNE_MAX_VOLTS);
-        }
-        break;
-      case "esp-mixer":
-        if (paramName === "mode") {
-          const sceneB = value >= GATE_THRESHOLD_VOLTS;
-          ["in1L", "in1R"].forEach((p) => applyRampValue(entry.inputMap.get(p).gain, sceneB ? 0 : 1));
-          ["in2L", "in2R"].forEach((p) => applyRampValue(entry.inputMap.get(p).gain, sceneB ? 1 : 0));
         }
         break;
       case "mixer":
@@ -4119,35 +3999,6 @@ export class AudioEngine {
           applyRamp(entry.ampGain.gain);
         }
         break;
-      case "reverb":
-        if (paramName === "bypass") {
-          entry.bypass = value === true || Number(value) >= 5;
-          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
-          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
-          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
-          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
-        } else if (paramName === "roomSize") {
-          entry.roomSize = value;
-          const buffer = this._generateImpulseResponse(this.ctx, this._roomSizeToSeconds(value));
-          entry.convolverL.buffer = buffer;
-          entry.convolverR.buffer = this._generateImpulseResponse(this.ctx, this._roomSizeToSeconds(value));
-        } else if (paramName === "damping") {
-          const hz = this._dampingToHz(value);
-          applyRampValue(entry.dampFilterL.frequency, hz);
-          applyRampValue(entry.dampFilterR.frequency, hz);
-        } else if (paramName === "wetLevelDb") {
-          const gain = 10 ** (value / 20);
-          applyRampValue(entry.wetL.gain, gain);
-          applyRampValue(entry.wetR.gain, gain);
-        } else if (paramName === "dryLevelDb") {
-          const gain = 10 ** (value / 20);
-          applyRampValue(entry.dryL.gain, gain);
-          applyRampValue(entry.dryR.gain, gain);
-        } else if (paramName === "preDelayMs") {
-          applyRampValue(entry.preDelayL.delayTime, value / 1000);
-          applyRampValue(entry.preDelayR.delayTime, value / 1000);
-        }
-        break;
       case "reverb-light":
         if (paramName === "bypass") {
           entry.bypass = value === true || Number(value) >= 5;
@@ -4329,7 +4180,7 @@ export class AudioEngine {
     if (entry.type === "sample-hold" && port === "out") return entry.processor;
     if (entry.type === "chorus" && port === "left") return entry.delayL;
     if (entry.type === "chorus" && port === "right") return entry.delayR;
-    if (entry.type === "delay" || entry.type === "reverb" || entry.type === "reverb-light") {
+    if (entry.type === "delay" || entry.type === "reverb-light") {
       if (port === "outL") return entry.outputL;
       if (port === "outR") return entry.outputR;
     }
@@ -4367,7 +4218,6 @@ export class AudioEngine {
     
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "cutoff") return entry.cutoffCv.prescale;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "resonance") return entry.resonanceCv.prescale;
-    if (entry.type === "esp-mixer") return entry.inputMap.get(port) || null;
     if (entry.type.startsWith("esp-") && (port === "inL" || port === "inR")) return port === "inL" ? entry.inputL : entry.inputR;
     if (entry.type === "mixer") return entry.inputGains.get(port) || null;
     if (entry.type === "multiplexer") return entry.inputGains.get(port) || null;
@@ -4434,7 +4284,7 @@ export class AudioEngine {
       if (port === "inL") return entry.inputL;
       if (port === "inR") return entry.inputR;
     }
-    if (entry.type === "reverb" || entry.type === "reverb-light") {
+    if (entry.type === "reverb-light") {
       if (port === "inL") return entry.inputNodeL;
       if (port === "inR") return entry.inputNodeR;
     }

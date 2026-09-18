@@ -16,7 +16,6 @@
 #include "CvConventions.h"
 #include "EngineStats.h"
 #include "EspEqEffect.h"
-#include "EspAdditionalEffects.h"
 #include "NodeInstance.h"
 #include "NodeRender.h"
 #include "ParamDispatch.h"
@@ -1586,28 +1585,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                     d.mixLog = log;
             }
         }
-        else if (slot.type == NodeType::Reverb &&
-                 (strcmp(key, "roomSizeCurve") == 0 || strcmp(key, "dampingCurve") == 0 ||
-                  strcmp(key, "wetLevelCurve") == 0 || strcmp(key, "dryLevelCurve") == 0 ||
-                  strcmp(key, "preDelayCurve") == 0) &&
-                 cJSON_IsString(item))
-        {
-            const bool log = strcmp(item->valuestring, "log") == 0;
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                ReverbState &r = *instances[slot.instanceBase + v].reverb;
-                if (strcmp(key, "roomSizeCurve") == 0)
-                    r.roomSizeLog = log;
-                else if (strcmp(key, "dampingCurve") == 0)
-                    r.dampingLog = log;
-                else if (strcmp(key, "wetLevelCurve") == 0)
-                    r.wetLevelLog = log;
-                else if (strcmp(key, "dryLevelCurve") == 0)
-                    r.dryLevelLog = log;
-                else
-                    r.preDelayLog = log;
-            }
-        }
         else if (slot.type == NodeType::ReverbLight &&
                  (strcmp(key, "roomSizeCurve") == 0 || strcmp(key, "dampingCurve") == 0 ||
                   strcmp(key, "wetLevelCurve") == 0 || strcmp(key, "dryLevelCurve") == 0) &&
@@ -1926,14 +1903,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
                 instances[slot.instanceBase + v].curtisFilter->global = global;
         }
-        else if (slot.type == NodeType::Reverb && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
-        {
-            const bool bypass = cJSON_IsTrue(item);
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].reverb->bypass = bypass;
-            }
-        }
         else if (slot.type == NodeType::ReverbLight && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
         {
             const bool bypass = cJSON_IsTrue(item);
@@ -1972,19 +1941,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 instances[slot.instanceBase + v].espEq->bypass = bypass;
-            }
-        }
-        else if ((slot.type == NodeType::EspAlc || slot.type == NodeType::EspChannelConvert ||
-                  slot.type == NodeType::EspSonic || slot.type == NodeType::EspDrc ||
-                  slot.type == NodeType::EspMbc) &&
-                 strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
-        {
-            // EspMixer deliberately excluded - see GraphBuilder.h's build-time
-            // init comment.
-            const bool bypass = cJSON_IsTrue(item);
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].espEffect->bypass = bypass;
             }
         }
         else if ((slot.type == NodeType::AudioOut || slot.type == NodeType::UsbOut ||
@@ -2122,32 +2078,11 @@ inline void Graph::destroy()
                 inst.espEq = nullptr;
             }
             break;
-        case NodeType::EspAlc:
-        case NodeType::EspChannelConvert:
-        case NodeType::EspMixer:
-        case NodeType::EspSonic:
-        case NodeType::EspDrc:
-        case NodeType::EspMbc:
-            // Null here means either a never-completed build (see
-            // GraphBuilder.h's build's state-alloc failure path, which calls
-            // this mid-build before every instance's pointer is set) or
-            // simply an instance slot this loop hasn't reached construction
-            // for yet - never a fully-built instance missing its state.
-            if (inst.espEffect != nullptr)
-            {
-                destroyEspEffect(*inst.espEffect);
-                heap_caps_free(inst.espEffect);
-                inst.espEffect = nullptr;
-            }
-            break;
         case NodeType::Chorus:
             nodes::chorus::destroy(inst);
             break;
         case NodeType::Delay:
             nodes::delay::destroy(inst);
-            break;
-        case NodeType::Reverb:
-            nodes::reverb::destroyReverb(inst);
             break;
         case NodeType::ReverbLight:
             nodes::reverb::destroyReverbLight(inst);

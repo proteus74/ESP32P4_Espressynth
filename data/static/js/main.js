@@ -82,7 +82,7 @@ async function applyWm8960Availability() {
     wm8960 = false;
   }
   if (!wm8960) {
-    const cat = WIDGET_CATEGORIES.find((c) => c.label === "Mixing/Output");
+    const cat = WIDGET_CATEGORIES.find((c) => c.label === "External Audio");
     if (cat) {
       const idx = cat.types.indexOf("wm8960-out");
       if (idx >= 0) cat.types.splice(idx, 1);
@@ -1183,12 +1183,6 @@ const WIDGET_TYPES = {
     outputs: [{ id: "out", label: "Out" }],
   },
   "esp-eq": { label: "EQ", icon: "📶", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "frequency", label: "Frequency" }, { id: "q", label: "Q" }, { id: "gainDb", label: "Gain dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-alc": { label: "ESP ALC", icon: "ALC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "gainL", label: "Gain L dB" }, { id: "gainR", label: "Gain R dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-channel-convert": { label: "ESP Channel Convert", icon: "CH", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-mixer": { label: "ESP Crossfade Mixer", icon: "MX", inputs: [{ id: "in1L", label: "A In L" }, { id: "in1R", label: "A In R" }, { id: "in2L", label: "B In L" }, { id: "in2R", label: "B In R" }, { id: "mode", label: "Scene" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-sonic": { label: "Sonic", icon: "Sonic", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "speed", label: "Speed" }, { id: "pitch", label: "Pitch" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-drc": { label: "Dynamic Range Control", icon: "DRC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "attackMs", label: "Attack ms" }, { id: "releaseMs", label: "Release ms" }, { id: "makeupDb", label: "Makeup dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
-  "esp-mbc": { label: "ESP MBC", icon: "MBC", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
   mixer: {
     label: "Mixer",
     icon: "🎧",
@@ -1333,24 +1327,6 @@ const WIDGET_TYPES = {
       { id: "outR", label: "Out R" },
     ],
   },
-  reverb: {
-    label: "Reverb",
-    icon: "🏛️",
-    inputs: [
-      { id: "inL", label: "In L" },
-      { id: "inR", label: "In R" },
-      { id: "bypass", label: "Bypass" },
-      { id: "roomSize", label: "Room Size" },
-      { id: "damping", label: "Damping" },
-      { id: "wetLevel", label: "Wet Level" },
-      { id: "dryLevel", label: "Dry Level" },
-      { id: "preDelay", label: "Pre-Delay" },
-    ],
-    outputs: [
-      { id: "outL", label: "Out L" },
-      { id: "outR", label: "Out R" },
-    ],
-  },
   "reverb-light": {
     label: "Reverb Light",
     icon: "🪶",
@@ -1453,8 +1429,9 @@ const WIDGET_CATEGORIES = [
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
-  { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc"] },
-  { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "usb-out", "es8311-out", "wm8960-out", "linked-input", "linked-output"] },
+  { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb-light"] },
+  { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output"] },
+  { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out"] },
 ];
@@ -1514,15 +1491,15 @@ const AUDIO_PORTS = {
   filter: { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "curtis-filter": { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "esp-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "esp-alc": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "esp-channel-convert": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "esp-mixer": { in: ["in1L", "in1R", "in2L", "in2R"], out: ["outL", "outR"] },
-  "esp-sonic": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "esp-drc": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  "esp-mbc": { in: ["inL", "inR"], out: ["outL", "outR"] },
-  
-  
-  
+
+
+
+
+
+
+
+
+
   mixer: { in: ["in1", "in2", "in3", "in4", "in5", "in6", "in7", "in8"], out: ["out"] },
   
   
@@ -1566,7 +1543,7 @@ const AUDIO_PORTS = {
   
   
   delay: { in: ["inL", "inR"], out: ["outL", "outR"] },
-  reverb: { in: ["inL", "inR"], out: ["outL", "outR"] },
+
   "reverb-light": { in: ["inL", "inR"], out: ["outL", "outR"] },
   "audio-output-link": { in: Array.from({ length: LINK_BUS_COUNT }, (_, i) => `in${i + 1}`) },
   "audio-input-link": {
@@ -1745,8 +1722,7 @@ const GENERATOR_PAGE_TYPES = [
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
-  "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb", "reverb-light", "esp-alc", "esp-channel-convert",
-  "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc", "audio-out",
+  "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb-light", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
 ];
 
@@ -2219,6 +2195,11 @@ function uniqueWidgetLabel(requestedLabel) {
   return `${base}${suffix}`;
 }
 
+// Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
+// to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
+// createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "wave-folder"]);
+
 function createWidget(type, label, x, y, forcedId) {
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
     const existing = pages.fx.canvasContentEl.querySelector(`.widget-instance[data-widget-type="${type}"]`);
@@ -2504,7 +2485,7 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "delay" || type === "reverb" || type === "reverb-light") {
+  if (type === "delay" || type === "reverb-light") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
       e.stopPropagation();
@@ -2926,7 +2907,8 @@ function createWidget(type, label, x, y, forcedId) {
     muteRow.appendChild(muteText);
 
     const volumeRow = document.createElement("label");
-    volumeRow.className = "audio-out-volume-row";
+    volumeRow.className = "audio-out-volume-row gain-control-row";
+    volumeRow.dataset.role = "main-gain-control";
     const volumeText = document.createElement("span");
     volumeText.textContent = "VOL";
     const volumeSlider = document.createElement("input");
@@ -3278,7 +3260,7 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, { ...state });
   }
 
-  if (type === "delay" || type === "reverb" || type === "reverb-light") {
+  if (type === "delay" || type === "reverb-light") {
     const state = defaultEffectCvState(type);
     effectCvStates.set(id, state);
     audioEngine.createNode(id, type, effectCvParamsToValues(type, state));
@@ -3894,6 +3876,15 @@ function createWidget(type, label, x, y, forcedId) {
   } else {
     def.inputs.forEach((port) => {
       const row = createPortRow(id, port, "in", type);
+      // Main Gain/Volume control - tagged so the end-of-createWidget relocation below moves it
+      // to the very last position in the widget, and styled distinctly (see .gain-control-row).
+      // Scoped to the unambiguous "volume knob" per widget type, not every gain-ish port
+      // (Mixer channel gains, ESP-EQ/ALC dB gains, Audio-Input-Link channel gains stay as-is).
+      if ((MAIN_GAIN_WIDGET_TYPES.has(type) && port.id === "gain") ||
+          (type === "gain" && port.id === "amount")) {
+        row.classList.add("gain-control-row");
+        row.dataset.role = "main-gain-control";
+      }
       if (type === "linked-input" && port.id === "in") {
         const label = row.querySelector(".port-label");
         if (label) {
@@ -4935,6 +4926,13 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "sample-hold") updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
   if (type === "pan") updatePanVisual(id);
+  // Main Gain/Volume control (see MAIN_GAIN_WIDGET_TYPES/.gain-control-row above) always sits
+  // last in the widget, below every other control - regardless of which code path built it
+  // (a plain port row from the def.inputs loop, or the bespoke audio-out-family volume row).
+  // appendChild() on an already-attached node relocates it rather than cloning it, so this
+  // works no matter how deeply nested it currently is inside `el`.
+  const mainGainControl = el.querySelector('[data-role="main-gain-control"]');
+  if (mainGainControl) el.appendChild(mainGainControl);
   refreshWiredSliderLocks();
   savePresetNow();
   return el;
@@ -9940,8 +9938,8 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
-  "esp-eq", "esp-alc", "esp-channel-convert", "esp-mixer", "esp-sonic", "esp-drc", "esp-mbc",
-  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
+  "esp-eq",
+  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   "linked-input", "linked-output",
 ]);
 
@@ -10862,13 +10860,6 @@ function updateGainVisual(widgetId) {
 const filterStates = new Map();
 const ESP_EFFECT_DEFAULTS = {
   "esp-eq": { filterType: "peak", frequency: 1000, q: 1, gainDb: 0, bypass: false },
-  "esp-alc": { gainL: 0, gainR: 0, bypass: false },
-  "esp-channel-convert": { weightL: 0.70710678, weightR: 0.70710678, bypass: false },
-  // esp-mixer deliberately excluded from bypass (see hasBypass()'s comment).
-  "esp-mixer": { weight1: 1, weight2: 0, fadeMs: 100, mode: 0 },
-  "esp-sonic": { speed: 1, pitch: 1, bypass: false },
-  "esp-drc": { threshold: -20, ratio: 4, attackMs: 10, releaseMs: 100, makeupDb: 0, kneeDb: 2, bypass: false },
-  "esp-mbc": { threshold: -22, ratio: 2, makeupDb: 0, bypass: false },
 };
 const espEffectStates = new Map();
 
@@ -10877,15 +10868,6 @@ const ESP_EFFECT_SLIDER_CONFIG = {
     frequency: { min: 20, max: 22049, step: 1, unit: " Hz" },
     q: { min: 0.1, max: 20, step: 0.1, unit: "" },
     gainDb: { min: -15, max: 15, step: 0.1, unit: " dB" },
-  },
-  "esp-sonic": {
-    speed: { min: 0.5, max: 2, step: 0.01, unit: "×" },
-    pitch: { min: 0.5, max: 2, step: 0.01, unit: "×" },
-  },
-  "esp-drc": {
-    attackMs: { min: 0, max: 500, step: 1, unit: " ms" },
-    releaseMs: { min: 0, max: 500, step: 1, unit: " ms" },
-    makeupDb: { min: -10, max: 10, step: 0.1, unit: " dB" },
   },
 };
 
@@ -11442,16 +11424,6 @@ const EFFECT_CV_PARAMS = {
     { portId: "feedback", paramName: "feedback", label: "Feedback", unit: "", defaultMin: 0, defaultMax: 0.95, defaultCurve: "linear", defaultValue: 0.3 },
     { portId: "mix", paramName: "mix", label: "Mix", unit: "", defaultMin: 0, defaultMax: 1, defaultCurve: "linear", defaultValue: 0.35 },
   ],
-  reverb: [
-    { portId: "roomSize", paramName: "roomSize", label: "Room Size", unit: "", defaultMin: 0, defaultMax: 1, defaultCurve: "linear", defaultValue: 0.5 },
-    { portId: "damping", paramName: "damping", label: "Damping", unit: "", defaultMin: 0, defaultMax: 1, defaultCurve: "linear", defaultValue: 0.5 },
-    { portId: "wetLevel", paramName: "wetLevelDb", label: "Wet Level", unit: "dB", defaultMin: -96, defaultMax: 0, defaultCurve: "linear", defaultValue: -6 },
-    { portId: "dryLevel", paramName: "dryLevelDb", label: "Dry Level", unit: "dB", defaultMin: -96, defaultMax: 0, defaultCurve: "linear", defaultValue: 0 },
-    { portId: "preDelay", paramName: "preDelayMs", label: "Pre-Delay", unit: "ms", defaultMin: 0, defaultMax: 200, defaultCurve: "linear", defaultValue: 0 },
-  ],
-  
-  
-  
   "reverb-light": [
     { portId: "roomSize", paramName: "roomSize", label: "Room Size", unit: "", defaultMin: 0, defaultMax: 1, defaultCurve: "linear", defaultValue: 0.5 },
     { portId: "damping", paramName: "damping", label: "Damping", unit: "", defaultMin: 0, defaultMax: 1, defaultCurve: "linear", defaultValue: 0.5 },
@@ -11463,36 +11435,29 @@ const EFFECT_CV_PARAMS = {
 
 
 function isReverbType(type) {
-  return type === "reverb" || type === "reverb-light";
+  return type === "reverb-light";
 }
 
 // Types whose "bypass" flows through the generic effectCvStates/
-// makeEffectCvEngine machinery below (reverb/reverb-light already did;
-// delay gets bypass the same way). Chorus/the ESP
-// effects have their OWN state maps (chorusStates/espEffectStates) and do
-// NOT go through this engine - see hasBypass()
-// below for the full cross-type set used by the shared toggle-switch UI.
+// makeEffectCvEngine machinery below (reverb-light already did; delay gets
+// bypass the same way). Chorus/esp-eq have their OWN state maps
+// (chorusStates/espEffectStates) and do NOT go through this engine - see
+// hasBypass() below for the full cross-type set used by the shared
+// toggle-switch UI.
 function isEffectCvBypassType(type) {
   return isReverbType(type) || type === "delay";
 }
 
 // Every widget type that gets a Bypass toggle switch (see the port-row
-// loop below and BYPASS_STATE_MAPS just after it) - reverb/reverb-light/
-// delay share effectCvStates via isEffectCvBypassType(); chorus/the 5 ESP
-// effects each keep their own state map. EspMixer
-// deliberately excluded (2-input mixer, no single dry signal - see the
-// backend plan).
+// loop below and BYPASS_STATE_MAPS just after it) - reverb-light/delay
+// share effectCvStates via isEffectCvBypassType(); chorus/esp-eq each keep
+// their own state map.
 function hasBypass(type) {
   return (
     isEffectCvBypassType(type) ||
     type === "bitcrusher" ||
     type === "chorus" ||
-    type === "esp-eq" ||
-    type === "esp-alc" ||
-    type === "esp-channel-convert" ||
-    type === "esp-sonic" ||
-    type === "esp-drc" ||
-    type === "esp-mbc"
+    type === "esp-eq"
   );
 }
 
@@ -11625,7 +11590,7 @@ function openEffectCvSettings(widgetId) {
   const type = el.dataset.widgetType;
   pendingEffectCvId = widgetId;
   pendingEffectCvType = type;
-  const effectCvTitleLabel = type === "delay" ? "Delay" : type === "reverb-light" ? "Reverb Light" : "Reverb";
+  const effectCvTitleLabel = type === "delay" ? "Delay" : "Reverb Light";
   effectCvSettingsTitle.textContent = `${effectCvTitleLabel} Settings`;
   effectCvSettingsFields.innerHTML = "";
   for (const p of EFFECT_CV_PARAMS[type] || []) {
@@ -15915,9 +15880,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  // esp-mixer deliberately excluded - see hasBypass()'s comment (no single
-  // dry signal for a 2-input mixer, no bypass toggle exposed for it).
-  if (hasBypass(el.dataset.widgetType) && el.dataset.widgetType !== "esp-mixer" &&
+  if (hasBypass(el.dataset.widgetType) &&
       el.dataset.widgetType.startsWith("esp-") && portId === "bypass") {
     const state = espEffectStates.get(widgetId);
     if (state) {
@@ -17499,7 +17462,6 @@ const WIDGET_ENGINES = {
     },
   },
   delay: makeEffectCvEngine("delay"),
-  reverb: makeEffectCvEngine("reverb"),
   "reverb-light": makeEffectCvEngine("reverb-light"),
 };
 

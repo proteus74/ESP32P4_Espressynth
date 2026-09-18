@@ -76,10 +76,8 @@ using nodes::delay::DelayState;
 
 namespace nodes::reverb
 {
-struct ReverbState;
 struct ReverbLightState;
 }
-using nodes::reverb::ReverbState;
 using nodes::reverb::ReverbLightState;
 
 namespace nodes::hammond
@@ -268,8 +266,9 @@ struct NodeInstance
     // Graph::destroy -
     // unlike every other state member above, which stays a plain value
     // (trivial lifetime, no manual alloc/free). They are by far the largest
-    // of the ~25 per-type payloads (ReverbState alone: 26 embedded DelayLine
-    // descriptors, ~550 B), and were previously always-present value members
+    // of the ~23 per-type payloads (ChorusState/DelayState/ReverbLightState
+    // among the largest, with several embedded DelayLine descriptors each),
+    // and were previously always-present value members
     // here, meaning every single instance - an Oscillator, an LFO, anything
     // - paid their combined size even though at most one type ever applies.
     // That padding was the dominant cost pushing NodeInstance's per-instance
@@ -286,9 +285,7 @@ struct NodeInstance
         void *typeState = nullptr;
         ChorusState *chorus;
         DelayState *delay;
-        ReverbState *reverb;
         ReverbLightState *reverbLight;
-        EspEffectState *espEffect;
         AdsrState *adsr;
         DxEnvelopeState *dxEnvelope;
         StepArpState *stepArp;

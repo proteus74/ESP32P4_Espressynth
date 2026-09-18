@@ -1096,10 +1096,6 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 240px;
 }
 
-.widget-instance[data-widget-type="reverb"] {
-  min-width: 260px;
-}
-
 .widget-instance[data-widget-type="mixer"] {
   min-width: 190px;
 }
@@ -2758,6 +2754,18 @@ body.show-node-cpu .widget-cpu-badge {
 
 .port-row.disabled {
   opacity: 0.45;
+}
+
+/* Main Gain/Volume control (Oscillator/FM-Osc/Hammond/SoundFont/WaveFolder "Gain",
+   Gain/VCA "Amount", Audio-Out-family "Volume") - a distinct violet accent (not the blue
+   --accent, green --ok, amber warn or red danger used elsewhere) so it reads as its own
+   category at a glance, and always relocated to the very last element of its widget (see
+   createWidget's end-of-function main-gain-control move in main.js) regardless of where in
+   the widget's own markup it's built. */
+.gain-control-row {
+  background: rgba(167, 139, 250, 0.14);
+  border-left: 3px solid #a78bfa;
+  padding-left: calc(0.6rem - 3px);
 }
 
 .port-row-in > .port-label {

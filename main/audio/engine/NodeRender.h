@@ -6,7 +6,6 @@
 #include "esp_attr.h"
 
 #include "CvConventions.h"
-#include "EspAdditionalEffects.h"
 #include "EspEqEffect.h"
 #include "NodeInstance.h"
 #include "SoundFontPlayer.h"
@@ -146,14 +145,6 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::EspEq:
         processEspEq(*inst.espEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
         break;
-    case NodeType::EspAlc:
-    case NodeType::EspChannelConvert:
-    case NodeType::EspMixer:
-    case NodeType::EspSonic:
-    case NodeType::EspDrc:
-    case NodeType::EspMbc:
-        processEspEffect(*inst.espEffect, inst.inPorts, inst.audioInPortCount, inst.outL, inst.outR, frames);
-        break;
     case NodeType::Multiplier:
         nodes::arithmetic::renderMultiplier(inst, frames);
         break;
@@ -186,9 +177,6 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Delay:
         nodes::delay::render(inst, frames);
-        break;
-    case NodeType::Reverb:
-        nodes::reverb::renderReverb(inst, frames);
         break;
     case NodeType::ReverbLight:
         nodes::reverb::renderReverbLight(inst, frames);

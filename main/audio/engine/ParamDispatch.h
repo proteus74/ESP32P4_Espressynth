@@ -4,7 +4,6 @@
 #include <cstring>
 
 #include "EspEqEffect.h"
-#include "EspAdditionalEffects.h"
 #include "NodeInstance.h"
 #include "NodeTypes.h"
 #include "SoundFontPlayer.h"
@@ -146,14 +145,6 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
             return updateEspEq(eq, eq.filterType, eq.frequencyHz, eq.q, value);
         return false;
     }
-    case NodeType::EspAlc:
-    case NodeType::EspChannelConvert:
-    case NodeType::EspMixer:
-    case NodeType::EspSonic:
-    case NodeType::EspDrc:
-    case NodeType::EspMbc:
-        return updateEspEffect(*inst.espEffect, name, value);
-
     case NodeType::Mixer:
         return nodes::mixer::setParam(inst, name, value);
 
@@ -178,8 +169,6 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::Delay:
         return nodes::delay::setParam(inst, name, value);
 
-    case NodeType::Reverb:
-        return nodes::reverb::setParamReverb(inst, name, value);
 
     case NodeType::ReverbLight:
         return nodes::reverb::setParamReverbLight(inst, name, value);

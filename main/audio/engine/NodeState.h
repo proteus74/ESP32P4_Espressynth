@@ -204,25 +204,6 @@ struct EspEqState
     bool bypass = false;
 };
 
-struct EspEffectState
-{
-    void *handle = nullptr;
-    espae::S32PlanarScratch scratch;
-    // Extra interleaved/FIFO storage used by Sonic and source scratch used
-    // by ESP Mixer. All allocated at graph build time.
-    int32_t *extra[4] = {};
-    float params[16] = {};
-    uint8_t kind = 0;
-    uint8_t inputCount = 2;
-    bool ready = false;
-    // Shared by Alc/ChannelConvert/Sonic/Drc/Mbc, deliberately never set
-    // true for Mixer (a 2-input mixer has no single dry signal - see
-    // GraphBuilder.h's build-time init, which skips this field for
-    // EspMixer). processEspEffect() already OR's it into its existing
-    // ready-check, so this needs no special-casing there either.
-    bool bypass = false;
-};
-
 struct GainState
 {
     // Raw CV (0-10V, see CvConventions.h): 0V = silent, 5V = 0.5x, 10V =
@@ -387,8 +368,8 @@ struct OutputMultiplexerState
 // DelayState is defined (state + render/build/destroy/setParam logic
 // together) in nodes/DelayNode.h.
 
-// ReverbState/ReverbLightState are defined (state + render/build/destroy/
-// setParam logic together) in nodes/ReverbNode.h.
+// ReverbLightState is defined (state + render/build/destroy/setParam logic
+// together) in nodes/ReverbNode.h.
 
 // HammondState is defined (state + render/build/destroy/setParam logic
 // together) in nodes/HammondNode.h.

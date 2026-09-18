@@ -240,21 +240,10 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 2;
         return -1;
     case NodeType::EspEq:
-    case NodeType::EspAlc:
-    case NodeType::EspChannelConvert:
-    case NodeType::EspDrc:
-    case NodeType::EspMbc:
-    case NodeType::EspSonic:
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
             return 1;
-        return -1;
-    case NodeType::EspMixer:
-        if (is(portName, "in1L")) return 0;
-        if (is(portName, "in1R")) return 1;
-        if (is(portName, "in2L")) return 2;
-        if (is(portName, "in2R")) return 3;
         return -1;
     case NodeType::Mixer:
     case NodeType::Multiplier:
@@ -320,7 +309,7 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Delay:
         // "time"/"feedback"/"mix" are real, but control-only audio-rate
         // CV ports (see isControlOnlyInput) - same pattern as Filter's
-        // cutoff/resonance. "bypass" - same pattern as Reverb's "bypass".
+        // cutoff/resonance. "bypass" - same pattern as ReverbLight's "bypass".
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
@@ -334,28 +323,9 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "mix"))
             return 5;
         return -1;
-    case NodeType::Reverb:
-        // "roomSize"/"damping"/"wetLevel"/"dryLevel"/"preDelay" are real,
-        // but control-only audio-rate CV ports (see isControlOnlyInput).
-        if (is(portName, "inL"))
-            return 0;
-        if (is(portName, "inR"))
-            return 1;
-        if (is(portName, "bypass"))
-            return 2;
-        if (is(portName, "roomSize"))
-            return 3;
-        if (is(portName, "damping"))
-            return 4;
-        if (is(portName, "wetLevel"))
-            return 5;
-        if (is(portName, "dryLevel"))
-            return 6;
-        if (is(portName, "preDelay"))
-            return 7;
-        return -1;
     case NodeType::ReverbLight:
-        // Like Reverb, but without "preDelay" (see ReverbLightState).
+        // "roomSize"/"damping"/"wetLevel"/"dryLevel" are real, but
+        // control-only audio-rate CV ports (see isControlOnlyInput).
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
@@ -576,12 +546,6 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Gain:
         return is(portName, "out") ? 0 : -1;
     case NodeType::EspEq:
-    case NodeType::EspAlc:
-    case NodeType::EspChannelConvert:
-    case NodeType::EspMixer:
-    case NodeType::EspSonic:
-    case NodeType::EspDrc:
-    case NodeType::EspMbc:
         if (is(portName, "outL"))
             return 0;
         if (is(portName, "outR"))
@@ -622,7 +586,6 @@ inline int audioOutIndex(NodeType type, const char *portName)
             return 1;
         return -1;
     case NodeType::Delay:
-    case NodeType::Reverb:
     case NodeType::ReverbLight:
         if (is(portName, "outL"))
             return 0;
@@ -711,14 +674,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Gain:
         return 3; // "in" + "amount" (CV) + "global" (CV)
     case NodeType::EspEq:
-    case NodeType::EspAlc:
-    case NodeType::EspChannelConvert:
-    case NodeType::EspSonic:
-    case NodeType::EspDrc:
-    case NodeType::EspMbc:
         return 2;
-    case NodeType::EspMixer:
-        return 4;
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
@@ -746,10 +702,8 @@ inline int audioInPortCount(NodeType type)
         return 1;
     case NodeType::Delay:
         return 6; // "inL"+"inR"+"bypass"+"time"+"feedback"+"mix" (CV)
-    case NodeType::Reverb:
-        return 8; // "inL"+"inR"+"bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel"+"preDelay" (CV)
     case NodeType::ReverbLight:
-        return 7; // like Reverb, without "preDelay"
+        return 7; // "inL"+"inR"+"bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel" (CV)
     case NodeType::AudioOutputLink:
         return synth::kLinkBusCount;
     case NodeType::AudioInputLink:
@@ -856,11 +810,8 @@ inline bool hasNoOutputs(NodeType type)
 // Heavy post-mix effects that must never be multiplied per synth voice.
 inline bool isGlobalOnly(NodeType type)
 {
-    return type == NodeType::EspEq || type == NodeType::EspAlc || type == NodeType::EspChannelConvert ||
-           type == NodeType::EspMixer || type == NodeType::EspSonic || type == NodeType::EspDrc ||
-           type == NodeType::EspMbc || type == NodeType::SoundFontPlayer || type == NodeType::Delay ||
-           type == NodeType::Reverb || type == NodeType::ReverbLight || type == NodeType::Bitcrusher ||
-           type == NodeType::WaveFolder;
+    return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::Delay ||
+           type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely
@@ -927,8 +878,6 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx >= 2; // "bypass"+"time"+"feedback"+"mix"
     case NodeType::Bitcrusher:
         return portIdx >= 1; // "bypass" + "crush"
-    case NodeType::Reverb:
-        return portIdx >= 2; // "bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel"+"preDelay"
     case NodeType::ReverbLight:
         return portIdx >= 2; // "bypass"+"roomSize"+"damping"+"wetLevel"+"dryLevel"
     case NodeType::AudioOut:

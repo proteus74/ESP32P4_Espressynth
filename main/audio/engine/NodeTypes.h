@@ -15,12 +15,6 @@ enum class NodeType : uint8_t
     Adsr,
     Filter,
     EspEq,
-    EspAlc,
-    EspChannelConvert,
-    EspMixer,
-    EspSonic,
-    EspDrc,
-    EspMbc,
     Gain,
     Mixer,
     Multiplier,
@@ -34,7 +28,6 @@ enum class NodeType : uint8_t
     Pan,
     Chorus,
     Delay,
-    Reverb,
     AudioOutputLink,
     AudioInputLink,
     AudioOut,
@@ -144,18 +137,6 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Filter;
     if (strcmp(typeStr, "esp-eq") == 0)
         return NodeType::EspEq;
-    if (strcmp(typeStr, "esp-alc") == 0)
-        return NodeType::EspAlc;
-    if (strcmp(typeStr, "esp-channel-convert") == 0)
-        return NodeType::EspChannelConvert;
-    if (strcmp(typeStr, "esp-mixer") == 0)
-        return NodeType::EspMixer;
-    if (strcmp(typeStr, "esp-sonic") == 0)
-        return NodeType::EspSonic;
-    if (strcmp(typeStr, "esp-drc") == 0)
-        return NodeType::EspDrc;
-    if (strcmp(typeStr, "esp-mbc") == 0)
-        return NodeType::EspMbc;
     if (strcmp(typeStr, "gain") == 0)
         return NodeType::Gain;
     if (strcmp(typeStr, "mixer") == 0)
@@ -182,8 +163,6 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Chorus;
     if (strcmp(typeStr, "delay") == 0)
         return NodeType::Delay;
-    if (strcmp(typeStr, "reverb") == 0)
-        return NodeType::Reverb;
     if (strcmp(typeStr, "reverb-light") == 0)
         return NodeType::ReverbLight;
     if (strcmp(typeStr, "audio-output-link") == 0)

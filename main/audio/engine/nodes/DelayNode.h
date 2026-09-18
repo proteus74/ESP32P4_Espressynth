@@ -55,7 +55,7 @@ inline void render(NodeInstance &inst, size_t frames)
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     auto &s = *inst.delay;
     // "bypass" (Port-Index 2, control-only) - same wired-CV-or-manual
-    // pattern as Reverb's bypass (see ReverbNode.h).
+    // pattern as ReverbLight's bypass (see ReverbNode.h).
     const bool bypass = (inst.controlConnectedPortMask & (1u << 2)) != 0
                             ? inst.controlValue[2] >= cv::kGateThresholdVolts
                             : s.bypass;

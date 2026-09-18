@@ -217,7 +217,7 @@ IRAM_ATTR inline float tanhLookup(float value)
 // its magnitude drops low enough - inaudible (well below -300dB) but
 // expensive. Snapping anything under this threshold to exact 0.0f breaks the
 // cycle before a value ever goes subnormal; used on every long-lived
-// feedback state this engine keeps (Biquad/OnePoleLowpass::process, Reverb/
+// feedback state this engine keeps (Biquad/OnePoleLowpass::process,
 // ReverbLight's comb+allpass writes, see NodeInstance.cpp).
 inline float flushDenorm(float x) { return (x > -1e-15f && x < 1e-15f) ? 0.0f : x; }
 } // namespace dsp

@@ -90,15 +90,8 @@ struct WidgetParams
     float eqFrequency = 1000.0f;
     float eqQ = 1.0f;
     float eqGainDb = 0.0f;
-    // eq-only bypass (see EspEqState::bypass) - separate from espBypass below
-    // since EspEq doesn't share EspEffectState with the other ESP effects.
+    // eq-only bypass (see EspEqState::bypass).
     bool eqBypass = false;
-    // Generic ESP effect parameters. Kept scalar for first UI/API slice.
-    float espParam[16] = {};
-    // Shared by EspAlc/EspChannelConvert/EspSonic/EspDrc/EspMbc (see
-    // EspEffectState::bypass) - deliberately NOT read/written for EspMixer
-    // (a 2-input mixer has no single dry signal to bypass to).
-    bool espBypass = false;
     // gain - "amount" is raw CV (0-10V, see CvConventions.h), 10V = unity-
     // gain default (see GainState). gainGlobal is the "global" port's
     // UI-toggle fallback (see GainState::global), same pattern as lfoGlobal.
@@ -140,16 +133,15 @@ struct WidgetParams
     float timeMin = 0.0f, timeMax = 2000.0f, feedbackMin = 0.0f, feedbackMax = 0.95f, mixMin = 0.0f, mixMax = 1.0f;
     bool timeLog = false, feedbackLog = false, mixLog = false;
     bool delayBypass = false;
-    // reverb (always stereo) - param semantics follow esp_ae_reverb_para_t
-    // (see NodeState.h's ReverbState). roomSize/damping/wetLevel/dryLevel/
-    // preDelayMin/Max/Log likewise mirror the settings dialog.
+    // reverb-light (always stereo) - param semantics follow esp_ae_reverb_para_t
+    // (see nodes/ReverbNode.h's ReverbLightState). roomSize/damping/wetLevel/
+    // dryLevel likewise mirror the settings dialog.
     float reverbRoomSize = 0.5f, reverbDamping = 0.5f;
-    float reverbWetLevelDb = -6.0f, reverbDryLevelDb = 0.0f, reverbPreDelayMs = 0.0f;
+    float reverbWetLevelDb = -6.0f, reverbDryLevelDb = 0.0f;
     bool reverbBypass = false;
     float roomSizeMin = 0.0f, roomSizeMax = 1.0f, dampingMin = 0.0f, dampingMax = 1.0f;
     float wetLevelMin = -96.0f, wetLevelMax = 0.0f, dryLevelMin = -96.0f, dryLevelMax = 0.0f;
-    float preDelayMin = 0.0f, preDelayMax = 200.0f;
-    bool roomSizeLog = false, dampingLog = false, wetLevelLog = false, dryLevelLog = false, preDelayLog = false;
+    bool roomSizeLog = false, dampingLog = false, wetLevelLog = false, dryLevelLog = false;
     // audio-out
     bool muted = false;
     float left = 1.0f, right = 1.0f, gain = 10.0f;
