@@ -187,7 +187,7 @@ dependencies:
   nimble_central_utils:
     dependencies: []
     source:
-      path: ../../../../../../esp/v6.1-rc1/esp-idf/examples/bluetooth/nimble/common/nimble_central_utils
+      path: ../../../../../esp/v6.1/esp-idf/examples/bluetooth/nimble/common/nimble_central_utils
       type: local
     version: '*'
   waveshare/esp_lcd_jd9365_10_1:

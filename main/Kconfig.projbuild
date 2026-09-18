@@ -475,31 +475,6 @@ menu "Application Features"
                     stays safely under it with room for the driver's own
                     alignment rounding. Not a value chosen for its latency.
 
-            menu "Synth Engine"
-
-                config AUDIO_SYNTH_MAX_VOICES
-                    int "Maximum voices"
-                    range 1 32
-                    default 16
-                    help
-                        Compile-time ceiling for polyphonic graph expansion.
-                        Presets may request fewer voices, and the runtime builder
-                        can reduce this count further when internal RAM does not
-                        fit. Higher values increase Graph metadata in PSRAM and
-                        per-voice node buffers/state, primarily in internal RAM.
-
-                config AUDIO_SYNTH_BLOCK_SIZE
-                    int "Render Block Size"
-                    range 16 1024
-                    default 128
-                    help
-                        Number of samples rendered per node-graph pass. At
-                        44.1 kHz, 128 samples correspond to about 2.9 ms.
-                        Smaller blocks reduce latency but increase scheduling
-                        and graph-walk overhead.
-
-            endmenu
-
             config USB_DEV_ENABLE_UAC2
                 bool "Enable USB Sound Card (UAC2, via USB Device Composite)"
                 default y
@@ -511,6 +486,31 @@ menu "Application Features"
                     Device Mode" above to be enabled. Fixed at 44.1 kHz.
 
         endif
+
+        menu "Synth Engine"
+
+            config AUDIO_SYNTH_MAX_VOICES
+                int "Maximum voices"
+                range 1 32
+                default 16
+                help
+                    Compile-time ceiling for polyphonic graph expansion.
+                    Presets may request fewer voices, and the runtime builder
+                    can reduce this count further when internal RAM does not
+                    fit. Higher values increase Graph metadata in PSRAM and
+                    per-voice node buffers/state, primarily in internal RAM.
+
+            config AUDIO_SYNTH_BLOCK_SIZE
+                int "Render Block Size"
+                range 16 1024
+                default 128
+                help
+                    Number of samples rendered per node-graph pass. At
+                    44.1 kHz, 128 samples correspond to about 2.9 ms.
+                    Smaller blocks reduce latency but increase scheduling
+                    and graph-walk overhead.
+
+        endmenu
 
     endmenu
 
