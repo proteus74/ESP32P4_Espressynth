@@ -524,11 +524,6 @@ struct MdaPianoState
     float choPhaModeCv = 0.0f;
     float choPhaDepthCv = 0.0f;
     float choPhaSpeedCv = 5.0f;
-    float delayModeCv = 0.0f;
-    float delayDepthCv = 0.0f;
-    float delayTimeCv = 5.0f;
-    float reverbDepthCv = 0.0f;
-    float volumeCv = 10.0f;
     float preGainCv = 10.0f;
     float gainCv = 10.0f;
     OnePoleLowpass gainSmooth;

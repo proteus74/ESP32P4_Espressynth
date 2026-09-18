@@ -268,11 +268,6 @@ struct WidgetParams
     float mdaPianoChoPhaMode = 0.0f;
     float mdaPianoChoPhaDepth = 0.0f;
     float mdaPianoChoPhaSpeed = 5.0f;
-    float mdaPianoDelayMode = 0.0f;
-    float mdaPianoDelayDepth = 0.0f;
-    float mdaPianoDelayTime = 5.0f;
-    float mdaPianoReverbDepth = 0.0f;
-    float mdaPianoVolume = 10.0f;
     float mdaPianoPreGain = 10.0f;
     // hammond - drawbar LEVELS (0-10V CV, default 888000000) and their
     // harmonic RATIOS (settings-dialog-only, default the classic Hammond

@@ -68,7 +68,6 @@ struct CpTremolo {
         }
     }
 };
-
 // ============================================================================
 // Effect 2a: CHORUS  (stereo modulated delay -> richer / wider)
 // ============================================================================
@@ -132,7 +131,6 @@ struct CpChorus {
         widx = (widx + 1) % kBuf;
     }
 };
-
 // ============================================================================
 // Effect 2b: PHASER  (4-stage all-pass cascade + feedback)
 // LFO sweeps the all-pass CORNER FREQUENCY exponentially (in octaves around
@@ -214,97 +212,4 @@ struct CpPhaser {
         r = 0.5f * r + 0.5f * sigR;
     }
 };
-
-// ============================================================================
-// Effect 3: D.DELAY / A.DELAY  (digital vs analog stereo delay)
-//   mode 0 = DIGITAL (clean repeats)
-//   mode 1 = ANALOG  (BBD-style: EVERY pass into the buffer is lowpassed
-//            (~2.5 kHz) and softly saturated, so repeats get progressively
-//            darker -- including the first one -- plus a slow clock wobble.
-//            The old version filtered only the feedback path, so the first
-//            repeat was identical to digital mode and barely distinguishable.)
-// ============================================================================
-struct CpDelay {
-    static constexpr int kBuf = 22080;   // ~500 ms @ 44.1 kHz (was 24001 for 48 kHz)
-    static constexpr float kTwoPi = 6.28318530718f;
-
-    float sr;
-    int mode;
-    float mix;
-    float feedback;
-    float delaySamp;
-    float modPhase;                       // BBD clock wobble LFO (analog mode)
-    int16_t bufL[kBuf], bufR[kBuf];   // int16 storage halves RAM (engine source is 16-bit anyway)
-    int wIdx;
-    float lpL, lpR;
-
-    void init(float sr_) {
-        sr = sr_;
-        reset();
-        setMode(0);
-        setDepth(0.5f);
-        setTime(0.5f);
-    }
-    void reset() {
-        for (int i = 0; i < kBuf; ++i) { bufL[i] = 0; bufR[i] = 0; }
-        wIdx = 0;
-        lpL = lpR = 0.f;
-        modPhase = 0.f;
-    }
-    void setMode(int m) { mode = (m == 1) ? 1 : 0; }
-    void setDepth(float n) {
-        n = cp_clamp01(n);
-        mix = n;
-        feedback = 0.7f * n;
-    }
-    void setTime(float n) {
-        n = cp_clamp01(n);
-        float ms = 20.f + n * (500.f - 20.f);
-        delaySamp = ms * 0.001f * sr;
-        if (delaySamp > (float)(kBuf - 1)) delaySamp = (float)(kBuf - 1);
-    }
-    void CP_HOT(process)(float& l, float& r) {
-        // BBD clock wobble: +-0.08 % delay-time modulation at 0.9 Hz (analog only)
-        modPhase += 0.9f / sr;
-        if (modPhase >= 1.f) modPhase -= 1.f;
-        float delayEff = delaySamp;
-        if (mode == 1) {
-            delayEff *= 1.0f + 0.0008f * g_sinLUT().sin01_nofloor(modPhase);
-            if (delayEff > (float)(kBuf - 2)) delayEff = (float)(kBuf - 2);
-        }
-
-        float rpos = (float)wIdx - delayEff;
-        while (rpos < 0.f) rpos += (float)kBuf;
-        while (rpos >= (float)kBuf) rpos -= (float)kBuf;
-        int i0 = (int)rpos;
-        int i1 = i0 + 1; if (i1 >= kBuf) i1 = 0;
-        float frac = rpos - (float)i0;
-        float sL0 = (float)bufL[i0] * (1.f / 32768.f);
-        float sL1 = (float)bufL[i1] * (1.f / 32768.f);
-        float sR0 = (float)bufR[i0] * (1.f / 32768.f);
-        float sR1 = (float)bufR[i1] * (1.f / 32768.f);
-        float dL = sL0 + frac * (sL1 - sL0);
-        float dR = sR0 + frac * (sR1 - sR0);
-
-        float wL = l + dL * feedback;
-        float wR = r + dR * feedback;
-        if (mode == 1) {
-            // BBD pass: darken + softly saturate EVERYTHING entering the buffer
-            lpL += 0.3f * (wL - lpL);
-            lpR += 0.3f * (wR - lpR);
-            wL = fastTanh(lpL);
-            wR = fastTanh(lpR);
-        }
-
-        float cL = wL * 32768.f;
-        float cR = wR * 32768.f;
-        if (cL > 32767.f) cL = 32767.f; else if (cL < -32768.f) cL = -32768.f;
-        if (cR > 32767.f) cR = 32767.f; else if (cR < -32768.f) cR = -32768.f;
-        bufL[wIdx] = (int16_t)lrintf(cL);
-        bufR[wIdx] = (int16_t)lrintf(cR);
-        wIdx++; if (wIdx >= kBuf) wIdx = 0;
-
-        l = l * (1.f - mix) + dL * mix;
-        r = r * (1.f - mix) + dR * mix;
-    }
-};
+// End of PicoFaceCP effect primitives.

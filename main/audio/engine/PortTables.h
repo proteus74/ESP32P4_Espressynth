@@ -418,13 +418,8 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "choPhaMode")) return 7;
         if (is(portName, "choPhaDepth")) return 8;
         if (is(portName, "choPhaSpeed")) return 9;
-        if (is(portName, "delayMode")) return 10;
-        if (is(portName, "delayDepth")) return 11;
-        if (is(portName, "delayTime")) return 12;
-        if (is(portName, "reverbDepth")) return 13;
-        if (is(portName, "volume")) return 14;
-        if (is(portName, "preGain")) return 15;
-        if (is(portName, "gain")) return 16;
+        if (is(portName, "preGain")) return 10;
+        if (is(portName, "gain")) return 11;
         return -1;
     case NodeType::Adsr:
         // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate
@@ -769,7 +764,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
     case NodeType::MdaPiano:
-        return 17; // wheel switches + voice/effect controls + final gain
+        return 12; // wheel switches + voice/effect controls + final gain
     case NodeType::Adsr:
         return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
@@ -911,7 +906,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::SoundFontPlayer:
         return portIdx != 5; // event/scalar inputs, control-only - except "gain" (index 5), real audio-rate like Oscillator's
     case NodeType::MdaPiano:
-        return portIdx != 16; // all controls except final gain are block-rate
+        return portIdx != 11; // all controls except final gain are block-rate
     case NodeType::Delay:
         return portIdx >= 2; // "bypass"+"time"+"feedback"+"mix"
     case NodeType::Bitcrusher:

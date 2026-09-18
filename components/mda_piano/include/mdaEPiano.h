@@ -114,9 +114,6 @@ public:
 	void setPolyphony(uint8_t value);
     uint8_t getPolyphony(void);
 	
-	void setVolume(uint8_t value); 	// Volume Range 0..127
-    uint8_t getVolume(void);
-    
 	int32_t getProgramCount();
 	int32_t getProgram();
 	void setProgram(int32_t program);

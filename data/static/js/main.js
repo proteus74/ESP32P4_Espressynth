@@ -1108,11 +1108,6 @@ const WIDGET_TYPES = {
       { id: "choPhaMode", label: "Cho/Pha Mode" },
       { id: "choPhaDepth", label: "Cho/Pha Depth" },
       { id: "choPhaSpeed", label: "Cho/Pha Speed" },
-      { id: "delayMode", label: "Delay Mode" },
-      { id: "delayDepth", label: "Delay Depth" },
-      { id: "delayTime", label: "Delay Time" },
-      { id: "reverbDepth", label: "Reverb Depth" },
-      { id: "volume", label: "Volume" },
       { id: "preGain", label: "Pre Gain" },
       { id: "gain", label: "Gain" },
     ],
@@ -2976,11 +2971,6 @@ function createWidget(type, label, x, y, forcedId) {
       choPhaMode: 0,
       choPhaDepth: 0,
       choPhaSpeed: 5,
-      delayMode: 0,
-      delayDepth: 0,
-      delayTime: 5,
-      reverbDepth: 0,
-      volume: CV_MAX_VOLTS,
       preGain: CV_MAX_VOLTS,
       gain: CV_MAX_VOLTS,
     });
@@ -8123,8 +8113,7 @@ let pendingMdaPianoId = null;
 
 const MDA_PIANO_CV_PARAMS = [
   "voiceType", "drive", "tremWahMode", "tremWahDepth", "tremWahRate",
-  "choPhaMode", "choPhaDepth", "choPhaSpeed", "delayMode", "delayDepth",
-  "delayTime", "reverbDepth", "volume", "preGain", "gain",
+  "choPhaMode", "choPhaDepth", "choPhaSpeed", "preGain", "gain",
 ];
 
 function updateMdaPianoControls(widgetId) {

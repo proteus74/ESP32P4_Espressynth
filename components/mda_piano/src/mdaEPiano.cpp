@@ -233,19 +233,6 @@ uint8_t mdaEPiano::getPolyphony(void)
 }
 
 
-void mdaEPiano::setVolume(uint8_t value)
-{
-  volume = 0.00002f * (float)(value * value);
-}
-
-
-uint8_t mdaEPiano::getVolume(void)
-{
-  float value = sqrtf(50000.0f * volume);
-  return(value);
-}
-
-
 mdaEPiano::~mdaEPiano ()  //destroy any buffers...
 {
   if(programs) delete [] programs;

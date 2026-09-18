@@ -92,11 +92,6 @@ inline void build(NodeInstance &inst, const WidgetParams &params)
     state.choPhaModeCv = clampCv(params.mdaPianoChoPhaMode);
     state.choPhaDepthCv = clampCv(params.mdaPianoChoPhaDepth);
     state.choPhaSpeedCv = clampCv(params.mdaPianoChoPhaSpeed);
-    state.delayModeCv = clampCv(params.mdaPianoDelayMode);
-    state.delayDepthCv = clampCv(params.mdaPianoDelayDepth);
-    state.delayTimeCv = clampCv(params.mdaPianoDelayTime);
-    state.reverbDepthCv = clampCv(params.mdaPianoReverbDepth);
-    state.volumeCv = clampCv(params.mdaPianoVolume);
     state.preGainCv = clampCv(params.mdaPianoPreGain);
     state.gainCv = clampCv(params.gain);
     state.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
@@ -138,11 +133,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     else if (strcmp(name, "choPhaMode") == 0) state.choPhaModeCv = cv;
     else if (strcmp(name, "choPhaDepth") == 0) state.choPhaDepthCv = cv;
     else if (strcmp(name, "choPhaSpeed") == 0) state.choPhaSpeedCv = cv;
-    else if (strcmp(name, "delayMode") == 0) state.delayModeCv = cv;
-    else if (strcmp(name, "delayDepth") == 0) state.delayDepthCv = cv;
-    else if (strcmp(name, "delayTime") == 0) state.delayTimeCv = cv;
-    else if (strcmp(name, "reverbDepth") == 0) state.reverbDepthCv = cv;
-    else if (strcmp(name, "volume") == 0) state.volumeCv = cv;
     else if (strcmp(name, "preGain") == 0) state.preGainCv = cv;
     else if (strcmp(name, "gain") == 0) state.gainCv = cv;
     else return false;
@@ -198,14 +188,12 @@ inline void render(NodeInstance &inst, size_t frames)
     float *values[] = {
         nullptr, nullptr, &state.voiceTypeCv, &state.driveCv, &state.tremWahModeCv,
         &state.tremWahDepthCv, &state.tremWahRateCv, &state.choPhaModeCv,
-        &state.choPhaDepthCv, &state.choPhaSpeedCv, &state.delayModeCv,
-        &state.delayDepthCv, &state.delayTimeCv, &state.reverbDepthCv,
-        &state.volumeCv, &state.preGainCv, &state.gainCv,
+        &state.choPhaDepthCv, &state.choPhaSpeedCv, &state.preGainCv, &state.gainCv,
     };
     const synth::PortMask connected = inst.controlConnectedPortMask | inst.audioConnectedPortMask;
     if (connected & synth::portBit(0)) state.enableModWheel = noderender::portSample(inst, 0, 0) >= 0.5f;
     if (connected & synth::portBit(1)) state.enablePitchWheel = noderender::portSample(inst, 1, 0) >= 0.5f;
-    for (int port = 2; port < 17; ++port)
+    for (int port = 2; port < 12; ++port)
     {
         if ((connected & synth::portBit(port)) == 0) continue;
         const float cv = clampCv(noderender::portSample(inst, port, 0));
@@ -239,11 +227,6 @@ inline void render(NodeInstance &inst, size_t frames)
     rt->effects.setChoPhaMode(effectModeFromCv(state.choPhaModeCv));
     rt->effects.setChoPhaDepth(state.choPhaDepthCv * 0.1f);
     rt->effects.setChoPhaSpeed(state.choPhaSpeedCv * 0.1f);
-    rt->effects.setDelayMode(effectModeFromCv(state.delayModeCv));
-    rt->effects.setDelayDepth(state.delayDepthCv * 0.1f);
-    rt->effects.setDelayTime(state.delayTimeCv * 0.1f);
-    rt->effects.setReverbDepth(state.reverbDepthCv * 0.1f);
-    rt->effects.setVolume(state.volumeCv * 0.1f);
     rt->effects.setPreGain(state.preGainCv * 0.1f);
 
     rt->piano.process(rt->scratchR, rt->scratchL, static_cast<int32_t>(frames));
@@ -255,12 +238,12 @@ inline void render(NodeInstance &inst, size_t frames)
     }
     rt->effects.process(inst.outL, inst.outR, static_cast<int>(frames));
 
-    const bool gainFed = (connected & synth::portBit(16)) != 0;
+    const bool gainFed = (connected & synth::portBit(11)) != 0;
     const float gainTarget = cv::vcaGain(state.gainCv, false);
     for (size_t i = 0; i < frames; ++i)
     {
         const float gain = gainFed
-            ? cv::vcaGain(clampCv(noderender::portSample(inst, 16, i)), false)
+            ? cv::vcaGain(clampCv(noderender::portSample(inst, 11, i)), false)
             : state.gainSmooth.process(gainTarget);
         inst.outL[i] *= gain;
         inst.outR[i] *= gain;
@@ -282,11 +265,6 @@ inline void parsePreset(cJSON *params, WidgetParams &out)
     out.mdaPianoChoPhaMode = clampCv(presetparser::getFloat(params, "choPhaMode", 0.0f));
     out.mdaPianoChoPhaDepth = clampCv(presetparser::getFloat(params, "choPhaDepth", 0.0f));
     out.mdaPianoChoPhaSpeed = clampCv(presetparser::getFloat(params, "choPhaSpeed", 5.0f));
-    out.mdaPianoDelayMode = clampCv(presetparser::getFloat(params, "delayMode", 0.0f));
-    out.mdaPianoDelayDepth = clampCv(presetparser::getFloat(params, "delayDepth", 0.0f));
-    out.mdaPianoDelayTime = clampCv(presetparser::getFloat(params, "delayTime", 5.0f));
-    out.mdaPianoReverbDepth = clampCv(presetparser::getFloat(params, "reverbDepth", 0.0f));
-    out.mdaPianoVolume = clampCv(presetparser::getFloat(params, "volume", 10.0f));
     out.mdaPianoPreGain = clampCv(presetparser::getFloat(params, "preGain", 10.0f));
     out.gain = clampCv(presetparser::getFloat(params, "gain", 10.0f));
 }
