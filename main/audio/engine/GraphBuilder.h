@@ -42,6 +42,7 @@
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
 #include "nodes/LinkNodes.h"
+#include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
@@ -607,6 +608,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::OutputSwitch:
         nodes::outputswitch::build(inst, p);
         break;
+    case NodeType::MdaPiano:
+        nodes::mdapiano::build(inst, p);
+        break;
     default:
         break;
     }
@@ -810,7 +814,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // shortly after a build). Its per-sample loop already reads the
             // sample data from PSRAM anyway, so PSRAM-backing its port/output
             // buffers too costs no new kind of latency, unlike most types.
-            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::SoundFontPlayer);
+            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::SoundFontPlayer ||
+                                      w.type == NodeType::MdaPiano);
             inst.outL = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
             if (inst.outL != nullptr) ++blockBufferCount;
             if (hasStereoOutput(w.type))
@@ -1077,7 +1082,9 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 kind = ControlRoute::Kind::MidiAftertouch;
             else if (strcmp(cd.fromPort, "pitchBend") == 0)
                 kind = ControlRoute::Kind::MidiPitchBend;
-            else if (strcmp(cd.fromPort, "midi") == 0 && toType == NodeType::SoundFontPlayer && strcmp(cd.toPort, "midi") == 0)
+            else if (strcmp(cd.fromPort, "midi") == 0 &&
+                     (toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano) &&
+                     strcmp(cd.toPort, "midi") == 0)
                 kind = ControlRoute::Kind::MidiRaw;
             // MidiSplit's single "midi" input - one wire standing in for what
             // used to be three (note/velocity/gate): the note-on/off event

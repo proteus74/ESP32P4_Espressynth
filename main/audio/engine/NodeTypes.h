@@ -63,6 +63,7 @@ enum class NodeType : uint8_t
     CvOut,
     DigitalIn,
     DigitalOut,
+    MdaPiano,
     Unknown,
 };
 
@@ -206,6 +207,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::WavePlayer;
     if (strcmp(typeStr, "soundfont-player") == 0)
         return NodeType::SoundFontPlayer;
+    if (strcmp(typeStr, "mda-piano") == 0)
+        return NodeType::MdaPiano;
     if (strcmp(typeStr, "clock") == 0)
         return NodeType::Clock;
     if (strcmp(typeStr, "sample-hold") == 0)

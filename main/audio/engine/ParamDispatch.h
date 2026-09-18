@@ -30,6 +30,7 @@
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
 #include "nodes/LinkNodes.h"
+#include "nodes/MdaPianoNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
@@ -136,6 +137,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
             return true;
         }
         return false;
+
+    case NodeType::MdaPiano:
+        return nodes::mdapiano::setParam(inst, name, value);
 
     case NodeType::EspEq:
     {

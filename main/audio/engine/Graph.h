@@ -433,6 +433,13 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 }
                 target.soundFontPlayer.gatePrev = noteOn;
             }
+            else if (target.type == NodeType::MdaPiano)
+            {
+                target.mdaPiano.currentNote = note;
+                if (noteOn) target.mdaPiano.pendingNoteOn = true;
+                else nodes::mdapiano::noteOff(target.mdaPiano, note);
+                target.mdaPiano.gatePrev = noteOn;
+            }
             else if (target.type == NodeType::MidiSplit)
             {
                 // Gate is "the event" - MidiSplit's single "midi" input
@@ -987,7 +994,11 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         const int eventChannel = event.status & 0x0F;
         if (midi.channel >= 0 && midi.channel != eventChannel) continue;
         WidgetSlot &target = widgets[route.targetWidget];
-        soundfont::handleMidi(instances[target.instanceBase].soundFontPlayer, event);
+        NodeInstance &targetInstance = instances[target.instanceBase];
+        if (target.type == NodeType::SoundFontPlayer)
+            soundfont::handleMidi(targetInstance.soundFontPlayer, event);
+        else if (target.type == NodeType::MdaPiano)
+            nodes::mdapiano::handleMidi(targetInstance.mdaPiano, event);
     }
 
     // Control Change: knob CC-learn/mapping, entirely independent of note
@@ -2093,6 +2104,9 @@ inline void Graph::destroy()
         case NodeType::SoundFontPlayer:
             soundfont::close(inst.soundFontPlayer.synth);
             inst.soundFontPlayer.synth = nullptr;
+            break;
+        case NodeType::MdaPiano:
+            nodes::mdapiano::destroy(inst);
             break;
         case NodeType::Adsr:
             nodes::adsr::destroy(inst);

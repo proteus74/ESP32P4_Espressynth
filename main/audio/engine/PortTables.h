@@ -407,6 +407,25 @@ inline int audioInIndex(NodeType type, const char *portName)
         // entry in isControlOnlyInput needed, see NodeInstance.cpp.
         if (is(portName, "gain")) return 5;
         return -1;
+    case NodeType::MdaPiano:
+        if (is(portName, "enableModWheel")) return 0;
+        if (is(portName, "enablePitchWheel")) return 1;
+        if (is(portName, "voiceType")) return 2;
+        if (is(portName, "drive")) return 3;
+        if (is(portName, "tremWahMode")) return 4;
+        if (is(portName, "tremWahDepth")) return 5;
+        if (is(portName, "tremWahRate")) return 6;
+        if (is(portName, "choPhaMode")) return 7;
+        if (is(portName, "choPhaDepth")) return 8;
+        if (is(portName, "choPhaSpeed")) return 9;
+        if (is(portName, "delayMode")) return 10;
+        if (is(portName, "delayDepth")) return 11;
+        if (is(portName, "delayTime")) return 12;
+        if (is(portName, "reverbDepth")) return 13;
+        if (is(portName, "volume")) return 14;
+        if (is(portName, "preGain")) return 15;
+        if (is(portName, "gain")) return 16;
+        return -1;
     case NodeType::Adsr:
         // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate
         // ports (see isControlOnlyInput). "gate" (index 4) is ALSO a real,
@@ -635,6 +654,10 @@ inline int audioOutIndex(NodeType type, const char *portName)
         if (is(portName, "left")) return 0;
         if (is(portName, "right")) return 1;
         return -1;
+    case NodeType::MdaPiano:
+        if (is(portName, "left")) return 0;
+        if (is(portName, "right")) return 1;
+        return -1;
     case NodeType::Clock:
         return is(portName, "pulse") ? 0 : -1;
     case NodeType::CvIn:
@@ -745,6 +768,8 @@ inline int audioInPortCount(NodeType type)
         return 4; // "amplitude"+"note"+"gate"+"gain" (CV)
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
+    case NodeType::MdaPiano:
+        return 17; // wheel switches + voice/effect controls + final gain
     case NodeType::Adsr:
         return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
@@ -821,7 +846,7 @@ inline bool hasNoOutputs(NodeType type)
 // Heavy post-mix effects that must never be multiplied per synth voice.
 inline bool isGlobalOnly(NodeType type)
 {
-    return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::Delay ||
+    return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder;
 }
 
@@ -885,6 +910,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 1 || portIdx == 2; // "note"+"gate" - "amplitude" (index 0) stays audio-rate
     case NodeType::SoundFontPlayer:
         return portIdx != 5; // event/scalar inputs, control-only - except "gain" (index 5), real audio-rate like Oscillator's
+    case NodeType::MdaPiano:
+        return portIdx != 16; // all controls except final gain are block-rate
     case NodeType::Delay:
         return portIdx >= 2; // "bypass"+"time"+"feedback"+"mix"
     case NodeType::Bitcrusher:

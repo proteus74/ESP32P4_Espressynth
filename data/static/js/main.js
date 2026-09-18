@@ -1093,6 +1093,34 @@ const WIDGET_TYPES = {
       { id: "right", label: "Out R" },
     ],
   },
+  "mda-piano": {
+    label: "MDA Piano",
+    icon: "🎹",
+    inputs: [
+      { id: "midi", label: "MIDI" },
+      { id: "enableModWheel", label: "Enable Mod Wheel" },
+      { id: "enablePitchWheel", label: "Enable Pitch Wheel" },
+      { id: "voiceType", label: "Voice Type" },
+      { id: "drive", label: "Drive" },
+      { id: "tremWahMode", label: "Trem/Wah Mode" },
+      { id: "tremWahDepth", label: "Trem/Wah Depth" },
+      { id: "tremWahRate", label: "Trem/Wah Rate" },
+      { id: "choPhaMode", label: "Cho/Pha Mode" },
+      { id: "choPhaDepth", label: "Cho/Pha Depth" },
+      { id: "choPhaSpeed", label: "Cho/Pha Speed" },
+      { id: "delayMode", label: "Delay Mode" },
+      { id: "delayDepth", label: "Delay Depth" },
+      { id: "delayTime", label: "Delay Time" },
+      { id: "reverbDepth", label: "Reverb Depth" },
+      { id: "volume", label: "Volume" },
+      { id: "preGain", label: "Pre Gain" },
+      { id: "gain", label: "Gain" },
+    ],
+    outputs: [
+      { id: "left", label: "Out L" },
+      { id: "right", label: "Out R" },
+    ],
+  },
   detune: {
     label: "DeTune",
     icon: "↔️",
@@ -1428,7 +1456,7 @@ const WIDGET_TYPES = {
 
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
-  { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player"] },
+  { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "sample-hold"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
@@ -1470,6 +1498,7 @@ const AUDIO_PORTS = {
   
   "wave-player": { in: ["amplitude", "gain"], out: ["left", "right"] },
   "soundfont-player": { out: ["left", "right"] },
+  "mda-piano": { out: ["left", "right"] },
   
   
   
@@ -1756,7 +1785,7 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder", "pan",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
@@ -2236,7 +2265,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "wave-folder", "wave-player"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player"]);
 
 function createWidget(type, label, x, y, forcedId) {
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
@@ -2488,6 +2517,14 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openSoundFontPlayerSettings(id);
+    });
+  }
+
+  if (type === "mda-piano") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input")) return;
+      e.stopPropagation();
+      openMdaPianoSettings(id);
     });
   }
 
@@ -2924,6 +2961,29 @@ function createWidget(type, label, x, y, forcedId) {
     body.appendChild(fileLabel);
     body.appendChild(presetLabel);
     el.appendChild(body);
+  }
+
+  if (type === "mda-piano") {
+    mdaPianoStates.set(id, {
+      maxVoices: 32,
+      enableModWheel: false,
+      enablePitchWheel: false,
+      voiceType: 0,
+      drive: 0,
+      tremWahMode: 0,
+      tremWahDepth: 0,
+      tremWahRate: 5,
+      choPhaMode: 0,
+      choPhaDepth: 0,
+      choPhaSpeed: 5,
+      delayMode: 0,
+      delayDepth: 0,
+      delayTime: 5,
+      reverbDepth: 0,
+      volume: CV_MAX_VOLTS,
+      preGain: CV_MAX_VOLTS,
+      gain: CV_MAX_VOLTS,
+    });
   }
 
   if (type === "audio-out" || type === "usb-out" || type === "es8311-out" || type === "wm8960-out") {
@@ -4315,6 +4375,50 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatNumber(state.gain ?? CV_MAX_VOLTS);
         row.appendChild(valueSpan);
       }
+      if (type === "mda-piano" && ["enableModWheel", "enablePitchWheel"].includes(port.id)) {
+        const state = mdaPianoStates.get(id);
+        const switchLabel = document.createElement("label");
+        switchLabel.className = "switch";
+        const toggle = document.createElement("input");
+        toggle.type = "checkbox";
+        toggle.checked = state[port.id] === true;
+        toggle.addEventListener("mousedown", (e) => e.stopPropagation());
+        toggle.addEventListener("click", (e) => e.stopPropagation());
+        toggle.addEventListener("change", () => {
+          state[port.id] = toggle.checked;
+          deliverToWidget(id, port.id, toggle.checked ? 1 : 0);
+        });
+        const switchTrack = document.createElement("span");
+        switchTrack.className = "switch-track";
+        switchLabel.appendChild(toggle);
+        switchLabel.appendChild(switchTrack);
+        row.insertBefore(switchLabel, row.querySelector(".port-label"));
+      }
+      if (type === "mda-piano" && !["midi", "enableModWheel", "enablePitchWheel"].includes(port.id)) {
+        const state = mdaPianoStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state[port.id]);
+        slider.dataset.role = `mda-piano-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `mda-piano-${port.id}-value`;
+        valueSpan.textContent = formatNumber(state[port.id]);
+        slider.addEventListener("input", () => {
+          const value = Number(slider.value);
+          state[port.id] = value;
+          valueSpan.textContent = formatNumber(value);
+          deliverToWidget(id, port.id, value);
+        });
+        row.appendChild(slider);
+        row.appendChild(valueSpan);
+      }
       if (hasBypass(type) && port.id === "bypass") {
         const state = bypassStateMapFor(type).get(id);
         const switchLabel = document.createElement("label");
@@ -5065,6 +5169,7 @@ function removeWidget(id, force = false) {
   hammondStates.delete(id);
   wavePlayerStates.delete(id);
   soundFontPlayerStates.delete(id);
+  mdaPianoStates.delete(id);
   detuneStates.delete(id);
   audioOutStates.delete(id);
   audioInputLinkStates.delete(id);
@@ -8010,6 +8115,33 @@ document.getElementById("wavePlayerSettingsSave").addEventListener("click", () =
 
 
 const soundFontPlayerStates = new Map();
+const mdaPianoStates = new Map();
+const mdaPianoSettingsOverlay = document.getElementById("mdaPianoSettingsOverlay");
+const mdaPianoVoicesInput = document.getElementById("mdaPianoVoicesInput");
+let pendingMdaPianoId = null;
+
+function openMdaPianoSettings(widgetId) {
+  const state = mdaPianoStates.get(widgetId);
+  if (!state) return;
+  pendingMdaPianoId = widgetId;
+  mdaPianoVoicesInput.value = String(state.maxVoices);
+  mdaPianoSettingsOverlay.classList.remove("hidden");
+}
+
+function closeMdaPianoSettings() {
+  mdaPianoSettingsOverlay.classList.add("hidden");
+  pendingMdaPianoId = null;
+}
+
+document.getElementById("mdaPianoSettingsCancel").addEventListener("click", closeMdaPianoSettings);
+document.getElementById("mdaPianoSettingsSave").addEventListener("click", () => {
+  const state = mdaPianoStates.get(pendingMdaPianoId);
+  if (!state) return;
+  state.maxVoices = clamp(parseInt(mdaPianoVoicesInput.value, 10) || 32, 4, 128);
+  savePresetNow();
+  closeMdaPianoSettings();
+});
+
 const soundFontPlayerSettingsOverlay = document.getElementById("soundFontPlayerSettingsOverlay");
 const soundFontPlayerFileSelect = document.getElementById("soundFontPlayerFileSelect");
 const soundFontPlayerVoicesInput = document.getElementById("soundFontPlayerVoicesInput");
