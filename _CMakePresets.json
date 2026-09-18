@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "debug",
+      "binaryDir": "build_debug",
+      "displayName": "Debug Environment",
+      "cacheVariables": {
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.debug"
+      }
+    },
+    {
+      "name": "release",
+      "binaryDir": "build_release",
+      "displayName": "Release Environment",
+      "cacheVariables": {
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.release"
+      }
+    },
+    {
+      "name": "nomqtt",
+      "binaryDir": "build_nomqtt",
+      "displayName": "No-MQTT Environment",
+      "cacheVariables": {
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.nomqtt"
+      }
+    }
+  ]
+} 

@@ -77,21 +77,19 @@ enum class WaveType : uint8_t
     SuperSaw,
 };
 
+// Order matters: the Filter widget's "filterType" CV port maps 0-10V onto this
+// list by index (filterKindFromCv in FilterNode.h), and main.js's
+// FILTER_TYPE_BUTTONS must stay in the same order.
 enum class FilterKind : uint8_t
 {
     None,
     LowPass,
     HighPass,
     BandPass,
-};
-
-enum class CurtisFilterMode : uint8_t
-{
-    None,
-    LowPass24,
-    LowPass12,
-    BandPass12,
-    HighPass12,
+    Notch,
+    LowShelf,
+    HighShelf,
+    AllPass,
 };
 
 // Mirrors esp_ae_eq_filter_type_t (managed_components/espressif__esp_audio_effects/
@@ -264,22 +262,55 @@ inline FilterKind filterKindFromString(const char *s)
         return FilterKind::HighPass;
     if (strcmp(s, "bandpass") == 0)
         return FilterKind::BandPass;
+    if (strcmp(s, "notch") == 0)
+        return FilterKind::Notch;
+    if (strcmp(s, "lowshelf") == 0)
+        return FilterKind::LowShelf;
+    if (strcmp(s, "highshelf") == 0)
+        return FilterKind::HighShelf;
+    if (strcmp(s, "allpass") == 0)
+        return FilterKind::AllPass;
     return FilterKind::LowPass;
 }
 
-inline CurtisFilterMode curtisFilterModeFromString(const char *s)
+// Shelving filters have no Q - the filter widgets' "resonance" control supplies
+// their gain instead (0-10V -> -24..+24 dB, mirroring main.js's
+// shelfGainDbFromCv). Shared by both filter node types.
+inline bool isShelfKind(FilterKind kind)
+{
+    return kind == FilterKind::LowShelf || kind == FilterKind::HighShelf;
+}
+
+inline float shelfGainDbFromCv(float volts) { return (volts - 5.0f) * 4.8f; }
+
+// The CEM3320 filter used to store its type and its slope in one string
+// ("lp24", "lp12", "bp12", "hp12"); it now shares FilterKind plus a separate
+// slope with the plain filter. These two unpack such a legacy value, and pass
+// anything else through to the current representation.
+inline FilterKind curtisLegacyFilterKind(const char *s)
 {
     if (s == nullptr)
-        return CurtisFilterMode::LowPass24;
-    if (strcmp(s, "none") == 0)
-        return CurtisFilterMode::None;
-    if (strcmp(s, "lp12") == 0)
-        return CurtisFilterMode::LowPass12;
-    if (strcmp(s, "bp12") == 0 || strcmp(s, "bandpass") == 0)
-        return CurtisFilterMode::BandPass12;
-    if (strcmp(s, "hp12") == 0 || strcmp(s, "highpass") == 0)
-        return CurtisFilterMode::HighPass12;
-    return CurtisFilterMode::LowPass24;
+        return FilterKind::LowPass;
+    if (strcmp(s, "lp24") == 0 || strcmp(s, "lp12") == 0)
+        return FilterKind::LowPass;
+    if (strcmp(s, "bp12") == 0)
+        return FilterKind::BandPass;
+    if (strcmp(s, "hp12") == 0)
+        return FilterKind::HighPass;
+    return filterKindFromString(s);
+}
+
+inline uint8_t curtisLegacySlopeDb(const char *s, int storedSlopeDb)
+{
+    if (s != nullptr)
+    {
+        if (strcmp(s, "lp24") == 0)
+            return 24;
+        if (strcmp(s, "lp12") == 0 || strcmp(s, "bp12") == 0 || strcmp(s, "hp12") == 0)
+            return 12;
+    }
+    const int poles = storedSlopeDb / 6;
+    return static_cast<uint8_t>((poles < 1 ? 1 : (poles > 6 ? 6 : poles)) * 6);
 }
 
 inline EqFilterKind eqFilterKindFromString(const char *s)

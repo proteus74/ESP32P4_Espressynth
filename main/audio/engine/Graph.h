@@ -1491,9 +1491,9 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         }
         else if (slot.type == NodeType::CurtisFilter && strcmp(key, "filterType") == 0 && cJSON_IsString(item))
         {
-            const CurtisFilterMode mode = curtisFilterModeFromString(item->valuestring);
+            const FilterKind kind = curtisLegacyFilterKind(item->valuestring);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
-                nodes::curtisfilter::setMode(instances[slot.instanceBase + v], mode);
+                nodes::curtisfilter::setKind(instances[slot.instanceBase + v], kind);
         }
         else if (slot.type == NodeType::Filter && strcmp(key, "cutoffCurve") == 0 && cJSON_IsString(item))
         {

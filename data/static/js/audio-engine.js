@@ -99,10 +99,14 @@ function cvToRange(volts, minVal, maxVal, curve) {
   return minVal + v * (maxVal - minVal);
 }
 
-function curtisFilterToBiquad(type) {
-  if (type === "bp12") return "bandpass";
-  if (type === "hp12") return "highpass";
-  return "lowpass";
+// Slope in dB per octave -> how many cascaded biquad sections the preview
+// engine runs. The firmware resolves this per pole (6 dB each); the browser
+// only approximates, rounding up to whole 12 dB sections.
+const FILTER_MAX_SECTIONS = 3;
+
+function filterSectionCount(slopeDb) {
+  const poles = Math.round((Number(slopeDb) || 12) / 6);
+  return clampRange(Math.ceil(poles / 2), 1, FILTER_MAX_SECTIONS);
 }
 
 
@@ -227,6 +231,17 @@ function buildValueMapperCurve(p, domainLo, domainHi) {
 
 function eqFilterTypeToBiquad(filterType) {
   return filterType === "peak" ? "peaking" : filterType || "peaking";
+}
+
+// A shelving biquad ignores Q and is shaped by its gain instead, so the Filter
+// widget's "resonance" control drives the shelf gain for those two types (the
+// widget relabels the row accordingly). 0-10V maps to -24..+24 dB.
+function isShelfFilterType(filterType) {
+  return filterType === "lowshelf" || filterType === "highshelf";
+}
+
+function shelfGainDbFromCv(volts) {
+  return ((Number(volts) || 0) - 5) * 4.8;
 }
 
 
@@ -2006,32 +2021,32 @@ export class AudioEngine {
       case "filter":
       case "curtis-filter": {
         const filterInput = ctx.createGain();
-        const filterNode = ctx.createBiquadFilter();
         const isCurtis = type === "curtis-filter";
-        const filterNode2 = isCurtis ? ctx.createBiquadFilter() : null;
-        const filteredOutput = isCurtis ? ctx.createGain() : filterNode;
+        // Both filter widgets share this chain: FILTER_MAX_SECTIONS identical
+        // biquads in series, with one tap gain per section. The selected slope
+        // opens exactly one tap, so the wet path carries 1, 2 or 3 sections.
+        const sections = Array.from({ length: FILTER_MAX_SECTIONS }, () => ctx.createBiquadFilter());
+        const sectionTaps = sections.map(() => ctx.createGain());
+        const filterNode = sections[0];
+        const filterNode2 = sections[1];
+        const filteredOutput = ctx.createGain();
         const filterOutput = ctx.createGain();
         const dryGain = ctx.createGain();
         const wetGain = ctx.createGain();
-        const modeOut1 = isCurtis ? ctx.createGain() : null;
-        const modeOut2 = isCurtis ? ctx.createGain() : null;
-        const initialFilterType = params.bypass === true ? "none" : (isCurtis
-          ? (params.filterType || "lp24")
-          : (params.filterType || "lowpass"));
-        filterNode.type = isCurtis ? curtisFilterToBiquad(initialFilterType) : (initialFilterType === "none" ? "lowpass" : initialFilterType);
-        filterInput.connect(filterNode);
+        const initialFilterType = params.bypass === true ? "none" : (params.filterType || "lowpass");
+        const initialSlope = Number(params.slope) || (isCurtis ? 24 : 12);
+        const initialBiquadType = initialFilterType === "none" ? "lowpass" : initialFilterType;
+        const initialSections = filterSectionCount(initialSlope);
         filterInput.connect(dryGain);
         dryGain.connect(filterOutput);
-        if (isCurtis) {
-          filterNode2.type = "lowpass";
-          filterNode.connect(filterNode2);
-          modeOut1.gain.value = initialFilterType === "lp24" ? 0 : 1;
-          modeOut2.gain.value = initialFilterType === "lp24" ? 1 : 0;
-          filterNode.connect(modeOut1);
-          filterNode2.connect(modeOut2);
-          modeOut1.connect(filteredOutput);
-          modeOut2.connect(filteredOutput);
-        }
+        filterInput.connect(sections[0]);
+        sections.forEach((section, index) => {
+          section.type = initialBiquadType;
+          if (index > 0) sections[index - 1].connect(section);
+          section.connect(sectionTaps[index]);
+          sectionTaps[index].gain.value = index === initialSections - 1 ? 1 : 0;
+          sectionTaps[index].connect(filteredOutput);
+        });
         filteredOutput.connect(wetGain);
         wetGain.connect(filterOutput);
         dryGain.gain.value = initialFilterType === "none" ? 1 : 0;
@@ -2044,12 +2059,12 @@ export class AudioEngine {
           filterInput,
           filterNode,
           filterNode2,
+          sections,
+          sectionTaps,
           filteredOutput,
           filterOutput,
           dryGain,
           wetGain,
-          modeOut1,
-          modeOut2,
           filterType: initialFilterType,
           cutoff: params.cutoff ?? 5,
           cutoffMinHz: params.cutoffMinHz ?? 20,
@@ -2059,15 +2074,18 @@ export class AudioEngine {
           resonanceMinQ: params.resonanceMinQ ?? 0.1,
           resonanceMaxQ: params.resonanceMaxQ ?? 20,
           resonanceCurve: params.resonanceCurve ?? "log",
+          slope: initialSlope,
           cutoffCvActive: false,
           resonanceCvActive: false,
         };
-        filterNode.frequency.value = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-        filterNode.Q.value = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-        if (filterNode2) {
-          filterNode2.frequency.value = filterNode.frequency.value;
-          filterNode2.Q.value = filterNode.Q.value;
-        }
+        const initialFrequency = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
+        const initialQ = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
+        const initialShelfGainDb = shelfGainDbFromCv(entry.resonance) / initialSections;
+        sections.forEach((section) => {
+          section.frequency.value = initialFrequency;
+          section.Q.value = initialQ;
+          if (isShelfFilterType(initialFilterType)) section.gain.value = initialShelfGainDb;
+        });
         
         
         
@@ -2091,21 +2109,20 @@ export class AudioEngine {
         entry.cutoffSharedGate = ctx.createGain();
         entry.cutoffSharedGate.gain.value = 0;
         entry.cutoffCv.waveShaper.connect(entry.cutoffOwnGate);
-        entry.cutoffOwnGate.connect(filterNode.frequency);
-        entry.cutoffSharedGate.connect(filterNode.frequency);
         entry.resonanceOwnGate = ctx.createGain();
         entry.resonanceOwnGate.gain.value = 1;
         entry.resonanceSharedGate = ctx.createGain();
         entry.resonanceSharedGate.gain.value = 0;
         entry.resonanceCv.waveShaper.connect(entry.resonanceOwnGate);
-        entry.resonanceOwnGate.connect(filterNode.Q);
-        entry.resonanceSharedGate.connect(filterNode.Q);
-        if (filterNode2) {
-          entry.cutoffOwnGate.connect(filterNode2.frequency);
-          entry.cutoffSharedGate.connect(filterNode2.frequency);
-          entry.resonanceOwnGate.connect(filterNode2.Q);
-          entry.resonanceSharedGate.connect(filterNode2.Q);
-        }
+        // Every section tracks the same cutoff/resonance CV - a section that is
+        // currently tapped out still has to be in tune for the moment the slope
+        // switches onto it.
+        sections.forEach((section) => {
+          entry.cutoffOwnGate.connect(section.frequency);
+          entry.cutoffSharedGate.connect(section.frequency);
+          entry.resonanceOwnGate.connect(section.Q);
+          entry.resonanceSharedGate.connect(section.Q);
+        });
         entry._sharedWired = false;
         return entry;
       }
@@ -3126,8 +3143,8 @@ export class AudioEngine {
       if (entry.filterOutput && entry.filterOutput !== entry.filterNode) entry.filterOutput.disconnect();
       if (entry.dryGain) entry.dryGain.disconnect();
       if (entry.wetGain) entry.wetGain.disconnect();
-      if (entry.modeOut1) entry.modeOut1.disconnect();
-      if (entry.modeOut2) entry.modeOut2.disconnect();
+      if (entry.sections) entry.sections.forEach((s) => s.disconnect());
+      if (entry.sectionTaps) entry.sectionTaps.forEach((t) => t.disconnect());
       if (entry.inputMap) entry.inputMap.forEach((g) => g.disconnect());
       if (entry.sum) entry.sum.disconnect();
       if (entry.inputGains) entry.inputGains.forEach((g) => g.disconnect());
@@ -3647,15 +3664,22 @@ export class AudioEngine {
         const recomputeCutoff = () => {
           if (!entry.cutoffCvActive) {
             const frequency = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-            applyRampValue(entry.filterNode.frequency, frequency);
-            if (entry.filterNode2) applyRampValue(entry.filterNode2.frequency, frequency);
+            entry.sections.forEach((section) => applyRampValue(section.frequency, frequency));
           }
         };
         const recomputeResonance = () => {
+          // Shelf types take this control as their gain instead of Q, split
+          // across the active sections so the total shelf lift stays put as the
+          // slope changes. Only on the manual path - an audio-rate cable on
+          // "resonance" still feeds Q, which a shelving biquad ignores.
+          if (isShelfFilterType(entry.filterType)) {
+            const shelfGainDb = shelfGainDbFromCv(entry.resonance) / filterSectionCount(entry.slope);
+            entry.sections.forEach((section) => applyRampValue(section.gain, shelfGainDb));
+            return;
+          }
           if (!entry.resonanceCvActive) {
             const q = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-            applyRampValue(entry.filterNode.Q, q);
-            if (entry.filterNode2) applyRampValue(entry.filterNode2.Q, q);
+            entry.sections.forEach((section) => applyRampValue(section.Q, q));
           }
         };
         if (paramName === "cutoff") {
@@ -3692,13 +3716,16 @@ export class AudioEngine {
           entry.filterType = value;
           applyRampValue(entry.dryGain.gain, value === "none" ? 1 : 0);
           applyRampValue(entry.wetGain.gain, value === "none" ? 0 : 1);
-          if (entry.type === "curtis-filter") {
-            entry.filterNode.type = curtisFilterToBiquad(value);
-            entry.modeOut1.gain.value = value === "lp24" ? 0 : 1;
-            entry.modeOut2.gain.value = value === "lp24" ? 1 : 0;
-          } else {
-            entry.filterNode.type = value === "none" ? "lowpass" : value;
-          }
+          const biquadType = value === "none" ? "lowpass" : value;
+          entry.sections.forEach((section) => { section.type = biquadType; });
+          recomputeResonance();
+        } else if (paramName === "slope") {
+          entry.slope = Number(value) || 12;
+          const active = filterSectionCount(entry.slope);
+          entry.sectionTaps.forEach((tap, index) => {
+            applyRampValue(tap.gain, index === active - 1 ? 1 : 0);
+          });
+          recomputeResonance();
         }
         break;
       }
@@ -4556,16 +4583,14 @@ export class AudioEngine {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         const cv = toPort === "cutoff" ? toEntry.cutoffCv : toEntry.resonanceCv;
-        const target = toPort === "cutoff" ? toEntry.filterNode.frequency : toEntry.filterNode.Q;
-        const target2 = toEntry.filterNode2
-          ? (toPort === "cutoff" ? toEntry.filterNode2.frequency : toEntry.filterNode2.Q)
-          : null;
         try {
           from.connect(cv.prescale);
           if (toPort === "cutoff") toEntry.cutoffCvActive = true;
           else toEntry.resonanceCvActive = true;
-          target.value = 0;
-          if (target2) target2.value = 0;
+          toEntry.sections.forEach((section) => {
+            const target = toPort === "cutoff" ? section.frequency : section.Q;
+            target.value = 0;
+          });
         } catch (err) {
           
         }
@@ -4784,21 +4809,16 @@ export class AudioEngine {
           from.disconnect(cv.prescale);
           if (toPort === "cutoff") {
             toEntry.cutoffCvActive = false;
-            
-            toEntry.filterNode.frequency.value = cvToRange(
+            const frequency = cvToRange(
               toEntry.cutoff, toEntry.cutoffMinHz, toEntry.cutoffMaxHz, toEntry.cutoffCurve
             );
-            if (toEntry.filterNode2) {
-              toEntry.filterNode2.frequency.value = toEntry.filterNode.frequency.value;
-            }
+            toEntry.sections.forEach((section) => { section.frequency.value = frequency; });
           } else {
             toEntry.resonanceCvActive = false;
-            toEntry.filterNode.Q.value = cvToRange(
+            const q = cvToRange(
               toEntry.resonance, toEntry.resonanceMinQ, toEntry.resonanceMaxQ, toEntry.resonanceCurve
             );
-            if (toEntry.filterNode2) {
-              toEntry.filterNode2.Q.value = toEntry.filterNode.Q.value;
-            }
+            toEntry.sections.forEach((section) => { section.Q.value = q; });
           }
         } catch (err) {
           

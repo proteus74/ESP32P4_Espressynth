@@ -1891,32 +1891,90 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .osc-wave-btn {
-  flex: 1;
+  position: relative;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg);
-  border: 1px solid var(--card-border);
-  border-radius: 0.3rem;
-  padding: 0.3rem 0.1rem;
-  color: var(--text);
+  background: linear-gradient(145deg, #1a2233 0%, #0a0e18 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.45rem;
+  color: var(--wave-color, var(--text));
   cursor: pointer;
-  opacity: 1;
+  overflow: hidden;
+  box-shadow:
+    0 6px 14px -4px rgba(0, 0, 0, 0.7),
+    inset 0 1px 1px rgba(255, 255, 255, 0.1),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.8);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.osc-wave-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 55% 0;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.osc-wave-btn::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #1a2234;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.9);
 }
 
 .osc-wave-btn svg {
   display: block;
   pointer-events: none;
+  width: 16px;
+  height: 16px;
+  transition: transform 0.25s ease;
 }
 
-.osc-wave-btn:hover {
-  border-color: var(--accent);
+.osc-wave-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 10px 20px -4px rgba(0, 0, 0, 0.85),
+    0 0 13px var(--wave-glow, rgba(6, 182, 212, 0.3)),
+    inset 0 1px 1px rgba(255, 255, 255, 0.14),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.85);
+}
+
+.osc-wave-btn:hover:not(:disabled) svg {
+  transform: scale(1.08);
 }
 
 .osc-wave-btn.active {
-  background: var(--accent);
-  color: #0f172a;
-  border-color: var(--accent);
+  background: linear-gradient(145deg, #1c2436 0%, #060810 100%);
+  border-color: var(--wave-color, var(--accent));
+  box-shadow:
+    0 6px 16px -4px rgba(0, 0, 0, 0.8),
+    0 0 16px var(--wave-glow, rgba(6, 182, 212, 0.45)),
+    inset 0 3px 6px rgba(0, 0, 0, 0.85),
+    inset 0 0 9px var(--wave-glow, rgba(6, 182, 212, 0.2));
+}
+
+.osc-wave-btn.active svg {
+  filter: drop-shadow(0 0 4px var(--wave-color, #06b6d4));
+  transform: scale(1.05);
+}
+
+.osc-wave-btn.active::after {
+  background: var(--wave-color, var(--accent));
+  box-shadow: 0 0 4px var(--wave-color, var(--accent)), 0 0 9px var(--wave-color, var(--accent));
+}
+
+.osc-wave-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .lfo-zero-mode-buttons,
@@ -1931,15 +1989,6 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 0;
   padding: 0.16rem 0.35rem;
   font-size: 0.7rem;
-}
-
-/* Same jagged mark as white noise, deliberately pink for Pink Noise. */
-.osc-wave-btn.osc-wave-btn-pink-noise {
-  color: #f472b6;
-}
-
-.osc-wave-btn.osc-wave-btn-pink-noise.active {
-  color: #0f172a;
 }
 
 .osc-freq-label {
@@ -2477,6 +2526,17 @@ body.show-node-cpu .widget-cpu-badge {
   margin-left: -1.1rem;
 }
 
+/* createWidget relocates the volume row to the widget root, out of .audio-out-body's
+   padding - so it carries .port-row's own spacing and dot offset instead, keeping it
+   aligned with the In L/In R rows above it. */
+.audio-out-volume-row.gain-control-row {
+  padding: 0.25rem 0.6rem 0.5rem;
+}
+
+.audio-out-volume-row.gain-control-row > .port-dot {
+  margin-left: -0.9rem;
+}
+
 .audio-out-meter-track {
   flex: 1;
   min-width: 110px;
@@ -2562,7 +2622,8 @@ body.show-node-cpu .widget-cpu-badge {
   padding: 0.5rem 0.7rem;
 }
 
-.filter-type-buttons {
+.filter-type-buttons,
+.filter-slope-buttons {
   display: flex;
   gap: 0.25rem;
   width: 100%;
@@ -2572,7 +2633,14 @@ body.show-node-cpu .widget-cpu-badge {
   width: auto;
 }
 
-.filter-type-btn {
+.filter-slope-buttons {
+  margin-top: 0.35rem;
+}
+
+/* The plain Filter's type buttons also carry .osc-wave-btn and take that
+   widget's icon-button look wholesale - every rule here is for the remaining
+   text buttons (Curtis filter, LFO, Gain). */
+.filter-type-btn:not(.osc-wave-btn) {
   flex: 1;
   display: flex;
   align-items: center;
@@ -2587,16 +2655,16 @@ body.show-node-cpu .widget-cpu-badge {
   cursor: pointer;
 }
 
-.filter-body .filter-type-btn {
+.filter-body .filter-type-btn:not(.osc-wave-btn) {
   flex: 0 0 42px;
   padding: 0.2rem 0.1rem;
 }
 
-.filter-type-btn:hover {
+.filter-type-btn:not(.osc-wave-btn):hover {
   border-color: var(--accent);
 }
 
-.filter-type-btn.active {
+.filter-type-btn.active:not(.osc-wave-btn) {
   background: var(--accent);
   color: #0f172a;
   border-color: var(--accent);
@@ -2757,15 +2825,23 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 /* Main Gain/Volume control (Oscillator/FM-Osc/Hammond/SoundFont/WaveFolder "Gain",
-   Gain/VCA "Amount", Audio-Out-family "Volume") - a distinct violet accent (not the blue
-   --accent, green --ok, amber warn or red danger used elsewhere) so it reads as its own
+   Gain/VCA "Amount", Audio-Out-family "Volume") - its own accent (not the blue --accent,
+   green --ok, amber warn or red danger used elsewhere) so it reads as its own
    category at a glance, and always relocated to the very last element of its widget (see
    createWidget's end-of-function main-gain-control move in main.js) regardless of where in
-   the widget's own markup it's built. */
-.gain-control-row {
-  background: rgba(167, 139, 250, 0.14);
-  border-left: 3px solid #a78bfa;
-  padding-left: calc(0.6rem - 3px);
+   the widget's own markup it's built. Foreground only - the row keeps the widget background. */
+.gain-control-row,
+.gain-control-row .port-label,
+.gain-control-row .port-value {
+  color: #12a176;
+}
+
+.gain-control-row .port-slider::-webkit-slider-thumb {
+  background: #12a176;
+}
+
+.gain-control-row .port-slider::-moz-range-thumb {
+  background: #12a176;
 }
 
 .port-row-in > .port-label {
@@ -3302,6 +3378,18 @@ body.show-node-cpu .widget-cpu-badge {
   stroke-width: var(--connection-width, 5px);
   stroke-linecap: round;
   stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+/* Hover hint pairing a Link In with its Link Out - deliberately thinner and
+   fainter than a real cable, since nothing is actually patched there. */
+.connection-path-link-hint {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: calc(var(--connection-width, 5px) * 0.5);
+  stroke-linecap: round;
+  stroke-dasharray: 8 7;
+  opacity: 0.5;
   pointer-events: none;
 }
 

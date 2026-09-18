@@ -238,8 +238,9 @@ inline void sinCosW0(float cutoffHz, float sampleRate, float &sinW0, float &cosW
 }
 } // namespace
 
-// RBJ-cookbook biquad, Direct Form II Transposed (lowpass/highpass/bandpass
-// only - the only filter types reachable from the UI per main.js).
+// RBJ-cookbook biquad, Direct Form II Transposed. Covers every filter type
+// reachable from the UI per main.js: lowpass/highpass/bandpass/notch plus the
+// two shelving types, which are shaped by a gain in dB rather than by Q.
 class Biquad
 {
 public:
@@ -265,6 +266,57 @@ public:
         sinCosW0(cutoffHz, sampleRate, sinw0, cosw0);
         const float alpha = sinw0 / (2.0f * q);
         setCoeffs(alpha, 0.0f, -alpha, 1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    // Flat magnitude, phase-only - the classic phaser/dispersion building block.
+    void setAllpass(float cutoffHz, float q, float sampleRate)
+    {
+        float sinw0, cosw0;
+        sinCosW0(cutoffHz, sampleRate, sinw0, cosw0);
+        const float alpha = sinw0 / (2.0f * q);
+        setCoeffs(1.0f - alpha, -2.0f * cosw0, 1.0f + alpha, 1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    void setNotch(float cutoffHz, float q, float sampleRate)
+    {
+        float sinw0, cosw0;
+        sinCosW0(cutoffHz, sampleRate, sinw0, cosw0);
+        const float alpha = sinw0 / (2.0f * q);
+        setCoeffs(1.0f, -2.0f * cosw0, 1.0f, 1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    // Shelving filters take a gain in dB instead of a Q - the widget's
+    // "resonance" control supplies it (see FilterNode.h and main.js).
+    void setLowShelf(float cutoffHz, float gainDb, float sampleRate)
+    {
+        float sinw0, cosw0;
+        sinCosW0(cutoffHz, sampleRate, sinw0, cosw0);
+        const float a = powf(10.0f, gainDb / 40.0f);
+        const float alpha = sinw0 * 0.70710678f;
+        const float twoSqrtAAlpha = 2.0f * sqrtf(a) * alpha;
+        setCoeffs(
+            a * ((a + 1.0f) - (a - 1.0f) * cosw0 + twoSqrtAAlpha),
+            2.0f * a * ((a - 1.0f) - (a + 1.0f) * cosw0),
+            a * ((a + 1.0f) - (a - 1.0f) * cosw0 - twoSqrtAAlpha),
+            (a + 1.0f) + (a - 1.0f) * cosw0 + twoSqrtAAlpha,
+            -2.0f * ((a - 1.0f) + (a + 1.0f) * cosw0),
+            (a + 1.0f) + (a - 1.0f) * cosw0 - twoSqrtAAlpha);
+    }
+
+    void setHighShelf(float cutoffHz, float gainDb, float sampleRate)
+    {
+        float sinw0, cosw0;
+        sinCosW0(cutoffHz, sampleRate, sinw0, cosw0);
+        const float a = powf(10.0f, gainDb / 40.0f);
+        const float alpha = sinw0 * 0.70710678f;
+        const float twoSqrtAAlpha = 2.0f * sqrtf(a) * alpha;
+        setCoeffs(
+            a * ((a + 1.0f) + (a - 1.0f) * cosw0 + twoSqrtAAlpha),
+            -2.0f * a * ((a - 1.0f) + (a + 1.0f) * cosw0),
+            a * ((a + 1.0f) + (a - 1.0f) * cosw0 - twoSqrtAAlpha),
+            (a + 1.0f) - (a - 1.0f) * cosw0 + twoSqrtAAlpha,
+            2.0f * ((a - 1.0f) - (a + 1.0f) * cosw0),
+            (a + 1.0f) - (a - 1.0f) * cosw0 - twoSqrtAAlpha);
     }
 
     float process(float x)

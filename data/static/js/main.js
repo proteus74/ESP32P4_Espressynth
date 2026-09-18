@@ -1164,6 +1164,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "in", label: "In" },
       { id: "filterType", label: "Filter Type" },
+      { id: "slope", label: "Slope" },
       { id: "cutoff", label: "Cutoff" },
       { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
@@ -1176,6 +1177,7 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "in", label: "In" },
       { id: "filterType", label: "Filter Type" },
+      { id: "slope", label: "Slope" },
       { id: "cutoff", label: "Cutoff" },
       { id: "resonance", label: "Resonance" },
       { id: "global", label: "Global" },
@@ -1659,35 +1661,47 @@ const WAVE_TYPE_LABELS = {
   noise: "Noise",
   "pink-noise": "Pink Noise",
   supersaw: "SuperSaw",
+  waveshaper: "WaveShaper",
 };
 
-const WAVE_ICON_ATTRS = 'viewBox="0 0 18 12" width="18" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+const WAVE_ICON_ATTRS = 'viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"';
 
 const WAVE_TYPE_BUTTONS = [
   {
     id: "sine",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 C2,0 4,0 5,6 C6,12 8,12 9,6 C10,0 12,0 13,6 C14,12 16,12 17,6"/></svg>`,
-  },
-  {
-    id: "square",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,9 L1,3 L5,3 L5,9 L9,9 L9,3 L13,3 L13,9 L17,9 L17,3"/></svg>`,
-  },
-  {
-    id: "triangle",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,9 L5,3 L9,9 L13,3 L17,9"/></svg>`,
+    color: "#06b6d4",
+    glow: "rgba(6, 182, 212, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 6,50 Q 28,8 50,50 T 94,50"/></svg>`,
   },
   {
     id: "sawtooth",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,9 L5,3 L5,9 L9,3 L9,9 L13,3 L13,9 L17,3"/></svg>`,
+    color: "#3b82f6",
+    glow: "rgba(59, 130, 246, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 90,16 L 90,84"/></svg>`,
   },
   {
-    id: "noise",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 L3,2 L4,9 L6,4 L7,10 L9,3 L10,7 L12,1 L13,8 L15,5 L17,9"/></svg>`,
+    id: "square",
+    color: "#8b5cf6",
+    glow: "rgba(139, 92, 246, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 10,16 L 50,16 L 50,84 L 90,84 L 90,16"/></svg>`,
+  },
+  {
+    id: "triangle",
+    color: "#06b6d4",
+    glow: "rgba(6, 182, 212, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 8,82 L 50,18 L 92,82"/></svg>`,
   },
   {
     id: "pink-noise",
-    className: "osc-wave-btn-pink-noise",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,6 L3,2 L4,9 L6,4 L7,10 L9,3 L10,7 L12,1 L13,8 L15,5 L17,9"/></svg>`,
+    color: "#ec4899",
+    glow: "rgba(236, 72, 153, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 6,50 L 18,18 L 30,82 L 42,22 L 54,78 L 66,15 L 78,85 L 94,50"/></svg>`,
+  },
+  {
+    id: "noise",
+    color: "#10b981",
+    glow: "rgba(16, 185, 129, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="6"><path d="M 6,65 L 14,15 L 22,85 L 30,10 L 38,88 L 46,20 L 54,80 L 62,12 L 70,85 L 78,25 L 86,75 L 94,50"/></svg>`,
   },
 ];
 
@@ -1695,9 +1709,22 @@ const FM_WAVE_TYPE_BUTTONS = [
   ...WAVE_TYPE_BUTTONS,
   {
     id: "supersaw",
-    icon: `<svg ${WAVE_ICON_ATTRS}><path d="M1,10 L5,4 L5,10 L9,4 L9,10 L13,4 L13,10 L17,4"/><path d="M1,8 L5,2 L5,8 L9,2 L9,8 L13,2 L13,8 L17,2" opacity=".55"/></svg>`,
+    color: "#ef4444",
+    glow: "rgba(239, 68, 68, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="7"><path d="M 6,80 L 46,20 L 46,80 L 86,20" opacity=".4"/><path d="M 6,70 L 42,14 L 42,70 L 82,14" opacity=".7"/><path d="M 10,88 L 50,26 L 50,88 L 90,26"/></svg>`,
   },
 ];
+
+// Not in FM_WAVE_TYPE_BUTTONS on purpose: disabled placeholder, not yet a real
+// waveType (backend doesn't know it), so it must stay out of the CV-mapping/
+// validity list and only get appended to the rendered button row below.
+const WAVESHAPER_BUTTON_PLACEHOLDER = {
+  id: "waveshaper",
+  disabled: true,
+  color: "#a855f7",
+  glow: "rgba(168, 85, 247, 0.4)",
+  icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,90 Q 25,90 40,50 Q 55,10 70,50 Q 85,90 90,10"/></svg>`,
+};
 
 
 
@@ -2665,10 +2692,11 @@ function createWidget(type, label, x, y, forcedId) {
     WAVE_TYPE_BUTTONS.forEach((w) => {
       const btn = document.createElement("button");
       btn.className = "osc-wave-btn";
-      if (w.className) btn.classList.add(w.className);
       btn.innerHTML = w.icon;
       btn.dataset.wave = w.id;
       btn.title = WAVE_TYPE_LABELS[w.id];
+      if (w.color) btn.style.setProperty("--wave-color", w.color);
+      if (w.glow) btn.style.setProperty("--wave-glow", w.glow);
       if (w.id === oscState.waveType) btn.classList.add("active");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -2725,18 +2753,23 @@ function createWidget(type, label, x, y, forcedId) {
 
     const waveButtons = document.createElement("div");
     waveButtons.className = "osc-wave-buttons";
-    FM_WAVE_TYPE_BUTTONS.forEach((w) => {
+    [...FM_WAVE_TYPE_BUTTONS, WAVESHAPER_BUTTON_PLACEHOLDER].forEach((w) => {
       const btn = document.createElement("button");
       btn.className = "osc-wave-btn";
-      if (w.className) btn.classList.add(w.className);
       btn.innerHTML = w.icon;
       btn.dataset.wave = w.id;
       btn.title = WAVE_TYPE_LABELS[w.id];
-      if (w.id === fmOscState.waveType) btn.classList.add("active");
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        setFmOscillatorWaveType(id, w.id);
-      });
+      if (w.color) btn.style.setProperty("--wave-color", w.color);
+      if (w.glow) btn.style.setProperty("--wave-glow", w.glow);
+      if (w.disabled) {
+        btn.disabled = true;
+      } else {
+        if (w.id === fmOscState.waveType) btn.classList.add("active");
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          setFmOscillatorWaveType(id, w.id);
+        });
+      }
       waveButtons.appendChild(btn);
     });
 
@@ -2968,7 +3001,7 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "filter" || type === "curtis-filter") {
     const filterDefaults = {
-      filterType: type === "curtis-filter" ? "lp24" : "lowpass",
+      filterType: "lowpass",
       cutoff: 5,
       cutoffMinHz: 20,
       cutoffMaxHz: 20000,
@@ -2977,12 +3010,15 @@ function createWidget(type, label, x, y, forcedId) {
       resonanceMinQ: 0.1,
       resonanceMaxQ: 20,
       resonanceCurve: "log",
-      
-      
-      
-      
-      
-      
+      // The CEM3320's signature response is its four-pole ladder, so it starts
+      // at 24 dB where the clean biquad filter starts at 12.
+      slope: type === "curtis-filter" ? 24 : 12,
+
+
+
+
+
+
       coeffStride: 4,
       global: false,
     };
@@ -2994,14 +3030,14 @@ function createWidget(type, label, x, y, forcedId) {
 
     const typeButtons = document.createElement("div");
     typeButtons.className = "filter-type-buttons";
-    const typeButtonsDefinition = type === "curtis-filter" ? CURTIS_FILTER_TYPE_BUTTONS : FILTER_TYPE_BUTTONS;
-    const typeLabels = type === "curtis-filter" ? CURTIS_FILTER_TYPE_LABELS : FILTER_TYPE_LABELS;
-    typeButtonsDefinition.forEach((f) => {
+    FILTER_TYPE_BUTTONS.forEach((f) => {
       const btn = document.createElement("button");
-      btn.className = "filter-type-btn";
-      btn.textContent = f.label;
+      btn.className = "filter-type-btn osc-wave-btn";
+      btn.innerHTML = f.icon;
+      btn.style.setProperty("--wave-color", f.color);
+      btn.style.setProperty("--wave-glow", f.glow);
       btn.dataset.filterType = f.id;
-      btn.title = typeLabels[f.id];
+      btn.title = FILTER_TYPE_LABELS[f.id];
       if (f.id === filterDefaults.filterType) btn.classList.add("active");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -3011,6 +3047,24 @@ function createWidget(type, label, x, y, forcedId) {
     });
 
     body.appendChild(typeButtons);
+
+    const slopeButtons = document.createElement("div");
+    slopeButtons.className = "filter-slope-buttons";
+    FILTER_SLOPE_BUTTONS.forEach((s) => {
+      const btn = document.createElement("button");
+      btn.className = "filter-type-btn";
+      btn.textContent = s.label;
+      btn.dataset.filterSlope = String(s.id);
+      btn.title = `${s.id} dB pro Oktave`;
+      if (s.id === filterDefaults.slope) btn.classList.add("active");
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setFilterSlope(id, s.id);
+      });
+      slopeButtons.appendChild(btn);
+    });
+    body.appendChild(slopeButtons);
+
     el.appendChild(body);
   }
 
@@ -3327,6 +3381,8 @@ function createWidget(type, label, x, y, forcedId) {
       btn.innerHTML = w.icon;
       btn.dataset.wave = w.id;
       btn.title = WAVE_TYPE_LABELS[w.id];
+      if (w.color) btn.style.setProperty("--wave-color", w.color);
+      if (w.glow) btn.style.setProperty("--wave-glow", w.glow);
       if (w.id === "sine") btn.classList.add("active");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -4084,16 +4140,17 @@ function createWidget(type, label, x, y, forcedId) {
         switchLabel.appendChild(switchTrack);
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
       }
-      if ((type === "filter" || type === "curtis-filter") && port.id === "filterType") {
+      if ((type === "filter" || type === "curtis-filter") && (port.id === "filterType" || port.id === "slope")) {
         const filterState = filterStates.get(id);
+        const isSlope = port.id === "slope";
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "port-slider";
         slider.min = "0";
         slider.max = String(CV_MAX_VOLTS);
         slider.step = "0.01";
-        slider.value = String(filterTypeToCv(filterState.filterType, type === "curtis-filter"));
-        slider.dataset.role = "filter-type-slider";
+        slider.value = String(isSlope ? filterSlopeToCv(filterState.slope) : filterTypeToCv(filterState.filterType));
+        slider.dataset.role = isSlope ? "filter-slope-slider" : "filter-type-slider";
         slider.addEventListener("mousedown", (e) => e.stopPropagation());
         slider.addEventListener("click", (e) => e.stopPropagation());
         slider.addEventListener("input", () => deliverToWidget(id, port.id, Number(slider.value)));
@@ -4101,8 +4158,8 @@ function createWidget(type, label, x, y, forcedId) {
 
         const valueSpan = document.createElement("span");
         valueSpan.className = "port-value";
-        valueSpan.dataset.role = "filter-type-value";
-        valueSpan.textContent = filterTypeLabel(filterState.filterType, type === "curtis-filter");
+        valueSpan.dataset.role = isSlope ? "filter-slope-value" : "filter-type-value";
+        valueSpan.textContent = isSlope ? filterSlopeLabel(filterState.slope) : filterTypeLabel(filterState.filterType);
         row.appendChild(valueSpan);
       }
       if (type === "lfo" && port.id === "zeroPoint") {
@@ -10639,6 +10696,35 @@ function generateLinkId() {
   return id;
 }
 
+// A freshly placed Link In starts out unnamed. The first cable plugged into it
+// names it after that source ("Midi-In Gate"), so it is identifiable in the Link
+// Out source list without opening the settings dialog first. An existing name is
+// never overwritten.
+function autoNameLinkedInput(widgetId, fromWidgetId, fromPortId) {
+  const state = linkedInputStates.get(widgetId);
+  if (!state || state.linkName) return;
+  const sourceEl = document.getElementById(fromWidgetId);
+  if (!sourceEl) return;
+  const widgetLabel = sourceEl.querySelector(".widget-instance-label")?.textContent.trim();
+  const portLabel = (WIDGET_TYPES[sourceEl.dataset.widgetType]?.outputs || [])
+    .find((port) => port.id === fromPortId)?.label?.trim();
+  const base = [widgetLabel, portLabel].filter(Boolean).join(" ");
+  if (!base) return;
+  const taken = new Set(
+    [...linkedInputStates.entries()]
+      .filter(([id]) => id !== widgetId)
+      .map(([, other]) => other.linkName)
+      .filter(Boolean)
+  );
+  let name = base;
+  let suffix = 2;
+  while (taken.has(name)) {
+    name = `${base} ${suffix}`;
+    suffix += 1;
+  }
+  state.linkName = name;
+}
+
 function updateLinkedInputVisual(widgetId) {
   const el = document.getElementById(widgetId);
   const state = linkedInputStates.get(widgetId);
@@ -10930,49 +11016,118 @@ const FILTER_TYPE_LABELS = {
   lowpass: "Lowpass",
   highpass: "Highpass",
   bandpass: "Bandpass",
+  notch: "Notch",
+  lowshelf: "Low Shelf",
+  highshelf: "High Shelf",
+  allpass: "Allpass",
 };
 
+// Same icon-button treatment as the oscillator's wave buttons (WAVE_TYPE_BUTTONS
+// above, shared .osc-wave-btn styling) - each entry draws its frequency response
+// in its own colour. "none" passes the signal through untouched, so it gets a
+// flat line in a deliberately neutral grey.
 const FILTER_TYPE_BUTTONS = [
-  { id: "none", label: "None" },
-  { id: "lowpass", label: "LP" },
-  { id: "highpass", label: "HP" },
-  { id: "bandpass", label: "BP" },
+  {
+    id: "none",
+    label: "None",
+    color: "#64748b",
+    glow: "rgba(100, 116, 139, 0.45)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,50 L 90,50"/></svg>`,
+  },
+  {
+    id: "lowpass",
+    label: "LP",
+    color: "#06b6d4",
+    glow: "rgba(6, 182, 212, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 12,30 L 45,30 Q 62,30 72,55 T 88,85"/></svg>`,
+  },
+  {
+    id: "highpass",
+    label: "HP",
+    color: "#ec4899",
+    glow: "rgba(236, 72, 153, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 12,85 L 28,85 Q 38,55 55,30 L 88,30"/></svg>`,
+  },
+  {
+    id: "bandpass",
+    label: "BP",
+    color: "#10b981",
+    glow: "rgba(16, 185, 129, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,85 L 25,85 C 38,85 43,20 50,20 C 57,20 62,85 75,85 L 90,85"/></svg>`,
+  },
+  {
+    id: "notch",
+    label: "Notch",
+    color: "#f59e0b",
+    glow: "rgba(245, 158, 11, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,30 L 35,30 C 43,30 46,85 50,85 C 54,85 57,30 65,30 L 90,30"/></svg>`,
+  },
+  {
+    id: "lowshelf",
+    label: "LS",
+    color: "#a855f7",
+    glow: "rgba(168, 85, 247, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,24 L 32,24 C 46,24 54,62 68,62 L 90,62"/></svg>`,
+  },
+  {
+    id: "highshelf",
+    label: "HS",
+    color: "#eab308",
+    glow: "rgba(234, 179, 8, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,62 L 32,62 C 46,62 54,24 68,24 L 90,24"/></svg>`,
+  },
+  {
+    // Allpass leaves the magnitude flat and only turns the phase, so the icon
+    // shows both: the flat response on top, the phase swing underneath.
+    id: "allpass",
+    label: "AP",
+    color: "#3b82f6",
+    glow: "rgba(59, 130, 246, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,28 L 90,28"/><path d="M 10,58 C 30,58 34,88 50,88 C 66,88 70,58 90,58" opacity=".55"/></svg>`,
+  },
 ];
 
-const CURTIS_FILTER_TYPE_LABELS = {
-  none: "None",
-  lp24: "24 dB Lowpass",
-  lp12: "12 dB Lowpass",
-  bp12: "12 dB Bandpass",
-  hp12: "12 dB Highpass",
+const FILTER_SHELF_TYPES = ["lowshelf", "highshelf"];
+
+// Filter steepness in 6 dB (= one pole) steps, selectable by button or by CV on
+// the "slope" port - same discrete 0-10V mapping as "filterType".
+const FILTER_SLOPE_BUTTONS = [6, 12, 18, 24, 30, 36].map((db) => ({ id: db, label: `${db}` }));
+
+function filterSlopeFromCv(volts) {
+  const index = clamp(Math.floor(clamp(Number(volts) || 0, 0, CV_MAX_VOLTS) / (CV_MAX_VOLTS / FILTER_SLOPE_BUTTONS.length)), 0, FILTER_SLOPE_BUTTONS.length - 1);
+  return FILTER_SLOPE_BUTTONS[index].id;
+}
+
+function filterSlopeToCv(slope) {
+  const index = Math.max(0, FILTER_SLOPE_BUTTONS.findIndex((entry) => entry.id === slope));
+  return ((index + 0.5) * CV_MAX_VOLTS) / FILTER_SLOPE_BUTTONS.length;
+}
+
+function filterSlopeLabel(slope) {
+  return `${slope ?? 12} dB`;
+}
+
+// Presets written before the CEM3320 gained the full type list stored its type
+// and its slope in one string ("lp24", "bp12", ...).
+const CURTIS_LEGACY_FILTER_TYPES = {
+  lp24: { filterType: "lowpass", slope: 24 },
+  lp12: { filterType: "lowpass", slope: 12 },
+  bp12: { filterType: "bandpass", slope: 12 },
+  hp12: { filterType: "highpass", slope: 12 },
 };
 
-const CURTIS_FILTER_TYPE_BUTTONS = [
-  { id: "none", label: "None" },
-  { id: "lp24", label: "LP24" },
-  { id: "lp12", label: "LP12" },
-  { id: "bp12", label: "BP12" },
-  { id: "hp12", label: "HP12" },
-];
-
-function filterTypeDefinitions(curtis) {
-  return curtis ? CURTIS_FILTER_TYPE_BUTTONS : FILTER_TYPE_BUTTONS;
+function filterTypeFromCv(volts) {
+  const index = clamp(Math.floor(clamp(Number(volts) || 0, 0, CV_MAX_VOLTS) / (CV_MAX_VOLTS / FILTER_TYPE_BUTTONS.length)), 0, FILTER_TYPE_BUTTONS.length - 1);
+  return FILTER_TYPE_BUTTONS[index].id;
 }
 
-function filterTypeFromCv(volts, curtis) {
-  const definitions = filterTypeDefinitions(curtis);
-  const index = clamp(Math.floor(clamp(Number(volts) || 0, 0, CV_MAX_VOLTS) / (CV_MAX_VOLTS / definitions.length)), 0, definitions.length - 1);
-  return definitions[index].id;
+function filterTypeToCv(filterType) {
+  const index = Math.max(0, FILTER_TYPE_BUTTONS.findIndex((entry) => entry.id === filterType));
+  return ((index + 0.5) * CV_MAX_VOLTS) / FILTER_TYPE_BUTTONS.length;
 }
 
-function filterTypeToCv(filterType, curtis) {
-  const definitions = filterTypeDefinitions(curtis);
-  const index = Math.max(0, definitions.findIndex((entry) => entry.id === filterType));
-  return ((index + 0.5) * CV_MAX_VOLTS) / definitions.length;
-}
-
-function filterTypeLabel(filterType, curtis) {
-  return (curtis ? CURTIS_FILTER_TYPE_LABELS : FILTER_TYPE_LABELS)[filterType] || "None";
+function filterTypeLabel(filterType) {
+  return FILTER_TYPE_LABELS[filterType] || "None";
 }
 
 function setFilterType(widgetId, filterType) {
@@ -10982,6 +11137,15 @@ function setFilterType(widgetId, filterType) {
   audioEngine.setParam(widgetId, "filterType", filterType);
   updateFilterVisual(widgetId);
   sendLiveParamUpdate(widgetId, { filterType });
+}
+
+function setFilterSlope(widgetId, slope) {
+  const state = filterStates.get(widgetId);
+  if (!state) return;
+  state.slope = FILTER_SLOPE_BUTTONS.some((entry) => entry.id === slope) ? slope : 12;
+  audioEngine.setParam(widgetId, "slope", state.slope);
+  updateFilterVisual(widgetId);
+  sendLiveParamUpdate(widgetId, { slope: state.slope });
 }
 
 
@@ -11014,23 +11178,43 @@ function updateFilterVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
 
-  el.querySelectorAll(".filter-type-btn").forEach((btn) => {
+  el.querySelectorAll("[data-filter-type]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.filterType === state.filterType);
   });
+
+  const slopeConnected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "slope");
+  el.querySelectorAll("[data-filter-slope]").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.filterSlope) === (state.slope ?? 12));
+    btn.disabled = slopeConnected || state.filterType === "none";
+  });
+  const slopeSlider = el.querySelector('[data-role="filter-slope-slider"]');
+  if (slopeSlider) {
+    slopeSlider.value = String(filterSlopeToCv(state.slope ?? 12));
+    slopeSlider.disabled = slopeConnected;
+  }
+  const slopeValue = el.querySelector('[data-role="filter-slope-value"]');
+  if (slopeValue) slopeValue.textContent = filterSlopeLabel(state.slope ?? 12);
+
+  // Shelf types ignore Q entirely - the "resonance" port drives their shelf gain
+  // instead (see audio-engine.js's filter case), so the row says what it does.
+  const resonanceLabel = el.querySelector('.port-row-in[data-port-id="resonance"] .port-label');
+  if (resonanceLabel) {
+    resonanceLabel.textContent = FILTER_SHELF_TYPES.includes(state.filterType) ? "Shelf Gain" : "Resonance";
+  }
 
   const globalToggle = el.querySelector('[data-role="filter-global-switch"]');
   if (globalToggle) globalToggle.checked = state.global === true;
   const typeConnected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "filterType");
-  el.querySelectorAll(".filter-type-btn").forEach((btn) => {
+  el.querySelectorAll("[data-filter-type]").forEach((btn) => {
     btn.disabled = typeConnected;
   });
   const typeSlider = el.querySelector('[data-role="filter-type-slider"]');
   if (typeSlider) {
-    typeSlider.value = String(filterTypeToCv(state.filterType, el.dataset.widgetType === "curtis-filter"));
+    typeSlider.value = String(filterTypeToCv(state.filterType));
     typeSlider.disabled = typeConnected;
   }
   const typeValue = el.querySelector('[data-role="filter-type-value"]');
-  if (typeValue) typeValue.textContent = filterTypeLabel(state.filterType, el.dataset.widgetType === "curtis-filter");
+  if (typeValue) typeValue.textContent = filterTypeLabel(state.filterType);
 
   
   
@@ -14689,6 +14873,65 @@ function drawConnections() {
   refreshWiredSliderLocks();
 }
 
+// Hovering a Link In / Link Out reveals its wireless partner for as long as the
+// cursor stays on it: a dashed, dimmed cable drawn in the colour of the cable that
+// feeds the Link In. Purely decorative - never enters `connections`, and the next
+// drawConnections() wipes it along with the rest of the layer.
+function linkedIoHintPairs(widgetId) {
+  const type = document.getElementById(widgetId)?.dataset.widgetType;
+  if (type === "linked-input") {
+    const linkId = linkedInputStates.get(widgetId)?.linkId;
+    if (!linkId) return [];
+    return [...linkedOutputStates.entries()]
+      .filter(([, state]) => state.sourceLinkId === linkId)
+      .map(([outputId]) => ({ inputId: widgetId, outputId }));
+  }
+  if (type === "linked-output") {
+    const sourceLinkId = linkedOutputStates.get(widgetId)?.sourceLinkId;
+    if (!sourceLinkId) return [];
+    const source = [...linkedInputStates.entries()].find(([, state]) => state.linkId === sourceLinkId);
+    return source ? [{ inputId: source[0], outputId: widgetId }] : [];
+  }
+  return [];
+}
+
+function clearLinkedIoHint() {
+  connectionsLayer.querySelectorAll(".connection-path-link-hint").forEach((path) => path.remove());
+}
+
+function showLinkedIoHint(widgetId) {
+  clearLinkedIoHint();
+  linkedIoHintPairs(widgetId).forEach(({ inputId, outputId }) => {
+    // findPortDot only sees the page that is currently on screen, so a partner
+    // sitting on the other page simply yields no hint.
+    const inDot = findPortDot(inputId, "in", "in");
+    const outDot = findPortDot(outputId, "out", "out");
+    if (!inDot || !outDot) return;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", "connection-path-link-hint");
+    path.setAttribute(
+      "d",
+      bezierPath(
+        portPosition(outDot),
+        portPosition(inDot),
+        outDot.closest(".widget-instance"),
+        inDot.closest(".widget-instance")
+      )
+    );
+    const feed = connections.find((conn) => conn.to.widgetId === inputId && conn.to.portId === "in");
+    if (feed?.color) path.style.stroke = feed.color;
+    connectionsLayer.appendChild(path);
+  });
+}
+
+document.addEventListener("mouseover", (e) => {
+  const widget = e.target.closest?.(
+    '.widget-instance[data-widget-type="linked-input"], .widget-instance[data-widget-type="linked-output"]'
+  );
+  if (widget) showLinkedIoHint(widget.id);
+  else clearLinkedIoHint();
+});
+
 // Sliders inside input port rows belong to those ports. A cable owns its
 // target parameter regardless of whether it carries CV or audio-rate signal.
 // Settings and decorative sliders have no port row and stay editable.
@@ -14938,6 +15181,7 @@ function startConnectionDrag(e, fromDot) {
         color: getConnectionColorForOutput(fromWidgetId, fromPortId),
       };
       connections.push(connection);
+      if (targetType === "linked-input") autoNameLinkedInput(toWidgetId, fromWidgetId, fromPortId);
 
       // toKind alone, not fromKind too: a control-only source (Knob, Const,
       // ...) can still own a real WebAudio node (see audio-engine.js's
@@ -15802,7 +16046,11 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   }
 
   if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "filterType") {
-    setFilterType(widgetId, filterTypeFromCv(value, el.dataset.widgetType === "curtis-filter"));
+    setFilterType(widgetId, filterTypeFromCv(value));
+  }
+
+  if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && portId === "slope") {
+    setFilterSlope(widgetId, filterSlopeFromCv(value));
   }
 
   
@@ -16448,9 +16696,10 @@ function routeMidiToSoundFontPlayer(data) {
 function applyFilterWidgetParams(id, params, curtis = false) {
   const state = filterStates.get(id);
   if (!state || !params) return;
-  const allowedTypes = filterTypeDefinitions(curtis).map((entry) => entry.id);
-  const requestedType = params.bypass === true ? "none" : params.filterType;
-  state.filterType = allowedTypes.includes(requestedType) ? requestedType : (curtis ? "lp24" : "lowpass");
+  const allowedTypes = FILTER_TYPE_BUTTONS.map((entry) => entry.id);
+  const legacy = CURTIS_LEGACY_FILTER_TYPES[params.filterType];
+  const requestedType = params.bypass === true ? "none" : (legacy ? legacy.filterType : params.filterType);
+  state.filterType = allowedTypes.includes(requestedType) ? requestedType : "lowpass";
   state.cutoff = params.cutoff ?? 5;
   state.cutoffMinHz = params.cutoffMinHz ?? 20;
   state.cutoffMaxHz = params.cutoffMaxHz ?? 20000;
@@ -16460,8 +16709,13 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   state.resonanceMaxQ = params.resonanceMaxQ ?? 20;
   state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
   state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
+  const requestedSlope = legacy ? legacy.slope : Number(params.slope);
+  state.slope = FILTER_SLOPE_BUTTONS.some((entry) => entry.id === requestedSlope)
+    ? requestedSlope
+    : (curtis ? 24 : 12);
   state.global = params.global === true;
   audioEngine.setParam(id, "filterType", state.filterType);
+  audioEngine.setParam(id, "slope", state.slope);
   audioEngine.setParam(id, "cutoffMinHz", state.cutoffMinHz);
   audioEngine.setParam(id, "cutoffMaxHz", state.cutoffMaxHz);
   audioEngine.setParam(id, "cutoffCurve", state.cutoffCurve);

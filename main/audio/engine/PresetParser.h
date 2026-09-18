@@ -73,7 +73,6 @@ struct WidgetParams
     // filter - "cutoff"/"resonance" are raw 0-10V CV (see CvConventions.h),
     // mapped to Hz/Q via the min/max/log fields below at DSP time.
     FilterKind filterType = FilterKind::LowPass;
-    CurtisFilterMode curtisFilterMode = CurtisFilterMode::LowPass24;
     float cutoffCv = 5.0f, cutoffMinHz = 20.0f, cutoffMaxHz = 20000.0f;
     bool cutoffLog = true;
     float resonanceCv = 5.0f, resonanceMinQ = 0.1f, resonanceMaxQ = 20.0f;
@@ -82,6 +81,9 @@ struct WidgetParams
     // genuine audio-rate cutoff/resonance edge - 1-16, default 4 (see
     // FilterState::coeffStride in NodeState.h).
     uint8_t coeffStride = 4;
+    // 12 or 24 dB per octave - 24 cascades a second identical biquad stage
+    // (see FilterState::slopeDb).
+    uint8_t filterSlopeDb = 12;
     // filterGlobal is the "global" port's UI-toggle fallback (see
     // FilterState::global), same pattern as gainGlobal.
     bool filterGlobal = false;

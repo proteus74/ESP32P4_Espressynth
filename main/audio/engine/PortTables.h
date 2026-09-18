@@ -211,17 +211,19 @@ inline int audioInIndex(NodeType type, const char *portName)
         // under a genuine DSP edge (real frequency modulation possible).
         if (is(portName, "in"))
             return 0;
-        // "filterType" is a control-only 0-10V discrete selector.
+        // "filterType"/"slope" are control-only 0-10V discrete selectors.
         if (is(portName, "filterType"))
             return 1;
-        if (is(portName, "cutoff"))
+        if (is(portName, "slope"))
             return 2;
-        if (is(portName, "resonance"))
+        if (is(portName, "cutoff"))
             return 3;
+        if (is(portName, "resonance"))
+            return 4;
         // "global" - same pattern as Gain's "global" above (control-only,
         // see isControlOnlyInput), see FilterState::global.
         if (is(portName, "global"))
-            return 4;
+            return 5;
         return -1;
     case NodeType::Gain:
         // "amount" (CV, 0-10V) is a real audio-rate port, not a ControlRoute
@@ -670,7 +672,7 @@ inline int audioInPortCount(NodeType type)
         return 1; // "in"
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return 5; // "in" + "filterType" + "cutoff" + "resonance" + "global" (CV)
+        return 6; // "in" + "filterType" + "slope" + "cutoff" + "resonance" + "global" (CV)
     case NodeType::Gain:
         return 3; // "in" + "amount" (CV) + "global" (CV)
     case NodeType::EspEq:
@@ -859,7 +861,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 2; // "global" - "amount" (index 1) stays real audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
-        return portIdx >= 1; // "filterType"+"cutoff"+"resonance"+"global"
+        return portIdx >= 1; // "filterType"+"slope"+"cutoff"+"resonance"+"global"
     case NodeType::Multiplexer:
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::OutputMultiplexer:

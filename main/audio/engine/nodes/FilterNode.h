@@ -20,9 +20,17 @@
 namespace nodes::filter
 {
 
+// 6 dB per pole, up to six poles (cv::kFilterMaxPoles) - two poles per biquad.
+constexpr int kFilterMaxSections = cv::kFilterMaxPoles / 2;
+
 struct FilterState
 {
+    // Identically-configured biquad sections, cascaded according to slopeDb
+    // (12 dB per section). An odd pole count adds onePole on top.
     Biquad biquad;
+    Biquad sections[kFilterMaxSections - 1];
+    OnePoleLowpass onePole;
+    uint8_t slopeDb = 12;
     FilterKind kind = FilterKind::LowPass;
     FilterKind renderedKind = FilterKind::None;
     // Raw CV (0-10V, see CvConventions.h) - the actual cutoff/Q is only
@@ -111,14 +119,96 @@ inline float filterResonanceQ(const FilterState &s, float resonanceCv)
     return qCv < 0.05f ? 0.05f : qCv;
 }
 
-inline FilterKind filterKindFromCv(float volts)
+using cv::filterKindFromCv;
+using cv::slopeDbFromCv;
+
+// Only low-/highpass have a meaningful single-pole section; every other type is
+// inherently second-order, so an odd pole count rounds up to the next full
+// biquad there instead of adding a one-pole stage.
+inline bool kindSupportsOnePole(FilterKind kind)
 {
-    int index = static_cast<int>(volts / (cv::kMaxVolts / 4.0f));
-    if (index < 0)
-        index = 0;
-    if (index > 3)
-        index = 3;
-    return static_cast<FilterKind>(index);
+    return kind == FilterKind::LowPass || kind == FilterKind::HighPass;
+}
+
+inline int polesFromSlope(uint8_t slopeDb)
+{
+    const int poles = slopeDb / 6;
+    return poles < 1 ? 1 : (poles > cv::kFilterMaxPoles ? cv::kFilterMaxPoles : poles);
+}
+
+inline int biquadCount(FilterKind kind, uint8_t slopeDb)
+{
+    const int poles = polesFromSlope(slopeDb);
+    const int count = kindSupportsOnePole(kind) ? poles / 2 : (poles + 1) / 2;
+    return count < 1 && !kindSupportsOnePole(kind) ? 1 : count;
+}
+
+inline bool usesOnePole(FilterKind kind, uint8_t slopeDb)
+{
+    return kindSupportsOnePole(kind) && (polesFromSlope(slopeDb) % 2) != 0;
+}
+
+// Configures every cascaded section identically; how many of them actually run
+// is decided by the slope in render() below.
+inline void applyCoeffs(FilterState &s, FilterKind kind, float cutoffCv, float resonanceCv, float sampleRate)
+{
+    const float cutoff = filterCutoffHz(s, cutoffCv);
+    s.onePole.setCutoff(cutoff, sampleRate);
+    Biquad *stages[kFilterMaxSections] = {&s.biquad, &s.sections[0], &s.sections[1]};
+    const int count = biquadCount(kind, s.slopeDb);
+    if (isShelfKind(kind))
+    {
+        // Split across the active sections so the total shelf lift stays put
+        // when the slope changes.
+        const float gainDb = shelfGainDbFromCv(resonanceCv) / static_cast<float>(count);
+        for (int i = 0; i < count; ++i)
+        {
+            if (kind == FilterKind::LowShelf)
+                stages[i]->setLowShelf(cutoff, gainDb, sampleRate);
+            else
+                stages[i]->setHighShelf(cutoff, gainDb, sampleRate);
+        }
+        return;
+    }
+    const float q = filterResonanceQ(s, resonanceCv);
+    for (int i = 0; i < count; ++i)
+    {
+        switch (kind)
+        {
+        case FilterKind::LowPass:
+            stages[i]->setLowpass(cutoff, q, sampleRate);
+            break;
+        case FilterKind::HighPass:
+            stages[i]->setHighpass(cutoff, q, sampleRate);
+            break;
+        case FilterKind::BandPass:
+            stages[i]->setBandpass(cutoff, q, sampleRate);
+            break;
+        case FilterKind::Notch:
+            stages[i]->setNotch(cutoff, q, sampleRate);
+            break;
+        case FilterKind::AllPass:
+            stages[i]->setAllpass(cutoff, q, sampleRate);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+inline float processChain(FilterState &s, FilterKind kind, float x)
+{
+    Biquad *stages[kFilterMaxSections] = {&s.biquad, &s.sections[0], &s.sections[1]};
+    const int count = biquadCount(kind, s.slopeDb);
+    float y = x;
+    for (int i = 0; i < count; ++i)
+        y = stages[i]->process(y);
+    if (usesOnePole(kind, s.slopeDb))
+    {
+        const float lp = s.onePole.process(y);
+        y = kind == FilterKind::HighPass ? y - lp : lp;
+    }
+    return y;
 }
 } // namespace
 
@@ -138,6 +228,20 @@ inline void render(NodeInstance &inst, size_t frames)
             inst.outL[i] = portSample(inst, 0, i);
         }
         return;
+    }
+    // "slope" (Port-Index 2) - same discrete 0-10V selector treatment as
+    // "filterType" above, six steps of 6 dB (see filterSlopeFromCv in main.js).
+    const bool slopeFed = controlPortConnected(inst, 2) ||
+                          (inst.audioConnectedPortMask & synth::portBit(2)) != 0;
+    if (slopeFed)
+    {
+        const uint8_t fedSlope = slopeDbFromCv(portSample(inst, 2, 0));
+        if (fedSlope != s.slopeDb)
+        {
+            s.slopeDb = fedSlope;
+            s.coeffsDirty = true;
+            s.audioCoeffsInitialized = false;
+        }
     }
     if (kind != s.renderedKind)
     {
@@ -165,7 +269,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // scalar): falls back to the existing coeffsDirty lazy path (only
     // recompute on actual change, unchanged behavior, coeffStride has no
     // effect there).
-    // "global" (Port-Index 4, control-only) - same pattern as Gain's
+    // "global" (Port-Index 5, control-only) - same pattern as Gain's
     // "global": only takes effect when cutoff/resonance is genuinely
     // DSP-edge-fed on voice 0 - every other voice then borrows voice 0's
     // raw cutoff/resonance CV instead of its own. "in" (Port 0) always
@@ -173,12 +277,12 @@ inline void render(NodeInstance &inst, size_t frames)
     // only the modulation source is shared. A purely manual (unwired)
     // cutoff/resonance is already the same widget-level value on every
     // voice by construction - Global has no extra effect there.
-    const bool modeFed = controlPortConnected(inst, 4) ||
-                          (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
-    const bool globalActive = modeFed ? (portSample(inst, 4, 0) >= cv::kGateThresholdVolts) : s.global;
+    const bool modeFed = controlPortConnected(inst, 5) ||
+                          (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+    const bool globalActive = modeFed ? (portSample(inst, 5, 0) >= cv::kGateThresholdVolts) : s.global;
     const NodeInstance &src = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
-    const bool cutoffAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
-    const bool resonanceAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool cutoffAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool resonanceAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
     if (cutoffAudioFed || resonanceAudioFed)
     {
         const size_t coeffStride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
@@ -188,59 +292,29 @@ inline void render(NodeInstance &inst, size_t frames)
             if (i == nextCoeffSample)
             {
                 nextCoeffSample += coeffStride;
-                const float cutoffCv = cutoffAudioFed ? src.inPorts[2][i] : s.cutoffCv;
-                const float resonanceCv = resonanceAudioFed ? src.inPorts[3][i] : s.resonanceCv;
+                const float cutoffCv = cutoffAudioFed ? src.inPorts[3][i] : s.cutoffCv;
+                const float resonanceCv = resonanceAudioFed ? src.inPorts[4][i] : s.resonanceCv;
                 if (!s.audioCoeffsInitialized || cutoffCv != s.lastAudioCutoffCv ||
                     resonanceCv != s.lastAudioResonanceCv)
                 {
-                    const float q = filterResonanceQ(s, resonanceCv);
-                    const float cutoff = filterCutoffHz(s, cutoffCv);
-                    switch (kind)
-                    {
-                    case FilterKind::None:
-                        break;
-                    case FilterKind::LowPass:
-                        s.biquad.setLowpass(cutoff, q, kSampleRate);
-                        break;
-                    case FilterKind::HighPass:
-                        s.biquad.setHighpass(cutoff, q, kSampleRate);
-                        break;
-                    case FilterKind::BandPass:
-                        s.biquad.setBandpass(cutoff, q, kSampleRate);
-                        break;
-                    }
+                    applyCoeffs(s, kind, cutoffCv, resonanceCv, kSampleRate);
                     s.lastAudioCutoffCv = cutoffCv;
                     s.lastAudioResonanceCv = resonanceCv;
                     s.audioCoeffsInitialized = true;
                 }
             }
-            inst.outL[i] = s.biquad.process(portSample(inst, 0, i));
+            inst.outL[i] = processChain(s, kind, portSample(inst, 0, i));
         }
         return;
     }
     if (s.coeffsDirty)
     {
-        const float q = filterResonanceQ(s, s.resonanceCv);
-        const float cutoff = filterCutoffHz(s, s.cutoffCv);
-        switch (kind)
-        {
-        case FilterKind::None:
-            break;
-        case FilterKind::LowPass:
-            s.biquad.setLowpass(cutoff, q, kSampleRate);
-            break;
-        case FilterKind::HighPass:
-            s.biquad.setHighpass(cutoff, q, kSampleRate);
-            break;
-        case FilterKind::BandPass:
-            s.biquad.setBandpass(cutoff, q, kSampleRate);
-            break;
-        }
+        applyCoeffs(s, kind, s.cutoffCv, s.resonanceCv, kSampleRate);
         s.coeffsDirty = false;
     }
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = s.biquad.process(portSample(inst, 0, i));
+        inst.outL[i] = processChain(s, kind, portSample(inst, 0, i));
     }
 }
 
@@ -256,6 +330,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.filter->resonanceMaxQ = p.resonanceMaxQ;
     inst.filter->resonanceLog = p.resonanceLog;
     inst.filter->coeffStride = p.coeffStride;
+    inst.filter->slopeDb = p.filterSlopeDb;
     inst.filter->global = p.filterGlobal;
     inst.filter->refreshLog2Ratios();
     inst.filter->coeffsDirty = true;
@@ -321,6 +396,16 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.filter->coeffsDirty = true;
         return true;
     }
+    if (strcmp(name, "slope") == 0)
+    {
+        const int poles = static_cast<int>(value) / 6;
+        inst.filter->slopeDb = static_cast<uint8_t>((poles < 1 ? 1 : (poles > cv::kFilterMaxPoles ? cv::kFilterMaxPoles : poles)) * 6);
+        for (Biquad &section : inst.filter->sections)
+            section.reset();
+        inst.filter->coeffsDirty = true;
+        inst.filter->audioCoeffsInitialized = false;
+        return true;
+    }
     if (strcmp(name, "coeffStride") == 0)
     {
         const int clamped = static_cast<int>(value) < 1 ? 1 : (static_cast<int>(value) > 16 ? 16 : static_cast<int>(value));
@@ -351,6 +436,10 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     {
         const int coeffStride = presetparser::getInt(p, "coeffStride", 4);
         out.coeffStride = static_cast<uint8_t>(coeffStride < 1 ? 1 : (coeffStride > 16 ? 16 : coeffStride));
+    }
+    {
+        const int poles = presetparser::getInt(p, "slope", 12) / 6;
+        out.filterSlopeDb = static_cast<uint8_t>((poles < 1 ? 1 : (poles > cv::kFilterMaxPoles ? cv::kFilterMaxPoles : poles)) * 6);
     }
     out.filterGlobal = presetparser::getBool(p, "global", false);
 }

@@ -39,7 +39,6 @@
     ".claude": true,
     ".codegraph": true,
     ".devcon*": true,
-    ".vscode*": true,
-    "sdkconfig*": true
+    ".vscode*": true
   }
 }

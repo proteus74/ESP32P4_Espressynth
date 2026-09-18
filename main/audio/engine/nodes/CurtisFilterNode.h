@@ -23,10 +23,16 @@ namespace nodes::curtisfilter
 
 using noderender::clampf;
 
+// Six cascadable one-pole sections, 6 dB each - the slope selects how many of
+// them are in circuit (the real CEM3320 wires four; this model extends the same
+// idea to the 36 dB setting the UI offers).
+constexpr int kCurtisMaxPoles = 6;
+
 struct CurtisFilterState
 {
-    CurtisFilterMode mode = CurtisFilterMode::LowPass24;
-    CurtisFilterMode renderedMode = CurtisFilterMode::None;
+    FilterKind kind = FilterKind::LowPass;
+    FilterKind renderedKind = FilterKind::None;
+    uint8_t slopeDb = 24;
     float cutoffCv = 5.0f;
     float cutoffMinHz = 20.0f;
     float cutoffMaxHz = 20000.0f;
@@ -39,7 +45,7 @@ struct CurtisFilterState
     bool global = false;
     float cutoffLog2Ratio = 0.0f;
     float resonanceLog2Ratio = 0.0f;
-    float stage[4] = {};
+    float stage[kCurtisMaxPoles] = {};
     float g = 0.1f;
     float feedback = 0.0f;
     bool coeffsDirty = true;
@@ -112,57 +118,63 @@ inline float asymmetricClip(float value)
     return cv::kAudioPeakVolts * dsp::tanhLookup(normalized * drive);
 }
 
-inline float feedbackFromQ(const CurtisFilterState &s, float q, CurtisFilterMode mode)
+using cv::filterKindFromCv;
+using cv::slopeDbFromCv;
+
+inline int poleCount(uint8_t slopeDb)
+{
+    const int poles = slopeDb / 6;
+    return poles < 1 ? 1 : (poles > kCurtisMaxPoles ? kCurtisMaxPoles : poles);
+}
+
+inline float feedbackFromQ(const CurtisFilterState &s, float q, int poles)
 {
     const float qSpan = s.resonanceMaxQ - s.resonanceMinQ;
     const float normalized = qSpan > 0.0001f
                                  ? (q - s.resonanceMinQ) / qSpan
                                  : 0.0f;
     const float amount = clampf(normalized, 0.0f, 1.0f);
-    const bool fourPole = mode == CurtisFilterMode::LowPass24;
-    // The two-pole modes reach oscillation with less loop gain than the
-    // four-pole ladder. Keep both ranges musical and bounded below unity.
-    return amount * (fourPole ? 0.985f : 0.94f);
+    // Shallower ladders reach oscillation with less loop gain than the deep
+    // ones. Keep every range musical and bounded below unity.
+    const float ceiling = poles >= 4 ? 0.985f : 0.94f;
+    return amount * ceiling;
 }
 
-inline int poleCount(CurtisFilterMode mode)
-{
-    return mode == CurtisFilterMode::LowPass24 ? 4 : 2;
-}
-
-inline void updateCoefficients(CurtisFilterState &s, float cutoffCv, float resonanceCv, CurtisFilterMode mode)
+inline void updateCoefficients(CurtisFilterState &s, float cutoffCv, float resonanceCv, int poles)
 {
     s.g = clampf(tptG(cutoffHz(s, cutoffCv)), 0.0001f, 0.9995f);
-    s.feedback = feedbackFromQ(s, resonanceQ(s, resonanceCv), mode);
+    s.feedback = isShelfKind(s.kind) ? 0.0f : feedbackFromQ(s, resonanceQ(s, resonanceCv), poles);
     s.coeffsDirty = false;
 }
 
-inline float outputForMode(CurtisFilterMode mode, float input, float stage1, float stage2, float stage4)
+// Derives the requested response from the ladder taps. `last`/`prev` are the
+// final two one-pole outputs, which behave like a two-pole section - the same
+// identity the CEM3320's configurable wiring exploits (LP + 2*BP + HP = in).
+inline float outputForKind(FilterKind kind, float input, float prev, float last, float shelfGainDb)
 {
-    switch (mode)
+    const float lowpass = last;
+    const float bandpass = prev - last;
+    const float highpass = input - 2.0f * prev + last;
+    switch (kind)
     {
-    case CurtisFilterMode::None:
+    case FilterKind::None:
         return input;
-    case CurtisFilterMode::LowPass24:
-        return stage4;
-    case CurtisFilterMode::LowPass12:
-        return stage2;
-    case CurtisFilterMode::BandPass12:
-        return stage1 - stage2;
-    case CurtisFilterMode::HighPass12:
-        return input - 2.0f * stage1 + stage2;
+    case FilterKind::LowPass:
+        return lowpass;
+    case FilterKind::BandPass:
+        return bandpass;
+    case FilterKind::HighPass:
+        return highpass;
+    case FilterKind::Notch:
+        return lowpass + highpass;
+    case FilterKind::AllPass:
+        return input - 4.0f * bandpass;
+    case FilterKind::LowShelf:
+        return input + (powf(10.0f, shelfGainDb / 20.0f) - 1.0f) * lowpass;
+    case FilterKind::HighShelf:
+        return input + (powf(10.0f, shelfGainDb / 20.0f) - 1.0f) * highpass;
     }
-    return stage4;
-}
-
-inline CurtisFilterMode filterModeFromCv(float volts)
-{
-    int index = static_cast<int>(volts / (cv::kMaxVolts / 5.0f));
-    if (index < 0)
-        index = 0;
-    if (index > 4)
-        index = 4;
-    return static_cast<CurtisFilterMode>(index);
+    return lowpass;
 }
 } // namespace
 
@@ -172,47 +184,61 @@ inline void render(NodeInstance &inst, size_t frames)
     CurtisFilterState &s = *inst.curtisFilter;
     const bool typeFed = controlPortConnected(inst, 1) ||
                          (inst.audioConnectedPortMask & synth::portBit(1)) != 0;
-    const CurtisFilterMode mode = typeFed ? filterModeFromCv(portSample(inst, 1, 0)) : s.mode;
-    if (mode == CurtisFilterMode::None)
+    const FilterKind kind = typeFed ? filterKindFromCv(portSample(inst, 1, 0)) : s.kind;
+    if (kind == FilterKind::None)
     {
-        s.renderedMode = CurtisFilterMode::None;
+        s.renderedKind = FilterKind::None;
         for (size_t i = 0; i < frames; ++i)
         {
             inst.outL[i] = portSample(inst, 0, i);
         }
         return;
     }
-    if (mode != s.renderedMode)
+    // "slope" (Port-Index 2) - discrete 0-10V selector, six steps of 6 dB, one
+    // ladder section per pole.
+    const bool slopeFed = controlPortConnected(inst, 2) ||
+                          (inst.audioConnectedPortMask & synth::portBit(2)) != 0;
+    if (slopeFed)
     {
-        s.renderedMode = mode;
+        const uint8_t fedSlope = slopeDbFromCv(portSample(inst, 2, 0));
+        if (fedSlope != s.slopeDb)
+        {
+            s.slopeDb = fedSlope;
+            s.coeffsDirty = true;
+            s.audioCoeffsInitialized = false;
+        }
+    }
+    if (kind != s.renderedKind)
+    {
+        s.renderedKind = kind;
         s.coeffsDirty = true;
         s.audioCoeffsInitialized = false;
     }
-    const bool globalPortFed = controlPortConnected(inst, 4) ||
-                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
-    const bool globalActive = globalPortFed ? (portSample(inst, 4, 0) >= cv::kGateThresholdVolts) : s.global;
+    const bool globalPortFed = controlPortConnected(inst, 5) ||
+                               (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 5)) != 0;
+    const bool globalActive = globalPortFed ? (portSample(inst, 5, 0) >= cv::kGateThresholdVolts) : s.global;
     const NodeInstance &source = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
-    const bool cutoffAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
-    const bool resonanceAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool cutoffAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const bool resonanceAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
     const size_t stride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
+    const int poles = poleCount(s.slopeDb);
 
     if (!cutoffAudioFed && !resonanceAudioFed && s.coeffsDirty)
     {
-        updateCoefficients(s, s.cutoffCv, s.resonanceCv, mode);
+        updateCoefficients(s, s.cutoffCv, s.resonanceCv, poles);
     }
 
-    const int poles = poleCount(mode);
     for (size_t i = 0; i < frames; ++i)
     {
         if (cutoffAudioFed || resonanceAudioFed)
         {
             if (i % stride == 0)
             {
-                const float cutoff = cutoffAudioFed ? source.inPorts[2][i] : s.cutoffCv;
-                const float resonance = resonanceAudioFed ? source.inPorts[3][i] : s.resonanceCv;
+                const float cutoff = cutoffAudioFed ? source.inPorts[3][i] : s.cutoffCv;
+                const float resonance = resonanceAudioFed ? source.inPorts[4][i] : s.resonanceCv;
                 if (!s.audioCoeffsInitialized || cutoff != s.lastAudioCutoffCv || resonance != s.lastAudioResonanceCv)
                 {
-                    updateCoefficients(s, cutoff, resonance, mode);
+                    updateCoefficients(s, cutoff, resonance, poles);
                     s.lastAudioCutoffCv = cutoff;
                     s.lastAudioResonanceCv = resonance;
                     s.audioCoeffsInitialized = true;
@@ -221,25 +247,18 @@ inline void render(NodeInstance &inst, size_t frames)
         }
 
         const float input = portSample(inst, 0, i);
-        const float feedbackTap = poles == 4 ? s.stage[3] : s.stage[1];
+        const float feedbackTap = s.stage[poles - 1];
         const float drivenInput = asymmetricClip(input + asymmetricClip(feedbackTap * s.feedback));
-        const float stage1 = processStage(s, 0, drivenInput);
-        const float stage2 = processStage(s, 1, stage1);
-        float stage4 = stage2;
-        if (poles == 4)
+        // Each pole is one TPT one-pole section, every stage feeding the next.
+        float chain = drivenInput;
+        float previous = drivenInput;
+        for (int p = 0; p < poles; ++p)
         {
-            // Fixed (plan section 6, finding 2): stage 3's actual output now
-            // feeds stage 4, matching the intended 4-pole TPT ladder cascade
-            // (each stage's output is the next stage's input). Previously
-            // stage 3's return value was discarded and stage 4 was fed
-            // s.stage[2] instead - that integrator's post-update internal
-            // state, not its output (see processStage()'s v/output/state
-            // relationship above) - a different, larger-magnitude signal.
-            // Audibly changes LP24's frequency response/resonance character.
-            const float stage3 = processStage(s, 2, stage2);
-            stage4 = processStage(s, 3, stage3);
+            previous = chain;
+            chain = processStage(s, p, chain);
         }
-        const float output = outputForMode(mode, input, stage1, stage2, stage4);
+        const float shelfGainDb = isShelfKind(kind) ? shelfGainDbFromCv(s.resonanceCv) : 0.0f;
+        const float output = outputForKind(kind, input, previous, chain, shelfGainDb);
         // tanhLookup is intrinsically bounded to +/-1, so asymmetricClip is
         // already guaranteed to remain inside the audio voltage domain.
         inst.outL[i] = asymmetricClip(output);
@@ -249,7 +268,8 @@ inline void render(NodeInstance &inst, size_t frames)
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     CurtisFilterState &s = *inst.curtisFilter;
-    s.mode = p.curtisFilterMode;
+    s.kind = p.filterType;
+    s.slopeDb = p.filterSlopeDb;
     s.cutoffCv = p.cutoffCv;
     s.cutoffMinHz = p.cutoffMinHz;
     s.cutoffMaxHz = p.cutoffMaxHz;
@@ -292,6 +312,8 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.resonanceMaxQ = value;
     else if (strcmp(name, "coeffStride") == 0)
         s.coeffStride = static_cast<uint8_t>(clampf(value, 1.0f, 16.0f));
+    else if (strcmp(name, "slope") == 0)
+        s.slopeDb = static_cast<uint8_t>(poleCount(static_cast<uint8_t>(clampf(value, 6.0f, 36.0f))) * 6);
     else if (strcmp(name, "global") == 0)
         s.global = value >= 0.5f;
     else
@@ -301,17 +323,21 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     return true;
 }
 
-inline void setMode(NodeInstance &inst, CurtisFilterMode mode)
+inline void setKind(NodeInstance &inst, FilterKind kind)
 {
-    inst.curtisFilter->mode = mode;
+    inst.curtisFilter->kind = kind;
     inst.curtisFilter->coeffsDirty = true;
 }
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.curtisFilterMode = presetparser::getBool(p, "bypass", false)
-                               ? CurtisFilterMode::None
-                               : curtisFilterModeFromString(presetparser::getString(p, "filterType", "lp24"));
+    // Presets older than the shared type list stored type and slope in one
+    // string ("lp24", "bp12", ...) - curtisLegacy* unpacks those.
+    const char *typeName = presetparser::getString(p, "filterType", "lowpass");
+    out.filterType = presetparser::getBool(p, "bypass", false)
+                         ? FilterKind::None
+                         : curtisLegacyFilterKind(typeName);
+    out.filterSlopeDb = curtisLegacySlopeDb(typeName, presetparser::getInt(p, "slope", 24));
     out.cutoffCv = presetparser::getFloat(p, "cutoff", 5.0f);
     out.cutoffMinHz = presetparser::getFloat(p, "cutoffMinHz", 20.0f);
     out.cutoffMaxHz = presetparser::getFloat(p, "cutoffMaxHz", 20000.0f);

@@ -158,4 +158,30 @@ inline float vcaGain(float volts, bool exponential)
         return dsp::vcaExpLookup(v);
     return v;
 }
+
+// Both filter widgets expose "filterType" and "slope" as discrete 0-10V
+// selectors, split into equal steps across the list. Mirrors main.js's
+// filterTypeFromCv/filterSlopeFromCv, which must stay in the same order.
+constexpr int kFilterKindCount = 8; // see FilterKind in NodeTypes.h
+constexpr int kFilterMaxPoles = 6;  // 6 dB per pole, 6..36 dB
+
+inline int discreteCvIndex(float volts, int steps)
+{
+    int index = static_cast<int>(volts / (kMaxVolts / static_cast<float>(steps)));
+    if (index < 0)
+        index = 0;
+    if (index > steps - 1)
+        index = steps - 1;
+    return index;
+}
+
+inline FilterKind filterKindFromCv(float volts)
+{
+    return static_cast<FilterKind>(discreteCvIndex(volts, kFilterKindCount));
+}
+
+inline uint8_t slopeDbFromCv(float volts)
+{
+    return static_cast<uint8_t>((discreteCvIndex(volts, kFilterMaxPoles) + 1) * 6);
+}
 } // namespace cv
