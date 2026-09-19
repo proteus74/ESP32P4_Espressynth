@@ -57,6 +57,7 @@ enum class NodeType : uint8_t
     FmOscillator,
     DxEnvelope,
     StepArpeggiator,
+    DrumSequencer,
     OutputSwitch,
     OutputMultiplexer,
     CvIn,
@@ -221,6 +222,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::CurtisFilter;
     if (strcmp(typeStr, "step-arpeggiator") == 0)
         return NodeType::StepArpeggiator;
+    if (strcmp(typeStr, "drum-sequencer") == 0)
+        return NodeType::DrumSequencer;
     if (strcmp(typeStr, "output-switch") == 0)
         return NodeType::OutputSwitch;
     if (strcmp(typeStr, "output-multiplexer") == 0)

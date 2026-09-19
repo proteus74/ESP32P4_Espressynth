@@ -1,18 +1,31 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
+#include "../CvConventions.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
 
-// cv (port "cv", index 0) in -> f1/f2 (outL/outR) out: two pitch-CV signals
-// spread symmetrically around cv, offset by +/-(amount*maxVolts). 1V/oct is
-// already logarithmic, so unlike the old Hz-domain Cent math this is a plain
-// volt addition. DetuneState (value member) stays in NodeState.h.
+// cv (port "cv", index 0) in -> out (outL) out: one pitch-CV signal, cv plus
+// a settings-dialog-scaled/quantized offset - same knob convention as
+// StepArpeggiator's per-step pitch knob (see DetuneState's comment in
+// NodeState.h). DetuneState (value member) stays in NodeState.h.
 namespace nodes::detune
 {
+
+// amountVolts: 0-10V, 5V = 0 offset - see DetuneState's comment. Returns the
+// resulting pitch-CV offset in volts, already clamped (by construction, the
+// normalized -1..1 factor) and rounded to the stepCents grid.
+inline float detuneOffsetVolts(float amountVolts, float maxOffsetCents, float stepCents)
+{
+    const float normalized = (amountVolts - cv::kMaxVolts * 0.5f) / (cv::kMaxVolts * 0.5f);
+    const float rawCents = normalized * maxOffsetCents;
+    const float steppedCents = stepCents > 0.0f ? roundf(rawCents / stepCents) * stepCents : rawCents;
+    return steppedCents / 1200.0f; // 1200 cents = 1 octave = 1V (kPitchCvVoltsPerOctave)
+}
 
 inline void render(NodeInstance &inst, size_t frames)
 {
@@ -28,47 +41,40 @@ inline void render(NodeInstance &inst, size_t frames)
     // the genuinely-varying case is effectively free either way.
     auto &s = inst.detune;
     const float amount = s.amountSmooth.process(s.amountTarget);
-    const float deltaVolts = amount * s.maxVolts;
+    const float deltaVolts = detuneOffsetVolts(amount, s.maxOffsetCents, s.stepCents);
     float cvValue = 0.0f;
     if (audioPortConstantForBlock(inst, 0, frames, cvValue))
     {
-        const float f1 = cvValue + deltaVolts;
-        const float f2 = cvValue - deltaVolts;
+        const float out = cvValue + deltaVolts;
         for (size_t i = 0; i < frames; ++i)
         {
-            inst.outL[i] = f1;
-            inst.outR[i] = f2;
+            inst.outL[i] = out;
         }
         return;
     }
-    // cv is a tagged ramp (not block-constant, but a linear start+i*inc):
-    // a constant offset add keeps it linear, both outputs share the same
-    // inc since deltaVolts is block-constant.
+    // cv is a tagged ramp (not block-constant, but a linear start+i*inc): a
+    // constant offset add keeps it linear.
     if (const NodeInstance::RampDescriptor *r = rampForPort(inst, 0))
     {
-        float f1 = r->start + deltaVolts;
-        float f2 = r->start - deltaVolts;
+        float out = r->start + deltaVolts;
         for (size_t i = 0; i < frames; ++i)
         {
-            inst.outL[i] = f1;
-            inst.outR[i] = f2;
-            f1 += r->inc;
-            f2 += r->inc;
+            inst.outL[i] = out;
+            out += r->inc;
         }
         return;
     }
     for (size_t i = 0; i < frames; ++i)
     {
-        const float cvIn = portSample(inst, 0, i);
-        inst.outL[i] = cvIn + deltaVolts;
-        inst.outR[i] = cvIn - deltaVolts;
+        inst.outL[i] = portSample(inst, 0, i) + deltaVolts;
     }
 }
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     inst.detune.amountTarget = p.detuneAmount;
-    inst.detune.maxVolts = p.detuneMaxVolts;
+    inst.detune.maxOffsetCents = p.detuneMaxOffsetCents;
+    inst.detune.stepCents = p.detuneStepCents;
     // One smoothing step per block (not per sample - f0 arrives as a
     // per-block-constant control value anyway, see Graph::renderBlock), so
     // the cutoff is expressed against the block rate, not kSampleRate.
@@ -87,9 +93,14 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.detune.amountTarget = value;
         return true;
     }
-    if (strcmp(name, "maxVolts") == 0)
+    if (strcmp(name, "maxOffsetCents") == 0)
     {
-        inst.detune.maxVolts = value;
+        inst.detune.maxOffsetCents = value;
+        return true;
+    }
+    if (strcmp(name, "stepCents") == 0)
+    {
+        inst.detune.stepCents = value;
         return true;
     }
     return false;
@@ -97,8 +108,9 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.detuneAmount = presetparser::getFloat(p, "amount", 0.0f);
-    out.detuneMaxVolts = presetparser::getFloat(p, "maxVolts", 0.5f);
+    out.detuneAmount = presetparser::getFloat(p, "amount", 5.0f);
+    out.detuneMaxOffsetCents = presetparser::getFloat(p, "maxOffsetCents", 1200.0f);
+    out.detuneStepCents = presetparser::getFloat(p, "stepCents", 100.0f);
 }
 
 } // namespace nodes::detune

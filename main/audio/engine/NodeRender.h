@@ -45,6 +45,7 @@
 #include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
+#include "nodes/DrumSequencerNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
 #include "nodes/LinkedIONodes.h"
@@ -124,6 +125,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::StepArpeggiator:
         nodes::steparp::render(inst, frames);
+        break;
+    case NodeType::DrumSequencer:
+        nodes::drumsequencer::render(inst, frames);
         break;
     case NodeType::Filter:
         nodes::filter::render(inst, frames);

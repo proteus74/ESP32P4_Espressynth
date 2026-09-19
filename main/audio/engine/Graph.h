@@ -36,6 +36,7 @@
 #include "nodes/KnobNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
+#include "nodes/DrumSequencerNode.h"
 #include "nodes/ValueMapperNode.h"
 
 struct WidgetSlot
@@ -2112,6 +2113,9 @@ inline void Graph::destroy()
         case NodeType::StepArpeggiator:
             nodes::steparp::destroy(inst);
             break;
+        case NodeType::DrumSequencer:
+            nodes::drumsequencer::destroy(inst);
+            break;
         case NodeType::Filter:
             nodes::filter::destroy(inst);
             break;
@@ -2154,10 +2158,6 @@ inline void Graph::destroy()
                 heap_caps_free(inst.outputMux);
                 inst.outputMux = nullptr;
             }
-            break;
-        case NodeType::Clock:
-            heap_caps_free(inst.clock.hzOut);
-            inst.clock.hzOut = nullptr;
             break;
         default:
             break;

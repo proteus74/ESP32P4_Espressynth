@@ -50,9 +50,12 @@ struct WidgetParams
     float lfoZeroPoint = 5.0f;
     bool lfoOneShot = false;
     bool lfoGlobal = false;
-    // detune
-    float detuneAmount = 0.0f;
-    float detuneMaxVolts = 0.5f;
+    // detune - amount is 0-10V, 5V = 0 offset (see DetuneState in
+    // NodeState.h). maxOffsetCents is the settings-dialog range; stepCents
+    // is the rounding grid (100 = semitone steps, 1 = cent steps).
+    float detuneAmount = 5.0f;
+    float detuneMaxOffsetCents = 1200.0f;
+    float detuneStepCents = 100.0f;
     // frequency-divider
     float frequencyDivider = 2.0f;
     // adsr - attack/decay/sustain/release are the final seconds/level value
@@ -313,6 +316,17 @@ struct WidgetParams
     float stepArpClockCvVolts = 0.0f;
     float stepArpClockMaxBpm = 120.0f;
     bool stepArpClockRoundBpm = false;
+    // drum-sequencer - 4/8/12/16 bars, sixteen steps per bar and up to
+    // eight trigger/velocity output pairs. Active flags are packed to keep
+    // PresetDoc bounded; velocity bytes map linearly to 0-10V.
+    uint8_t drumBarCount = 4;
+    uint8_t drumTrackCount = 1;
+    uint8_t drumActive[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
+    uint8_t drumVelocity[synth::kDrumSequencerMaxCells] = {};
+    float drumPulseMs = 10.0f;
+    float drumClockCvVolts = 0.0f;
+    float drumClockMaxBpm = 120.0f;
+    bool drumClockRoundBpm = false;
 };
 
 struct WidgetDesc

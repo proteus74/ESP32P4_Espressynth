@@ -124,17 +124,23 @@ struct LfoState
     bool global = false;
 };
 
-// cv (port "cv", index 0) in -> f1/f2 (outL/outR) out: two pitch-CV signals
-// spread symmetrically around cv, offset by +/-(amount*maxVolts). 1V/oct is
-// already logarithmic, so unlike the old Hz-domain Cent math this is a plain
-// volt addition. amountTarget is the raw -1..1 knob value; amountSmooth is a
-// one-pole ramp toward it (one step per block, see processNodeBlock's Detune
-// case) so dragging the amount slider mid-note doesn't zipper the pitch.
+// cv (port "cv", index 0) in -> out (outL) out: one pitch-CV signal, cv plus
+// a settings-dialog-scaled offset - same "knob's full 0-10V travel rescaled
+// to +/-maxOffset, then rounded to a step grid" convention as
+// StepArpeggiator's per-step pitch knob (nodes/StepArpeggiatorNode.h's
+// triggerStep): amountTarget's own 5V center means 0 offset, 0V/10V mean
+// -/+maxOffsetCents. stepCents is the rounding grid - 100 for semitone
+// steps, 1 for cent steps (settings-dialog choice) - so the result always
+// lands on a musically exact step, never an arbitrary knob-position
+// fraction. amountSmooth is a one-pole ramp toward amountTarget (one step
+// per block, see processNodeBlock's Detune case) so dragging the amount
+// slider mid-note doesn't zipper the pitch.
 struct DetuneState
 {
-    float amountTarget = 0.0f;
+    float amountTarget = 5.0f;
     OnePoleLowpass amountSmooth;
-    float maxVolts = 0.5f;
+    float maxOffsetCents = 1200.0f;
+    float stepCents = 100.0f;
 };
 
 struct FrequencyDividerState
@@ -267,12 +273,6 @@ struct ClockState
     float pulseMs = 100.0f;
     float phaseSec = 0.0f;
     bool pulseActive = false;
-    // Third output ("hz") - "pulse"/"bpm" use NodeInstance's own outL/outR,
-    // but that struct only has two named output fields, so this one extra
-    // buffer lives here instead (see NodeInstance::outputPortBuffer's Clock
-    // branch). Allocated in GraphBuilder::build alongside outL/outR, freed
-    // in Graph::destroy - same lifetime, just not the same field.
-    float *hzOut = nullptr;
 };
 
 // CV In (ADS1115) / CV Out (GP8413) - External Hardware widgets. Port/address/channel are
@@ -367,6 +367,24 @@ struct OutputMultiplexerState
     // NodeInstance.h); this array holds ports 2.. only - same split LinkState
     // ::busOut uses for AudioOutputLink/AudioInputLink's extra buses.
     float *outPorts[kOutputMultiplexerMaxOutputs - 2] = {};
+};
+
+struct DrumSequencerState
+{
+    uint8_t barCount = 4;
+    uint8_t trackCount = 1;
+    uint16_t currentStep = 0;
+    bool clockPrev = false;
+    float pulseMs = 10.0f;
+    float internalClockCvVolts = 0.0f;
+    float internalClockMaxBpm = 120.0f;
+    bool internalClockRoundBpm = false;
+    float internalPhaseSec = 0.0f;
+    uint8_t active[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
+    uint8_t velocity[synth::kDrumSequencerMaxCells] = {};
+    float heldVelocity[synth::kDrumSequencerMaxTracks] = {};
+    uint32_t pulseSamplesRemaining[synth::kDrumSequencerMaxTracks] = {};
+    float *outPorts[synth::kDrumSequencerMaxTracks * 2 - 2] = {};
 };
 
 // ChorusState is defined (state + render/build/destroy/setParam logic

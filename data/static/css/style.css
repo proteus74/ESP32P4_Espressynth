@@ -1262,6 +1262,175 @@ body.show-node-cpu .widget-cpu-badge {
   padding-bottom: 0.4rem;
 }
 
+.widget-instance[data-widget-type="drum-sequencer"] {
+  width: 680px;
+  max-width: calc(100vw - 40px);
+}
+
+.widget-instance[data-widget-type="drum-sequencer"] .widget-ports {
+  padding-bottom: 0.35rem;
+}
+
+.drum-sequencer-clear {
+  margin-left: auto;
+  margin-right: 0.35rem;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.68rem;
+}
+
+.drum-sequencer-inputs {
+  padding: 0.2rem 0;
+}
+
+.drum-sequencer-port {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+}
+
+.drum-sequencer-port-in {
+  min-height: 24px;
+  padding: 0 0.6rem;
+}
+
+.drum-sequencer-port-in .port-dot {
+  margin-left: -0.9rem;
+}
+
+.drum-sequencer-rate {
+  width: 120px;
+  margin-left: 0.4rem;
+}
+
+.drum-sequencer-pattern-layout {
+  display: flex;
+  min-width: 0;
+  border-top: 1px solid var(--card-border);
+}
+
+.drum-sequencer-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.drum-sequencer-grid {
+  display: grid;
+  width: max-content;
+  padding: 0.25rem 0 0.3rem;
+  user-select: none;
+}
+
+.drum-sequencer-track-label,
+.drum-sequencer-bar-label,
+.drum-sequencer-step-number,
+.drum-sequencer-cell {
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+}
+
+.drum-sequencer-track-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card);
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  border-right: 1px solid var(--card-border);
+}
+
+.drum-sequencer-corner {
+  z-index: 4;
+}
+
+.drum-sequencer-bar-label {
+  width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+  font-size: 0.62rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.drum-sequencer-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8290a3;
+  font-size: 0.52rem;
+}
+
+.drum-sequencer-step-number.bar-start,
+.drum-sequencer-cell.bar-start {
+  border-left: 2px solid #64748b;
+}
+
+.drum-sequencer-cell {
+  --velocity: 1;
+  appearance: none;
+  padding: 2px;
+  border: 1px solid #364152;
+  border-radius: 3px;
+  background: #18202c;
+  cursor: crosshair;
+}
+
+.drum-sequencer-cell.active {
+  background: linear-gradient(
+    to top,
+    var(--accent) 0,
+    var(--accent) calc(var(--velocity) * 100%),
+    #263244 calc(var(--velocity) * 100%),
+    #263244 100%
+  );
+  border-color: #93c5fd;
+}
+
+.drum-sequencer-cell.playing {
+  box-shadow: inset 0 0 0 2px var(--ok), 0 0 5px var(--ok);
+}
+
+.drum-sequencer-outputs {
+  flex: 0 0 74px;
+  padding: 0.25rem 0 0.3rem;
+  border-left: 1px solid var(--card-border);
+}
+
+.drum-sequencer-output-header {
+  height: 44px;
+  text-align: center;
+  color: #8290a3;
+  font-size: 0.58rem;
+  line-height: 44px;
+}
+
+.drum-sequencer-output-pair {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  padding-right: 0.6rem;
+}
+
+.drum-sequencer-output-pair .drum-sequencer-port-out {
+  gap: 0.15rem;
+}
+
+.drum-sequencer-output-pair .drum-sequencer-port-out:last-child .port-dot {
+  margin-right: -0.9rem;
+}
+
 .widget-instance[data-widget-type="annotation"] {
   width: 300px;
   height: 180px;

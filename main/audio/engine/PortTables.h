@@ -505,6 +505,10 @@ inline int audioInIndex(NodeType type, const char *portName)
             return (n >= 1 && n <= 16) ? 3 + n : -1;
         }
         return -1;
+    case NodeType::DrumSequencer:
+        if (is(portName, "clock")) return 0;
+        if (is(portName, "rate")) return 1;
+        return -1;
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
@@ -536,11 +540,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
         // value.
         return is(portName, "value") ? 0 : -1;
     case NodeType::Detune:
-        if (is(portName, "f1"))
-            return 0;
-        if (is(portName, "f2"))
-            return 1;
-        return -1;
+        return is(portName, "out") ? 0 : -1;
     case NodeType::Knob:
         // "value" is deliberately NEVER a real audio port: a Knob typically
         // changes a few times per second, not 48000x - it is delivered
@@ -654,10 +654,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Clock:
         if (is(portName, "pulse"))
             return 0;
-        if (is(portName, "bpm"))
+        if (is(portName, "frequency"))
             return 1;
-        if (is(portName, "hz"))
-            return 2;
         return -1;
     case NodeType::CvIn:
     case NodeType::DigitalIn:
@@ -667,6 +665,19 @@ inline int audioOutIndex(NodeType type, const char *portName)
             return 0;
         if (is(portName, "gateOut"))
             return 1;
+        return -1;
+    case NodeType::DrumSequencer:
+        if (portName != nullptr)
+        {
+            const bool trigger = strncmp(portName, "trigger", 7) == 0;
+            const bool velocity = strncmp(portName, "velocity", 8) == 0;
+            const char *number = trigger ? portName + 7 : (velocity ? portName + 8 : nullptr);
+            if (number != nullptr && number[0] >= '1' && number[0] <= '8' && number[1] == '\0')
+            {
+                const int track = number[0] - '1';
+                return track * 2 + (velocity ? 1 : 0);
+            }
+        }
         return -1;
     case NodeType::AudioOut:
     case NodeType::VuMeter:
@@ -775,6 +786,8 @@ inline int audioInPortCount(NodeType type)
         return 9; // four level plus four time CV inputs, plus "gate" (CV)
     case NodeType::StepArpeggiator:
         return 22; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate" + "step1".."step16" (CV)
+    case NodeType::DrumSequencer:
+        return 2; // "clock" + internal-fallback "rate"
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
@@ -846,7 +859,8 @@ inline bool hasNoOutputs(NodeType type)
 inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
-           type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder;
+           type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder ||
+           type == NodeType::DrumSequencer;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely

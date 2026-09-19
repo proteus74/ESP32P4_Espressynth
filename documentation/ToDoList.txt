@@ -12,9 +12,6 @@ Rotary Encoder
 
 Automatisches Bauen verschiedener Standardkonfigurationen 
 
-
-DADSR implementieren.
-
-Buttons dürfen auch Werte über 10 Volt haben. 
-
+ 
+ 
 MIT license. 

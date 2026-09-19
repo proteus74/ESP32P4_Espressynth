@@ -47,6 +47,7 @@
 #include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
+#include "nodes/DrumSequencerNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
 #include "nodes/LinkedIONodes.h"
@@ -98,6 +99,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::StepArpeggiator:
         nodes::steparp::parsePreset(p, out);
+        break;
+    case NodeType::DrumSequencer:
+        nodes::drumsequencer::parsePreset(p, out);
         break;
     case NodeType::Filter:
         nodes::filter::parsePreset(p, out);

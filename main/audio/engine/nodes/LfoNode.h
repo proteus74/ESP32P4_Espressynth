@@ -13,7 +13,7 @@
 namespace nodes::lfo
 {
 
-constexpr float kMaxRateHz = 50.0f;
+constexpr float kMaxRateHz = 500.0f;
 
 inline float clampRate(float value)
 {

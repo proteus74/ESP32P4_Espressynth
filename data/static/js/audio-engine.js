@@ -72,7 +72,15 @@ function superSawWeights(volts) {
 
 
 
-const DETUNE_MAX_VOLTS = 0.5;
+// Mirrors nodes/DetuneNode.h's detuneOffsetVolts() / main.js's own copy
+// exactly: "amount"'s full 0-10V travel is rescaled to +/-maxOffsetCents
+// (5V = 0), then rounded to the stepCents grid (100 = semitone, 1 = cent).
+function detuneOffsetVolts(amount, maxOffsetCents, stepCents) {
+  const normalized = (amount - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2);
+  const rawCents = normalized * maxOffsetCents;
+  const steppedCents = stepCents > 0 ? Math.round(rawCents / stepCents) * stepCents : rawCents;
+  return steppedCents / 1200;
+}
 
 
 
@@ -2355,30 +2363,19 @@ export class AudioEngine {
         return { type, chain, ...vmParams };
       }
       case "detune": {
-        
-        
-        
-        
-        
-        
         const cvIn = ctx.createGain();
         cvIn.gain.value = 1;
-        const amount = clampRange(params.amount ?? 0, -1, 1);
+        const amount = clampRange(params.amount ?? CV_MAX_VOLTS / 2, 0, CV_MAX_VOLTS);
+        const maxOffsetCents = params.maxOffsetCents ?? 1200;
+        const stepCents = params.stepCents ?? 100;
         const deltaConst = ctx.createConstantSource();
-        deltaConst.offset.value = amount * DETUNE_MAX_VOLTS;
+        deltaConst.offset.value = detuneOffsetVolts(amount, maxOffsetCents, stepCents);
         deltaConst.start();
-        const negDeltaConst = ctx.createConstantSource();
-        negDeltaConst.offset.value = -amount * DETUNE_MAX_VOLTS;
-        negDeltaConst.start();
-        const f1 = ctx.createGain();
-        f1.gain.value = 1;
-        cvIn.connect(f1);
-        deltaConst.connect(f1);
-        const f2 = ctx.createGain();
-        f2.gain.value = 1;
-        cvIn.connect(f2);
-        negDeltaConst.connect(f2);
-        return { type, cvIn, deltaConst, negDeltaConst, f1, f2, amount };
+        const out = ctx.createGain();
+        out.gain.value = 1;
+        cvIn.connect(out);
+        deltaConst.connect(out);
+        return { type, cvIn, deltaConst, out, amount, maxOffsetCents, stepCents };
       }
       case "adsr": {
         
@@ -3789,11 +3786,15 @@ export class AudioEngine {
       }
       case "detune":
         if (paramName === "amount") {
-          const amount = clampRange(Number(value) || 0, -1, 1);
-          entry.amount = amount;
-          applyRampValue(entry.deltaConst.offset, amount * DETUNE_MAX_VOLTS);
-          applyRampValue(entry.negDeltaConst.offset, -amount * DETUNE_MAX_VOLTS);
+          entry.amount = clampRange(Number(value) ?? CV_MAX_VOLTS / 2, 0, CV_MAX_VOLTS);
+        } else if (paramName === "maxOffsetCents") {
+          entry.maxOffsetCents = Number(value) || 0;
+        } else if (paramName === "stepCents") {
+          entry.stepCents = Number(value) || 0;
+        } else {
+          break;
         }
+        applyRampValue(entry.deltaConst.offset, detuneOffsetVolts(entry.amount, entry.maxOffsetCents, entry.stepCents));
         break;
       case "mixer":
         if (paramName === "outputGain") {
@@ -4211,8 +4212,7 @@ export class AudioEngine {
     if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.outGain;
     if (entry.type === "abs" && port === "value") return entry.waveShaper;
     if (entry.type === "value-mapper" && port === "out") return entry.chain.waveShaper;
-    if (entry.type === "detune" && port === "f1") return entry.f1;
-    if (entry.type === "detune" && port === "f2") return entry.f2;
+    if (entry.type === "detune" && port === "out") return entry.out;
     if (entry.type === "adsr" && port === "out") return entry.output;
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
     if (entry.type === "bitcrusher" && port === "out") return entry.processor;

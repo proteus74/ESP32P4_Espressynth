@@ -688,16 +688,74 @@
   </div>
 </div>
 
+<div id="drumSequencerSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Drum Sequencer Settings</h3>
+    <label class="modal-field">
+      <span>Bars</span>
+      <select id="drumSequencerBarCountInput">
+        <option value="4">4</option>
+        <option value="8">8</option>
+        <option value="12">12</option>
+        <option value="16">16</option>
+      </select>
+    </label>
+    <label class="modal-field">
+      <span>Tracks</span>
+      <input id="drumSequencerTrackCountInput" type="number" min="1" max="8" step="1" value="1">
+    </label>
+    <label class="modal-field">
+      <span>Trigger Pulse (ms)</span>
+      <input id="drumSequencerPulseMsInput" type="number" min="0.1" step="0.1" value="10">
+    </label>
+    <label class="modal-field">
+      <span>Rate Maximum BPM at 10 V</span>
+      <input id="drumSequencerClockMaxBpmInput" type="number" min="0.1" step="0.1" value="120">
+    </label>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="drumSequencerClockRoundBpmInput">
+      <span>Whole BPM only</span>
+    </label>
+    <p class="modal-hint">Reducing Bars or Tracks permanently deletes removed pattern data. Removed Track cables are disconnected.</p>
+    <div class="modal-actions">
+      <button id="drumSequencerSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="drumSequencerSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="lfoSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>LFO Settings</h3>
     <label>Max. Rate bei 10 V (Hz)
-      <input id="lfoMaxRateInput" type="number" min="0" max="50" step="0.01">
+      <input id="lfoMaxRateInput" type="number" min="0" max="500" step="0.01">
     </label>
     <p class="modal-hint">0–10 V werden linear auf 0–diese Maximalrate abgebildet.</p>
     <div class="modal-actions">
       <button id="lfoSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="lfoSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="detuneSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Detune Settings</h3>
+    <label class="modal-field">
+      <span>Step Unit</span>
+      <select id="detuneUnitSelect">
+        <option value="semitone">Semitones</option>
+        <option value="cent">Cents</option>
+      </select>
+    </label>
+    <label class="modal-field">
+      <span>Max Detune (at 0 V / 10 V)</span>
+      <input id="detuneMaxOffsetInput" type="number" min="0" step="1">
+    </label>
+    <p class="modal-hint">Amount slider's full 0–10V travel maps to +/- this range (5V = 0). Result is always rounded to a whole step of the chosen unit.</p>
+    <div class="modal-actions">
+      <button id="detuneSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="detuneSettingsSave">Save</button>
     </div>
   </div>
 </div>

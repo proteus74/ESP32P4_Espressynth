@@ -964,13 +964,12 @@ const WIDGET_TYPES = {
     // Tempo comes from the single Master Clock (tab bar, see
     // openMasterClockSettings) - this widget only owns its own pulse width.
     inputs: [],
-    // "bpm"/"hz" mirror the current Master Clock tempo (see clockBpmVolts/
-    // clockHz below) - control-rate like "pulse" (see AUDIO_PORTS' Clock
-    // omission comment), not real Web Audio nodes.
+    // "frequency" mirrors the current Master Clock tempo (see
+    // propagateClockFrequency below) - control-rate like "pulse" (see
+    // AUDIO_PORTS' Clock omission comment), not a real Web Audio node.
     outputs: [
       { id: "pulse", label: "Pulse" },
-      { id: "bpm", label: "BPM" },
-      { id: "hz", label: "Hz" },
+      { id: "frequency", label: "Frequency" },
     ],
   },
   "cv-in": {
@@ -1130,10 +1129,7 @@ const WIDGET_TYPES = {
       { id: "cv", label: "In" },
       { id: "amount", label: "Amount" },
     ],
-    outputs: [
-      { id: "f1", label: "Tune Up" },
-      { id: "f2", label: "Tune Down" },
-    ],
+    outputs: [{ id: "out", label: "Out" }],
   },
   "audio-out": {
     label: "JS Audio-Out",
@@ -1278,6 +1274,18 @@ const WIDGET_TYPES = {
       { id: "cv", label: "CV" },
       { id: "gateOut", label: "Gate Out" },
     ],
+  },
+  "drum-sequencer": {
+    label: "Drum Sequencer",
+    icon: "▦",
+    inputs: [
+      { id: "clock", label: "Clock" },
+      { id: "rate", label: "Rate" },
+    ],
+    outputs: Array.from({ length: 8 }, (_, i) => [
+      { id: `trigger${i + 1}`, label: `T${i + 1}` },
+      { id: `velocity${i + 1}`, label: `V${i + 1}` },
+    ]).flat(),
   },
   const: {
     label: "Const",
@@ -1459,7 +1467,7 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
-  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "sample-hold"] },
+  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
@@ -1569,6 +1577,7 @@ const AUDIO_PORTS = {
     // path that will ever actually reach a connected Voltmeter/Debug widget.
     out: [],
   },
+  "drum-sequencer": { in: ["clock", "rate"], out: [] },
   chorus: { in: ["in"], out: ["left", "right"] },
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
@@ -1622,7 +1631,7 @@ const DUAL_MODE_TYPES = {
   "frequency-divider": { states: () => frequencyDividerStates, audioPorts: "all" },
   abs: { states: () => absStates, audioPorts: "all" },
   "value-mapper": { states: () => valueMapperStates, audioPorts: "all" },
-  detune: { states: () => detuneStates, audioPorts: { in: ["cv"], out: ["f1", "f2"] } },
+  detune: { states: () => detuneStates, audioPorts: { in: ["cv"], out: ["out"] } },
 };
 
 function getPortKind(widgetId, portId, direction, resolvingLinks = new Set()) {
@@ -1787,7 +1796,7 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "const", "bitcrusher", "wave-folder", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "const", "bitcrusher", "wave-folder", "pan",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
@@ -2554,6 +2563,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "detune") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openDetuneSettings(id);
+    });
+  }
+
   if (type === "value-mapper") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -2930,6 +2947,44 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openStepArpSettings(id);
+    });
+  }
+
+  if (type === "drum-sequencer") {
+    const cellCount = DRUM_DEFAULT_BARS * DRUM_STEPS_PER_BAR;
+    drumSequencerStates.set(id, {
+      barCount: DRUM_DEFAULT_BARS,
+      trackCount: 1,
+      active: new Array(cellCount).fill(false),
+      velocities: new Array(cellCount).fill(CV_MAX_VOLTS),
+      pulseMs: 10,
+      clockCvVolts: 0,
+      clockMaxBpm: 120,
+      clockRoundBpm: false,
+      currentStep: 0,
+      lastStep: -1,
+      clockPrev: false,
+      heldVelocity: new Array(DRUM_MAX_TRACKS).fill(0),
+      triggerTimers: new Array(DRUM_MAX_TRACKS).fill(null),
+      clockTickTimer: null,
+    });
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "drum-sequencer-clear";
+    clearBtn.textContent = "Clear";
+    clearBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearDrumSequencer(id);
+    });
+    const closeBtn = header.querySelector(".widget-instance-close");
+    header.insertBefore(clearBtn, closeBtn);
+
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input, .drum-sequencer-grid, .port-dot")) return;
+      e.stopPropagation();
+      openDrumSequencerSettings(id);
     });
   }
 
@@ -3937,7 +3992,16 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "detune") {
-    detuneStates.set(id, { amount: 0, cv: CV_MAX_VOLTS / 2, audioMode: false });
+    detuneStates.set(id, {
+      amount: CV_MAX_VOLTS / 2,
+      cv: CV_MAX_VOLTS / 2,
+      audioMode: false,
+      // Settings-dialog range (always stored in cents) + step grid unit -
+      // see DetuneState's comment in NodeState.h. "semitone" = 100-cent
+      // grid, "cent" = 1-cent grid.
+      maxOffsetCents: 1200,
+      unit: "semitone",
+    });
   }
 
   const ports = document.createElement("div");
@@ -3961,6 +4025,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderHammondPorts(id, ports);
   } else if (type === "step-arpeggiator") {
     renderStepArpPorts(id, ports);
+  } else if (type === "drum-sequencer") {
+    renderDrumSequencerPorts(id, ports);
   } else if (type === "midi-split") {
     renderMidiSplitPorts(id, ports);
   } else {
@@ -4840,27 +4906,28 @@ function createWidget(type, label, x, y, forcedId) {
       }
       if (type === "detune" && port.id === "amount") {
         const detuneState = detuneStates.get(id);
-        const initialCents = Math.round(detuneAmountToCents(detuneState.amount) / DETUNE_CENTS_STEP) * DETUNE_CENTS_STEP;
 
+        // Same "0-10V, 5V = 0 offset" knob convention as StepArpeggiator's
+        // per-step pitch knobs - see nodes/DetuneNode.h's detuneOffsetVolts().
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "port-slider";
-        slider.min = String(-DETUNE_MAX_CENTS);
-        slider.max = String(DETUNE_MAX_CENTS);
-        slider.step = String(DETUNE_CENTS_STEP);
-        slider.value = String(initialCents);
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(detuneState.amount);
         slider.dataset.role = "detune-amount-slider";
         slider.addEventListener("mousedown", (e) => e.stopPropagation());
         slider.addEventListener("click", (e) => e.stopPropagation());
         slider.addEventListener("input", () => {
-          deliverToWidget(id, "amount", detuneCentsToAmount(parseFloat(slider.value)));
+          deliverToWidget(id, "amount", parseFloat(slider.value));
         });
         row.appendChild(slider);
 
         const valueSpan = document.createElement("span");
         valueSpan.className = "port-value";
         valueSpan.dataset.role = "detune-amount-value";
-        valueSpan.textContent = `${initialCents > 0 ? "+" : ""}${initialCents} ct`;
+        valueSpan.textContent = detuneOffsetLabel(detuneState);
         row.appendChild(valueSpan);
       }
       if (type === "frequency-divider" && port.id === "divider") {
@@ -5105,6 +5172,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "adsr") updateAdsrSliders(id);
   if (type === "dx-envelope") updateDxEnvelopeVisuals(id);
   if (type === "step-arpeggiator") updateStepArpVisual(id);
+  if (type === "drum-sequencer") updateDrumSequencerVisual(id);
   if (type === "sample-hold") updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
   if (type === "pan") updatePanVisual(id);
@@ -5179,6 +5247,10 @@ function removeWidget(id, force = false) {
   stepArpStopInternalClock(id);
   clearTimeout(stepArpStates.get(id)?.gateOutTimer);
   stepArpStates.delete(id);
+  drumSequencerStopInternalClock(id);
+  const drumState = drumSequencerStates.get(id);
+  if (drumState) drumState.triggerTimers.forEach((timer) => clearTimeout(timer));
+  drumSequencerStates.delete(id);
   const removedWasLinkedIO = el?.dataset.widgetType === "linked-input" || el?.dataset.widgetType === "linked-output";
   audioEngine.removeNode(id);
   refreshControlGraph();
@@ -5349,7 +5421,6 @@ function layoutPortsGrid(portsEl) {
   const isSoundFontPlayer = portsEl.closest('[data-widget-type="soundfont-player"]') !== null;
   const isMidiIn = portsEl.closest('[data-widget-type="midi-in"]') !== null;
   const isAudioInputLink = portsEl.closest('[data-widget-type="audio-input-link"]') !== null;
-  const isDetune = portsEl.closest('[data-widget-type="detune"]') !== null;
   const isPan = portsEl.closest('[data-widget-type="pan"]') !== null;
 
   outRows.forEach((row) => {
@@ -5388,13 +5459,13 @@ function layoutPortsGrid(portsEl) {
     ? -(portsEl.previousElementSibling?.offsetHeight || 0)
     : paddingTop + outputRowStart * rowHeight;
   const outputCenterOffset = isAudioInputLink ? Math.max(0, (rowHeight - 14) / 2) : 0;
-  const outputRowCount = outputRowStart + outRows.length + ((isDetune || isPan) ? 1 : 0);
+  const outputRowCount = outputRowStart + outRows.length + (isPan ? 1 : 0);
   portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowCount)}px`;
   outRows.forEach((row, i) => {
     row.style.position = "absolute";
-    // DeTune/Pan have a slider on their second input row. Keep second output
+    // Pan has a slider on its second input row. Keep its second output
     // label below that row instead of painting it over the slider/value.
-    const outputIndex = (isDetune || isPan) && i === 1 ? 2 : i;
+    const outputIndex = isPan && i === 1 ? 2 : i;
     row.style.top = `${outputTop + outputCenterOffset + outputIndex * rowHeight}px`;
     row.style.right = "0";
   });
@@ -9758,14 +9829,12 @@ function updateClockVisual(widgetId) {
   if (bpmLabel) bpmLabel.textContent = `${formatNumber(masterClockBpm)} BPM`;
 }
 
-// "bpm" output: same 0-maxBpm-to-0-10V scale the Master Clock dialog's own
-// MIDI-CC learn already uses (masterClockMaxBpm), just the other direction -
-// mirrors nodes/ClockNode.h's render() exactly. "hz" is the literal beat
-// frequency (bpm/60), not a scaled CV - see that same firmware comment.
-function propagateClockBpmHz(widgetId) {
-  const bpmVolts = masterClockMaxBpm > 0 ? clamp((masterClockBpm / masterClockMaxBpm) * CV_MAX_VOLTS, 0, CV_MAX_VOLTS) : 0;
-  propagate(widgetId, "bpm", bpmVolts);
-  propagate(widgetId, "hz", masterClockBpm / 60);
+// "frequency" output: same 0-maxBpm-to-0-10V scale the Master Clock dialog's
+// own MIDI-CC learn already uses (masterClockMaxBpm), just the other
+// direction - mirrors nodes/ClockNode.h's render() exactly.
+function propagateClockFrequency(widgetId) {
+  const frequencyVolts = masterClockMaxBpm > 0 ? clamp((masterClockBpm / masterClockMaxBpm) * CV_MAX_VOLTS, 0, CV_MAX_VOLTS) : 0;
+  propagate(widgetId, "frequency", frequencyVolts);
 }
 
 function fireClockPulse(widgetId) {
@@ -9793,7 +9862,7 @@ function restartClockTimer(widgetId) {
 
   stopClockTimer(widgetId);
   updateClockVisual(widgetId);
-  propagateClockBpmHz(widgetId);
+  propagateClockFrequency(widgetId);
   if (masterClockBpm <= 0) return;
 
   const intervalMs = 60000 / masterClockBpm;
@@ -9804,7 +9873,7 @@ function restartClockTimer(widgetId) {
 
 const lfoStates = new Map();
 const LFO_TICK_MS = 30;
-const LFO_MAX_RATE_HZ = 50;
+const LFO_MAX_RATE_HZ = 500;
 const lfoSettingsOverlay = document.getElementById("lfoSettingsOverlay");
 const lfoMaxRateInput = document.getElementById("lfoMaxRateInput");
 let pendingLfoId = null;
@@ -10535,6 +10604,104 @@ document.getElementById("stepArpSettingsSave").addEventListener("click", () => {
     }
   }
   closeStepArpSettings();
+});
+
+const drumSequencerStates = new Map();
+const DRUM_STEPS_PER_BAR = 16;
+const DRUM_DEFAULT_BARS = 4;
+const DRUM_MAX_BARS = 16;
+const DRUM_MAX_TRACKS = 8;
+const DRUM_BAR_COUNTS = [4, 8, 12, 16];
+
+const drumSequencerSettingsOverlay = document.getElementById("drumSequencerSettingsOverlay");
+const drumSequencerBarCountInput = document.getElementById("drumSequencerBarCountInput");
+const drumSequencerTrackCountInput = document.getElementById("drumSequencerTrackCountInput");
+const drumSequencerPulseMsInput = document.getElementById("drumSequencerPulseMsInput");
+const drumSequencerClockMaxBpmInput = document.getElementById("drumSequencerClockMaxBpmInput");
+const drumSequencerClockRoundBpmInput = document.getElementById("drumSequencerClockRoundBpmInput");
+let pendingDrumSequencerId = null;
+
+function openDrumSequencerSettings(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  pendingDrumSequencerId = widgetId;
+  drumSequencerBarCountInput.value = String(state.barCount);
+  drumSequencerTrackCountInput.value = String(state.trackCount);
+  drumSequencerPulseMsInput.value = String(state.pulseMs);
+  drumSequencerClockMaxBpmInput.value = String(state.clockMaxBpm);
+  drumSequencerClockRoundBpmInput.checked = state.clockRoundBpm === true;
+  drumSequencerSettingsOverlay.classList.remove("hidden");
+}
+
+function closeDrumSequencerSettings() {
+  drumSequencerSettingsOverlay.classList.add("hidden");
+  pendingDrumSequencerId = null;
+}
+
+function reshapeDrumSequencer(state, barCount, trackCount) {
+  const oldSteps = state.barCount * DRUM_STEPS_PER_BAR;
+  const newSteps = barCount * DRUM_STEPS_PER_BAR;
+  const active = new Array(newSteps * trackCount).fill(false);
+  const velocities = new Array(newSteps * trackCount).fill(CV_MAX_VOLTS);
+  const copyTracks = Math.min(state.trackCount, trackCount);
+  const copySteps = Math.min(oldSteps, newSteps);
+  for (let track = 0; track < copyTracks; track += 1) {
+    for (let step = 0; step < copySteps; step += 1) {
+      active[track * newSteps + step] = state.active[track * oldSteps + step] === true;
+      velocities[track * newSteps + step] = state.velocities[track * oldSteps + step];
+    }
+  }
+  state.barCount = barCount;
+  state.trackCount = trackCount;
+  state.active = active;
+  state.velocities = velocities;
+  if (state.currentStep >= newSteps) state.currentStep = 0;
+}
+
+document.getElementById("drumSequencerSettingsCancel").addEventListener("click", closeDrumSequencerSettings);
+
+document.getElementById("drumSequencerSettingsSave").addEventListener("click", () => {
+  if (!pendingDrumSequencerId) return;
+  const widgetId = pendingDrumSequencerId;
+  const state = drumSequencerStates.get(widgetId);
+  if (state) {
+    const requestedBars = Number(drumSequencerBarCountInput.value);
+    const barCount = DRUM_BAR_COUNTS.includes(requestedBars) ? requestedBars : DRUM_DEFAULT_BARS;
+    const trackCount = clamp(parseInt(drumSequencerTrackCountInput.value, 10) || 1, 1, DRUM_MAX_TRACKS);
+    const structural = barCount !== state.barCount || trackCount !== state.trackCount;
+    if (trackCount < state.trackCount) {
+      for (let track = trackCount + 1; track <= state.trackCount; track += 1) {
+        removeConnectionsForPort(widgetId, `trigger${track}`, "out");
+        removeConnectionsForPort(widgetId, `velocity${track}`, "out");
+        clearTimeout(state.triggerTimers[track - 1]);
+      }
+    }
+    if (structural) reshapeDrumSequencer(state, barCount, trackCount);
+
+    let pulseMs = parseFloatFlexible(drumSequencerPulseMsInput.value);
+    if (!Number.isFinite(pulseMs) || pulseMs <= 0) pulseMs = 10;
+    state.pulseMs = pulseMs;
+    let maxBpm = parseFloatFlexible(drumSequencerClockMaxBpmInput.value);
+    if (!Number.isFinite(maxBpm) || maxBpm <= 0) maxBpm = 120;
+    state.clockMaxBpm = maxBpm;
+    state.clockRoundBpm = drumSequencerClockRoundBpmInput.checked === true;
+
+    if (structural) {
+      const portsEl = document.getElementById(widgetId)?.querySelector(".widget-ports");
+      if (portsEl) renderDrumSequencerPorts(widgetId, portsEl);
+      drawConnections();
+      savePresetNow();
+    } else {
+      updateDrumSequencerVisual(widgetId);
+      drumSequencerRestartInternalClock(widgetId);
+      sendLiveParamUpdate(widgetId, {
+        pulseMs: state.pulseMs,
+        clockMaxBpm: state.clockMaxBpm,
+        clockRoundBpm: state.clockRoundBpm ? 1 : 0,
+      });
+    }
+  }
+  closeDrumSequencerSettings();
 });
 
 function updateOscillatorFreqLabel(widgetId) {
@@ -11480,28 +11647,39 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
 
 const detuneStates = new Map();
 
-const DETUNE_MAX_VOLTS = 0.5;
-
-
-
-const DETUNE_MAX_CENTS = DETUNE_MAX_VOLTS * 1200;
-const DETUNE_CENTS_STEP = 100; 
-
-function detuneAmountToCents(amount) {
-  return clamp(amount, -1, 1) * DETUNE_MAX_CENTS;
+// state.unit: "semitone" (100-cent grid) or "cent" (1-cent grid) - the
+// settings-dialog choice (see openDetuneSettings). state.maxOffsetCents is
+// always stored in cents regardless of the display unit, matching the
+// firmware preset field (nodes/DetuneNode.h).
+function detuneStepCents(state) {
+  return state.unit === "cent" ? 1 : 100;
 }
 
-function detuneCentsToAmount(cents) {
-  return clamp(cents, -DETUNE_MAX_CENTS, DETUNE_MAX_CENTS) / DETUNE_MAX_CENTS;
+// Mirrors nodes/DetuneNode.h's detuneOffsetVolts() exactly: the "amount"
+// knob's full 0-10V travel is rescaled to +/-maxOffsetCents (5V = 0), then
+// rounded to the step grid - same convention as StepArpeggiator's per-step
+// pitch knobs.
+function detuneOffsetCents(state) {
+  const normalized = (state.amount - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2);
+  const rawCents = normalized * state.maxOffsetCents;
+  const stepCents = detuneStepCents(state);
+  return stepCents > 0 ? Math.round(rawCents / stepCents) * stepCents : rawCents;
+}
+
+function detuneOffsetVolts(state) {
+  return detuneOffsetCents(state) / 1200;
+}
+
+function detuneOffsetLabel(state) {
+  const cents = detuneOffsetCents(state);
+  if (state.unit === "cent") return `${cents > 0 ? "+" : ""}${cents} ct`;
+  const semitones = cents / 100;
+  return `${semitones > 0 ? "+" : ""}${semitones} st`;
 }
 
 function detuneOutputs(state) {
-  const amount = clamp(state.amount, -1, 1);
-  const deltaVolts = amount * DETUNE_MAX_VOLTS;
-  return { f1: state.cv + deltaVolts, f2: state.cv - deltaVolts };
+  return { out: state.cv + detuneOffsetVolts(state) };
 }
-
-
 
 
 
@@ -11513,18 +11691,18 @@ function recomputeDetune(widgetId, cv, voiceIndex) {
   if (!state) return;
   if (cv !== undefined) state.cv = cv;
   if (state.audioMode) return;
-  const { f1, f2 } = detuneOutputs(state);
-  propagate(widgetId, "f1", roundFloat(f1, 4), voiceIndex);
-  propagate(widgetId, "f2", roundFloat(f2, 4), voiceIndex);
+  const { out } = detuneOutputs(state);
+  propagate(widgetId, "out", roundFloat(out, 4), voiceIndex);
 }
-
-
-
 
 function updateDetuneMode(widgetId) {
   const state = detuneStates.get(widgetId);
   if (!state) return;
-  updateDualModeAudioNode(widgetId, "detune", state, ["cv"], { amount: state.amount });
+  updateDualModeAudioNode(widgetId, "detune", state, ["cv"], {
+    amount: state.amount,
+    maxOffsetCents: state.maxOffsetCents,
+    stepCents: detuneStepCents(state),
+  });
   recomputeDetune(widgetId);
 }
 
@@ -11533,14 +11711,57 @@ function updateDetuneVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
 
-  const cents = Math.round(detuneAmountToCents(state.amount) / DETUNE_CENTS_STEP) * DETUNE_CENTS_STEP;
   const slider = el.querySelector('[data-role="detune-amount-slider"]');
-  if (slider) slider.value = String(cents);
+  if (slider) slider.value = String(state.amount);
   const valueSpan = el.querySelector('[data-role="detune-amount-value"]');
-  if (valueSpan) valueSpan.textContent = `${cents > 0 ? "+" : ""}${cents} ct`;
+  if (valueSpan) valueSpan.textContent = detuneOffsetLabel(state);
 }
 
+let pendingDetuneId = null;
+const detuneSettingsOverlay = document.getElementById("detuneSettingsOverlay");
+const detuneMaxOffsetInput = document.getElementById("detuneMaxOffsetInput");
+const detuneUnitSelect = document.getElementById("detuneUnitSelect");
 
+function openDetuneSettings(widgetId) {
+  const state = detuneStates.get(widgetId);
+  if (!state) return;
+  pendingDetuneId = widgetId;
+  detuneUnitSelect.value = state.unit;
+  // Displayed in whatever unit is currently selected - maxOffsetCents
+  // itself always stays stored in cents (see detuneStepCents's comment).
+  detuneMaxOffsetInput.value = String(state.unit === "cent" ? state.maxOffsetCents : state.maxOffsetCents / 100);
+  detuneSettingsOverlay.classList.remove("hidden");
+}
+
+function closeDetuneSettings() {
+  detuneSettingsOverlay.classList.add("hidden");
+  pendingDetuneId = null;
+}
+
+document.getElementById("detuneSettingsCancel").addEventListener("click", closeDetuneSettings);
+
+document.getElementById("detuneSettingsSave").addEventListener("click", () => {
+  if (!pendingDetuneId) return;
+  const state = detuneStates.get(pendingDetuneId);
+  if (state) {
+    const unit = detuneUnitSelect.value === "cent" ? "cent" : "semitone";
+    let entered = parseFloatFlexible(detuneMaxOffsetInput.value);
+    if (Number.isNaN(entered) || entered < 0) entered = unit === "cent" ? 1200 : 12;
+    state.unit = unit;
+    state.maxOffsetCents = unit === "cent" ? entered : entered * 100;
+    updateDetuneVisual(pendingDetuneId);
+    if (state.audioMode) {
+      audioEngine.setParam(pendingDetuneId, "maxOffsetCents", state.maxOffsetCents);
+      audioEngine.setParam(pendingDetuneId, "stepCents", detuneStepCents(state));
+    }
+    recomputeDetune(pendingDetuneId);
+    sendLiveParamUpdateThrottled(pendingDetuneId, {
+      maxOffsetCents: state.maxOffsetCents,
+      stepCents: detuneStepCents(state),
+    });
+  }
+  closeDetuneSettings();
+});
 
 const MIDI_SPLIT_MAX_ZONES = 4;
 const midiSplitStates = new Map();
@@ -12951,6 +13172,314 @@ function stepArpTriggerStep(widgetId, state, el) {
   }, state.pulseMs);
 
   state.currentStep = stepArpNextIndex(state);
+}
+
+let drumPaintSession = null;
+
+function drumSequencerTotalSteps(state) {
+  return state.barCount * DRUM_STEPS_PER_BAR;
+}
+
+function drumSequencerCellIndex(state, track, step) {
+  return track * drumSequencerTotalSteps(state) + step;
+}
+
+function drumSequencerEncodedCell(state, index) {
+  const volts = clamp(Number(state.velocities[index]) || 0, 0, CV_MAX_VOLTS);
+  return state.active[index] ? volts : -(volts + 1);
+}
+
+function buildDrumSequencerPort(widgetId, port, direction) {
+  const source = createPortRow(widgetId, port, direction, "drum-sequencer");
+  const dot = source.querySelector(".port-dot");
+  const label = source.querySelector(".port-label");
+  const line = document.createElement("div");
+  line.className = `drum-sequencer-port drum-sequencer-port-${direction}`;
+  if (direction === "out") {
+    line.appendChild(label);
+    line.appendChild(dot);
+  } else {
+    line.appendChild(dot);
+    line.appendChild(label);
+  }
+  return line;
+}
+
+function renderDrumSequencerPorts(widgetId, portsEl) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  const inputs = document.createElement("div");
+  inputs.className = "drum-sequencer-inputs";
+  const clockLine = buildDrumSequencerPort(widgetId, { id: "clock", label: "Clock" }, "in");
+  inputs.appendChild(clockLine);
+  const rateLine = buildDrumSequencerPort(widgetId, { id: "rate", label: "Rate" }, "in");
+  const rateSlider = document.createElement("input");
+  rateSlider.type = "range";
+  rateSlider.min = "0";
+  rateSlider.max = String(CV_MAX_VOLTS);
+  rateSlider.step = "0.05";
+  rateSlider.className = "drum-sequencer-rate";
+  rateSlider.dataset.role = "drum-sequencer-rate";
+  rateSlider.addEventListener("mousedown", (e) => e.stopPropagation());
+  rateSlider.addEventListener("input", () => setDrumSequencerRate(widgetId, Number(rateSlider.value)));
+  const rateValue = document.createElement("span");
+  rateValue.className = "port-value";
+  rateValue.dataset.role = "drum-sequencer-rate-value";
+  rateLine.appendChild(rateSlider);
+  rateLine.appendChild(rateValue);
+  inputs.appendChild(rateLine);
+  portsEl.appendChild(inputs);
+
+  const layout = document.createElement("div");
+  layout.className = "drum-sequencer-pattern-layout";
+  const scroll = document.createElement("div");
+  scroll.className = "drum-sequencer-scroll";
+  const grid = document.createElement("div");
+  grid.className = "drum-sequencer-grid";
+  const totalSteps = drumSequencerTotalSteps(state);
+  grid.style.gridTemplateColumns = `36px repeat(${totalSteps}, 22px)`;
+
+  const barCorner = document.createElement("span");
+  barCorner.className = "drum-sequencer-track-label drum-sequencer-corner";
+  grid.appendChild(barCorner);
+  for (let bar = 0; bar < state.barCount; bar += 1) {
+    const barLabel = document.createElement("span");
+    barLabel.className = "drum-sequencer-bar-label";
+    barLabel.style.gridColumn = "span 16";
+    barLabel.textContent = `Bar ${bar + 1}`;
+    grid.appendChild(barLabel);
+  }
+  const stepCorner = document.createElement("span");
+  stepCorner.className = "drum-sequencer-track-label drum-sequencer-corner";
+  grid.appendChild(stepCorner);
+  for (let step = 0; step < totalSteps; step += 1) {
+    const number = document.createElement("span");
+    number.className = "drum-sequencer-step-number";
+    if (step % DRUM_STEPS_PER_BAR === 0) number.classList.add("bar-start");
+    number.textContent = String((step % DRUM_STEPS_PER_BAR) + 1);
+    number.title = `Bar ${Math.floor(step / DRUM_STEPS_PER_BAR) + 1}, Step ${(step % DRUM_STEPS_PER_BAR) + 1}`;
+    grid.appendChild(number);
+  }
+
+  for (let track = 0; track < state.trackCount; track += 1) {
+    const label = document.createElement("span");
+    label.className = "drum-sequencer-track-label";
+    label.textContent = String(track + 1);
+    grid.appendChild(label);
+    for (let step = 0; step < totalSteps; step += 1) {
+      const index = drumSequencerCellIndex(state, track, step);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "drum-sequencer-cell";
+      if (step % DRUM_STEPS_PER_BAR === 0) cell.classList.add("bar-start");
+      cell.dataset.drumCell = String(index);
+      cell.dataset.track = String(track);
+      cell.dataset.step = String(step);
+      cell.addEventListener("mousedown", (e) => startDrumSequencerPaint(e, widgetId, index));
+      cell.addEventListener("mouseenter", (e) => continueDrumSequencerPaint(e, widgetId, index));
+      cell.addEventListener("wheel", (e) => adjustDrumSequencerVelocity(e, widgetId, index), { passive: false });
+      grid.appendChild(cell);
+    }
+  }
+  scroll.appendChild(grid);
+  layout.appendChild(scroll);
+
+  const outputs = document.createElement("div");
+  outputs.className = "drum-sequencer-outputs";
+  const outputHeader = document.createElement("div");
+  outputHeader.className = "drum-sequencer-output-header";
+  outputHeader.textContent = "T / V";
+  outputs.appendChild(outputHeader);
+  for (let track = 1; track <= state.trackCount; track += 1) {
+    const row = document.createElement("div");
+    row.className = "drum-sequencer-output-pair";
+    row.appendChild(buildDrumSequencerPort(widgetId, { id: `trigger${track}`, label: "T" }, "out"));
+    row.appendChild(buildDrumSequencerPort(widgetId, { id: `velocity${track}`, label: "V" }, "out"));
+    outputs.appendChild(row);
+  }
+  layout.appendChild(outputs);
+  portsEl.appendChild(layout);
+  updateDrumSequencerVisual(widgetId);
+  drumSequencerRestartInternalClock(widgetId);
+}
+
+function updateDrumSequencerCell(widgetId, index, targetCell) {
+  const state = drumSequencerStates.get(widgetId);
+  const cell = targetCell || document.getElementById(widgetId)?.querySelector(`[data-drum-cell="${index}"]`);
+  if (!state || !cell) return;
+  const volts = clamp(Number(state.velocities[index]) || 0, 0, CV_MAX_VOLTS);
+  cell.classList.toggle("active", state.active[index] === true);
+  cell.style.setProperty("--velocity", String(volts / CV_MAX_VOLTS));
+  const track = Number(cell.dataset.track);
+  const step = Number(cell.dataset.step);
+  cell.title = `Track ${track + 1}, Bar ${Math.floor(step / DRUM_STEPS_PER_BAR) + 1}, Step ${(step % DRUM_STEPS_PER_BAR) + 1}: ${volts.toFixed(1)} V`;
+}
+
+function updateDrumSequencerVisual(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  el.querySelectorAll(".drum-sequencer-cell").forEach((cell) => {
+    const index = Number(cell.dataset.drumCell);
+    updateDrumSequencerCell(widgetId, index, cell);
+  });
+  updateDrumSequencerPlayhead(widgetId);
+  const rateSlider = el.querySelector('[data-role="drum-sequencer-rate"]');
+  const rateWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "rate");
+  if (rateSlider) {
+    rateSlider.value = String(state.clockCvVolts);
+    rateSlider.disabled = rateWired;
+  }
+  const rateValue = el.querySelector('[data-role="drum-sequencer-rate-value"]');
+  if (rateValue) rateValue.textContent = `${formatNumber(drumSequencerBpm(state))} BPM`;
+}
+
+function updateDrumSequencerPlayhead(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  el.querySelectorAll(".drum-sequencer-cell.playing").forEach((cell) => cell.classList.remove("playing"));
+  if (state.lastStep >= 0) {
+    el.querySelectorAll(`[data-step="${state.lastStep}"]`).forEach((cell) => cell.classList.add("playing"));
+  }
+}
+
+function setDrumSequencerCell(widgetId, index, active, velocity) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state || index < 0 || index >= state.active.length) return;
+  state.active[index] = active;
+  if (velocity !== undefined) state.velocities[index] = clamp(velocity, 0, CV_MAX_VOLTS);
+  updateDrumSequencerCell(widgetId, index);
+  sendLiveParamUpdateThrottled(widgetId, { [`cell${index}`]: drumSequencerEncodedCell(state, index) });
+}
+
+function startDrumSequencerPaint(e, widgetId, index) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  pushHistorySnapshot();
+  drumPaintSession = {
+    widgetId,
+    active: !state.active[index],
+    velocity: state.velocities[index],
+    visited: new Set(),
+  };
+  paintDrumSequencerCell(widgetId, index);
+  const finish = () => {
+    drumPaintSession = null;
+    document.removeEventListener("mouseup", finish);
+    markDirty();
+  };
+  document.addEventListener("mouseup", finish);
+}
+
+function paintDrumSequencerCell(widgetId, index) {
+  if (!drumPaintSession || drumPaintSession.widgetId !== widgetId || drumPaintSession.visited.has(index)) return;
+  drumPaintSession.visited.add(index);
+  setDrumSequencerCell(
+    widgetId,
+    index,
+    drumPaintSession.active,
+    drumPaintSession.active ? drumPaintSession.velocity : undefined
+  );
+}
+
+function continueDrumSequencerPaint(e, widgetId, index) {
+  if (!drumPaintSession || (e.buttons & 1) === 0) return;
+  paintDrumSequencerCell(widgetId, index);
+}
+
+function adjustDrumSequencerVelocity(e, widgetId, index) {
+  e.preventDefault();
+  e.stopPropagation();
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  const delta = e.deltaY < 0 ? 0.1 : -0.1;
+  setDrumSequencerCell(widgetId, index, state.active[index], Math.round(clamp(state.velocities[index] + delta, 0, CV_MAX_VOLTS) * 10) / 10);
+  markDirty();
+}
+
+function clearDrumSequencer(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  pushHistorySnapshot();
+  state.active.fill(false);
+  state.velocities.fill(CV_MAX_VOLTS);
+  state.currentStep = 0;
+  state.lastStep = -1;
+  state.heldVelocity.fill(0);
+  state.triggerTimers.forEach((timer, track) => {
+    clearTimeout(timer);
+    state.triggerTimers[track] = null;
+    propagate(widgetId, `trigger${track + 1}`, GATE_OFF_VOLTS);
+    propagate(widgetId, `velocity${track + 1}`, 0);
+  });
+  updateDrumSequencerVisual(widgetId);
+  savePresetNow();
+}
+
+function drumSequencerBpm(state) {
+  const bpm = (state.clockCvVolts / CV_MAX_VOLTS) * state.clockMaxBpm;
+  return state.clockRoundBpm ? Math.round(bpm) : bpm;
+}
+
+function setDrumSequencerRate(widgetId, volts) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  state.clockCvVolts = clamp(volts, 0, CV_MAX_VOLTS);
+  updateDrumSequencerVisual(widgetId);
+  drumSequencerRestartInternalClock(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { clockCvVolts: state.clockCvVolts });
+}
+
+function drumSequencerStopInternalClock(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (state?.clockTickTimer) {
+    clearInterval(state.clockTickTimer);
+    state.clockTickTimer = null;
+  }
+}
+
+function drumSequencerRestartInternalClock(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  drumSequencerStopInternalClock(widgetId);
+  if (connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "clock")) return;
+  const bpm = drumSequencerBpm(state);
+  if (bpm <= 0) return;
+  state.clockTickTimer = setInterval(() => drumSequencerTriggerStep(widgetId), 60000 / bpm);
+}
+
+function drumSequencerTriggerStep(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const totalSteps = drumSequencerTotalSteps(state);
+  const playedStep = state.currentStep;
+  state.lastStep = playedStep;
+  for (let track = 0; track < state.trackCount; track += 1) {
+    const index = drumSequencerCellIndex(state, track, playedStep);
+    if (!state.active[index]) continue;
+    const velocity = state.velocities[index];
+    state.heldVelocity[track] = velocity;
+    propagate(widgetId, `velocity${track + 1}`, velocity);
+    const triggerPort = `trigger${track + 1}`;
+    const triggerDot = el.querySelector(`[data-port-id="${triggerPort}"][data-port-dir="out"]`);
+    setLedActive(triggerDot, true);
+    propagate(widgetId, triggerPort, GATE_ON_VOLTS);
+    clearTimeout(state.triggerTimers[track]);
+    state.triggerTimers[track] = setTimeout(() => {
+      setLedActive(triggerDot, false);
+      propagate(widgetId, triggerPort, GATE_OFF_VOLTS);
+      state.triggerTimers[track] = null;
+    }, state.pulseMs);
+  }
+  state.currentStep = (playedStep + 1) % totalSteps;
+  updateDrumSequencerPlayhead(widgetId);
 }
 
 function recomputeHammondFreq(widgetId, voiceIndex) {
@@ -15033,6 +15562,10 @@ function drawConnections() {
     updateStepArpVisual(widgetId);
     stepArpRestartInternalClock(widgetId);
   });
+  drumSequencerStates.forEach((_, widgetId) => {
+    updateDrumSequencerVisual(widgetId);
+    drumSequencerRestartInternalClock(widgetId);
+  });
   sampleHoldStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
   waveFolderStates.forEach((_, widgetId) => updateWaveFolderVisual(widgetId));
   panStates.forEach((_, widgetId) => updatePanVisual(widgetId));
@@ -15902,7 +16435,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const state = detuneStates.get(widgetId);
     if (state) {
       const num = Number(value);
-      state.amount = Number.isNaN(num) ? 0 : clamp(num, -1, 1);
+      state.amount = Number.isNaN(num) ? CV_MAX_VOLTS / 2 : clamp(num, 0, CV_MAX_VOLTS);
       updateDetuneVisual(widgetId);
       sendLiveParamUpdateThrottled(widgetId, { amount: state.amount });
       if (state.audioMode) audioEngine.setParam(widgetId, "amount", state.amount, 0);
@@ -16080,6 +16613,20 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       state.clockCvVolts = Number(value) || 0;
       updateStepArpRateVisual(widgetId);
       stepArpRestartInternalClock(widgetId);
+    }
+  }
+
+  if (el.dataset.widgetType === "drum-sequencer") {
+    const state = drumSequencerStates.get(widgetId);
+    if (state && portId === "clock") {
+      const clockOn = Number(value) >= GATE_THRESHOLD_VOLTS;
+      setLedActive(el.querySelector('[data-port-id="clock"][data-port-dir="in"]'), clockOn);
+      if (clockOn && !state.clockPrev) drumSequencerTriggerStep(widgetId);
+      state.clockPrev = clockOn;
+    } else if (state && portId === "rate") {
+      state.clockCvVolts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+      updateDrumSequencerVisual(widgetId);
+      drumSequencerRestartInternalClock(widgetId);
     }
   }
 
@@ -17627,12 +18174,18 @@ const WIDGET_ENGINES = {
   detune: {
     getParams: (id) => {
       const state = detuneStates.get(id);
-      return state ? { amount: state.amount } : {};
+      return state
+        ? { amount: state.amount, maxOffsetCents: state.maxOffsetCents, stepCents: detuneStepCents(state) }
+        : {};
     },
     applyParams: (id, params) => {
       const state = detuneStates.get(id);
       if (!state || !params) return;
-      state.amount = clamp(params.amount ?? 0, -1, 1);
+      const amount = Number(params.amount);
+      state.amount = clamp(Number.isFinite(amount) ? amount : CV_MAX_VOLTS / 2, 0, CV_MAX_VOLTS);
+      const maxOffsetCents = Number(params.maxOffsetCents);
+      state.maxOffsetCents = Number.isFinite(maxOffsetCents) && maxOffsetCents >= 0 ? maxOffsetCents : 1200;
+      state.unit = Number(params.stepCents) <= 1 ? "cent" : "semitone";
       updateDetuneVisual(id);
     },
   },
@@ -17852,6 +18405,55 @@ const WIDGET_ENGINES = {
       if (portsEl) renderStepArpPorts(id, portsEl);
       updateStepArpVisual(id);
       stepArpRestartInternalClock(id);
+    },
+  },
+  "drum-sequencer": {
+    getParams: (id) => {
+      const state = drumSequencerStates.get(id);
+      return state
+        ? {
+            barCount: state.barCount,
+            trackCount: state.trackCount,
+            cells: state.active.map((active, index) =>
+              active ? state.velocities[index] : -(state.velocities[index] + 1)
+            ),
+            pulseMs: state.pulseMs,
+            clockCvVolts: state.clockCvVolts,
+            clockMaxBpm: state.clockMaxBpm,
+            clockRoundBpm: state.clockRoundBpm === true,
+          }
+        : {};
+    },
+    applyParams: (id, params) => {
+      const state = drumSequencerStates.get(id);
+      if (!state || !params) return;
+      const requestedBars = Number(params.barCount);
+      const barCount = DRUM_BAR_COUNTS.includes(requestedBars) ? requestedBars : DRUM_DEFAULT_BARS;
+      const trackCount = clamp(parseInt(params.trackCount, 10) || 1, 1, DRUM_MAX_TRACKS);
+      reshapeDrumSequencer(state, barCount, trackCount);
+      state.active.fill(false);
+      state.velocities.fill(CV_MAX_VOLTS);
+      if (Array.isArray(params.cells)) {
+        const count = Math.min(params.cells.length, state.active.length);
+        for (let index = 0; index < count; index += 1) {
+          const encoded = Number(params.cells[index]);
+          if (!Number.isFinite(encoded)) continue;
+          state.active[index] = encoded >= 0;
+          state.velocities[index] = clamp(encoded >= 0 ? encoded : -encoded - 1, 0, CV_MAX_VOLTS);
+        }
+      }
+      const pulseMs = Number(params.pulseMs);
+      state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? pulseMs : 10;
+      state.clockCvVolts = clamp(Number(params.clockCvVolts) || 0, 0, CV_MAX_VOLTS);
+      const maxBpm = Number(params.clockMaxBpm);
+      state.clockMaxBpm = Number.isFinite(maxBpm) && maxBpm > 0 ? maxBpm : 120;
+      state.clockRoundBpm = params.clockRoundBpm === true;
+      state.currentStep = 0;
+      state.lastStep = -1;
+      const portsEl = document.getElementById(id)?.querySelector(".widget-ports");
+      if (portsEl) renderDrumSequencerPorts(id, portsEl);
+      updateDrumSequencerVisual(id);
+      drumSequencerRestartInternalClock(id);
     },
   },
   const: {

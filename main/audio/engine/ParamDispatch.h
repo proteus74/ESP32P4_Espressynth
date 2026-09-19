@@ -39,6 +39,7 @@
 #include "nodes/OutputNodes.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
+#include "nodes/DrumSequencerNode.h"
 #include "nodes/ValueMapperNode.h"
 
 namespace
@@ -191,6 +192,8 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::StepArpeggiator:
         return nodes::steparp::setParam(inst, name, value);
+    case NodeType::DrumSequencer:
+        return nodes::drumsequencer::setParam(inst, name, value);
 
     case NodeType::AudioOut:
     case NodeType::UsbOut:

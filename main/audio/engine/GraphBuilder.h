@@ -53,6 +53,7 @@
 #include "nodes/OutputSwitchNode.h"
 #include "nodes/ReverbNode.h"
 #include "nodes/StepArpeggiatorNode.h"
+#include "nodes/DrumSequencerNode.h"
 #include "nodes/SwitchNode.h"
 #include "nodes/ValueMapperNode.h"
 
@@ -149,9 +150,9 @@ inline bool hasStereoOutput(NodeType type)
 {
     return type == NodeType::Chorus || type == NodeType::EspEq || ports::isGlobalOnly(type) ||
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
-           type == NodeType::Wm8960Out || type == NodeType::Detune || type == NodeType::WavePlayer ||
+           type == NodeType::Wm8960Out || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
-           type == NodeType::StepArpeggiator || type == NodeType::Pan || type == NodeType::OutputSwitch ||
+           type == NodeType::StepArpeggiator || type == NodeType::DrumSequencer || type == NodeType::Pan || type == NodeType::OutputSwitch ||
            type == NodeType::OutputMultiplexer || type == NodeType::Clock;
 }
 
@@ -514,6 +515,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::StepArpeggiator:
         nodes::steparp::build(inst, p);
         break;
+    case NodeType::DrumSequencer:
+        nodes::drumsequencer::build(inst, p);
+        break;
     case NodeType::Filter:
         nodes::filter::build(inst, p);
         break;
@@ -867,6 +871,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.stepArp = allocateNodeState<StepArpState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.stepArp == nullptr);
                 break;
+            case NodeType::DrumSequencer:
+                inst.drumSequencer = allocateNodeState<DrumSequencerState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.drumSequencer == nullptr);
+                break;
             case NodeType::Filter:
                 inst.filter = allocateNodeState<FilterState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.filter == nullptr);
@@ -972,18 +980,22 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     return g;
                 }
             }
-            if (w.type == NodeType::Clock)
+            if (w.type == NodeType::DrumSequencer)
             {
-                // Third output ("hz") - "pulse"/"bpm" already got outL/outR
-                // above (hasStereoOutput). See ClockState::hzOut's comment.
-                inst.clock.hzOut = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
-                if (inst.clock.hzOut != nullptr)
+                const uint8_t trackCount = nodes::drumsequencer::clampTrackCount(doc.widgets[i].params.drumTrackCount);
+                const int extraCount = static_cast<int>(trackCount) * 2 - 2;
+                bool buffersAllocated = true;
+                for (int e = 0; e < extraCount; ++e)
                 {
-                    ++blockBufferCount;
+                    inst.drumSequencer->outPorts[e] = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
+                    if (inst.drumSequencer->outPorts[e] != nullptr)
+                        ++blockBufferCount;
+                    else
+                        buffersAllocated = false;
                 }
-                else
+                if (!buffersAllocated)
                 {
-                    ESP_LOGE(kGraphBuilderTag, "Clock hz buffer allocation failed");
+                    ESP_LOGE(kGraphBuilderTag, "DrumSequencer buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
                     g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
