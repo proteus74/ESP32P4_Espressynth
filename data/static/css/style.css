@@ -2601,10 +2601,9 @@ body.show-node-cpu .widget-cpu-badge {
   margin: 0;
 }
 
-/* Filter-Widget (auch fuers Gain/VCA-Widget's Lin/Exp-Umschalter, .gain-body) */
+/* Filter-Widget */
 
-.filter-body,
-.gain-body {
+.filter-body {
   display: flex;
   flex-direction: column;
   align-items: center;

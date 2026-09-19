@@ -93,11 +93,13 @@ struct WidgetParams
     float eqGainDb = 0.0f;
     // eq-only bypass (see EspEqState::bypass).
     bool eqBypass = false;
-    // gain - "amount" is raw CV (0-10V, see CvConventions.h), 10V = unity-
-    // gain default (see GainState). gainGlobal is the "global" port's
-    // UI-toggle fallback (see GainState::global), same pattern as lfoGlobal.
+    // gain - "amount" (Output Gain) and "curve" are raw CV (0-10V, see
+    // CvConventions.h): amount 10V = unity gain default, curve 5V = unity
+    // default (see GainState/cv::curveGain). gainGlobal is the "global"
+    // port's UI-toggle fallback (see GainState::global), same pattern as
+    // lfoGlobal.
     float amount = 10.0f;
-    bool amountExponential = false;
+    float curve = 5.0f;
     bool gainGlobal = false;
     // bitcrusher - 0..10 combines 16..2-bit quantization with 1..32-sample hold.
     float bitcrusherCrush = 5.0f;
@@ -292,6 +294,11 @@ struct WidgetParams
     // 0-10V maps to (in seconds) whenever the port IS wired.
     float stepArpPulseMs = 10.0f;
     float stepArpPulseTimeMinSec = 0.001f, stepArpPulseTimeMaxSec = 2.0f;
+    // Settings-dialog cap (semitones) on a step knob's pitch-CV offset when
+    // "pitch" is wired - see nodes/StepArpeggiatorNode.h's StepArpState::
+    // maxSemitoneOffset comment. Default 60 keeps the previous, uncapped
+    // 5-octave behavior.
+    float stepArpMaxSemitoneOffset = 60.0f;
     // Local knob fallback (0-10V) for the "direction" port - only consulted
     // while unwired. Default 0V = Forward (see directionFromCv()).
     float stepArpDirectionVolts = 0.0f;

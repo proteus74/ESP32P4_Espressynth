@@ -159,6 +159,20 @@ inline float vcaGain(float volts, bool exponential)
     return v;
 }
 
+// Second VCA stage for the Gain/VCA widget's "curve" port (replaces the
+// former linear/exponential toggle): 0-10V CV -> gain factor 0..2, with 5V
+// as the unity point (0V = silent, 5V = 1x, 10V = 2x) - a single linear ramp
+// across the whole range (gain = CV/5) already puts the unity point exactly
+// at 5V, no piecewise shaping needed. Multiplies onto "amount"/Output Gain.
+inline float curveGain(float volts)
+{
+    if (volts < 0.0f)
+        volts = 0.0f;
+    if (volts > kMaxVolts)
+        volts = kMaxVolts;
+    return volts * (2.0f / kMaxVolts);
+}
+
 // Both filter widgets expose "filterType" and "slope" as discrete 0-10V
 // selectors, split into equal steps across the list. Mirrors main.js's
 // filterTypeFromCv/filterSlopeFromCv, which must stay in the same order.

@@ -453,6 +453,12 @@ inline float *outputPortBuffer(NodeInstance &inst, uint8_t port)
         return inst.outputMux != nullptr && extra < kOutputMultiplexerMaxOutputs - 2 ? inst.outputMux->outPorts[extra]
                                                                                       : nullptr;
     }
+    // Clock's third output ("hz") lives in ClockState (inline union, not the
+    // heap-pointer union above) - see ClockState::hzOut's comment.
+    if (inst.type == NodeType::Clock)
+    {
+        return extra == 0 ? inst.clock.hzOut : nullptr;
+    }
     return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
 }
 
@@ -467,6 +473,10 @@ inline const float *outputPortBuffer(const NodeInstance &inst, uint8_t port)
     {
         return inst.outputMux != nullptr && extra < kOutputMultiplexerMaxOutputs - 2 ? inst.outputMux->outPorts[extra]
                                                                                       : nullptr;
+    }
+    if (inst.type == NodeType::Clock)
+    {
+        return extra == 0 ? inst.clock.hzOut : nullptr;
     }
     return inst.link != nullptr && extra < synth::kLinkBusCount - 2 ? inst.link->busOut[extra] : nullptr;
 }

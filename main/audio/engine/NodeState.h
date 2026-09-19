@@ -200,11 +200,15 @@ struct EspEqState
 
 struct GainState
 {
-    // Raw CV (0-10V, see CvConventions.h): 0V = silent, 5V = 0.5x, 10V =
-    // unity gain. The actual multiplier is computed in NodeInstance.cpp via
-    // cv::vcaGain() from this value + exponential.
+    // "amount" (Output Gain). Raw CV (0-10V, see CvConventions.h): 0V =
+    // silent, 5V = 0.5x, 10V = unity gain. The actual multiplier is computed
+    // via cv::vcaGain() from this value.
     float amountCv = 10.0f;
-    bool exponential = false;
+    // "curve" - independent second VCA stage. Raw CV (0-10V): 0V = silent,
+    // 5V = unity (1x), 10V = 2x. See cv::curveGain(). Multiplies onto
+    // "amount" rather than shaping it (replaces the former linear/
+    // exponential toggle).
+    float curveCv = 5.0f;
     // Global/per-voice switch, same pattern as LfoState::global above:
     // false (default) = each voice applies its own "amount" CV to its own
     // "in" signal (current behavior). true = voice 0's "amount" (input port
@@ -220,6 +224,9 @@ struct GainState
     // metallic sound - Gain multiplies directly onto every sample, unlike
     // Detune's pure pitch-CV smoothing.
     OnePoleLowpass amountSmooth;
+    // Same per-sample smoothing as amountSmooth above, for "curve" when it's
+    // manual/unwired.
+    OnePoleLowpass curveSmooth;
 };
 
 struct BitcrusherState
@@ -260,6 +267,12 @@ struct ClockState
     float pulseMs = 100.0f;
     float phaseSec = 0.0f;
     bool pulseActive = false;
+    // Third output ("hz") - "pulse"/"bpm" use NodeInstance's own outL/outR,
+    // but that struct only has two named output fields, so this one extra
+    // buffer lives here instead (see NodeInstance::outputPortBuffer's Clock
+    // branch). Allocated in GraphBuilder::build alongside outL/outR, freed
+    // in Graph::destroy - same lifetime, just not the same field.
+    float *hzOut = nullptr;
 };
 
 // CV In (ADS1115) / CV Out (GP8413) - External Hardware widgets. Port/address/channel are

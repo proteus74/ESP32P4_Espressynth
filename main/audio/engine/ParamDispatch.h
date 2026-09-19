@@ -91,8 +91,6 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
         return nodes::curtisfilter::setParam(inst, name, value);
 
     case NodeType::Gain:
-        // "curve" ("linear"/"exponential") is a string, same pattern as
-        // Filter's "cutoffCurve" - see Graph.cpp's applyLiveParams.
         return nodes::gain::setParam(inst, name, value);
 
     case NodeType::Clock:

@@ -226,19 +226,17 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 5;
         return -1;
     case NodeType::Gain:
-        // "amount" (CV, 0-10V) is a real audio-rate port, not a ControlRoute
-        // - any source can feed it sample-accurately (Gain is deliberately
-        // NOT listed in ports::isControlOnlyInput, unlike e.g. Detune's
-        // "cv"). When no DSP edge is present, NodeInstance.cpp's Gain case
-        // falls back to the manual/knob-driven amountCv scalar (see
-        // GainState).
+        // "amount" (Output Gain) and "curve" (independent 2nd VCA stage,
+        // 0-10V, 5V = unity - see cv::curveGain) are both real audio-rate
+        // ports, not ControlRoutes - any source can feed either
+        // sample-accurately (neither is listed in ports::isControlOnlyInput,
+        // unlike e.g. Detune's "cv"). When no DSP edge is present,
+        // GainNode.h's render() falls back to the manual/knob-driven
+        // amountCv/curveCv scalars (see GainState).
         if (is(portName, "in"))
             return 0;
         if (is(portName, "amount"))
             return 1;
-        // "curve" - control-only 0-10V 2-position selector (<5V linear,
-        // >=5V exponential), same discrete-CV pattern as Filter's
-        // "filterType"/"slope".
         if (is(portName, "curve"))
             return 2;
         // "global" - same pattern as Lfo's "global" above (control-only,
@@ -654,7 +652,13 @@ inline int audioOutIndex(NodeType type, const char *portName)
         if (is(portName, "right")) return 1;
         return -1;
     case NodeType::Clock:
-        return is(portName, "pulse") ? 0 : -1;
+        if (is(portName, "pulse"))
+            return 0;
+        if (is(portName, "bpm"))
+            return 1;
+        if (is(portName, "hz"))
+            return 2;
+        return -1;
     case NodeType::CvIn:
     case NodeType::DigitalIn:
         return is(portName, "value") ? 0 : -1;
@@ -887,7 +891,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::Detune:
         return portIdx == 0; // "cv" - same reasoning as Oscillator's pitchCv
     case NodeType::Gain:
-        return portIdx == 2 || portIdx == 3; // "curve"+"global" - "amount" (index 1) stays real audio-rate
+        return portIdx == 3; // "global" - "amount"(1) and "curve"(2) both stay real audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         return portIdx >= 1; // "filterType"+"slope"+"cutoff"+"resonance"+"global"

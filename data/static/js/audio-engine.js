@@ -117,6 +117,9 @@ function filterSectionCount(slopeDb) {
 function vcaAmountFromCv(volts, curve) {
   const v = clampRange(volts / CV_MAX_VOLTS, 0, 1);
   if (curve === "exponential") return (10 ** v - 1) / 9;
+  // Gain/VCA widget's "curve" port (2nd, independent VCA stage): 0-10V ->
+  // 0..2, 5V = unity. Mirrors cv::curveGain() in CvConventions.h.
+  if (curve === "gainCurve") return v * 2;
   return v;
 }
 
@@ -132,7 +135,7 @@ function buildVcaCurve(curve) {
   const samples = new Float32Array(VCA_CURVE_SAMPLES);
   for (let i = 0; i < VCA_CURVE_SAMPLES; i += 1) {
     const v = i / (VCA_CURVE_SAMPLES - 1); 
-    samples[i] = curve === "exponential" ? (10 ** v - 1) / 9 : v;
+    samples[i] = curve === "exponential" ? (10 ** v - 1) / 9 : curve === "gainCurve" ? v * 2 : v;
   }
   return samples;
 }
@@ -1952,28 +1955,13 @@ export class AudioEngine {
         };
       }
       case "gain": {
+        // "amount" (Output Gain, always linear) -> gainNode -> "curve" (2nd
+        // independent VCA stage, 5V = unity/0..2x) -> curveGainNode -> out.
         const gainNode = ctx.createGain();
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        const cv = this._createCvGainChain(ctx, params.curve || "linear");
+        const curveGainNode = ctx.createGain();
+        gainNode.connect(curveGainNode);
+
+        const cv = this._createCvGainChain(ctx, "linear");
         const ownGate = ctx.createGain();
         ownGate.gain.value = 1;
         const sharedGate = ctx.createGain();
@@ -1981,12 +1969,24 @@ export class AudioEngine {
         cv.waveShaper.connect(ownGate);
         ownGate.connect(gainNode.gain);
         sharedGate.connect(gainNode.gain);
+
+        const curveCv = this._createCvGainChain(ctx, "gainCurve");
+        const curveOwnGate = ctx.createGain();
+        curveOwnGate.gain.value = 1;
+        const curveSharedGate = ctx.createGain();
+        curveSharedGate.gain.value = 0;
+        curveCv.waveShaper.connect(curveOwnGate);
+        curveOwnGate.connect(curveGainNode.gain);
+        curveSharedGate.connect(curveGainNode.gain);
+
         const entry = {
           type,
           gainNode,
+          curveGainNode,
           amount: params.amount ?? CV_MAX_VOLTS,
-          curve: params.curve || "linear",
+          curve: typeof params.curve === "number" ? params.curve : CV_MAX_VOLTS / 2,
           cvActive: false,
+          curveCvActive: false,
           globalFollower: false,
           _sharedWired: false,
           ownGate,
@@ -1995,8 +1995,12 @@ export class AudioEngine {
           shiftConst: cv.shiftConst,
           sumNode: cv.sumNode,
           waveShaper: cv.waveShaper,
+          curveOwnGate,
+          curveSharedGate,
+          curveCv,
         };
-        gainNode.gain.value = vcaAmountFromCv(entry.amount, entry.curve);
+        gainNode.gain.value = vcaAmountFromCv(entry.amount, "linear");
+        curveGainNode.gain.value = vcaAmountFromCv(entry.curve, "gainCurve");
         return entry;
       }
       case "linked-input":
@@ -3138,6 +3142,16 @@ export class AudioEngine {
       if (entry.leftAnalyser) entry.leftAnalyser.disconnect();
       if (entry.rightAnalyser) entry.rightAnalyser.disconnect();
       if (entry.gainNode) entry.gainNode.disconnect();
+      if (entry.curveGainNode) entry.curveGainNode.disconnect();
+      if (entry.curveOwnGate) entry.curveOwnGate.disconnect();
+      if (entry.curveSharedGate) entry.curveSharedGate.disconnect();
+      if (entry.curveCv) {
+        entry.curveCv.waveShaper.disconnect();
+        entry.curveCv.sumNode.disconnect();
+        entry.curveCv.prescale.disconnect();
+        entry.curveCv.shiftConst.stop();
+        entry.curveCv.shiftConst.disconnect();
+      }
       if (entry.filterNode) entry.filterNode.disconnect();
       if (entry.filterNode2) entry.filterNode2.disconnect();
       if (entry.filterInput) entry.filterInput.disconnect();
@@ -3638,11 +3652,10 @@ export class AudioEngine {
         
         if (paramName === "amount") {
           entry.amount = value;
-          if (!entry.cvActive && !entry.globalFollower) applyRampValue(entry.gainNode.gain, vcaAmountFromCv(entry.amount, entry.curve));
+          if (!entry.cvActive && !entry.globalFollower) applyRampValue(entry.gainNode.gain, vcaAmountFromCv(entry.amount, "linear"));
         } else if (paramName === "curve") {
           entry.curve = value;
-          entry.waveShaper.curve = buildVcaCurve(entry.curve);
-          if (!entry.cvActive && !entry.globalFollower) applyRampValue(entry.gainNode.gain, vcaAmountFromCv(entry.amount, entry.curve));
+          if (!entry.curveCvActive && !entry.globalFollower) applyRampValue(entry.curveGainNode.gain, vcaAmountFromCv(entry.curve, "gainCurve"));
         }
         break;
       }
@@ -4101,22 +4114,21 @@ export class AudioEngine {
       } else if (wrapper.type === "gain") {
         if (isGlobal && !entry._sharedWired) {
           primary.waveShaper.connect(entry.sharedGate);
+          primary.curveCv.waveShaper.connect(entry.curveSharedGate);
           entry._sharedWired = true;
         }
         entry.ownGate.gain.setTargetAtTime(isGlobal ? 0 : 1, now, 0.005);
         entry.sharedGate.gain.setTargetAtTime(isGlobal ? 1 : 0, now, 0.005);
-        
-        
-        
-        
-        
-        
-        
+        entry.curveOwnGate.gain.setTargetAtTime(isGlobal ? 0 : 1, now, 0.005);
+        entry.curveSharedGate.gain.setTargetAtTime(isGlobal ? 1 : 0, now, 0.005);
+
         entry.globalFollower = isGlobal;
         if (isGlobal) {
           entry.gainNode.gain.setTargetAtTime(0, now, 0.005);
-        } else if (!entry.cvActive) {
-          entry.gainNode.gain.setTargetAtTime(vcaAmountFromCv(entry.amount, entry.curve), now, 0.005);
+          entry.curveGainNode.gain.setTargetAtTime(0, now, 0.005);
+        } else {
+          if (!entry.cvActive) entry.gainNode.gain.setTargetAtTime(vcaAmountFromCv(entry.amount, "linear"), now, 0.005);
+          if (!entry.curveCvActive) entry.curveGainNode.gain.setTargetAtTime(vcaAmountFromCv(entry.curve, "gainCurve"), now, 0.005);
         }
       } else if (wrapper.type === "filter" || wrapper.type === "curtis-filter") {
         if (isGlobal && !entry._sharedWired) {
@@ -4184,7 +4196,7 @@ export class AudioEngine {
         return entry.constants?.[index] || null;
       }
     }
-    if (entry.type === "gain" && port === "out") return entry.gainNode;
+    if (entry.type === "gain" && port === "out") return entry.curveGainNode;
     if (entry.type === "linked-output" && port === "out") return entry.gainNode;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {
       return entry.filterOutput || entry.filterNode;
@@ -4241,6 +4253,7 @@ export class AudioEngine {
     
     
     if (entry.type === "gain" && port === "amount") return entry.prescale;
+    if (entry.type === "gain" && port === "curve") return entry.curveCv.prescale;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "in") return entry.filterInput;
     
     
@@ -4534,13 +4547,6 @@ export class AudioEngine {
       return;
     }
     if (toEntry && toEntry.type === "gain" && toPort === "amount") {
-      
-      
-      
-      
-      
-      
-      
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -4548,7 +4554,20 @@ export class AudioEngine {
           toEntry.cvActive = true;
           toEntry.gainNode.gain.value = 0;
         } catch (err) {
-          
+
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "gain" && toPort === "curve") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.connect(toEntry.curveCv.prescale);
+          toEntry.curveCvActive = true;
+          toEntry.curveGainNode.gain.value = 0;
+        } catch (err) {
+
         }
       }
       return;
@@ -4780,10 +4799,22 @@ export class AudioEngine {
         try {
           from.disconnect(toEntry.prescale);
           toEntry.cvActive = false;
-          
-          toEntry.gainNode.gain.value = vcaAmountFromCv(toEntry.amount, toEntry.curve);
+          toEntry.gainNode.gain.value = vcaAmountFromCv(toEntry.amount, "linear");
         } catch (err) {
-          
+
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "gain" && toPort === "curve") {
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from) {
+        try {
+          from.disconnect(toEntry.curveCv.prescale);
+          toEntry.curveCvActive = false;
+          toEntry.curveGainNode.gain.value = vcaAmountFromCv(toEntry.curve, "gainCurve");
+        } catch (err) {
+
         }
       }
       return;

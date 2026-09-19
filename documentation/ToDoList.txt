@@ -1,33 +1,16 @@
 
-Icons beim Oszillator schöner machen? 
-
-Icons für die Filter oder bessere Bilder bei den Filtern? 
-Preset Umschaltung per MIDI 
-
+ 
 Clock sollte doch irgendwie einen Frequency Ausgang haben, der dann in den LFO gehen kann. 
-
-Anbindung von EEZ Studio 
+ 
 Drum Sequencer 
 
 i2c Display und SPI Display 
 
 GPIO Input Schalter / BUtton
 Rotary Encoder 
-Analoge I²C-CV-Eingänge 
-
-Mehr Tabs? 
+ 
 
 Automatisches Bauen verschiedener Standardkonfigurationen 
-
-Trance-Gate (nur wenn Clock bekannt ist.)
-
-Masterclock soll im Preset sein und noch nur noch als Clock-Out da sein.
-
-Alle Gains sollen eine leicht andere Farbe haben Und immer vielleicht ganz unten im Widget sein. 
-
-Icons beim LFO auch schöner machen Und auch die Buttons müssen irgendwie anders gemacht werden. 
-
-Beim VCA auch die Buttons kleiner und das Gain muss da irgendwie anders gemacht werden. 
 
 
 DADSR implementieren.

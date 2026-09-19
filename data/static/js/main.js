@@ -964,7 +964,14 @@ const WIDGET_TYPES = {
     // Tempo comes from the single Master Clock (tab bar, see
     // openMasterClockSettings) - this widget only owns its own pulse width.
     inputs: [],
-    outputs: [{ id: "pulse", label: "Pulse" }],
+    // "bpm"/"hz" mirror the current Master Clock tempo (see clockBpmVolts/
+    // clockHz below) - control-rate like "pulse" (see AUDIO_PORTS' Clock
+    // omission comment), not real Web Audio nodes.
+    outputs: [
+      { id: "pulse", label: "Pulse" },
+      { id: "bpm", label: "BPM" },
+      { id: "hz", label: "Hz" },
+    ],
   },
   "cv-in": {
     label: "CV In",
@@ -1177,7 +1184,7 @@ const WIDGET_TYPES = {
     icon: "🔉",
     inputs: [
       { id: "in", label: "In" },
-      { id: "amount", label: "Gain" },
+      { id: "amount", label: "Output Gain" },
       { id: "curve", label: "Curve" },
       { id: "global", label: "Global" },
     ],
@@ -1511,7 +1518,7 @@ const AUDIO_PORTS = {
   
   
   
-  gain: { in: ["in", "amount"], out: ["out"] },
+  gain: { in: ["in", "amount", "curve"], out: ["out"] },
   
   
   
@@ -2879,6 +2886,11 @@ function createWidget(type, label, x, y, forcedId) {
       pulseMs: 10,
       pulseTimeMinSec: 0.001,
       pulseTimeMaxSec: 2,
+      // Settings-dialog cap (semitones) on a step knob's pitch-CV offset
+      // while "pitch" is wired - see nodes/StepArpeggiatorNode.h's
+      // StepArpState::maxSemitoneOffset comment. Default 60 = previous,
+      // uncapped 5-octave behavior.
+      maxSemitoneOffset: 60,
       // Settings-dialog toggle - see nodes/StepArpeggiatorNode.h's
       // StepArpState::retriggerGateOut comment. Mirrored here (see the
       // "clock" branch of deliverToWidget below) purely so the editor's own
@@ -3034,32 +3046,8 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "gain") {
-    gainStates.set(id, { amount: CV_MAX_VOLTS, curve: "linear", global: false });
-    audioEngine.createNode(id, "gain", { amount: CV_MAX_VOLTS, curve: "linear" });
-
-    const body = document.createElement("div");
-    body.className = "widget-instance-body gain-body";
-
-    const curveButtons = document.createElement("div");
-    curveButtons.className = "filter-type-buttons";
-    GAIN_CURVE_BUTTONS.forEach((c) => {
-      const btn = document.createElement("button");
-      btn.className = "filter-type-btn osc-wave-btn";
-      btn.innerHTML = c.icon;
-      btn.style.setProperty("--wave-color", c.color);
-      btn.style.setProperty("--wave-glow", c.glow);
-      btn.dataset.curve = c.id;
-      btn.title = c.title;
-      if (c.id === "linear") btn.classList.add("active");
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        setGainCurve(id, c.id);
-      });
-      curveButtons.appendChild(btn);
-    });
-
-    body.appendChild(curveButtons);
-    el.appendChild(body);
+    gainStates.set(id, { amount: CV_MAX_VOLTS, curve: CV_MAX_VOLTS / 2, global: false });
+    audioEngine.createNode(id, "gain", { amount: CV_MAX_VOLTS, curve: CV_MAX_VOLTS / 2 });
   }
 
   if (type === "filter" || type === "curtis-filter") {
@@ -4931,7 +4919,7 @@ function createWidget(type, label, x, y, forcedId) {
         slider.min = "0";
         slider.max = String(CV_MAX_VOLTS);
         slider.step = "0.01";
-        slider.value = String(gainCurveToCv(gainState.curve));
+        slider.value = String(gainState.curve);
         slider.dataset.role = "gain-curve-slider";
         slider.addEventListener("mousedown", (e) => e.stopPropagation());
         slider.addEventListener("click", (e) => e.stopPropagation());
@@ -4941,7 +4929,7 @@ function createWidget(type, label, x, y, forcedId) {
         const valueSpan = document.createElement("span");
         valueSpan.className = "port-value";
         valueSpan.dataset.role = "gain-curve-value";
-        valueSpan.textContent = gainState.curve === "exponential" ? "Exp" : "Lin";
+        valueSpan.textContent = `${formatNumber(gainState.curve)} V`;
         row.appendChild(valueSpan);
       }
       if (type === "lfo" && (port.id === "rate" || port.id === "amplitude" || port.id === "phase")) {
@@ -6430,12 +6418,12 @@ const buttonStates = new Map();
 let buttonMidiLearnTargetId = null;
 
 function buttonCurrentOutput(state) {
-  const list = parseVoltageValueList(state.listText);
+  const list = parseValueList(state.listText);
   if (list && list.length >= 2) {
     const idx = clamp(state.listIndex, 0, list.length - 1);
     return list[idx];
   }
-  return clampVoltage(state.wasAbove ? state.value127 : state.value0);
+  return state.wasAbove ? state.value127 : state.value0;
 }
 
 function publishButtonValue(widgetId) {
@@ -6461,7 +6449,7 @@ function publishButtonValue(widgetId) {
 function advanceButtonValue(widgetId) {
   const state = buttonStates.get(widgetId);
   if (!state) return;
-  const list = parseVoltageValueList(state.listText);
+  const list = parseValueList(state.listText);
   if (list && list.length >= 2) {
     state.listIndex = (state.listIndex + 1) % list.length;
   } else {
@@ -6476,7 +6464,7 @@ function updateButtonVisual(widgetId) {
   if (!state || !el) return;
 
   const readout = el.querySelector('[data-role="button-readout"]');
-  const list = parseVoltageValueList(state.listText);
+  const list = parseValueList(state.listText);
   const active = list && list.length >= 2 ? state.listIndex > 0 : state.wasAbove;
   if (readout) {
     readout.textContent = formatNumber(buttonCurrentOutput(state));
@@ -6513,7 +6501,7 @@ function routeMidiToButtons(data) {
     if (state.cc !== data.control || state.channel !== data.channel) return;
 
     const above = data.value >= 64;
-    const list = parseVoltageValueList(state.listText);
+    const list = parseValueList(state.listText);
     if (list && list.length >= 2) {
       if (above && !state.wasAbove) {
         state.listIndex = (state.listIndex + 1) % list.length;
@@ -6538,7 +6526,7 @@ let pendingButtonId = null;
 
 
 function updateButtonFieldsDisabledState() {
-  const list = parseVoltageValueList(buttonValueListInput.value);
+  const list = parseValueList(buttonValueListInput.value);
   const listValid = !!(list && list.length >= 2);
   buttonFixedInputs.forEach((input) => {
     input.disabled = listValid;
@@ -6555,7 +6543,7 @@ function openButtonSettings(widgetId) {
     state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
   buttonValue0Input.value = state.value0;
   buttonValue127Input.value = state.value127;
-  const buttonList = parseVoltageValueList(state.listText);
+  const buttonList = parseValueList(state.listText);
   buttonValueListInput.value = buttonList ? buttonList.join(", ") : (state.listText || "");
   updateButtonFieldsDisabledState();
   buttonLearnBtn.textContent = "Learn";
@@ -6585,9 +6573,9 @@ document.getElementById("buttonSettingsSave").addEventListener("click", () => {
   if (state) {
     const v0 = parseFloatFlexible(buttonValue0Input.value);
     const v127 = parseFloatFlexible(buttonValue127Input.value);
-    state.value0 = clampVoltage(Number.isNaN(v0) ? 0 : v0);
-    state.value127 = clampVoltage(Number.isNaN(v127) ? CV_MAX_VOLTS : v127, CV_MAX_VOLTS);
-    const list = parseVoltageValueList(buttonValueListInput.value);
+    state.value0 = Number.isNaN(v0) ? 0 : v0;
+    state.value127 = Number.isNaN(v127) ? CV_MAX_VOLTS : v127;
+    const list = parseValueList(buttonValueListInput.value);
     state.listText = list ? list.join(", ") : buttonValueListInput.value;
     if (list && list.length >= 2) {
       state.listIndex = clamp(state.listIndex, 0, list.length - 1);
@@ -9770,6 +9758,16 @@ function updateClockVisual(widgetId) {
   if (bpmLabel) bpmLabel.textContent = `${formatNumber(masterClockBpm)} BPM`;
 }
 
+// "bpm" output: same 0-maxBpm-to-0-10V scale the Master Clock dialog's own
+// MIDI-CC learn already uses (masterClockMaxBpm), just the other direction -
+// mirrors nodes/ClockNode.h's render() exactly. "hz" is the literal beat
+// frequency (bpm/60), not a scaled CV - see that same firmware comment.
+function propagateClockBpmHz(widgetId) {
+  const bpmVolts = masterClockMaxBpm > 0 ? clamp((masterClockBpm / masterClockMaxBpm) * CV_MAX_VOLTS, 0, CV_MAX_VOLTS) : 0;
+  propagate(widgetId, "bpm", bpmVolts);
+  propagate(widgetId, "hz", masterClockBpm / 60);
+}
+
 function fireClockPulse(widgetId) {
   const state = clockStates.get(widgetId);
   if (!state) return;
@@ -9795,6 +9793,7 @@ function restartClockTimer(widgetId) {
 
   stopClockTimer(widgetId);
   updateClockVisual(widgetId);
+  propagateClockBpmHz(widgetId);
   if (masterClockBpm <= 0) return;
 
   const intervalMs = 60000 / masterClockBpm;
@@ -10439,17 +10438,6 @@ function pitchCvToNoteName(volts) {
   return `${WAVE_PLAYER_NOTE_NAMES[note % 12]}${octave}`;
 }
 
-// Same 1V/octave anchor as pitchCvToNoteName, expressed as "+/-N semitones
-// from the 5V default" instead of an absolute note. Used for a Step
-// Arpeggiator knob whenever its "pitch" input is wired: the note that
-// actually sounds then also depends on that live CV (heldCv = stepCv +
-// pitchVolts, see nodes/StepArpeggiatorNode.h's triggerStep), which an
-// absolute note name here would misrepresent - the relative offset stays
-// meaningful regardless of what Pitch is doing at runtime.
-function pitchCvToSemitoneOffset(volts) {
-  return Math.round(((volts - CV_MAX_VOLTS / 2) / PITCH_CV_VOLTS_PER_OCTAVE) * 12);
-}
-
 // Step count (8/16) and gateOut pulse width are structural/occasional
 // settings, not continuous-drag values - same dblclick-opened-modal +
 // Save-triggers-a-full-resave pattern as Clock's own pulseMs/minBpm/maxBpm
@@ -10459,6 +10447,7 @@ const stepArpSettingsOverlay = document.getElementById("stepArpSettingsOverlay")
 const stepArpStepCountInput = document.getElementById("stepArpStepCountInput");
 const stepArpPulseTimeMaxInput = document.getElementById("stepArpPulseTimeMaxInput");
 const stepArpRetriggerGateOutInput = document.getElementById("stepArpRetriggerGateOutInput");
+const stepArpMaxSemitoneOffsetInput = document.getElementById("stepArpMaxSemitoneOffsetInput");
 const stepArpClockMaxBpmInput = document.getElementById("stepArpClockMaxBpmInput");
 const stepArpClockRoundBpmInput = document.getElementById("stepArpClockRoundBpmInput");
 let pendingStepArpId = null;
@@ -10469,6 +10458,7 @@ function openStepArpSettings(widgetId) {
   pendingStepArpId = widgetId;
   stepArpStepCountInput.value = String(state.stepCount);
   stepArpPulseTimeMaxInput.value = String(state.pulseTimeMaxSec);
+  stepArpMaxSemitoneOffsetInput.value = String(state.maxSemitoneOffset);
   stepArpRetriggerGateOutInput.checked = state.retriggerGateOut === true;
   stepArpClockMaxBpmInput.value = String(state.clockMaxBpm);
   stepArpClockRoundBpmInput.checked = state.clockRoundBpm === true;
@@ -10505,6 +10495,9 @@ document.getElementById("stepArpSettingsSave").addEventListener("click", () => {
     // pulseTimeMinSec (0V end) is no longer settings-dialog-editable - stays
     // at its build-time default (0.001s), only the 10V end is exposed.
     state.pulseTimeMaxSec = maxSec;
+    let maxSemitoneOffset = parseFloatFlexible(stepArpMaxSemitoneOffsetInput.value);
+    if (Number.isNaN(maxSemitoneOffset) || maxSemitoneOffset < 0) maxSemitoneOffset = 60;
+    state.maxSemitoneOffset = clamp(maxSemitoneOffset, 0, 60);
     state.retriggerGateOut = stepArpRetriggerGateOutInput.checked === true;
     let maxBpm = parseFloatFlexible(stepArpClockMaxBpmInput.value);
     if (Number.isNaN(maxBpm) || maxBpm <= 0) maxBpm = 120;
@@ -10530,6 +10523,7 @@ document.getElementById("stepArpSettingsSave").addEventListener("click", () => {
       sendLiveParamUpdateThrottled(pendingStepArpId, {
         pulseTimeMinSec: state.pulseTimeMinSec,
         pulseTimeMaxSec: state.pulseTimeMaxSec,
+        maxSemitoneOffset: state.maxSemitoneOffset,
         // 0/1, not a JS boolean - see Clock's own "roundBpm" live-push for
         // why (Graph::applyLiveParams' generic path only fires for JSON
         // numbers; nodes::steparp::setParam's `value >= 0.5f` check already
@@ -11052,47 +11046,6 @@ function setAudioInputLinkGain(widgetId, channel, value, sendLive = true) {
 
 const gainStates = new Map();
 
-// Same icon-button treatment as the oscillator/filter type buttons (shared
-// .osc-wave-btn styling) instead of plain text pills.
-const GAIN_CURVE_BUTTONS = [
-  {
-    id: "linear",
-    title: "Linear: A = CV/10",
-    color: "#06b6d4",
-    glow: "rgba(6, 182, 212, 0.55)",
-    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,90 L 90,10"/></svg>`,
-  },
-  {
-    id: "exponential",
-    title: "Exponential: A = (10^(CV/10) - 1) / 9",
-    color: "#f59e0b",
-    glow: "rgba(245, 158, 11, 0.55)",
-    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,90 Q 70,90 90,10"/></svg>`,
-  },
-];
-
-// "curve" is a discrete 2-position 0-10V selector like filterType/slope: <5V
-// = linear, >=5V = exponential. gainCurveToCv parks the slider at the exact
-// endpoint for the selected curve rather than the segment's midpoint.
-function gainCurveFromCv(volts) {
-  return (Number(volts) || 0) >= CV_MAX_VOLTS / 2 ? "exponential" : "linear";
-}
-
-function gainCurveToCv(curve) {
-  return curve === "exponential" ? CV_MAX_VOLTS : 0;
-}
-
-function setGainCurve(widgetId, curve) {
-  const state = gainStates.get(widgetId);
-  if (!state) return;
-  state.curve = curve;
-  audioEngine.setParam(widgetId, "curve", state.curve);
-  updateGainVisual(widgetId);
-  sendLiveParamUpdate(widgetId, { curve: state.curve });
-}
-
-
-
 
 
 function setGainGlobal(widgetId, on) {
@@ -11112,17 +11065,13 @@ function updateGainVisual(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   const curveConnected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "curve");
-  el.querySelectorAll(".gain-body .filter-type-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.curve === state.curve);
-    btn.disabled = curveConnected;
-  });
   const curveSlider = el.querySelector('[data-role="gain-curve-slider"]');
   if (curveSlider) {
-    curveSlider.value = String(gainCurveToCv(state.curve));
+    curveSlider.value = String(state.curve);
     curveSlider.disabled = curveConnected;
   }
   const curveValue = el.querySelector('[data-role="gain-curve-value"]');
-  if (curveValue) curveValue.textContent = state.curve === "exponential" ? "Exp" : "Lin";
+  if (curveValue) curveValue.textContent = `${formatNumber(state.curve)} V`;
 
   const audioConnected = connections.some(
     (c) =>
@@ -12877,7 +12826,12 @@ function updateStepArpKnobVisual(widgetId, index) {
   const noteSpan = el.querySelector(`[data-role="step-arp-note-${index + 1}"]`);
   if (noteSpan) {
     if (pitchWired) {
-      const semitones = pitchCvToSemitoneOffset(volts);
+      // Matches nodes/StepArpeggiatorNode.h's triggerStep() exactly: the
+      // knob's full 0-10V travel is RESCALED to +/-maxSemitoneOffset (not
+      // clamped), then rounded - this IS the offset that actually gets
+      // added to Pitch, not just the raw knob position.
+      const normalized = (volts - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2);
+      const semitones = Math.round(normalized * state.maxSemitoneOffset);
       noteSpan.textContent = `${semitones > 0 ? "+" : ""}${semitones}`;
     } else {
       noteSpan.textContent = pitchCvToNoteName(volts);
@@ -12973,15 +12927,17 @@ function stepArpTriggerStep(widgetId, state, el) {
   // "pitch" - when wired, a step's own knob value is a +/-N-semitone offset
   // from its own 5V center, added on top of the incoming Pitch CV (0
   // semitones at the knob's 5V default + a 5V Pitch signal must produce
-  // exactly 5V out, not 10V) - see nodes/StepArpeggiatorNode.h's
-  // triggerStep() for the matching firmware math and
-  // pitchCvToSemitoneOffset for the matching knob display.
+  // exactly 5V out, not 10V), the knob's full travel rescaled to
+  // +/-maxSemitoneOffset and rounded to a whole semitone - see
+  // nodes/StepArpeggiatorNode.h's triggerStep() for the matching firmware
+  // math and updateStepArpKnobVisual for the matching knob display.
   const pitchWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pitch");
-  state.heldCv = clamp(
-    pitchWired ? state.pitchVolts + (stepVolts - CV_MAX_VOLTS / 2) : stepVolts,
-    0,
-    CV_MAX_VOLTS
-  );
+  let offsetVolts = 0;
+  if (pitchWired) {
+    const normalized = (stepVolts - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2);
+    offsetVolts = Math.round(normalized * state.maxSemitoneOffset) / 12;
+  }
+  state.heldCv = clamp(pitchWired ? state.pitchVolts + offsetVolts : stepVolts, 0, CV_MAX_VOLTS);
   propagate(widgetId, "cv", state.heldCv);
   updateStepArpActiveHighlight(widgetId);
 
@@ -16261,7 +16217,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   if (el.dataset.widgetType === "gain" && portId === "curve") {
-    setGainCurve(widgetId, gainCurveFromCv(value));
+    const state = gainStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.curve = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "curve", state.curve);
+      updateGainVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { curve: state.curve });
+    }
   }
 
   if (el.dataset.widgetType === "gain" && portId === "global") {
@@ -17147,15 +17110,13 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = buttonStates.get(id);
       if (!state) return {};
-      return { ...state, value0: clampVoltage(state.value0), value127: clampVoltage(state.value127, CV_MAX_VOLTS), valueList: parseVoltageValueList(state.listText) || [] };
+      return { ...state, value0: state.value0, value127: state.value127, valueList: parseValueList(state.listText) || [] };
     },
     applyParams: (id, params) => {
       const state = buttonStates.get(id);
       if (state && params) {
         Object.assign(state, params);
-        state.value0 = clampVoltage(state.value0);
-        state.value127 = clampVoltage(state.value127, CV_MAX_VOLTS);
-        const list = parseVoltageValueList(state.listText);
+        const list = parseValueList(state.listText);
         if (list) state.listText = list.join(", ");
         audioEngine.setParam(id, "value", buttonCurrentOutput(state));
         updateButtonVisual(id);
@@ -17689,7 +17650,11 @@ const WIDGET_ENGINES = {
       
       const isLegacy = params.curve === undefined;
       state.amount = clamp(isLegacy ? params.amount * CV_MAX_VOLTS : params.amount, 0, CV_MAX_VOLTS);
-      state.curve = params.curve === "exponential" ? "exponential" : "linear";
+      // Legacy presets stored "curve" as "linear"/"exponential" (shaping the
+      // single amount stage). The new "curve" is a separate 2nd VCA stage
+      // (5V = unity, see cv::curveGain) with no equivalent old value, so any
+      // non-numeric/missing curve falls back to unity (no change in level).
+      state.curve = typeof params.curve === "number" ? clamp(params.curve, 0, CV_MAX_VOLTS) : CV_MAX_VOLTS / 2;
       state.global = params.global === true;
       audioEngine.setParam(id, "amount", state.amount);
       audioEngine.setParam(id, "curve", state.curve);
@@ -17850,6 +17815,7 @@ const WIDGET_ENGINES = {
             pulseMs: state.pulseMs,
             pulseTimeMinSec: state.pulseTimeMinSec,
             pulseTimeMaxSec: state.pulseTimeMaxSec,
+            maxSemitoneOffset: state.maxSemitoneOffset,
             direction: state.directionVolts,
             retriggerGateOut: state.retriggerGateOut === true,
             clockCvVolts: state.clockCvVolts,
@@ -17872,6 +17838,8 @@ const WIDGET_ENGINES = {
       const maxSec = Number(params.pulseTimeMaxSec);
       state.pulseTimeMinSec = Number.isFinite(minSec) && minSec >= 0 ? minSec : 0.001;
       state.pulseTimeMaxSec = Number.isFinite(maxSec) && maxSec > state.pulseTimeMinSec ? maxSec : Math.max(2, state.pulseTimeMinSec + 1);
+      const maxSemitoneOffset = Number(params.maxSemitoneOffset);
+      state.maxSemitoneOffset = Number.isFinite(maxSemitoneOffset) ? clamp(maxSemitoneOffset, 0, 60) : 60;
       state.directionVolts = clamp(Number(params.direction) || 0, 0, CV_MAX_VOLTS);
       state.retriggerGateOut = params.retriggerGateOut === true;
       const cvVolts = Number(params.clockCvVolts);

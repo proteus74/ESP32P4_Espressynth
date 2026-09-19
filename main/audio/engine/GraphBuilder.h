@@ -152,7 +152,7 @@ inline bool hasStereoOutput(NodeType type)
            type == NodeType::Wm8960Out || type == NodeType::Detune || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
            type == NodeType::StepArpeggiator || type == NodeType::Pan || type == NodeType::OutputSwitch ||
-           type == NodeType::OutputMultiplexer;
+           type == NodeType::OutputMultiplexer || type == NodeType::Clock;
 }
 
 inline bool requiresInputBlockBuffers(NodeType type)
@@ -966,6 +966,24 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 if (!outputMuxBuffersAllocated)
                 {
                     ESP_LOGE(kGraphBuilderTag, "OutputMultiplexer buffer allocation failed");
+                    g->destroy();
+                    g->widgetCount = 0;
+                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                    return g;
+                }
+            }
+            if (w.type == NodeType::Clock)
+            {
+                // Third output ("hz") - "pulse"/"bpm" already got outL/outR
+                // above (hasStereoOutput). See ClockState::hzOut's comment.
+                inst.clock.hzOut = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
+                if (inst.clock.hzOut != nullptr)
+                {
+                    ++blockBufferCount;
+                }
+                else
+                {
+                    ESP_LOGE(kGraphBuilderTag, "Clock hz buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
                     g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;

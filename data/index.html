@@ -668,6 +668,11 @@
     <p class="modal-hint">If a step's Gate Out pulse is still running when the next step triggers: checked briefly resets it low first (retriggers a downstream envelope); unchecked just lets the next step play through it.</p>
     <p class="modal-hint">Reducing to 8 Steps removes any cables on Step 9–16.</p>
     <label class="modal-field">
+      <span>Max Pitch Offset (semitones, when Pitch is wired)</span>
+      <input type="number" min="0" max="60" step="1" inputmode="numeric" id="stepArpMaxSemitoneOffsetInput" value="60">
+    </label>
+    <p class="modal-hint">Caps how far a step knob can shift a note up/down from Pitch (±N semitones); the offset is always rounded to a whole semitone so notes stay in tune.</p>
+    <label class="modal-field">
       <span>Rate Maximum BPM at 10 V</span>
       <input type="number" min="0" step="0.1" inputmode="decimal" id="stepArpClockMaxBpmInput" value="120">
     </label>

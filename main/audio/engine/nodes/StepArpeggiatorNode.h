@@ -88,6 +88,15 @@ struct StepArpState
     float pulseMs = 10.0f;
     float pulseTimeMinSec = 0.001f, pulseTimeMaxSec = 2.0f;
 
+    // Settings-dialog cap on a step knob's pitch-CV OFFSET (see triggerStep's
+    // pitchWired branch) in semitones, e.g. 12 to keep steps within one
+    // octave. The offset is also always rounded to a whole semitone before
+    // being added to Pitch, so the summed CV never lands off the semitone
+    // grid (no out-of-tune notes from a knob not sitting exactly on a
+    // semitone's voltage). Only the offset is capped/rounded - a step knob
+    // used as an ABSOLUTE pitch-CV (pitch unwired) is untouched.
+    float maxSemitoneOffset = 60.0f;
+
     uint8_t currentStep = 0;     // step that will be PLAYED on the next qualifying clock edge
     bool pingPongForward = true; // Ping-Pong sub-direction, persists across edges
     bool clockPrev = false;
@@ -195,10 +204,26 @@ inline void triggerStep(NodeInstance &inst, StepArpState &s, size_t i, float sam
     // +/-N-semitone OFFSET from its own 5V center, added on top of the
     // incoming Pitch CV (0 Halbtoene at the knob's 5V default + a 5V Pitch
     // signal must produce exactly 5V out, not 10V - see main.js's
-    // pitchCvToSemitoneOffset for the matching display). Unwired, the knob
+    // updateStepArpKnobVisual for the matching display). Unwired, the knob
     // stays the note's ABSOLUTE pitch-CV, unchanged from before.
     const bool pitchWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(kPitchPort)) != 0;
-    s.heldCv = pitchWired ? portSample(inst, kPitchPort, i) + (stepVolts - cv::kMaxVolts * 0.5f) : stepVolts;
+    if (pitchWired)
+    {
+        // maxSemitoneOffset RESCALES the knob's full travel, it does not just
+        // clamp it - 0V (knob fully down) always means -maxSemitoneOffset and
+        // 10V (fully up) always means +maxSemitoneOffset, so the whole turn
+        // stays usable no matter how small the cap is set. Rounded to a
+        // whole semitone before adding to Pitch, so the resulting CV always
+        // sums to an exact semitone - never a fraction that would play out
+        // of tune.
+        const float normalized = (stepVolts - cv::kMaxVolts * 0.5f) / (cv::kMaxVolts * 0.5f); // -1..+1
+        const float offsetVolts = roundf(normalized * s.maxSemitoneOffset) / 12.0f;
+        s.heldCv = portSample(inst, kPitchPort, i) + offsetVolts;
+    }
+    else
+    {
+        s.heldCv = stepVolts;
+    }
 
     // "pulseTime" (Port-Index 20) - real, control-only audio-rate CV port
     // (see PortTables.h), same wired-CV-or-manual pattern as Delay's "time"
@@ -383,6 +408,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.pulseMs = p.stepArpPulseMs;
     s.pulseTimeMinSec = p.stepArpPulseTimeMinSec;
     s.pulseTimeMaxSec = p.stepArpPulseTimeMaxSec;
+    s.maxSemitoneOffset = p.stepArpMaxSemitoneOffset;
     s.retriggerGateOut = p.stepArpRetriggerGateOut;
     s.internalClockCvVolts = p.stepArpClockCvVolts;
     s.internalClockMaxBpm = p.stepArpClockMaxBpm;
@@ -472,6 +498,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.stepArp->pulseTimeMaxSec = value;
         return true;
     }
+    if (strcmp(name, "maxSemitoneOffset") == 0)
+    {
+        inst.stepArp->maxSemitoneOffset = value;
+        return true;
+    }
     if (strcmp(name, "retriggerGateOut") == 0)
     {
         inst.stepArp->retriggerGateOut = value >= 0.5f;
@@ -516,6 +547,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.stepArpPulseMs = presetparser::getFloat(p, "pulseMs", 10.0f);
     out.stepArpPulseTimeMinSec = presetparser::getFloat(p, "pulseTimeMinSec", 0.001f);
     out.stepArpPulseTimeMaxSec = presetparser::getFloat(p, "pulseTimeMaxSec", 2.0f);
+    out.stepArpMaxSemitoneOffset = presetparser::getFloat(p, "maxSemitoneOffset", 60.0f);
     out.stepArpDirectionVolts = presetparser::getFloat(p, "direction", 0.0f);
     out.stepArpRetriggerGateOut = presetparser::getBool(p, "retriggerGateOut", false);
     out.stepArpClockCvVolts = presetparser::getFloat(p, "clockCvVolts", 0.0f);

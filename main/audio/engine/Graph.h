@@ -1618,14 +1618,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                     r.dryLevelLog = log;
             }
         }
-        else if (slot.type == NodeType::Gain && strcmp(key, "curve") == 0 && cJSON_IsString(item))
-        {
-            const bool exponential = strcmp(item->valuestring, "exponential") == 0;
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].gain.exponential = exponential;
-            }
-        }
         else if (slot.type == NodeType::EspEq && strcmp(key, "filterType") == 0 && cJSON_IsString(item))
         {
             const EqFilterKind kind = eqFilterKindFromString(item->valuestring);
@@ -2162,6 +2154,10 @@ inline void Graph::destroy()
                 heap_caps_free(inst.outputMux);
                 inst.outputMux = nullptr;
             }
+            break;
+        case NodeType::Clock:
+            heap_caps_free(inst.clock.hzOut);
+            inst.clock.hzOut = nullptr;
             break;
         default:
             break;

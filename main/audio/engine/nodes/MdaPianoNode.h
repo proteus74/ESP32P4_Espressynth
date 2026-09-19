@@ -243,8 +243,8 @@ inline void render(NodeInstance &inst, size_t frames)
     for (size_t i = 0; i < frames; ++i)
     {
         const float gain = gainFed
-            ? cv::vcaGain(clampCv(noderender::portSample(inst, 11, i)), false)
-            : state.gainSmooth.process(gainTarget);
+            ? cv::vcaGain(clampCv(noderender::portSample(inst, 11, i)), false) * cv::kAudioPeakVolts * 3
+            : state.gainSmooth.process(gainTarget) * cv::kAudioPeakVolts * 3 ;
         inst.outL[i] *= gain;
         inst.outR[i] *= gain;
     }
