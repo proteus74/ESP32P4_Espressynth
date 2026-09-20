@@ -36,8 +36,11 @@ constexpr size_t kDrumSequencerMaxCells = kDrumSequencerMaxSteps * kDrumSequence
 constexpr size_t kDrumSequencerMaxPatterns = 8;
 constexpr size_t kValueListMax = 16;   // Knob/Button "value list" mode entry cap
 constexpr size_t kKnobControlMax = 16;
-constexpr size_t kKnobLayerMax = 4;
+constexpr size_t kKnobLayerMax = 8;
 constexpr size_t kKnobOutputMax = kKnobControlMax * kKnobLayerMax;
+constexpr size_t kButtonControlMax = 16;
+constexpr size_t kButtonLayerMax = 8;
+constexpr size_t kButtonOutputMax = kButtonControlMax * kButtonLayerMax;
 constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 

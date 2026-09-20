@@ -233,6 +233,29 @@ inline bool parseKnobPort(const char *portName, int &knobIndex, int &layerIndex)
     return true;
 }
 
+inline bool parseButtonPort(const char *portName, int &buttonIndex, int &layerIndex)
+{
+    if (portName == nullptr || strncmp(portName, "value", 5) != 0)
+        return false;
+    char *end = nullptr;
+    const long buttonNumber = strtol(portName + 5, &end, 10);
+    if (buttonNumber < 1 || buttonNumber > static_cast<long>(synth::kButtonControlMax))
+        return false;
+    buttonIndex = static_cast<int>(buttonNumber - 1);
+    layerIndex = 0;
+    if (*end != '\0')
+    {
+        if (strncmp(end, "Layer", 5) != 0)
+            return false;
+        char *layerEnd = nullptr;
+        const long layerNumber = strtol(end + 5, &layerEnd, 10);
+        if (*layerEnd != '\0' || layerNumber < 1 || layerNumber > static_cast<long>(synth::kButtonLayerMax))
+            return false;
+        layerIndex = static_cast<int>(layerNumber - 1);
+    }
+    return true;
+}
+
 inline int findWidgetIndex(const PresetDoc &doc, const char *id)
 {
     for (uint16_t i = 0; i < doc.widgetCount; ++i)
@@ -1256,10 +1279,19 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // Knob above.
         if (fromType == NodeType::Button && g->controlRouteCount < synth::kMaxConnections)
         {
+            int buttonIndex = 0;
+            int layerIndex = 0;
+            if (!parseButtonPort(cd.fromPort, buttonIndex, layerIndex))
+                continue;
+            const ButtonState *sourceButton = g->instances[g->widgets[fromIdx].instanceBase].button;
+            if (sourceButton == nullptr || buttonIndex >= static_cast<int>(sourceButton->count) ||
+                layerIndex >= static_cast<int>(sourceButton->layerCount))
+                continue;
             ControlRoute &route = g->controlRoutes[g->controlRouteCount++];
             route.sourceWidget = static_cast<uint16_t>(fromIdx);
             route.targetWidget = static_cast<uint16_t>(toIdx);
             route.kind = ControlRoute::Kind::Button;
+            route.side = ButtonState::controlIndex(static_cast<uint8_t>(buttonIndex), static_cast<uint8_t>(layerIndex));
             snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
             if (toPort >= 0)
             {
@@ -1356,7 +1388,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         }
         else if (route.kind == ControlRoute::Kind::Button)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].button->currentValue;
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].button->controls[route.side].currentValue;
         }
         else if (route.kind == ControlRoute::Kind::UpDownButton)
         {

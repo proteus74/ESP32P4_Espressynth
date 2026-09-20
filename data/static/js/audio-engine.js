@@ -461,16 +461,20 @@ export class AudioEngine {
 
     const sourcesByLinkId = new Map();
     this.nodes.forEach((entry) => {
-      if (entry.type === "linked-input" && entry.linkId) {
-        sourcesByLinkId.set(entry.linkId, entry.gainNode);
+      if (entry.type.startsWith("linked-input") && entry.linkId) {
+        sourcesByLinkId.set(entry.linkId, entry.gainNodes);
       }
     });
     this.nodes.forEach((entry) => {
-      if (entry.type !== "linked-output" || !entry.sourceLinkId) return;
-      const source = sourcesByLinkId.get(entry.sourceLinkId);
-      if (!source) return;
-      source.connect(entry.gainNode);
-      this._linkedIOEdges.push({ from: source, to: entry.gainNode });
+      if (!entry.type.startsWith("linked-output") || !entry.sourceLinkId) return;
+      const sources = sourcesByLinkId.get(entry.sourceLinkId);
+      if (!sources) return;
+      entry.gainNodes.forEach((target, index) => {
+        const source = sources[index];
+        if (!source) return;
+        source.connect(target);
+        this._linkedIOEdges.push({ from: source, to: target });
+      });
     });
   }
 
@@ -1849,15 +1853,24 @@ export class AudioEngine {
         };
       }
       case "const":
-      case "button":
       case "up-down-button": {
         const constant = ctx.createConstantSource();
         constant.offset.value = params.value ?? 0;
         constant.start();
         return { type, constant };
       }
+      case "button": {
+        const constants = [];
+        for (let i = 0; i < 128; i += 1) {
+          const constant = ctx.createConstantSource();
+          constant.offset.value = i === 0 ? (params.value ?? 0) : 0;
+          constant.start();
+          constants.push(constant);
+        }
+        return { type, constant: constants[0], constants };
+      }
       case "knob": {
-        // One ConstantSourceNode per knob/layer output (16 knobs x 4 layers).
+        // One ConstantSourceNode per knob/layer output (16 knobs x 8 layers).
         // Mixer elsewhere in this file - unused ones just stay silent at 0),
         // instead of the single shared node const/button/up-down-button use
         // above - a multi-knob widget's "voltageN" outputs (see main.js's
@@ -1866,7 +1879,7 @@ export class AudioEngine {
         // node. `constant` stays an alias for control 0, for any code still
         // reading it directly.
         const constants = [];
-        for (let i = 0; i < 64; i += 1) {
+        for (let i = 0; i < 128; i += 1) {
           const c = ctx.createConstantSource();
           c.offset.value = i === 0 ? (params.value ?? 0) : 0;
           c.start();
@@ -2012,15 +2025,24 @@ export class AudioEngine {
         return entry;
       }
       case "linked-input":
-      case "linked-output": {
+      case "linked-output":
+      case "linked-input-4":
+      case "linked-output-4":
+      case "linked-input-8":
+      case "linked-output-8": {
         // Transparent, fixed-unity passthrough - the actual fan-out wiring
         // between matching linkId/sourceLinkId pairs happens in
         // _wireLinkedIO(), not here (see createNode()/_removeEntry()).
-        const gainNode = ctx.createGain();
-        gainNode.gain.value = 1;
+        const linkCount = params.linkCount || (type.endsWith("-8") ? 8 : (type.endsWith("-4") ? 4 : 1));
+        const gainNodes = Array.from({ length: linkCount }, () => {
+          const gainNode = ctx.createGain();
+          gainNode.gain.value = 1;
+          return gainNode;
+        });
         return {
           type,
-          gainNode,
+          gainNode: gainNodes[0],
+          gainNodes,
           linkId: params.linkId,
           linkName: params.linkName,
           sourceLinkId: params.sourceLinkId,
@@ -2964,7 +2986,7 @@ export class AudioEngine {
       this._wireLinkBridge();
     }
 
-    if (type === "linked-input" || type === "linked-output") {
+    if (type.startsWith("linked-input") || type.startsWith("linked-output")) {
       this._wireLinkedIO();
     }
   }
@@ -3340,8 +3362,8 @@ export class AudioEngine {
         if (entry.linkGainPrescales) entry.linkGainPrescales.forEach((node) => node.disconnect());
         this._linkBridged = false;
       }
-      if ((entry.type === "linked-input" || entry.type === "linked-output") && entry.gainNode) {
-        entry.gainNode.disconnect();
+      if ((entry.type.startsWith("linked-input") || entry.type.startsWith("linked-output")) && entry.gainNodes) {
+        entry.gainNodes.forEach((node) => node.disconnect());
         this._wireLinkedIO();
       }
       if (entry.analyser) entry.analyser.disconnect();
@@ -3657,10 +3679,14 @@ export class AudioEngine {
         break;
       }
       case "linked-input":
+      case "linked-input-4":
+      case "linked-input-8":
         if (paramName === "linkId") entry.linkId = value;
         else if (paramName === "linkName") entry.linkName = value;
         break;
       case "linked-output":
+      case "linked-output-4":
+      case "linked-output-8":
         if (paramName === "sourceLinkId") entry.sourceLinkId = value;
         break;
       case "filter":
@@ -3921,12 +3947,20 @@ export class AudioEngine {
         break;
       }
       case "const":
-      case "button":
       case "up-down-button":
         if (paramName === "value") applyRamp(entry.constant.offset);
         break;
+      case "button": {
+        const match = /^value(\d*)$/.exec(paramName);
+        if (match) {
+          const index = match[1] ? Number(match[1]) - 1 : 0;
+          const node = entry.constants?.[index];
+          if (node) applyRampValue(node.offset, value);
+        }
+        break;
+      }
       case "knob": {
-        // "value" (index 0) or "value2".."value64" (see main.js's
+        // "value" (index 0) or "value2".."value128" (see main.js's
         // knobValueParamName) - each control owns its own ConstantSourceNode
         // (see _buildNode's "knob" case), unlike const/button/up-down-button
         // above which only ever have one.
@@ -4196,8 +4230,20 @@ export class AudioEngine {
         return entry.constants?.[index] || null;
       }
     }
+    if (entry.type === "button") {
+      const match = /^value(\d+)(?:Layer(\d+))?$/.exec(port);
+      if (match) {
+        const buttonIndex = Number(match[1]) - 1;
+        const layerIndex = match[2] ? Number(match[2]) - 1 : 0;
+        return entry.constants?.[layerIndex * 16 + buttonIndex] || null;
+      }
+    }
     if (entry.type === "gain" && port === "out") return entry.curveGainNode;
-    if (entry.type === "linked-output" && port === "out") return entry.gainNode;
+    if (entry.type.startsWith("linked-output")) {
+      if (port === "out") return entry.gainNodes?.[0] || null;
+      const match = /^out([1-8])$/.exec(port);
+      if (match) return entry.gainNodes?.[Number(match[1]) - 1] || null;
+    }
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {
       return entry.filterOutput || entry.filterNode;
     }
@@ -4246,7 +4292,11 @@ export class AudioEngine {
       if (port === "right") return entry.rightGain;
     }
     if (entry.type === "gain" && port === "in") return entry.gainNode;
-    if (entry.type === "linked-input" && port === "in") return entry.gainNode;
+    if (entry.type.startsWith("linked-input")) {
+      if (port === "in") return entry.gainNodes?.[0] || null;
+      const match = /^in([1-8])$/.exec(port);
+      if (match) return entry.gainNodes?.[Number(match[1]) - 1] || null;
+    }
     
     
     

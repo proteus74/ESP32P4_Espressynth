@@ -24,6 +24,11 @@ document.addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (cancelKnobMidiLearn() || cancelButtonMidiLearn()) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return;
+  }
   const openOverlays = Array.from(document.querySelectorAll(".modal-overlay:not(.hidden)"));
   const overlay = openOverlays.at(-1);
   if (!overlay) return;
@@ -884,6 +889,14 @@ async function restoreSystemFromFile(file) {
 
 
 
+const LINKED_INPUT_TYPES = new Set(["linked-input", "linked-input-4", "linked-input-8"]);
+const LINKED_OUTPUT_TYPES = new Set(["linked-output", "linked-output-4", "linked-output-8"]);
+const isLinkedInputType = (type) => LINKED_INPUT_TYPES.has(type);
+const isLinkedOutputType = (type) => LINKED_OUTPUT_TYPES.has(type);
+const isLinkedIoType = (type) => isLinkedInputType(type) || isLinkedOutputType(type);
+const linkedIoCountForType = (type) => type.endsWith("-8") ? 8 : (type.endsWith("-4") ? 4 : 1);
+const linkedIoPortId = (direction, index, count) => count === 1 ? direction : `${direction}${index + 1}`;
+
 const WIDGET_TYPES = {
   annotation: {
     label: "Annotation",
@@ -936,7 +949,7 @@ const WIDGET_TYPES = {
     outputs: [
       { id: "voltage", label: "" },
       ...Array.from({ length: 16 }, (_, knobIndex) =>
-        Array.from({ length: 4 }, (_, layerIndex) => ({
+        Array.from({ length: 8 }, (_, layerIndex) => ({
           id: layerIndex === 0 ? `voltage${knobIndex + 1}` : `voltage${knobIndex + 1}Layer${layerIndex + 1}`,
           label: `${knobIndex + 1}.${layerIndex + 1}`,
         }))
@@ -946,8 +959,13 @@ const WIDGET_TYPES = {
   button: {
     label: "Button",
     icon: "🔘",
-    inputs: [],
-    outputs: [{ id: "value", label: "" }],
+    inputs: [{ id: "layer", label: "Layer" }],
+    outputs: Array.from({ length: 16 }, (_, buttonIndex) =>
+      Array.from({ length: 8 }, (_, layerIndex) => ({
+        id: layerIndex === 0 ? `value${buttonIndex + 1}` : `value${buttonIndex + 1}Layer${layerIndex + 1}`,
+        label: `${buttonIndex + 1}.${layerIndex + 1}`,
+      }))
+    ).flat(),
   },
   "up-down-button": {
     label: "Up/Down Button",
@@ -1503,6 +1521,30 @@ const WIDGET_TYPES = {
     inputs: [],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "linked-input-4": {
+    label: "Link In 4×",
+    icon: "📥",
+    inputs: Array.from({ length: 4 }, (_, index) => ({ id: `in${index + 1}`, label: String(index + 1) })),
+    outputs: [],
+  },
+  "linked-output-4": {
+    label: "Link Out 4×",
+    icon: "📤",
+    inputs: [],
+    outputs: Array.from({ length: 4 }, (_, index) => ({ id: `out${index + 1}`, label: String(index + 1) })),
+  },
+  "linked-input-8": {
+    label: "Link In 8×",
+    icon: "📥",
+    inputs: Array.from({ length: 8 }, (_, index) => ({ id: `in${index + 1}`, label: String(index + 1) })),
+    outputs: [],
+  },
+  "linked-output-8": {
+    label: "Link Out 8×",
+    icon: "📤",
+    inputs: [],
+    outputs: Array.from({ length: 8 }, (_, index) => ({ id: `out${index + 1}`, label: String(index + 1) })),
+  },
   lfo: {
     label: "LFO",
     icon: "🔄",
@@ -1565,7 +1607,7 @@ const WIDGET_CATEGORIES = [
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb-light"] },
-  { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output"] },
+  { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out"] },
@@ -1689,6 +1731,10 @@ const AUDIO_PORTS = {
   },
   "linked-input": { in: ["in"] },
   "linked-output": { out: ["out"] },
+  "linked-input-4": { in: Array.from({ length: 4 }, (_, index) => `in${index + 1}`) },
+  "linked-output-4": { out: Array.from({ length: 4 }, (_, index) => `out${index + 1}`) },
+  "linked-input-8": { in: Array.from({ length: 8 }, (_, index) => `in${index + 1}`) },
+  "linked-output-8": { out: Array.from({ length: 8 }, (_, index) => `out${index + 1}`) },
   "audio-out": { in: ["left", "right"] },
   "usb-out": { in: ["left", "right"] },
   "es8311-out": { in: ["left", "right"] },
@@ -1736,8 +1782,8 @@ function getPortKind(widgetId, portId, direction, resolvingLinks = new Set()) {
   // signal.  Derive that mode from the Link In's upstream source instead of
   // treating every link as audio.  The latter creates a silent GainNode for
   // MIDI Pitch/Gate and incorrectly takes ownership of audio-rate targets.
-  if (type === "linked-input" && direction === "in") {
-    const key = `in:${widgetId}`;
+  if (isLinkedInputType(type) && direction === "in") {
+    const key = `${portId}:${widgetId}`;
     if (resolvingLinks.has(key)) return "control";
     const next = new Set(resolvingLinks);
     next.add(key);
@@ -1747,8 +1793,8 @@ function getPortKind(widgetId, portId, direction, resolvingLinks = new Set()) {
     ) ? "audio" : "control";
   }
 
-  if (type === "linked-output" && direction === "out") {
-    const key = `out:${widgetId}`;
+  if (isLinkedOutputType(type) && direction === "out") {
+    const key = `${portId}:${widgetId}`;
     if (resolvingLinks.has(key)) return "control";
     const sourceLinkId = linkedOutputStates.get(widgetId)?.sourceLinkId;
     if (!sourceLinkId) return "control";
@@ -1758,7 +1804,9 @@ function getPortKind(widgetId, portId, direction, resolvingLinks = new Set()) {
     if (!sourceWidgetId) return "control";
     const next = new Set(resolvingLinks);
     next.add(key);
-    return getPortKind(sourceWidgetId, "in", "in", next);
+    const count = linkedIoCountForType(type);
+    const portIndex = count === 1 ? 0 : Math.max(0, Number(portId.slice(3)) - 1);
+    return getPortKind(sourceWidgetId, linkedIoPortId("in", portIndex, count), "in", next);
   }
 
   const dual = DUAL_MODE_TYPES[type];
@@ -1903,12 +1951,12 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "linked-input", "linked-output", "sample-hold", "cv-in", "cv-out", "digital-in", "digital-out"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "cv-in", "cv-out", "digital-in", "digital-out"];
 
 
 
 const LINK_WIDGET_TYPES = ["audio-output-link", "audio-input-link"];
-const LINKED_IO_WIDGET_TYPES = ["linked-input", "linked-output"];
+const LINKED_IO_WIDGET_TYPES = [...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES];
 const OUTPUT_SINGLETON_TYPES = ["audio-out", "usb-out", "es8311-out", "wm8960-out"];
 
 function makePageState(kind, title, canvasEl, canvasContentEl, connectionsLayerEl, lassoBoxEl) {
@@ -2491,7 +2539,7 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "linked-input") {
+  if (isLinkedInputType(type)) {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
       e.stopPropagation();
@@ -2499,7 +2547,7 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "linked-output") {
+  if (isLinkedOutputType(type)) {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
       e.stopPropagation();
@@ -3527,20 +3575,33 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, effectCvParamsToValues(type, state));
   }
 
+  if (isLinkedIoType(type)) {
+    const body = document.createElement("div");
+    body.className = "widget-instance-body linked-io-body";
+    const groupName = document.createElement("div");
+    groupName.className = "linked-io-group-name";
+    groupName.dataset.role = "linked-io-group-name";
+    groupName.textContent = isLinkedInputType(type) ? "(unbenannt)" : "Nicht verbunden";
+    body.appendChild(groupName);
+    el.appendChild(body);
+  }
+
   if (type === "audio-output-link" || type === "audio-input-link") {
     const state = type === "audio-input-link" ? { gains: Array(LINK_BUS_COUNT).fill(CV_MAX_VOLTS) } : {};
     if (type === "audio-input-link") audioInputLinkStates.set(id, state);
     audioEngine.createNode(id, type, state);
   }
 
-  if (type === "linked-input") {
-    const state = { linkId: generateLinkId(), linkName: "" };
+  if (isLinkedInputType(type)) {
+    const linkCount = linkedIoCountForType(type);
+    const state = { linkId: generateLinkId(), linkName: "", linkCount, labels: Array(linkCount).fill(""), portSide: "left" };
     linkedInputStates.set(id, state);
     audioEngine.createNode(id, type, state);
   }
 
-  if (type === "linked-output") {
-    const state = { sourceLinkId: "" };
+  if (isLinkedOutputType(type)) {
+    const linkCount = linkedIoCountForType(type);
+    const state = { sourceLinkId: "", linkCount, portSide: "right" };
     linkedOutputStates.set(id, state);
     audioEngine.createNode(id, type, state);
   }
@@ -3901,42 +3962,28 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "button") {
     buttonStates.set(id, {
-      cc: null,
-      channel: null,
-      value0: 0,
-      value127: CV_MAX_VOLTS,
-      listText: "",
-      listIndex: 0,
-      wasAbove: false,
+      count: 1,
+      layerCount: 1,
+      activeLayer: 0,
+      layers: [createButtonLayer()],
+      outputSide: "bottom",
     });
     audioEngine.createNode(id, "button", { value: 0 });
 
     const body = document.createElement("div");
     body.className = "widget-instance-body button-body";
-
-    const controlRow = document.createElement("div");
-    controlRow.className = "button-control-row";
-
-    const pressButton = document.createElement("button");
-    pressButton.className = "button-trigger";
-    pressButton.type = "button";
-    pressButton.dataset.role = "button-readout";
-    pressButton.title = "Wert weiterschalten";
-    pressButton.addEventListener("click", (e) => {
-      e.stopPropagation();
-      advanceButtonValue(id);
-    });
-
-    const ccLabel = document.createElement("div");
-    ccLabel.className = "button-cc-label";
-    ccLabel.dataset.role = "button-cc-label";
-
-    controlRow.appendChild(pressButton);
-    body.appendChild(controlRow);
-    body.appendChild(ccLabel);
+    body.dataset.role = "button-body";
+    const controls = document.createElement("div");
+    controls.className = "button-controls";
+    controls.dataset.role = "button-grid";
+    body.appendChild(controls);
+    const layerSelector = document.createElement("div");
+    layerSelector.className = "knob-layer-selector";
+    layerSelector.dataset.role = "button-layer-selector";
+    body.appendChild(layerSelector);
     el.appendChild(body);
-
-    updateButtonVisual(id);
+    renderButtonControls(id, controls);
+    renderButtonLayerSelector(id, layerSelector);
   }
 
   if (type === "up-down-button") {
@@ -4116,6 +4163,8 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "knob") {
     renderKnobPorts(id, ports);
+  } else if (type === "button") {
+    renderButtonPorts(id, ports);
   } else if (type === "multiplier") {
     renderMultiplierPorts(id, ports);
   } else if (type === "adder") {
@@ -4148,12 +4197,13 @@ function createWidget(type, label, x, y, forcedId) {
         row.classList.add("gain-control-row");
         row.dataset.role = "main-gain-control";
       }
-      if (type === "linked-input" && port.id === "in") {
+      if (isLinkedInputType(type)) {
         const label = row.querySelector(".port-label");
         if (label) {
-          label.classList.add("linked-io-status");
-          label.dataset.role = "linked-io-status";
-          label.textContent = linkedInputStates.get(id)?.linkName || "(unbenannt)";
+          const state = linkedInputStates.get(id);
+          const index = state.linkCount === 1 ? 0 : Number(port.id.slice(2)) - 1;
+          label.classList.add("linked-io-port-label");
+          label.textContent = state.labels[index] || String(index + 1);
         }
       }
       if (type === "value-mapper" && port.id === "in") {
@@ -5145,12 +5195,10 @@ function createWidget(type, label, x, y, forcedId) {
     });
     def.outputs.forEach((port) => {
       const row = createPortRow(id, port, "out", type);
-      if (type === "linked-output" && port.id === "out") {
+      if (isLinkedOutputType(type)) {
         const label = row.querySelector(".port-label");
         if (label) {
-          label.classList.add("linked-io-status");
-          label.dataset.role = "linked-io-status";
-          label.textContent = "Nicht verbunden";
+          label.classList.add("linked-io-port-label");
         }
       }
       if (type === "abs" && port.id === "value") {
@@ -5226,9 +5274,10 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(ports);
   } else if (type === "button") {
     ports.classList.add("button-output-ports");
-    const buttonControlRow = el.querySelector(".button-control-row");
-    if (buttonControlRow) buttonControlRow.appendChild(ports);
-    else el.appendChild(ports);
+    el.appendChild(ports);
+  } else if (isLinkedIoType(type)) {
+    el.appendChild(ports);
+    renderLinkedIoLayout(id);
   } else if (type === "up-down-button") {
     ports.classList.add("up-down-button-output-ports");
     const pressRow = el.querySelector(".up-down-button-press-row");
@@ -5266,7 +5315,7 @@ function createWidget(type, label, x, y, forcedId) {
 
 
 
-  if (type !== "annotation" && type !== "knob") layoutPortsGrid(ports);
+  if (type !== "annotation" && type !== "knob" && type !== "button" && !isLinkedIoType(type)) layoutPortsGrid(ports);
   if (type === "multiplexer") {
     updateMultiplexerVisual(id);
     requestAnimationFrame(() => updateMultiplexerRouting(id));
@@ -5358,13 +5407,13 @@ function removeWidget(id, force = false) {
   const drumState = drumSequencerStates.get(id);
   if (drumState) drumState.triggerTimers.forEach((timer) => clearTimeout(timer));
   drumSequencerStates.delete(id);
-  const removedWasLinkedIO = el?.dataset.widgetType === "linked-input" || el?.dataset.widgetType === "linked-output";
+  const removedWasLinkedIO = isLinkedIoType(el?.dataset.widgetType);
   audioEngine.removeNode(id);
   refreshControlGraph();
   refreshVoiceGroups();
   if (removedWasLinkedIO || connections.some(connectionTouchesLinkedIO)) refreshLinkedIO();
-  if (midiLearnTargetId === id) midiLearnTargetId = null;
-  if (buttonMidiLearnTargetId === id) buttonMidiLearnTargetId = null;
+  if (midiLearnTargetId?.widgetId === id) midiLearnTargetId = null;
+  if (buttonMidiLearnTargetId?.widgetId === id) buttonMidiLearnTargetId = null;
   if (upDownMidiLearnTargetIdUp === id) upDownMidiLearnTargetIdUp = null;
   if (upDownMidiLearnTargetIdDown === id) upDownMidiLearnTargetIdDown = null;
   if (switchMidiLearnTargetId === id) switchMidiLearnTargetId = null;
@@ -5613,7 +5662,7 @@ function createPortRow(widgetId, port, direction, widgetType) {
 const knobStates = new Map();
 let midiLearnTargetId = null;
 const KNOB_MAX_COUNT = 16;
-const KNOB_MAX_LAYERS = 4;
+const KNOB_MAX_LAYERS = 8;
 
 function createKnobControl() {
   return { cc: null, channel: null, raw: 0, point1In: 0, point1Out: 0, point2In: 127, point2Out: CV_MAX_VOLTS, constraintMin: null, constraintMax: null, listText: "" };
@@ -5628,7 +5677,7 @@ function createKnobLayer(bindingSource = null) {
     }
     return control;
   });
-  return { controls, labels: Array(KNOB_MAX_COUNT).fill("") };
+  return { name: "", controls, labels: Array(KNOB_MAX_COUNT).fill("") };
 }
 
 function knobLayer(state, layerIndex = state?.activeLayer ?? 0) {
@@ -5702,6 +5751,7 @@ function renderKnobControls(widgetId, gridElement = null) {
     body.style.setProperty("--knob-count", state.count);
     body.style.setProperty("--knob-columns", columns);
     body.style.setProperty("--knob-layer-count", state.layerCount);
+    body.style.setProperty("--knob-column-min", `${Math.max(76, state.layerCount * 18 + (state.layerCount - 1) * 2)}px`);
     body.classList.toggle("knob-single-layer", state.layerCount === 1);
   }
   for (let index = 0; index < state.count; index += 1) {
@@ -5756,6 +5806,7 @@ function renderKnobLayerSelector(widgetId, target = null) {
   const port = createPortRow(widgetId, { id: "layer", label: "Layer" }, "in", "knob");
   const slider = document.createElement("input");
   slider.type = "range";
+  slider.className = "port-slider";
   slider.min = "0";
   slider.max = String(state.layerCount - 1);
   slider.step = "1";
@@ -5763,11 +5814,15 @@ function renderKnobLayerSelector(widgetId, target = null) {
   slider.disabled = state.layerCount <= 1 || connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "layer");
   slider.setAttribute("aria-label", "Active layer");
   slider.addEventListener("mousedown", (event) => event.stopPropagation());
+  slider.addEventListener("click", (event) => event.stopPropagation());
   slider.addEventListener("input", () => setKnobActiveLayer(widgetId, Number(slider.value), true));
   const value = document.createElement("span");
   value.className = "knob-layer-value";
   value.textContent = `${state.activeLayer + 1}/${state.layerCount}`;
-  container.append(port, slider, value);
+  const name = document.createElement("span");
+  name.className = "knob-layer-name";
+  name.textContent = knobLayer(state)?.name || `Layer ${state.activeLayer + 1}`;
+  container.append(name, port, slider, value);
 }
 
 function setKnobActiveLayer(widgetId, layerIndex, sendLive = false) {
@@ -5780,8 +5835,10 @@ function setKnobActiveLayer(widgetId, layerIndex, sendLive = false) {
   const el = document.getElementById(widgetId);
   const slider = el?.querySelector('[data-role="knob-layer-selector"] input[type="range"]');
   const value = el?.querySelector(".knob-layer-value");
+  const name = el?.querySelector(".knob-layer-name");
   if (slider) slider.value = String(next);
   if (value) value.textContent = `${next + 1}/${state.layerCount}`;
+  if (name) name.textContent = knobLayer(state)?.name || `Layer ${next + 1}`;
   el?.querySelectorAll(".knob-output-group").forEach((group) => {
     Array.from(group.children).forEach((row, index) => row.classList.toggle("knob-output-active", index === next));
   });
@@ -6461,21 +6518,19 @@ function routeMidiToKnobs(data) {
   if (data.type !== "midi" || data.midiType !== "control_change") return;
 
   if (midiLearnTargetId) {
-    const state = knobStates.get(midiLearnTargetId.widgetId);
-    const control = knobLayer(state, 0)?.controls[midiLearnTargetId.index];
+    const target = midiLearnTargetId;
+    const state = knobStates.get(target.widgetId);
+    const control = knobLayer(state, 0)?.controls[target.index];
     if (control) {
       state.layers.forEach((layer) => {
-        layer.controls[midiLearnTargetId.index].cc = data.control;
-        layer.controls[midiLearnTargetId.index].channel = data.channel;
+        layer.controls[target.index].cc = data.control;
+        layer.controls[target.index].channel = data.channel;
       });
-      const card = knobSettingsGrid.querySelector(`[data-knob-index="${midiLearnTargetId.index}"]`);
-      const ccDisplay = card?.querySelector('[data-knob-field="cc"]');
-      const learnButton = card?.querySelector('[data-role="knob-learn"]');
-      if (ccDisplay) ccDisplay.textContent = `${data.control} (Ch ${data.channel + 1})`;
-      if (learnButton) learnButton.textContent = "Learn";
-      updateKnobVisual(midiLearnTargetId.widgetId, midiLearnTargetId.index);
-      sendLiveParamUpdate(midiLearnTargetId.widgetId, {
-        knobIndex: midiLearnTargetId.index + 1,
+      midiLearnTargetId = null;
+      updateKnobSettingsCcDisplay(target.widgetId, target.index);
+      updateKnobVisual(target.widgetId, target.index);
+      sendLiveParamUpdate(target.widgetId, {
+        knobIndex: target.index + 1,
         cc: data.control,
         channel: data.channel,
       });
@@ -6499,13 +6554,94 @@ function routeMidiToKnobs(data) {
 const knobSettingsOverlay = document.getElementById("knobSettingsOverlay");
 const knobSettingsAdd = document.getElementById("knobSettingsAdd");
 const knobSettingsAddLayer = document.getElementById("knobSettingsAddLayer");
-const knobSettingsDeleteLayer = document.getElementById("knobSettingsDeleteLayer");
 const knobSettingsLayerTabs = document.getElementById("knobSettingsLayerTabs");
+const knobLayerNameInput = document.getElementById("knobLayerNameInput");
+const knobCcContextMenu = document.getElementById("knobCcContextMenu");
+const knobLayerContextMenu = document.getElementById("knobLayerContextMenu");
 const knobOutputSideInput = document.getElementById("knobOutputSideInput");
 const knobSettingsGrid = document.getElementById("knobSettingsGrid");
 let pendingKnobId = null;
 let pendingKnobIndex = 0;
 let pendingKnobLayerIndex = 0;
+let knobCcContextTarget = null;
+let knobLayerContextTarget = null;
+
+function knobCcDisplayText(widgetId, index) {
+  if (midiLearnTargetId?.widgetId === widgetId && midiLearnTargetId.index === index) return "Waiting…";
+  const binding = knobLayer(knobStates.get(widgetId), 0)?.controls[index];
+  return binding?.cc === null || binding?.cc === undefined
+    ? "Learn"
+    : `${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
+}
+
+function updateKnobSettingsCcDisplay(widgetId, index) {
+  const display = knobSettingsGrid.querySelector(`[data-knob-index="${index}"] [data-knob-field="cc"]`);
+  if (!display || pendingKnobId !== widgetId) return;
+  const waiting = midiLearnTargetId?.widgetId === widgetId && midiLearnTargetId.index === index;
+  display.textContent = knobCcDisplayText(widgetId, index);
+  display.classList.toggle("waiting", waiting);
+}
+
+function closeKnobCcContextMenu() {
+  knobCcContextMenu.classList.add("hidden");
+  knobCcContextTarget = null;
+}
+
+function startKnobMidiLearn(widgetId, index) {
+  const previous = midiLearnTargetId;
+  midiLearnTargetId = { widgetId, index };
+  closeKnobCcContextMenu();
+  if (previous) updateKnobSettingsCcDisplay(previous.widgetId, previous.index);
+  updateKnobSettingsCcDisplay(widgetId, index);
+}
+
+function cancelKnobMidiLearn() {
+  if (!midiLearnTargetId) return false;
+  const target = midiLearnTargetId;
+  midiLearnTargetId = null;
+  updateKnobSettingsCcDisplay(target.widgetId, target.index);
+  return true;
+}
+
+function openKnobCcContextMenu(event, widgetId, index) {
+  event.preventDefault();
+  event.stopPropagation();
+  knobCcContextTarget = { widgetId, index };
+  knobCcContextMenu.classList.remove("hidden");
+  const rect = knobCcContextMenu.getBoundingClientRect();
+  knobCcContextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - rect.width - 8)}px`;
+  knobCcContextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - rect.height - 8)}px`;
+}
+
+function clearKnobMidiLearn(widgetId, index) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  if (midiLearnTargetId?.widgetId === widgetId && midiLearnTargetId.index === index) midiLearnTargetId = null;
+  state.layers.forEach((layer) => {
+    layer.controls[index].cc = null;
+    layer.controls[index].channel = null;
+  });
+  updateKnobSettingsCcDisplay(widgetId, index);
+  sendLiveParamUpdate(widgetId, { knobIndex: index + 1, cc: null, channel: null });
+  savePresetNow();
+}
+
+function closeKnobLayerContextMenu() {
+  knobLayerContextMenu.classList.add("hidden");
+  knobLayerContextTarget = null;
+}
+
+function openKnobLayerContextMenu(event, widgetId, layerIndex) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeKnobCcContextMenu();
+  knobLayerContextTarget = { widgetId, layerIndex };
+  knobLayerContextMenu.querySelector('[data-action="delete"]').disabled = knobStates.get(widgetId)?.layerCount <= 1;
+  knobLayerContextMenu.classList.remove("hidden");
+  const rect = knobLayerContextMenu.getBoundingClientRect();
+  knobLayerContextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - rect.width - 8)}px`;
+  knobLayerContextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - rect.height - 8)}px`;
+}
 
 function createKnobSettingsInput(field, value, { readOnly = false, placeholder = "" } = {}) {
   const input = document.createElement("input");
@@ -6535,7 +6671,8 @@ function renderKnobSettingsLayerTabs(widgetId) {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = "btn-secondary knob-settings-layer-tab";
-    tab.textContent = `Layer ${layerIndex + 1}`;
+    tab.textContent = state.layers[layerIndex].name || `Layer ${layerIndex + 1}`;
+    tab.dataset.layerIndex = String(layerIndex);
     tab.classList.toggle("active", layerIndex === pendingKnobLayerIndex);
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(layerIndex === pendingKnobLayerIndex));
@@ -6544,10 +6681,11 @@ function renderKnobSettingsLayerTabs(widgetId) {
       pendingKnobLayerIndex = layerIndex;
       renderKnobSettingsGrid(widgetId);
     });
+    tab.addEventListener("contextmenu", (event) => openKnobLayerContextMenu(event, widgetId, layerIndex));
     knobSettingsLayerTabs.appendChild(tab);
   }
   knobSettingsAddLayer.disabled = state.layerCount >= KNOB_MAX_LAYERS;
-  knobSettingsDeleteLayer.disabled = state.layerCount <= 1;
+  knobLayerNameInput.value = knobLayer(state, pendingKnobLayerIndex)?.name || "";
 }
 
 function renderKnobSettingsGrid(widgetId) {
@@ -6555,12 +6693,10 @@ function renderKnobSettingsGrid(widgetId) {
   if (!state) return;
   pendingKnobLayerIndex = clamp(pendingKnobLayerIndex, 0, state.layerCount - 1);
   const layer = knobLayer(state, pendingKnobLayerIndex);
-  const bindings = knobLayer(state, 0);
   renderKnobSettingsLayerTabs(widgetId);
   knobSettingsGrid.innerHTML = "";
   for (let index = 0; index < state.count; index += 1) {
     const control = layer.controls[index];
-    const binding = bindings.controls[index];
     const card = document.createElement("section");
     card.className = "knob-settings-card";
     card.dataset.knobIndex = String(index);
@@ -6569,33 +6705,28 @@ function renderKnobSettingsGrid(widgetId) {
     number.className = "knob-settings-number";
     number.textContent = String(index + 1);
     card.appendChild(number);
-    card.appendChild(createKnobSettingsInput("label", layer.labels[index] ?? ""));
 
     const cc = document.createElement("div");
     cc.className = "knob-settings-cc";
-    const ccValue = document.createElement("span");
+    const ccValue = document.createElement("button");
+    ccValue.type = "button";
     ccValue.className = "knob-settings-cc-value";
     ccValue.dataset.knobField = "cc";
-    ccValue.textContent = binding.cc === null ? "-" : `${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
-    cc.appendChild(ccValue);
+    ccValue.textContent = knobCcDisplayText(widgetId, index);
+    ccValue.classList.toggle("waiting", midiLearnTargetId?.widgetId === widgetId && midiLearnTargetId.index === index);
     if (pendingKnobLayerIndex === 0) {
-      const learn = document.createElement("button");
-      learn.type = "button";
-      learn.className = "btn-secondary";
-      learn.dataset.role = "knob-learn";
-      learn.textContent = "Learn";
-      learn.addEventListener("click", () => {
-        midiLearnTargetId = { widgetId, index };
-        learn.textContent = "Waiting";
+      ccValue.addEventListener("click", () => {
+        if (midiLearnTargetId?.widgetId === widgetId && midiLearnTargetId.index === index) cancelKnobMidiLearn();
+        else startKnobMidiLearn(widgetId, index);
       });
-      cc.appendChild(learn);
     } else {
-      const inherited = document.createElement("span");
-      inherited.className = "knob-settings-inherited";
-      inherited.textContent = "Shared";
-      cc.appendChild(inherited);
+      ccValue.classList.add("readonly");
+      ccValue.title = "MIDI Learn is available on Layer 1";
     }
+    ccValue.addEventListener("contextmenu", (event) => openKnobCcContextMenu(event, widgetId, index));
+    cc.appendChild(ccValue);
     card.appendChild(cc);
+    card.appendChild(createKnobSettingsInput("label", layer.labels[index] ?? ""));
 
     card.appendChild(createKnobSettingsInput("listText", control.listText ?? ""));
     [
@@ -6635,6 +6766,7 @@ function syncKnobSettingsGrid(widgetId, layerIndex = pendingKnobLayerIndex) {
   if (!state) return;
   const layer = knobLayer(state, layerIndex);
   if (!layer) return;
+  layer.name = knobLayerNameInput.value.trim().slice(0, 32);
   const controls = [];
   const labels = [];
   knobSettingsGrid.querySelectorAll("[data-knob-index]").forEach((card) => {
@@ -6710,11 +6842,12 @@ function addKnobLayer(widgetId) {
   renderKnobSettingsGrid(widgetId);
 }
 
-function deleteKnobLayer(widgetId) {
+function deleteKnobLayer(widgetId, removedLayer = pendingKnobLayerIndex) {
   const state = knobStates.get(widgetId);
   if (!state || state.layerCount <= 1) return;
+  const currentLayer = pendingKnobLayerIndex;
   syncKnobSettingsGrid(widgetId, pendingKnobLayerIndex);
-  const removedLayer = pendingKnobLayerIndex;
+  removedLayer = clamp(removedLayer, 0, state.layerCount - 1);
   for (let knobIndex = 0; knobIndex < state.count; knobIndex += 1) {
     removeConnectionsForPort(widgetId, knobPortId(knobIndex, removedLayer), "out");
   }
@@ -6734,7 +6867,9 @@ function deleteKnobLayer(widgetId) {
   if (state.layerCount === 1) removeConnectionsForPort(widgetId, "layer", "in");
   if (state.activeLayer === removedLayer) state.activeLayer = Math.min(removedLayer, state.layerCount - 1);
   else if (state.activeLayer > removedLayer) state.activeLayer -= 1;
-  pendingKnobLayerIndex = Math.min(removedLayer, state.layerCount - 1);
+  pendingKnobLayerIndex = currentLayer === removedLayer
+    ? Math.min(removedLayer, state.layerCount - 1)
+    : currentLayer - (currentLayer > removedLayer ? 1 : 0);
   renderKnobSettingsGrid(widgetId);
 }
 
@@ -6752,6 +6887,8 @@ function openKnobSettings(widgetId, index = 0) {
 
 function closeKnobSettings() {
   knobSettingsOverlay.classList.add("hidden");
+  closeKnobCcContextMenu();
+  closeKnobLayerContextMenu();
   pendingKnobId = null;
   pendingKnobIndex = 0;
   pendingKnobLayerIndex = 0;
@@ -6769,8 +6906,32 @@ knobSettingsAddLayer.addEventListener("click", () => {
   if (pendingKnobId) addKnobLayer(pendingKnobId);
 });
 
-knobSettingsDeleteLayer.addEventListener("click", () => {
-  if (pendingKnobId) deleteKnobLayer(pendingKnobId);
+knobLayerNameInput.addEventListener("input", () => {
+  const state = knobStates.get(pendingKnobId);
+  const layer = knobLayer(state, pendingKnobLayerIndex);
+  if (!layer) return;
+  layer.name = knobLayerNameInput.value.trimStart().slice(0, 32);
+  const tab = knobSettingsLayerTabs.querySelector(`[data-layer-index="${pendingKnobLayerIndex}"]`);
+  if (tab) tab.textContent = layer.name || `Layer ${pendingKnobLayerIndex + 1}`;
+});
+
+knobCcContextMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  const target = knobCcContextTarget;
+  closeKnobCcContextMenu();
+  if (action === "unlearn" && target) clearKnobMidiLearn(target.widgetId, target.index);
+});
+
+knobLayerContextMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  const target = knobLayerContextTarget;
+  closeKnobLayerContextMenu();
+  if (action === "delete" && target) deleteKnobLayer(target.widgetId, target.layerIndex);
+});
+
+document.addEventListener("mousedown", (event) => {
+  if (!event.target.closest("#knobCcContextMenu")) closeKnobCcContextMenu();
+  if (!event.target.closest("#knobLayerContextMenu")) closeKnobLayerContextMenu();
 });
 
 document.getElementById("knobSettingsSave").addEventListener("click", () => {
@@ -6778,7 +6939,7 @@ document.getElementById("knobSettingsSave").addEventListener("click", () => {
   const state = knobStates.get(pendingKnobId);
   if (state) {
     syncKnobSettingsGrid(pendingKnobId, pendingKnobLayerIndex);
-    state.outputSide = ["top", "bottom", "left", "right"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
+    state.outputSide = ["top", "bottom"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
     state.layers.forEach((layer, layerIndex) => {
       layer.controls.slice(0, state.count).forEach((control, knobIndex) => {
         const binding = state.layers[0].controls[knobIndex];
@@ -6822,181 +6983,633 @@ document.getElementById("knobSettingsSave").addEventListener("click", () => {
 
 const buttonStates = new Map();
 let buttonMidiLearnTargetId = null;
+const BUTTON_MAX_COUNT = 16;
+const BUTTON_MAX_LAYERS = 8;
 
-function buttonCurrentOutput(state) {
-  const list = parseValueList(state.listText);
-  if (list && list.length >= 2) {
-    const idx = clamp(state.listIndex, 0, list.length - 1);
-    return list[idx];
-  }
-  return state.wasAbove ? state.value127 : state.value0;
+function createButtonControl() {
+  return { cc: null, channel: null, value0: 0, value127: CV_MAX_VOLTS, listText: "", listIndex: 0, wasAbove: false };
 }
 
-function publishButtonValue(widgetId) {
+function createButtonLayer(bindingSource = null) {
+  const controls = Array.from({ length: BUTTON_MAX_COUNT }, (_, index) => {
+    const control = createButtonControl();
+    if (bindingSource?.controls[index]) {
+      control.cc = bindingSource.controls[index].cc;
+      control.channel = bindingSource.controls[index].channel;
+    }
+    return control;
+  });
+  return { name: "", controls, labels: Array(BUTTON_MAX_COUNT).fill("") };
+}
+
+function buttonLayer(state, layerIndex = state?.activeLayer ?? 0) {
+  return state?.layers?.[layerIndex] || null;
+}
+
+function buttonControlIndex(buttonIndex, layerIndex) {
+  return layerIndex * BUTTON_MAX_COUNT + buttonIndex;
+}
+
+function buttonPortId(buttonIndex, layerIndex = 0) {
+  return layerIndex === 0 ? `value${buttonIndex + 1}` : `value${buttonIndex + 1}Layer${layerIndex + 1}`;
+}
+
+function parseButtonPortId(portId) {
+  const match = /^value(\d+)(?:Layer(\d+))?$/.exec(portId);
+  if (!match) return null;
+  const buttonIndex = Number(match[1]) - 1;
+  const layerIndex = match[2] ? Number(match[2]) - 1 : 0;
+  return buttonIndex >= 0 && buttonIndex < BUTTON_MAX_COUNT && layerIndex >= 0 && layerIndex < BUTTON_MAX_LAYERS
+    ? { buttonIndex, layerIndex }
+    : null;
+}
+
+function buttonValueParamName(buttonIndex, layerIndex) {
+  const index = buttonControlIndex(buttonIndex, layerIndex);
+  return index === 0 ? "value" : `value${index + 1}`;
+}
+
+function buttonCurrentOutput(control) {
+  const list = parseValueList(control.listText);
+  if (list && list.length >= 2) {
+    const idx = clamp(control.listIndex, 0, list.length - 1);
+    return list[idx];
+  }
+  return control.wasAbove ? control.value127 : control.value0;
+}
+
+function renderButtonPorts(widgetId, portsEl) {
   const state = buttonStates.get(widgetId);
   if (!state) return;
-  const output = buttonCurrentOutput(state);
-  audioEngine.setParam(widgetId, "value", output);
+  portsEl.innerHTML = "";
+  portsEl.className = `widget-ports knob-output-ports button-output-ports knob-output-${state.outputSide}`;
+  portsEl.style.setProperty("--knob-count", state.count);
+  portsEl.style.setProperty("--knob-layer-count", state.layerCount);
+  for (let buttonIndex = 0; buttonIndex < state.count; buttonIndex += 1) {
+    const group = document.createElement("div");
+    group.className = "knob-output-group";
+    for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex += 1) {
+      const row = createPortRow(widgetId, { id: buttonPortId(buttonIndex, layerIndex), label: `L${layerIndex + 1}` }, "out", "button");
+      row.classList.toggle("knob-output-active", layerIndex === state.activeLayer);
+      group.appendChild(row);
+    }
+    portsEl.appendChild(group);
+  }
+}
+
+function renderButtonControls(widgetId, target = null) {
+  const state = buttonStates.get(widgetId);
+  const grid = target || document.getElementById(widgetId)?.querySelector('[data-role="button-grid"]');
+  if (!state || !grid) return;
+  const layer = buttonLayer(state);
+  grid.innerHTML = "";
+  grid.style.setProperty("--button-columns", state.count);
+  const body = grid.closest('[data-role="button-body"]');
+  if (body) {
+    body.style.setProperty("--button-layer-count", state.layerCount);
+    body.style.setProperty("--button-column-min", `${Math.max(72, state.layerCount * 18 + (state.layerCount - 1) * 2)}px`);
+    body.classList.toggle("button-single-layer", state.layerCount === 1);
+  }
+  for (let index = 0; index < state.count; index += 1) {
+    const cell = document.createElement("div");
+    cell.className = "button-control";
+    cell.dataset.buttonIndex = String(index);
+    const trigger = document.createElement("button");
+    trigger.className = "button-trigger";
+    trigger.type = "button";
+    trigger.dataset.role = "button-readout";
+    trigger.title = "Advance value";
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      advanceButtonValue(widgetId, index);
+    });
+    const label = document.createElement("div");
+    label.className = "button-control-label";
+    label.textContent = layer.labels[index] || `Button ${index + 1}`;
+    cell.append(trigger, label);
+    grid.appendChild(cell);
+  }
   updateButtonVisual(widgetId);
-  propagate(widgetId, "value", output);
-  // wasAbove as 0/1, not a JS boolean: ButtonNode.h::setParam takes a plain
-  // float ("value != 0.0f"), and Graph::applyLiveParams only dispatches a
-  // key into setFloatFieldByName when cJSON_IsNumber() is true - a JSON
-  // `true`/`false` literal fails that check and gets silently dropped, so
-  // clicking this button never actually updated the firmware's live graph
-  // (a connected target - e.g. a Multiplexer's "select" - stayed stuck on
-  // whatever wasAbove was at the last full preset rebuild).
+}
+
+function renderButtonLayerSelector(widgetId, target = null) {
+  const state = buttonStates.get(widgetId);
+  const container = target || document.getElementById(widgetId)?.querySelector('[data-role="button-layer-selector"]');
+  if (!state || !container) return;
+  container.innerHTML = "";
+  container.classList.toggle("hidden", state.layerCount === 1);
+  if (state.layerCount === 1) return;
+  const port = createPortRow(widgetId, { id: "layer", label: "Layer" }, "in", "button");
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.className = "port-slider";
+  slider.min = "0";
+  slider.max = String(state.layerCount - 1);
+  slider.step = "1";
+  slider.value = String(state.activeLayer);
+  slider.disabled = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "layer");
+  slider.setAttribute("aria-label", "Active layer");
+  slider.addEventListener("mousedown", (event) => event.stopPropagation());
+  slider.addEventListener("click", (event) => event.stopPropagation());
+  slider.addEventListener("input", () => setButtonActiveLayer(widgetId, Number(slider.value), true));
+  const value = document.createElement("span");
+  value.className = "knob-layer-value";
+  value.textContent = `${state.activeLayer + 1}/${state.layerCount}`;
+  const name = document.createElement("span");
+  name.className = "knob-layer-name";
+  name.textContent = buttonLayer(state)?.name || `Layer ${state.activeLayer + 1}`;
+  container.append(name, port, slider, value);
+}
+
+function setButtonActiveLayer(widgetId, layerIndex, sendLive = false) {
+  const state = buttonStates.get(widgetId);
+  if (!state) return;
+  const next = clamp(Math.round(Number(layerIndex) || 0), 0, state.layerCount - 1);
+  if (next === state.activeLayer && !sendLive) return;
+  state.activeLayer = next;
+  renderButtonControls(widgetId);
+  const el = document.getElementById(widgetId);
+  const slider = el?.querySelector('[data-role="button-layer-selector"] input[type="range"]');
+  const value = el?.querySelector(".knob-layer-value");
+  const name = el?.querySelector(".knob-layer-name");
+  if (slider) slider.value = String(next);
+  if (value) value.textContent = `${next + 1}/${state.layerCount}`;
+  if (name) name.textContent = buttonLayer(state)?.name || `Layer ${next + 1}`;
+  el?.querySelectorAll(".knob-output-group").forEach((group) => {
+    Array.from(group.children).forEach((row, index) => row.classList.toggle("knob-output-active", index === next));
+  });
+  if (sendLive) {
+    sendLiveParamUpdateThrottled(widgetId, { activeLayer: next });
+    markDirty();
+  }
+}
+
+function publishButtonValue(widgetId, buttonIndex) {
+  const state = buttonStates.get(widgetId);
+  const control = buttonLayer(state)?.controls[buttonIndex];
+  if (!state || !control) return;
+  const output = buttonCurrentOutput(control);
+  audioEngine.setParam(widgetId, buttonValueParamName(buttonIndex, state.activeLayer), output);
+  updateButtonVisual(widgetId, buttonIndex);
+  propagate(widgetId, buttonPortId(buttonIndex, state.activeLayer), output);
   sendLiveParamUpdate(widgetId, {
-    listIndex: state.listIndex,
-    wasAbove: state.wasAbove ? 1 : 0,
+    buttonIndex: buttonControlIndex(buttonIndex, state.activeLayer) + 1,
+    listIndex: control.listIndex,
+    wasAbove: control.wasAbove ? 1 : 0,
   });
 }
 
-function advanceButtonValue(widgetId) {
+function advanceButtonValue(widgetId, buttonIndex) {
   const state = buttonStates.get(widgetId);
-  if (!state) return;
-  const list = parseValueList(state.listText);
+  const control = buttonLayer(state)?.controls[buttonIndex];
+  if (!state || !control) return;
+  const list = parseValueList(control.listText);
   if (list && list.length >= 2) {
-    state.listIndex = (state.listIndex + 1) % list.length;
+    control.listIndex = (control.listIndex + 1) % list.length;
   } else {
-    state.wasAbove = !state.wasAbove;
+    control.wasAbove = !control.wasAbove;
   }
-  publishButtonValue(widgetId);
+  publishButtonValue(widgetId, buttonIndex);
 }
 
-function updateButtonVisual(widgetId) {
+function updateButtonVisual(widgetId, buttonIndex = null) {
   const state = buttonStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
-
-  const readout = el.querySelector('[data-role="button-readout"]');
-  const list = parseValueList(state.listText);
-  const active = list && list.length >= 2 ? state.listIndex > 0 : state.wasAbove;
-  if (readout) {
-    readout.textContent = formatNumber(buttonCurrentOutput(state));
-    readout.classList.toggle("is-active", active);
-    readout.setAttribute("aria-pressed", String(active));
-  }
-
-  const ccLabel = el.querySelector('[data-role="button-cc-label"]');
-  if (ccLabel) {
-    ccLabel.textContent =
-      state.cc === null ? "CC: –" : `CC ${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
-  }
+  const layer = buttonLayer(state);
+  const indexes = buttonIndex === null ? Array.from({ length: state.count }, (_, index) => index) : [buttonIndex];
+  indexes.forEach((index) => {
+    const control = layer.controls[index];
+    const readout = el.querySelector(`[data-button-index="${index}"] [data-role="button-readout"]`);
+    const list = parseValueList(control.listText);
+    const active = list && list.length >= 2 ? control.listIndex > 0 : control.wasAbove;
+    if (readout) {
+      readout.textContent = formatNumber(buttonCurrentOutput(control));
+      readout.classList.toggle("is-active", active);
+      readout.setAttribute("aria-pressed", String(active));
+    }
+  });
 }
 
 function routeMidiToButtons(data) {
   if (data.type !== "midi" || data.midiType !== "control_change") return;
 
   if (buttonMidiLearnTargetId) {
-    const state = buttonStates.get(buttonMidiLearnTargetId);
+    const target = buttonMidiLearnTargetId;
+    const state = buttonStates.get(target.widgetId);
     if (state) {
-      state.cc = data.control;
-      state.channel = data.channel;
-      buttonCcDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
-      buttonLearnBtn.textContent = "Learn";
-      updateButtonVisual(buttonMidiLearnTargetId);
-      sendLiveParamUpdate(buttonMidiLearnTargetId, { cc: data.control, channel: data.channel });
-      savePresetNow(); 
+      state.layers.forEach((layer) => {
+        layer.controls[target.index].cc = data.control;
+        layer.controls[target.index].channel = data.channel;
+      });
+      buttonMidiLearnTargetId = null;
+      updateButtonSettingsCcDisplay(target.widgetId, target.index);
+      sendLiveParamUpdate(target.widgetId, { buttonIndex: target.index + 1, cc: data.control, channel: data.channel });
+      savePresetNow();
     }
     buttonMidiLearnTargetId = null;
     return;
   }
 
   buttonStates.forEach((state, widgetId) => {
-    if (state.cc !== data.control || state.channel !== data.channel) return;
-
-    const above = data.value >= 64;
-    const list = parseValueList(state.listText);
-    if (list && list.length >= 2) {
-      if (above && !state.wasAbove) {
-        state.listIndex = (state.listIndex + 1) % list.length;
+    const bindings = buttonLayer(state, 0);
+    bindings.controls.slice(0, state.count).forEach((binding, buttonIndex) => {
+      if (binding.cc !== data.control || binding.channel !== data.channel) return;
+      const control = buttonLayer(state).controls[buttonIndex];
+      const above = data.value >= 64;
+      const list = parseValueList(control.listText);
+      if (list && list.length >= 2 && above && !control.wasAbove) {
+        control.listIndex = (control.listIndex + 1) % list.length;
       }
-    }
-    state.wasAbove = above;
-
-    publishButtonValue(widgetId);
-    markDirty();
+      control.wasAbove = above;
+      publishButtonValue(widgetId, buttonIndex);
+      markDirty();
+    });
   });
 }
 
 const buttonSettingsOverlay = document.getElementById("buttonSettingsOverlay");
-const buttonCcDisplay = document.getElementById("buttonCcDisplay");
-const buttonLearnBtn = document.getElementById("buttonLearnBtn");
-const buttonValue0Input = document.getElementById("buttonValue0Input");
-const buttonValue127Input = document.getElementById("buttonValue127Input");
-const buttonValueListInput = document.getElementById("buttonValueListInput");
-const buttonFixedInputs = [buttonValue0Input, buttonValue127Input];
+const buttonSettingsAdd = document.getElementById("buttonSettingsAdd");
+const buttonSettingsAddLayer = document.getElementById("buttonSettingsAddLayer");
+const buttonSettingsLayerTabs = document.getElementById("buttonSettingsLayerTabs");
+const buttonLayerNameInput = document.getElementById("buttonLayerNameInput");
+const buttonSettingsGrid = document.getElementById("buttonSettingsGrid");
+const buttonOutputSideInput = document.getElementById("buttonOutputSideInput");
+const buttonCcContextMenu = document.getElementById("buttonCcContextMenu");
+const buttonLayerContextMenu = document.getElementById("buttonLayerContextMenu");
 let pendingButtonId = null;
+let pendingButtonLayerIndex = 0;
+let buttonCcContextTarget = null;
+let buttonLayerContextTarget = null;
 
-
-
-function updateButtonFieldsDisabledState() {
-  const list = parseValueList(buttonValueListInput.value);
+function updateButtonCardDisabledState(card) {
+  const list = parseValueList(card.querySelector('[data-button-field="listText"]').value);
   const listValid = !!(list && list.length >= 2);
-  buttonFixedInputs.forEach((input) => {
-    input.disabled = listValid;
+  card.querySelectorAll("[data-button-fixed]").forEach((input) => { input.disabled = listValid; });
+}
+
+function buttonCcDisplayText(widgetId, index) {
+  if (buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index) return "Waiting…";
+  const binding = buttonLayer(buttonStates.get(widgetId), 0)?.controls[index];
+  return binding?.cc === null || binding?.cc === undefined ? "Learn" : `${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
+}
+
+function updateButtonSettingsCcDisplay(widgetId, index) {
+  const display = buttonSettingsGrid.querySelector(`[data-button-index="${index}"] [data-button-field="cc"]`);
+  if (!display || pendingButtonId !== widgetId) return;
+  const waiting = buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index;
+  display.textContent = buttonCcDisplayText(widgetId, index);
+  display.classList.toggle("waiting", waiting);
+}
+
+function startButtonMidiLearn(widgetId, index) {
+  const previous = buttonMidiLearnTargetId;
+  buttonMidiLearnTargetId = { widgetId, index };
+  if (previous) updateButtonSettingsCcDisplay(previous.widgetId, previous.index);
+  updateButtonSettingsCcDisplay(widgetId, index);
+}
+
+function cancelButtonMidiLearn() {
+  if (!buttonMidiLearnTargetId) return false;
+  const target = buttonMidiLearnTargetId;
+  buttonMidiLearnTargetId = null;
+  updateButtonSettingsCcDisplay(target.widgetId, target.index);
+  return true;
+}
+
+function clearButtonMidiLearn(widgetId, index) {
+  const state = buttonStates.get(widgetId);
+  if (!state) return;
+  if (buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index) buttonMidiLearnTargetId = null;
+  state.layers.forEach((layer) => {
+    layer.controls[index].cc = null;
+    layer.controls[index].channel = null;
+  });
+  updateButtonSettingsCcDisplay(widgetId, index);
+  sendLiveParamUpdate(widgetId, { buttonIndex: index + 1, cc: null, channel: null });
+  savePresetNow();
+}
+
+function closeButtonCcContextMenu() {
+  buttonCcContextMenu.classList.add("hidden");
+  buttonCcContextTarget = null;
+}
+
+function openButtonCcContextMenu(event, widgetId, index) {
+  event.preventDefault();
+  event.stopPropagation();
+  buttonCcContextTarget = { widgetId, index };
+  buttonCcContextMenu.classList.remove("hidden");
+  const rect = buttonCcContextMenu.getBoundingClientRect();
+  buttonCcContextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - rect.width - 8)}px`;
+  buttonCcContextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - rect.height - 8)}px`;
+}
+
+function closeButtonLayerContextMenu() {
+  buttonLayerContextMenu.classList.add("hidden");
+  buttonLayerContextTarget = null;
+}
+
+function openButtonLayerContextMenu(event, widgetId, layerIndex) {
+  event.preventDefault();
+  event.stopPropagation();
+  buttonLayerContextTarget = { widgetId, layerIndex };
+  buttonLayerContextMenu.querySelector('[data-action="delete"]').disabled = buttonStates.get(widgetId)?.layerCount <= 1;
+  buttonLayerContextMenu.classList.remove("hidden");
+  const rect = buttonLayerContextMenu.getBoundingClientRect();
+  buttonLayerContextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - rect.width - 8)}px`;
+  buttonLayerContextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - rect.height - 8)}px`;
+}
+
+function renderButtonSettingsLayerTabs(widgetId) {
+  const state = buttonStates.get(widgetId);
+  if (!state) return;
+  buttonSettingsLayerTabs.innerHTML = "";
+  for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex += 1) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "btn-secondary knob-settings-layer-tab";
+    tab.textContent = state.layers[layerIndex].name || `Layer ${layerIndex + 1}`;
+    tab.dataset.layerIndex = String(layerIndex);
+    tab.classList.toggle("active", layerIndex === pendingButtonLayerIndex);
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(layerIndex === pendingButtonLayerIndex));
+    tab.addEventListener("click", () => {
+      syncButtonSettingsGrid(widgetId, pendingButtonLayerIndex);
+      pendingButtonLayerIndex = layerIndex;
+      renderButtonSettingsGrid(widgetId);
+    });
+    tab.addEventListener("contextmenu", (event) => openButtonLayerContextMenu(event, widgetId, layerIndex));
+    buttonSettingsLayerTabs.appendChild(tab);
+  }
+  buttonSettingsAddLayer.disabled = state.layerCount >= BUTTON_MAX_LAYERS;
+  buttonLayerNameInput.value = buttonLayer(state, pendingButtonLayerIndex)?.name || "";
+}
+
+function renderButtonSettingsGrid(widgetId) {
+  const state = buttonStates.get(widgetId);
+  if (!state) return;
+  pendingButtonLayerIndex = clamp(pendingButtonLayerIndex, 0, state.layerCount - 1);
+  const layer = buttonLayer(state, pendingButtonLayerIndex);
+  renderButtonSettingsLayerTabs(widgetId);
+  buttonSettingsGrid.innerHTML = "";
+  for (let index = 0; index < state.count; index += 1) {
+    const control = layer.controls[index];
+    const card = document.createElement("section");
+    card.className = "button-settings-card";
+    card.dataset.buttonIndex = String(index);
+    const number = document.createElement("strong");
+    number.className = "knob-settings-number";
+    number.textContent = String(index + 1);
+    card.appendChild(number);
+    const cc = document.createElement("button");
+    cc.type = "button";
+    cc.className = "knob-settings-cc-value";
+    cc.dataset.buttonField = "cc";
+    cc.textContent = buttonCcDisplayText(widgetId, index);
+    cc.classList.toggle("waiting", buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index);
+    if (pendingButtonLayerIndex === 0) {
+      cc.addEventListener("click", () => {
+        if (buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index) cancelButtonMidiLearn();
+        else startButtonMidiLearn(widgetId, index);
+      });
+    } else {
+      cc.classList.add("readonly");
+      cc.title = "MIDI Learn is available on Layer 1";
+    }
+    cc.addEventListener("contextmenu", (event) => openButtonCcContextMenu(event, widgetId, index));
+    card.appendChild(cc);
+    const addInput = (field, value, fixed = false) => {
+      const input = createKnobSettingsInput(field, value);
+      delete input.dataset.knobField;
+      input.dataset.buttonField = field;
+      if (fixed) input.dataset.buttonFixed = "true";
+      card.appendChild(input);
+      return input;
+    };
+    addInput("label", layer.labels[index] ?? "");
+    const listInput = addInput("listText", control.listText ?? "");
+    addInput("value0", control.value0, true);
+    addInput("value127", control.value127, true);
+    listInput.addEventListener("input", () => updateButtonCardDisabledState(card));
+    updateButtonCardDisabledState(card);
+    const actions = document.createElement("div");
+    actions.className = "knob-settings-actions";
+    [["up", "↑", "Move button left"], ["down", "↓", "Move button right"], ["delete", "✕", "Delete button"]].forEach(([action, text, title]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn-secondary";
+      button.textContent = text;
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.disabled = (action === "up" && index === 0) || (action === "down" && index === state.count - 1) || (action === "delete" && state.count === 1);
+      button.addEventListener("click", () => editButtonSettingsStructure(widgetId, index, action));
+      actions.appendChild(button);
+    });
+    card.appendChild(actions);
+    buttonSettingsGrid.appendChild(card);
+  }
+}
+
+function syncButtonSettingsGrid(widgetId, layerIndex = pendingButtonLayerIndex) {
+  const state = buttonStates.get(widgetId);
+  const layer = buttonLayer(state, layerIndex);
+  if (!state || !layer) return;
+  layer.name = buttonLayerNameInput.value.trim().slice(0, 32);
+  buttonSettingsGrid.querySelectorAll("[data-button-index]").forEach((card) => {
+    const index = Number(card.dataset.buttonIndex);
+    const field = (name) => card.querySelector(`[data-button-field="${name}"]`).value;
+    const control = layer.controls[index];
+    control.listText = field("listText");
+    const value0 = parseFloatFlexible(field("value0"));
+    const value127 = parseFloatFlexible(field("value127"));
+    control.value0 = Number.isNaN(value0) ? 0 : value0;
+    control.value127 = Number.isNaN(value127) ? CV_MAX_VOLTS : value127;
+    const list = parseValueList(control.listText);
+    if (list) control.listIndex = clamp(control.listIndex, 0, list.length - 1);
+    layer.labels[index] = field("label").trim();
   });
 }
 
-buttonValueListInput.addEventListener("input", updateButtonFieldsDisabledState);
+function editButtonSettingsStructure(widgetId, index, action) {
+  const state = buttonStates.get(widgetId);
+  if (!state) return;
+  syncButtonSettingsGrid(widgetId);
+  if (action === "add" && state.count < BUTTON_MAX_COUNT) {
+    state.layers.forEach((layer, layerIndex) => {
+      layer.controls[state.count] = createButtonControl();
+      if (layerIndex > 0) {
+        layer.controls[state.count].cc = state.layers[0].controls[state.count].cc;
+        layer.controls[state.count].channel = state.layers[0].controls[state.count].channel;
+      }
+      layer.labels[state.count] = "";
+    });
+    state.count += 1;
+  } else if (action === "delete" && state.count > 1) {
+    for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex += 1) removeConnectionsForPort(widgetId, buttonPortId(index, layerIndex), "out");
+    const shifted = connections.filter((connection) => {
+      if (connection.from.widgetId !== widgetId) return false;
+      const parsed = parseButtonPortId(connection.from.portId);
+      return parsed && parsed.buttonIndex > index;
+    });
+    shifted.forEach(disconnectIfAudio);
+    shifted.forEach((connection) => {
+      const parsed = parseButtonPortId(connection.from.portId);
+      connection.from.portId = buttonPortId(parsed.buttonIndex - 1, parsed.layerIndex);
+      connectIfAudio(connection);
+    });
+    state.layers.forEach((layer) => {
+      layer.controls.splice(index, 1);
+      layer.controls.push(createButtonControl());
+      layer.labels.splice(index, 1);
+      layer.labels.push("");
+    });
+    state.count -= 1;
+  } else if (action === "up" && index > 0) {
+    state.layers.forEach((layer) => {
+      [layer.controls[index - 1], layer.controls[index]] = [layer.controls[index], layer.controls[index - 1]];
+      [layer.labels[index - 1], layer.labels[index]] = [layer.labels[index], layer.labels[index - 1]];
+    });
+  } else if (action === "down" && index < state.count - 1) {
+    state.layers.forEach((layer) => {
+      [layer.controls[index], layer.controls[index + 1]] = [layer.controls[index + 1], layer.controls[index]];
+      [layer.labels[index], layer.labels[index + 1]] = [layer.labels[index + 1], layer.labels[index]];
+    });
+  }
+  renderButtonSettingsGrid(widgetId);
+}
+
+function addButtonLayer(widgetId) {
+  const state = buttonStates.get(widgetId);
+  if (!state || state.layerCount >= BUTTON_MAX_LAYERS) return;
+  syncButtonSettingsGrid(widgetId);
+  state.layers.push(createButtonLayer(state.layers[0]));
+  state.layerCount += 1;
+  pendingButtonLayerIndex = state.layerCount - 1;
+  renderButtonSettingsGrid(widgetId);
+}
+
+function deleteButtonLayer(widgetId, removedLayer = pendingButtonLayerIndex) {
+  const state = buttonStates.get(widgetId);
+  if (!state || state.layerCount <= 1) return;
+  const currentLayer = pendingButtonLayerIndex;
+  syncButtonSettingsGrid(widgetId);
+  removedLayer = clamp(removedLayer, 0, state.layerCount - 1);
+  for (let buttonIndex = 0; buttonIndex < state.count; buttonIndex += 1) removeConnectionsForPort(widgetId, buttonPortId(buttonIndex, removedLayer), "out");
+  const shifted = connections.filter((connection) => {
+    if (connection.from.widgetId !== widgetId) return false;
+    const parsed = parseButtonPortId(connection.from.portId);
+    return parsed && parsed.layerIndex > removedLayer;
+  });
+  shifted.forEach(disconnectIfAudio);
+  shifted.forEach((connection) => {
+    const parsed = parseButtonPortId(connection.from.portId);
+    connection.from.portId = buttonPortId(parsed.buttonIndex, parsed.layerIndex - 1);
+    connectIfAudio(connection);
+  });
+  state.layers.splice(removedLayer, 1);
+  state.layerCount -= 1;
+  if (state.layerCount === 1) removeConnectionsForPort(widgetId, "layer", "in");
+  if (state.activeLayer === removedLayer) state.activeLayer = Math.min(removedLayer, state.layerCount - 1);
+  else if (state.activeLayer > removedLayer) state.activeLayer -= 1;
+  pendingButtonLayerIndex = currentLayer === removedLayer ? Math.min(removedLayer, state.layerCount - 1) : currentLayer - (currentLayer > removedLayer ? 1 : 0);
+  renderButtonSettingsGrid(widgetId);
+}
 
 function openButtonSettings(widgetId) {
   const state = buttonStates.get(widgetId);
   if (!state) return;
   pendingButtonId = widgetId;
-  buttonCcDisplay.value =
-    state.cc === null ? "" : `${state.cc}${state.channel === null ? "" : ` (Ch ${state.channel + 1})`}`;
-  buttonValue0Input.value = state.value0;
-  buttonValue127Input.value = state.value127;
-  const buttonList = parseValueList(state.listText);
-  buttonValueListInput.value = buttonList ? buttonList.join(", ") : (state.listText || "");
-  updateButtonFieldsDisabledState();
-  buttonLearnBtn.textContent = "Learn";
+  pendingButtonLayerIndex = state.activeLayer;
+  buttonOutputSideInput.value = state.outputSide;
   buttonMidiLearnTargetId = null;
+  renderButtonSettingsGrid(widgetId);
   buttonSettingsOverlay.classList.remove("hidden");
 }
 
 function closeButtonSettings() {
   buttonSettingsOverlay.classList.add("hidden");
+  closeButtonCcContextMenu();
+  closeButtonLayerContextMenu();
   pendingButtonId = null;
+  pendingButtonLayerIndex = 0;
   buttonMidiLearnTargetId = null;
-  buttonLearnBtn.textContent = "Learn";
 }
 
 
 document.getElementById("buttonSettingsCancel").addEventListener("click", closeButtonSettings);
 
-buttonLearnBtn.addEventListener("click", () => {
-  if (!pendingButtonId) return;
-  buttonMidiLearnTargetId = pendingButtonId;
-  buttonLearnBtn.textContent = "Waiting for CC…";
+buttonSettingsAdd.addEventListener("click", () => {
+  if (pendingButtonId) editButtonSettingsStructure(pendingButtonId, 0, "add");
+});
+
+buttonSettingsAddLayer.addEventListener("click", () => {
+  if (pendingButtonId) addButtonLayer(pendingButtonId);
+});
+
+buttonLayerNameInput.addEventListener("input", () => {
+  const state = buttonStates.get(pendingButtonId);
+  const layer = buttonLayer(state, pendingButtonLayerIndex);
+  if (!layer) return;
+  layer.name = buttonLayerNameInput.value.trimStart().slice(0, 32);
+  const tab = buttonSettingsLayerTabs.querySelector(`[data-layer-index="${pendingButtonLayerIndex}"]`);
+  if (tab) tab.textContent = layer.name || `Layer ${pendingButtonLayerIndex + 1}`;
+});
+
+buttonCcContextMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  const target = buttonCcContextTarget;
+  closeButtonCcContextMenu();
+  if (action === "unlearn" && target) clearButtonMidiLearn(target.widgetId, target.index);
+});
+
+buttonLayerContextMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  const target = buttonLayerContextTarget;
+  closeButtonLayerContextMenu();
+  if (action === "delete" && target) deleteButtonLayer(target.widgetId, target.layerIndex);
+});
+
+document.addEventListener("mousedown", (event) => {
+  if (!event.target.closest("#buttonCcContextMenu")) closeButtonCcContextMenu();
+  if (!event.target.closest("#buttonLayerContextMenu")) closeButtonLayerContextMenu();
 });
 
 document.getElementById("buttonSettingsSave").addEventListener("click", () => {
   if (!pendingButtonId) return;
   const state = buttonStates.get(pendingButtonId);
   if (state) {
-    const v0 = parseFloatFlexible(buttonValue0Input.value);
-    const v127 = parseFloatFlexible(buttonValue127Input.value);
-    state.value0 = Number.isNaN(v0) ? 0 : v0;
-    state.value127 = Number.isNaN(v127) ? CV_MAX_VOLTS : v127;
-    const list = parseValueList(buttonValueListInput.value);
-    state.listText = list ? list.join(", ") : buttonValueListInput.value;
-    if (list && list.length >= 2) {
-      state.listIndex = clamp(state.listIndex, 0, list.length - 1);
-    }
-
-    const output = buttonCurrentOutput(state);
-    audioEngine.setParam(pendingButtonId, "value", output);
-    propagate(pendingButtonId, "value", output);
-    updateButtonVisual(pendingButtonId);
-    sendLiveParamUpdate(pendingButtonId, {
-      value0: state.value0,
-      value127: state.value127,
-      valueList: list || [],
+    syncButtonSettingsGrid(pendingButtonId);
+    state.outputSide = ["top", "bottom"].includes(buttonOutputSideInput.value) ? buttonOutputSideInput.value : "bottom";
+    state.layers.forEach((layer, layerIndex) => {
+      layer.controls.slice(0, state.count).forEach((control, buttonIndex) => {
+        const binding = state.layers[0].controls[buttonIndex];
+        control.cc = binding.cc;
+        control.channel = binding.channel;
+        const output = buttonCurrentOutput(control);
+        audioEngine.setParam(pendingButtonId, buttonValueParamName(buttonIndex, layerIndex), output);
+        if (layerIndex === state.activeLayer) propagate(pendingButtonId, buttonPortId(buttonIndex, layerIndex), output);
+        sendLiveParamUpdate(pendingButtonId, {
+          buttonIndex: buttonControlIndex(buttonIndex, layerIndex) + 1,
+          buttonCount: state.count,
+          layerCount: state.layerCount,
+          activeLayer: state.activeLayer,
+          cc: control.cc,
+          channel: control.channel,
+          value0: control.value0,
+          value127: control.value127,
+          listIndex: control.listIndex,
+          wasAbove: control.wasAbove ? 1 : 0,
+          valueList: parseValueList(control.listText) || [],
+        });
+      });
     });
-    savePresetNow(); 
+    renderButtonControls(pendingButtonId);
+    renderButtonLayerSelector(pendingButtonId);
+    const portsEl = document.getElementById(pendingButtonId)?.querySelector(".widget-ports");
+    if (portsEl) renderButtonPorts(pendingButtonId, portsEl);
+    drawConnections();
+    savePresetNow();
   }
   closeButtonSettings();
 });
@@ -7463,12 +8076,30 @@ document.getElementById("outputSwitchSettingsSave").addEventListener("click", ()
 const linkedInputSettingsOverlay = document.getElementById("linkedInputSettingsOverlay");
 const linkedInputNameInput = document.getElementById("linkedInputNameInput");
 const linkedInputNameError = document.getElementById("linkedInputNameError");
+const linkedInputLabels = document.getElementById("linkedInputLabels");
+const linkedInputPortSide = document.getElementById("linkedInputPortSide");
 
 function openLinkedInputSettings(widgetId) {
   const state = linkedInputStates.get(widgetId);
   if (!state) return;
   pendingLinkedInputId = widgetId;
   linkedInputNameInput.value = state.linkName || "";
+  linkedInputPortSide.value = state.portSide || "left";
+  linkedInputLabels.innerHTML = "";
+  for (let index = 0; index < state.linkCount; index += 1) {
+    const label = document.createElement("label");
+    label.className = "modal-field";
+    const title = document.createElement("span");
+    title.textContent = `Port ${index + 1} label`;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 32;
+    input.dataset.linkedPortLabel = String(index);
+    input.placeholder = String(index + 1);
+    input.value = state.labels?.[index] || "";
+    label.append(title, input);
+    linkedInputLabels.appendChild(label);
+  }
   linkedInputNameError.style.display = "none";
   linkedInputNameError.textContent = "";
   linkedInputSettingsOverlay.classList.remove("hidden");
@@ -7504,6 +8135,8 @@ document.getElementById("linkedInputSettingsSave").addEventListener("click", () 
     return;
   }
   state.linkName = trimmed;
+  state.labels = Array.from(linkedInputLabels.querySelectorAll("[data-linked-port-label]"), (input) => input.value.trim());
+  state.portSide = ["top", "bottom", "left", "right"].includes(linkedInputPortSide.value) ? linkedInputPortSide.value : "left";
   refreshLinkedIO();
   savePresetNow();
   closeLinkedInputSettings();
@@ -7511,11 +8144,13 @@ document.getElementById("linkedInputSettingsSave").addEventListener("click", () 
 
 const linkedOutputSettingsOverlay = document.getElementById("linkedOutputSettingsOverlay");
 const linkedOutputSourceSelect = document.getElementById("linkedOutputSourceSelect");
+const linkedOutputPortSide = document.getElementById("linkedOutputPortSide");
 
 function openLinkedOutputSettings(widgetId) {
   const state = linkedOutputStates.get(widgetId);
   if (!state) return;
   pendingLinkedOutputId = widgetId;
+  linkedOutputPortSide.value = state.portSide || "right";
 
   linkedOutputSourceSelect.innerHTML = "";
   const noneOpt = document.createElement("option");
@@ -7523,7 +8158,9 @@ function openLinkedOutputSettings(widgetId) {
   noneOpt.textContent = "— Nicht verbunden —";
   linkedOutputSourceSelect.appendChild(noneOpt);
 
-  const outputs = [...linkedInputStates.entries()].map(([widgetId, state]) => ({ widgetId, ...state }));
+  const outputs = [...linkedInputStates.entries()]
+    .filter(([, source]) => source.linkCount === state.linkCount)
+    .map(([widgetId, source]) => ({ widgetId, ...source }));
   outputs.forEach((out) => {
     const opt = document.createElement("option");
     opt.value = out.linkId;
@@ -7555,6 +8192,7 @@ document.getElementById("linkedOutputSettingsSave").addEventListener("click", ()
   const state = linkedOutputStates.get(pendingLinkedOutputId);
   if (state) {
     state.sourceLinkId = linkedOutputSourceSelect.value || "";
+    state.portSide = ["top", "bottom", "left", "right"].includes(linkedOutputPortSide.value) ? linkedOutputPortSide.value : "right";
     audioEngine.setParam(pendingLinkedOutputId, "sourceLinkId", state.sourceLinkId);
     refreshLinkedIO();
     refreshControlGraph();
@@ -8958,7 +9596,12 @@ function refreshControlGraph() {
       if (index === 0 && layerIndex === 0) push(id, "voltage", value);
     });
   });
-  buttonStates.forEach((state, id) => push(id, "value", buttonCurrentOutput(state)));
+  buttonStates.forEach((state, id) => {
+    const layerIndex = state.activeLayer;
+    buttonLayer(state, layerIndex).controls.slice(0, state.count).forEach((control, index) => {
+      push(id, buttonPortId(index, layerIndex), buttonCurrentOutput(control));
+    });
+  });
   upDownButtonStates.forEach((state, id) => push(id, "value", upDownButtonCurrentOutput(state)));
   sources.forEach(({ widgetId, portId, value }) => propagate(widgetId, portId, value));
 
@@ -8979,9 +9622,11 @@ function refreshControlGraph() {
       if (control) value = mapKnobValue(control);
     } else if (sourceType === "const" && connection.from.portId === "value") {
       value = constStates.get(connection.from.widgetId)?.value ?? null;
-    } else if (sourceType === "button" && connection.from.portId === "value") {
+    } else if (sourceType === "button") {
       const sourceState = buttonStates.get(connection.from.widgetId);
-      if (sourceState) value = buttonCurrentOutput(sourceState);
+      const parsed = parseButtonPortId(connection.from.portId);
+      const control = parsed ? buttonLayer(sourceState, parsed.layerIndex)?.controls[parsed.buttonIndex] : null;
+      if (control) value = buttonCurrentOutput(control);
     } else if (sourceType === "up-down-button" && connection.from.portId === "value") {
       const sourceState = upDownButtonStates.get(connection.from.widgetId);
       if (sourceState) value = upDownButtonCurrentOutput(sourceState);
@@ -9048,7 +9693,7 @@ function traverseVoiceSet(midiInId) {
     const type = el ? el.dataset.widgetType : null;
     if (!type) continue;
 
-    if (type === "linked-input") {
+    if (isLinkedInputType(type)) {
       visited.add(widgetId);
       const linkId = linkedInputStates.get(widgetId)?.linkId;
       if (linkId) {
@@ -9061,7 +9706,7 @@ function traverseVoiceSet(midiInId) {
       continue;
     }
 
-    if (type === "linked-output") {
+    if (isLinkedOutputType(type)) {
       visited.add(widgetId);
       connections
         .filter((c) => c.from.widgetId === widgetId)
@@ -11382,9 +12027,9 @@ function generateLinkId() {
 // names it after that source ("Midi-In Gate"), so it is identifiable in the Link
 // Out source list without opening the settings dialog first. An existing name is
 // never overwritten.
-function autoNameLinkedInput(widgetId, fromWidgetId, fromPortId) {
+function autoNameLinkedInput(widgetId, fromWidgetId, fromPortId, toPortId = "in") {
   const state = linkedInputStates.get(widgetId);
-  if (!state || state.linkName) return;
+  if (!state) return;
   const sourceEl = document.getElementById(fromWidgetId);
   if (!sourceEl) return;
   const widgetLabel = sourceEl.querySelector(".widget-instance-label")?.textContent.trim();
@@ -11392,6 +12037,9 @@ function autoNameLinkedInput(widgetId, fromWidgetId, fromPortId) {
     .find((port) => port.id === fromPortId)?.label?.trim();
   const base = [widgetLabel, portLabel].filter(Boolean).join(" ");
   if (!base) return;
+  const portIndex = state.linkCount === 1 ? 0 : Math.max(0, Number(toPortId.slice(2)) - 1);
+  if (!state.labels[portIndex]) state.labels[portIndex] = base;
+  if (state.linkName) return;
   const taken = new Set(
     [...linkedInputStates.entries()]
       .filter(([id]) => id !== widgetId)
@@ -11411,22 +12059,28 @@ function updateLinkedInputVisual(widgetId) {
   const el = document.getElementById(widgetId);
   const state = linkedInputStates.get(widgetId);
   if (!el || !state) return;
-  const status = el.querySelector('[data-role="linked-io-status"]');
-  if (!status) return;
-  status.textContent = state.linkName ? state.linkName : "(unbenannt)";
-  status.classList.remove("missing");
+  const groupName = el.querySelector('[data-role="linked-io-group-name"]');
+  if (groupName) groupName.textContent = state.linkName || "(unbenannt)";
+  el.querySelectorAll(".port-row-in").forEach((row, index) => {
+    const label = row.querySelector(".linked-io-port-label");
+    if (label) label.textContent = state.labels?.[index] || String(index + 1);
+  });
+  renderLinkedIoLayout(widgetId);
 }
 
 function updateLinkedOutputVisual(widgetId) {
   const el = document.getElementById(widgetId);
   const state = linkedOutputStates.get(widgetId);
   if (!el || !state) return;
-  const status = el.querySelector('[data-role="linked-io-status"]');
+  const status = el.querySelector('[data-role="linked-io-group-name"]');
   if (!status) return;
+  const portLabels = el.querySelectorAll(".port-row-out .linked-io-port-label");
   if (!state.sourceLinkId) {
     status.textContent = "Nicht verbunden";
     status.removeAttribute("title");
     status.classList.remove("missing");
+    portLabels.forEach((label, index) => { label.textContent = String(index + 1); });
+    renderLinkedIoLayout(widgetId);
     return;
   }
   const sourceEntry = [...linkedInputStates.entries()].find(([, source]) => source.linkId === state.sourceLinkId);
@@ -11443,16 +12097,33 @@ function updateLinkedOutputVisual(widgetId) {
     status.replaceChildren(pagePart, linkPart);
     status.title = `${pageName} → ${linkName}`;
     status.classList.remove("missing");
+    portLabels.forEach((label, index) => { label.textContent = source.labels?.[index] || String(index + 1); });
   } else {
     status.textContent = "Fehlender Link: " + state.sourceLinkId;
     status.removeAttribute("title");
     status.classList.add("missing");
+    portLabels.forEach((label, index) => { label.textContent = String(index + 1); });
   }
+  renderLinkedIoLayout(widgetId);
+}
+
+function renderLinkedIoLayout(widgetId) {
+  const el = document.getElementById(widgetId);
+  const type = el?.dataset.widgetType;
+  const state = isLinkedInputType(type) ? linkedInputStates.get(widgetId) : linkedOutputStates.get(widgetId);
+  const ports = el?.querySelector(".widget-ports");
+  if (!el || !state || !ports) return;
+  const side = ["top", "bottom", "left", "right"].includes(state.portSide)
+    ? state.portSide
+    : (isLinkedInputType(type) ? "left" : "right");
+  ports.className = `widget-ports linked-io-ports linked-io-ports-${side}`;
+  ports.style.setProperty("--linked-io-count", state.linkCount);
+  el.style.setProperty("--linked-io-count", state.linkCount);
 }
 
 function refreshLinkedIO() {
-  document.querySelectorAll('.widget-instance[data-widget-type="linked-input"]').forEach((el) => updateLinkedInputVisual(el.id));
-  document.querySelectorAll('.widget-instance[data-widget-type="linked-output"]').forEach((el) => updateLinkedOutputVisual(el.id));
+  document.querySelectorAll('.widget-instance[data-widget-type^="linked-input"]').forEach((el) => updateLinkedInputVisual(el.id));
+  document.querySelectorAll('.widget-instance[data-widget-type^="linked-output"]').forEach((el) => updateLinkedOutputVisual(el.id));
 
   // A link can change between control and audio when its input cable or its
   // selected source changes. Remove only routes that were really connected
@@ -11473,17 +12144,19 @@ function refreshLinkedIO() {
   connections.filter(connectionTouchesLinkedIO).forEach(connectIfAudio);
 }
 
-function forwardLinkedInputValue(widgetId, value, voiceIndex) {
+function forwardLinkedInputValue(widgetId, portId, value, voiceIndex) {
   const source = linkedInputStates.get(widgetId);
   if (!source?.linkId) return;
-  const routeKey = `${widgetId}:${voiceIndex ?? "global"}`;
+  const portIndex = source.linkCount === 1 ? 0 : Math.max(0, Number(portId.slice(2)) - 1);
+  const outputPortId = linkedIoPortId("out", portIndex, source.linkCount);
+  const routeKey = `${widgetId}:${portIndex}:${voiceIndex ?? "global"}`;
   if (activeLinkedControlRoutes.has(routeKey)) return;
 
   activeLinkedControlRoutes.add(routeKey);
   try {
     linkedOutputStates.forEach((target, targetWidgetId) => {
       if (target.sourceLinkId === source.linkId) {
-        propagate(targetWidgetId, "out", value, voiceIndex);
+        propagate(targetWidgetId, outputPortId, value, voiceIndex);
       }
     });
   } finally {
@@ -15546,20 +16219,20 @@ function confirmPendingPaste(pos, minX, minY) {
   const newIds = ghosts.map(({ item, dx, dy }) => {
     const widget = createWidget(item.type, item.label, snap(pos.x + dx), snap(pos.y + dy));
     idMap.set(item.id, widget.id);
-    if (item.type === "linked-input" && item.params) {
+    if (isLinkedInputType(item.type) && item.params) {
       const newLinkId = generateLinkId();
       linkIdMap.set(item.params.linkId, newLinkId);
       applyWidgetParams(item.type, widget.id, { ...item.params, linkId: newLinkId });
-    } else if (item.type === "linked-output" && item.params) {
-      deferredLinkedOutputs.push({ id: widget.id, params: item.params });
+    } else if (isLinkedOutputType(item.type) && item.params) {
+      deferredLinkedOutputs.push({ id: widget.id, type: item.type, params: item.params });
     } else if (item.params) {
       applyWidgetParams(item.type, widget.id, item.params);
     }
     return widget.id;
   });
-  deferredLinkedOutputs.forEach(({ id, params }) => {
+  deferredLinkedOutputs.forEach(({ id, type, params }) => {
     const remapped = linkIdMap.get(params.sourceLinkId);
-    applyWidgetParams("linked-output", id, { sourceLinkId: remapped || params.sourceLinkId });
+    applyWidgetParams(type, id, { ...params, sourceLinkId: remapped || params.sourceLinkId });
   });
 
   clipboard.connections.forEach((c) => {
@@ -16125,18 +16798,29 @@ function drawConnections() {
 // drawConnections() wipes it along with the rest of the layer.
 function linkedIoHintPairs(widgetId) {
   const type = document.getElementById(widgetId)?.dataset.widgetType;
-  if (type === "linked-input") {
-    const linkId = linkedInputStates.get(widgetId)?.linkId;
+  if (isLinkedInputType(type)) {
+    const sourceState = linkedInputStates.get(widgetId);
+    const linkId = sourceState?.linkId;
     if (!linkId) return [];
     return [...linkedOutputStates.entries()]
       .filter(([, state]) => state.sourceLinkId === linkId)
-      .map(([outputId]) => ({ inputId: widgetId, outputId }));
+      .flatMap(([outputId]) => Array.from({ length: sourceState.linkCount }, (_, index) => ({
+        inputId: widgetId,
+        inputPortId: linkedIoPortId("in", index, sourceState.linkCount),
+        outputId,
+        outputPortId: linkedIoPortId("out", index, sourceState.linkCount),
+      })));
   }
-  if (type === "linked-output") {
+  if (isLinkedOutputType(type)) {
     const sourceLinkId = linkedOutputStates.get(widgetId)?.sourceLinkId;
     if (!sourceLinkId) return [];
     const source = [...linkedInputStates.entries()].find(([, state]) => state.linkId === sourceLinkId);
-    return source ? [{ inputId: source[0], outputId: widgetId }] : [];
+    return source ? Array.from({ length: source[1].linkCount }, (_, index) => ({
+      inputId: source[0],
+      inputPortId: linkedIoPortId("in", index, source[1].linkCount),
+      outputId: widgetId,
+      outputPortId: linkedIoPortId("out", index, source[1].linkCount),
+    })) : [];
   }
   return [];
 }
@@ -16147,11 +16831,11 @@ function clearLinkedIoHint() {
 
 function showLinkedIoHint(widgetId) {
   clearLinkedIoHint();
-  linkedIoHintPairs(widgetId).forEach(({ inputId, outputId }) => {
+  linkedIoHintPairs(widgetId).forEach(({ inputId, inputPortId, outputId, outputPortId }) => {
     // findPortDot only sees the page that is currently on screen, so a partner
     // sitting on the other page simply yields no hint.
-    const inDot = findPortDot(inputId, "in", "in");
-    const outDot = findPortDot(outputId, "out", "out");
+    const inDot = findPortDot(inputId, inputPortId, "in");
+    const outDot = findPortDot(outputId, outputPortId, "out");
     if (!inDot || !outDot) return;
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", "connection-path-link-hint");
@@ -16164,7 +16848,7 @@ function showLinkedIoHint(widgetId) {
         inDot.closest(".widget-instance")
       )
     );
-    const feed = connections.find((conn) => conn.to.widgetId === inputId && conn.to.portId === "in");
+    const feed = connections.find((conn) => conn.to.widgetId === inputId && conn.to.portId === inputPortId);
     if (feed?.color) path.style.stroke = feed.color;
     connectionsLayer.appendChild(path);
   });
@@ -16172,7 +16856,7 @@ function showLinkedIoHint(widgetId) {
 
 document.addEventListener("mouseover", (e) => {
   const widget = e.target.closest?.(
-    '.widget-instance[data-widget-type="linked-input"], .widget-instance[data-widget-type="linked-output"]'
+    '.widget-instance[data-widget-type^="linked-input"], .widget-instance[data-widget-type^="linked-output"]'
   );
   if (widget) showLinkedIoHint(widget.id);
   else clearLinkedIoHint();
@@ -16292,8 +16976,7 @@ function removeConnectionsForWidget(widgetId) {
 function connectionTouchesLinkedIO(conn) {
   const fromType = document.getElementById(conn.from.widgetId)?.dataset.widgetType;
   const toType = document.getElementById(conn.to.widgetId)?.dataset.widgetType;
-  return fromType === "linked-input" || fromType === "linked-output" ||
-    toType === "linked-input" || toType === "linked-output";
+  return isLinkedIoType(fromType) || isLinkedIoType(toType);
 }
 
 function shouldConnectAudio(conn) {
@@ -16402,11 +17085,11 @@ function startConnectionDrag(e, fromDot) {
       connectionCounter += 1;
       const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
       const targetType = document.getElementById(toWidgetId)?.dataset.widgetType;
-      const toKind = targetType === "linked-input"
+      const toKind = isLinkedInputType(targetType)
         ? fromKind
         : getPortKind(toWidgetId, toPortId, "in");
 
-      if (targetType === "linked-input" && getPortKind(toWidgetId, toPortId, "in") !== toKind) {
+      if (isLinkedInputType(targetType) && getPortKind(toWidgetId, toPortId, "in") !== toKind) {
         connections.filter(
           (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
         ).forEach(disconnectIfAudio);
@@ -16430,7 +17113,7 @@ function startConnectionDrag(e, fromDot) {
         color: getConnectionColorForOutput(fromWidgetId, fromPortId),
       };
       connections.push(connection);
-      if (targetType === "linked-input") autoNameLinkedInput(toWidgetId, fromWidgetId, fromPortId);
+      if (isLinkedInputType(targetType)) autoNameLinkedInput(toWidgetId, fromWidgetId, fromPortId, toPortId);
 
       // toKind alone, not fromKind too: a control-only source (Knob, Const,
       // ...) can still own a real WebAudio node (see audio-engine.js's
@@ -16480,14 +17163,22 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   const el = document.getElementById(widgetId);
   if (!el) return;
 
-  if (el.dataset.widgetType === "linked-input" && portId === "in") {
-    forwardLinkedInputValue(widgetId, value, voiceIndex);
+  if (isLinkedInputType(el.dataset.widgetType)) {
+    forwardLinkedInputValue(widgetId, portId, value, voiceIndex);
   }
 
   if (el.dataset.widgetType === "knob" && portId === "layer") {
     const state = knobStates.get(widgetId);
     if (state) {
       setKnobActiveLayer(widgetId, knobLayerIndexFromCv(value, state.layerCount), false);
+      sendLiveParamUpdateThrottled(widgetId, { layer: clamp(Number(value) || 0, 0, CV_MAX_VOLTS) });
+    }
+  }
+
+  if (el.dataset.widgetType === "button" && portId === "layer") {
+    const state = buttonStates.get(widgetId);
+    if (state) {
+      setButtonActiveLayer(widgetId, knobLayerIndexFromCv(value, state.layerCount), false);
       sendLiveParamUpdateThrottled(widgetId, { layer: clamp(Number(value) || 0, 0, CV_MAX_VOLTS) });
     }
   }
@@ -18172,6 +18863,7 @@ const WIDGET_ENGINES = {
         outputSide: state.outputSide,
         bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel }) => ({ cc, channel })),
         layers: state.layers.slice(0, state.layerCount).map((layer, layerIndex) => ({
+          name: layer.name,
           labels: layer.labels.slice(0, state.count),
           knobs: layer.controls.slice(0, state.count).map((control) => serializeControl(control, layerIndex === 0)),
         })),
@@ -18195,7 +18887,7 @@ const WIDGET_ENGINES = {
       state.count = count;
       state.layerCount = clamp(layerEntries?.length ?? params.layerCount ?? 1, 1, KNOB_MAX_LAYERS);
       state.activeLayer = clamp(Math.round(Number(params.activeLayer) || 0), 0, state.layerCount - 1);
-      if (typeof params.outputSide === "string") state.outputSide = params.outputSide;
+      state.outputSide = ["top", "bottom"].includes(params.outputSide) ? params.outputSide : "bottom";
       state.layers = Array.from({ length: state.layerCount }, () => createKnobLayer());
       const applyControls = (layer, controls, labels) => {
         if (Array.isArray(labels)) {
@@ -18224,6 +18916,7 @@ const WIDGET_ENGINES = {
       if (layerEntries) {
         state.layers.forEach((layer, layerIndex) => {
           const entry = layerEntries[layerIndex] || {};
+          layer.name = typeof entry.name === "string" ? entry.name.slice(0, 32) : "";
           applyControls(layer, entry.knobs, entry.labels);
         });
       } else if (sourceList) {
@@ -18266,17 +18959,65 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = buttonStates.get(id);
       if (!state) return {};
-      return { ...state, value0: state.value0, value127: state.value127, valueList: parseValueList(state.listText) || [] };
+      const firstLayer = state.layers[0];
+      return {
+        buttonCount: state.count,
+        layerCount: state.layerCount,
+        activeLayer: state.activeLayer,
+        outputSide: state.outputSide,
+        bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel }) => ({ cc, channel })),
+        layers: state.layers.slice(0, state.layerCount).map((layer) => ({
+          name: layer.name,
+          labels: layer.labels.slice(0, state.count),
+          buttons: layer.controls.slice(0, state.count).map((control) => ({
+            value0: control.value0,
+            value127: control.value127,
+            valueList: parseValueList(control.listText) || [],
+            listIndex: control.listIndex,
+            wasAbove: control.wasAbove,
+          })),
+        })),
+      };
     },
     applyParams: (id, params) => {
       const state = buttonStates.get(id);
-      if (state && params) {
-        Object.assign(state, params);
-        const list = parseValueList(state.listText);
-        if (list) state.listText = list.join(", ");
-        audioEngine.setParam(id, "value", buttonCurrentOutput(state));
-        updateButtonVisual(id);
-      }
+      if (!state || !params) return;
+      const entries = Array.isArray(params.layers) ? params.layers.slice(0, BUTTON_MAX_LAYERS) : [];
+      state.layerCount = clamp(entries.length || Number(params.layerCount) || 1, 1, BUTTON_MAX_LAYERS);
+      const firstButtons = Array.isArray(entries[0]?.buttons) ? entries[0].buttons : [];
+      state.count = clamp(Number(params.buttonCount) || firstButtons.length || 1, 1, BUTTON_MAX_COUNT);
+      state.activeLayer = clamp(Math.round(Number(params.activeLayer) || 0), 0, state.layerCount - 1);
+      state.outputSide = ["top", "bottom"].includes(params.outputSide) ? params.outputSide : "bottom";
+      state.layers = Array.from({ length: state.layerCount }, () => createButtonLayer());
+      state.layers.forEach((layer, layerIndex) => {
+        const entry = entries[layerIndex] || {};
+        layer.name = typeof entry.name === "string" ? entry.name.slice(0, 32) : "";
+        if (Array.isArray(entry.labels)) entry.labels.slice(0, BUTTON_MAX_COUNT).forEach((label, index) => { layer.labels[index] = typeof label === "string" ? label : ""; });
+        if (Array.isArray(entry.buttons)) entry.buttons.slice(0, BUTTON_MAX_COUNT).forEach((raw, index) => {
+          const control = layer.controls[index];
+          control.value0 = typeof raw?.value0 === "number" ? raw.value0 : 0;
+          control.value127 = typeof raw?.value127 === "number" ? raw.value127 : CV_MAX_VOLTS;
+          control.listText = Array.isArray(raw?.valueList) ? raw.valueList.join(", ") : "";
+          control.listIndex = clamp(Math.round(Number(raw?.listIndex) || 0), 0, Math.max(0, (raw?.valueList?.length || 1) - 1));
+          control.wasAbove = raw?.wasAbove === true;
+        });
+      });
+      const bindings = Array.isArray(params.bindings) ? params.bindings : [];
+      state.layers.forEach((layer) => {
+        for (let index = 0; index < state.count; index += 1) {
+          layer.controls[index].cc = typeof bindings[index]?.cc === "number" ? bindings[index].cc : null;
+          layer.controls[index].channel = typeof bindings[index]?.channel === "number" ? bindings[index].channel : null;
+        }
+      });
+      renderButtonControls(id);
+      renderButtonLayerSelector(id);
+      const portsEl = document.getElementById(id)?.querySelector(".widget-ports");
+      if (portsEl) renderButtonPorts(id, portsEl);
+      state.layers.forEach((layer, layerIndex) => {
+        for (let buttonIndex = 0; buttonIndex < state.count; buttonIndex += 1) {
+          audioEngine.setParam(id, buttonValueParamName(buttonIndex, layerIndex), buttonCurrentOutput(layer.controls[buttonIndex]));
+        }
+      });
     },
   },
   "up-down-button": {
@@ -18765,6 +19506,8 @@ const WIDGET_ENGINES = {
       if (!state) return;
       if (typeof params?.linkId === "string" && params.linkId) state.linkId = params.linkId;
       if (typeof params?.linkName === "string") state.linkName = params.linkName;
+      if (Array.isArray(params?.labels)) state.labels = Array.from({ length: state.linkCount }, (_, index) => typeof params.labels[index] === "string" ? params.labels[index] : "");
+      if (["top", "bottom", "left", "right"].includes(params?.portSide)) state.portSide = params.portSide;
       audioEngine.setParam(id, "linkId", state.linkId);
       audioEngine.setParam(id, "linkName", state.linkName);
       updateLinkedInputVisual(id);
@@ -18776,6 +19519,7 @@ const WIDGET_ENGINES = {
       const state = linkedOutputStates.get(id);
       if (!state) return;
       state.sourceLinkId = typeof params?.sourceLinkId === "string" ? params.sourceLinkId : "";
+      if (["top", "bottom", "left", "right"].includes(params?.portSide)) state.portSide = params.portSide;
       audioEngine.setParam(id, "sourceLinkId", state.sourceLinkId);
       updateLinkedOutputVisual(id);
     },
@@ -19174,6 +19918,9 @@ const WIDGET_ENGINES = {
   delay: makeEffectCvEngine("delay"),
   "reverb-light": makeEffectCvEngine("reverb-light"),
 };
+
+["linked-input-4", "linked-input-8"].forEach((type) => { WIDGET_ENGINES[type] = WIDGET_ENGINES["linked-input"]; });
+["linked-output-4", "linked-output-8"].forEach((type) => { WIDGET_ENGINES[type] = WIDGET_ENGINES["linked-output"]; });
 
 function getWidgetParams(type, id) {
   const engine = WIDGET_ENGINES[type];

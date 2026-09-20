@@ -462,12 +462,20 @@ private:
                     }
                 }
             }
-            else if (widget.type == NodeType::Button && instance.button != nullptr &&
-                     instance.button->cc >= 0 && static_cast<uint8_t>(instance.button->cc) == event.data1 &&
-                     instance.button->channel >= 0 && static_cast<uint8_t>(instance.button->channel) == channel)
+            else if (widget.type == NodeType::Button && instance.button != nullptr)
             {
-                publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Button, 0, channel,
-                                           event.data1, event.data2, instance.button->currentValue);
+                for (uint8_t buttonIndex = 0; buttonIndex < instance.button->count; ++buttonIndex)
+                {
+                    const ButtonControl &binding = instance.button->controls[buttonIndex];
+                    if (binding.cc < 0 || static_cast<uint8_t>(binding.cc) != event.data1 ||
+                        binding.channel < 0 || static_cast<uint8_t>(binding.channel) != channel)
+                        continue;
+                    const ButtonControl &control = instance.button->controls[
+                        ButtonState::controlIndex(buttonIndex, instance.button->activeLayer)];
+                    publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Button, buttonIndex, channel,
+                                               event.data1, event.data2, control.currentValue);
+                    break;
+                }
             }
             else if (widget.type == NodeType::UpDownButton && instance.upDownButton != nullptr)
             {

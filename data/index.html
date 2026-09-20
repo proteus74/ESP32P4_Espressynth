@@ -380,19 +380,22 @@
   <div class="modal knob-settings-modal">
     <h3>Knob Settings</h3>
     <div class="modal-field-row">
-      <button type="button" id="knobSettingsAdd" class="btn-secondary">Add knob</button>
-      <button type="button" id="knobSettingsAddLayer" class="btn-secondary">Add layer</button>
-      <button type="button" id="knobSettingsDeleteLayer" class="btn-secondary">Delete layer</button>
+      <button type="button" id="knobSettingsAdd" class="btn-secondary knob-add-action knob-add-knob" title="Add knob" aria-label="Add knob"><span class="knob-add-knob-icon" aria-hidden="true"></span></button>
+      <button type="button" id="knobSettingsAddLayer" class="btn-secondary knob-add-action knob-layer-add" title="Add layer" aria-label="Add layer"><span class="knob-layer-icon" aria-hidden="true"></span></button>
     </div>
     <div id="knobSettingsLayerTabs" class="knob-settings-layer-tabs" role="tablist" aria-label="Knob layers"></div>
+    <label class="knob-settings-layer-name">
+      <span>Layer name</span>
+      <input type="text" id="knobLayerNameInput" maxlength="32" placeholder="Layer name">
+    </label>
     <div class="knob-settings-head" aria-hidden="true">
-      <span>Knob</span><span>Label</span><span>CC</span><span>List</span><span>A In</span><span>A Out</span><span>B In</span><span>B Out</span><span>Min</span><span>Max</span><span>Actions</span>
+      <span>Knob</span><span>CC / Channel</span><span>Label</span><span>List</span><span>A In</span><span>A Out</span><span>B In</span><span>B Out</span><span>Min</span><span>Max</span><span>Actions</span>
     </div>
     <div id="knobSettingsGrid" class="knob-settings-grid"></div>
     <div class="modal-actions knob-settings-footer">
       <label class="knob-settings-output-side">
         <span>Output side</span>
-        <select id="knobOutputSideInput"><option value="top">Top</option><option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option></select>
+        <select id="knobOutputSideInput"><option value="top">Top</option><option value="bottom">Bottom</option></select>
       </label>
       <button id="knobSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="knobSettingsSave">Save</button>
@@ -400,35 +403,47 @@
   </div>
 </div>
 
+<div id="knobCcContextMenu" class="page-tab-context-menu knob-cc-context-menu hidden">
+  <button type="button" data-action="unlearn">Unlearn</button>
+</div>
+
+<div id="knobLayerContextMenu" class="page-tab-context-menu knob-layer-context-menu hidden">
+  <button type="button" data-action="delete">Delete layer</button>
+</div>
+
 <div id="buttonSettingsOverlay" class="modal-overlay hidden">
-  <div class="modal">
+  <div class="modal knob-settings-modal button-settings-modal">
     <h3>Button Settings</h3>
-    <div class="modal-cc-learn-row">
-    <label class="modal-field modal-cc-field">
-      <span>Learned CC Number</span>
-      <input type="text" id="buttonCcDisplay" readonly placeholder="– none yet –">
-    </label>
-    <button id="buttonLearnBtn" class="btn-secondary">Learn</button>
-    </div>
-    <label class="modal-field">
-      <span>Voltage list (0-10V, comma-separated, e.g. "0,10") - cycles one step per press</span>
-      <input type="text" id="buttonValueListInput" placeholder="0,10">
-    </label>
     <div class="modal-field-row">
-      <label class="modal-field">
-        <span>Voltage at MIDI 0</span>
-        <input type="text" inputmode="decimal" id="buttonValue0Input" value="0">
-      </label>
-      <label class="modal-field">
-        <span>Voltage at MIDI 127</span>
-        <input type="text" inputmode="decimal" id="buttonValue127Input" value="10">
-      </label>
+      <button type="button" id="buttonSettingsAdd" class="btn-secondary knob-add-action button-add-control" title="Add button" aria-label="Add button"><span class="button-add-control-icon" aria-hidden="true"></span></button>
+      <button type="button" id="buttonSettingsAddLayer" class="btn-secondary knob-add-action knob-layer-add" title="Add layer" aria-label="Add layer"><span class="knob-layer-icon" aria-hidden="true"></span></button>
     </div>
-    <div class="modal-actions">
+    <div id="buttonSettingsLayerTabs" class="knob-settings-layer-tabs" role="tablist" aria-label="Button layers"></div>
+    <label class="knob-settings-layer-name">
+      <span>Layer name</span>
+      <input type="text" id="buttonLayerNameInput" maxlength="32" placeholder="Layer name">
+    </label>
+    <div class="button-settings-head" aria-hidden="true">
+      <span>Button</span><span>CC / Channel</span><span>Label</span><span>List</span><span>Value 0</span><span>Value 127</span><span>Actions</span>
+    </div>
+    <div id="buttonSettingsGrid" class="knob-settings-grid"></div>
+    <div class="modal-actions knob-settings-footer">
+      <label class="knob-settings-output-side">
+        <span>Output side</span>
+        <select id="buttonOutputSideInput"><option value="top">Top</option><option value="bottom">Bottom</option></select>
+      </label>
       <button id="buttonSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="buttonSettingsSave">Save</button>
     </div>
   </div>
+</div>
+
+<div id="buttonCcContextMenu" class="page-tab-context-menu knob-cc-context-menu hidden">
+  <button type="button" data-action="unlearn">Unlearn</button>
+</div>
+
+<div id="buttonLayerContextMenu" class="page-tab-context-menu knob-layer-context-menu hidden">
+  <button type="button" data-action="delete">Delete layer</button>
 </div>
 
 <div id="upDownButtonSettingsOverlay" class="modal-overlay hidden">
@@ -523,8 +538,13 @@
   <div class="modal">
     <h3>Link In Settings</h3>
     <label class="modal-field">
-      <span>Link Name</span>
+      <span>Group name</span>
       <input type="text" id="linkedInputNameInput" maxlength="47">
+    </label>
+    <div id="linkedInputLabels" class="linked-io-label-settings"></div>
+    <label class="modal-field">
+      <span>Port side</span>
+      <select id="linkedInputPortSide"><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select>
     </label>
     <p class="modal-hint modal-hint-error" id="linkedInputNameError" style="display:none;"></p>
     <div class="modal-actions">
@@ -540,6 +560,10 @@
     <label class="modal-field">
       <span>Source</span>
       <select id="linkedOutputSourceSelect"></select>
+    </label>
+    <label class="modal-field">
+      <span>Port side</span>
+      <select id="linkedOutputPortSide"><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select>
     </label>
     <div class="modal-actions">
       <button id="linkedOutputSettingsCancel" class="btn-secondary">Cancel</button>

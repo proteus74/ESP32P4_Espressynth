@@ -1036,27 +1036,23 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
             {
                 NodeInstance &btnInst = instances[widgets[w].instanceBase];
                 ButtonState &b = *btnInst.button;
-                if (b.cc < 0 || static_cast<uint8_t>(b.cc) != ccNumber)
+                for (uint8_t buttonIndex = 0; buttonIndex < b.count; ++buttonIndex)
                 {
-                    continue;
-                }
-                if (b.channel < 0 || static_cast<uint8_t>(b.channel) != ccChannel0)
-                {
-                    continue;
-                }
+                    const ButtonControl &binding = b.controls[buttonIndex];
+                    if (binding.cc < 0 || static_cast<uint8_t>(binding.cc) != ccNumber ||
+                        binding.channel < 0 || static_cast<uint8_t>(binding.channel) != ccChannel0)
+                        continue;
+                    const uint8_t controlIndex = ButtonState::controlIndex(buttonIndex, b.activeLayer);
+                    ButtonControl &control = b.controls[controlIndex];
 
-                // List mode advances only on the press edge (wasAbove flips
-                // false->true) - release, or repeated CC messages while held
-                // above the threshold, must not skip entries.
-                const bool above = ccValue >= 64;
-                if (b.valueListCount >= 2 && above && !b.wasAbove)
-                {
-                    b.listIndex = static_cast<uint8_t>((b.listIndex + 1) % b.valueListCount);
-                }
-                b.wasAbove = above;
-                b.currentValue = b.currentOutput();
+                    const bool above = ccValue >= 64;
+                    if (control.valueListCount >= 2 && above && !control.wasAbove)
+                        control.listIndex = static_cast<uint8_t>((control.listIndex + 1) % control.valueListCount);
+                    control.wasAbove = above;
+                    control.currentValue = control.currentOutput();
 
-                pushControlRouteValue(*this, w, ControlRoute::Kind::Button, b.currentValue);
+                    pushControlRouteValue(*this, w, ControlRoute::Kind::Button, control.currentValue, controlIndex);
+                }
             }
             else if (widgets[w].type == NodeType::UpDownButton)
             {
@@ -1390,6 +1386,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     }
     WidgetSlot &slot = widgets[widgetIdx];
     uint8_t knobControlIndex = 0;
+    uint8_t buttonControlIndex = 0;
     if (slot.type == NodeType::Knob)
     {
         cJSON *indexItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "knobIndex");
@@ -1432,6 +1429,42 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             }
         }
     }
+    else if (slot.type == NodeType::Button)
+    {
+        cJSON *indexItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "buttonIndex");
+        if (cJSON_IsNumber(indexItem) && indexItem->valueint > 0 &&
+            indexItem->valueint <= static_cast<int>(synth::kButtonOutputMax))
+            buttonControlIndex = static_cast<uint8_t>(indexItem->valueint - 1);
+        cJSON *countItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "buttonCount");
+        if (cJSON_IsNumber(countItem))
+        {
+            const int count = countItem->valueint;
+            const uint8_t clamped = static_cast<uint8_t>(count < 1 ? 1 :
+                (count > static_cast<int>(synth::kButtonControlMax) ? synth::kButtonControlMax : count));
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                instances[slot.instanceBase + v].button->count = clamped;
+        }
+        cJSON *layerCountItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "layerCount");
+        if (cJSON_IsNumber(layerCountItem))
+        {
+            const int count = layerCountItem->valueint;
+            const uint8_t clamped = static_cast<uint8_t>(count < 1 ? 1 :
+                (count > static_cast<int>(synth::kButtonLayerMax) ? synth::kButtonLayerMax : count));
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                button->layerCount = clamped;
+                if (button->activeLayer >= clamped) button->activeLayer = clamped - 1;
+            }
+        }
+        cJSON *activeLayerItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "activeLayer");
+        if (cJSON_IsNumber(activeLayerItem))
+        {
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                nodes::button::setParamButton(instances[slot.instanceBase + v], "activeLayer",
+                                              static_cast<float>(activeLayerItem->valuedouble));
+        }
+    }
 
     cJSON *item = nullptr;
     cJSON_ArrayForEach(item, paramsObj)
@@ -1447,6 +1480,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         {
             continue;
         }
+        if (slot.type == NodeType::Button &&
+            (strcmp(key, "buttonIndex") == 0 || strcmp(key, "buttonCount") == 0 ||
+             strcmp(key, "layerCount") == 0 || strcmp(key, "activeLayer") == 0))
+            continue;
 
         if (slot.type == NodeType::MidiIn && strcmp(key, "glide") == 0 && cJSON_IsBool(item))
         {
@@ -1474,6 +1511,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 if (slot.type == NodeType::Knob)
                 {
                     handled = nodes::knob::setParam(instances[slot.instanceBase + v], key, value, knobControlIndex) || handled;
+                }
+                else if (slot.type == NodeType::Button)
+                {
+                    handled = nodes::button::setParamButton(instances[slot.instanceBase + v], key, value, buttonControlIndex) || handled;
                 }
                 else
                 {
@@ -1767,7 +1808,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             const int16_t cc = cJSON_IsNumber(item) ? static_cast<int16_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].button->cc = cc;
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                const uint8_t buttonIndex = buttonControlIndex % synth::kButtonControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < button->layerCount; ++layerIndex)
+                    button->controls[ButtonState::controlIndex(buttonIndex, layerIndex)].cc = cc;
             }
         }
         else if (slot.type == NodeType::Button && strcmp(key, "channel") == 0)
@@ -1775,17 +1819,20 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             const int8_t ch = cJSON_IsNumber(item) ? static_cast<int8_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].button->channel = ch;
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                const uint8_t buttonIndex = buttonControlIndex % synth::kButtonControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < button->layerCount; ++layerIndex)
+                    button->controls[ButtonState::controlIndex(buttonIndex, layerIndex)].channel = ch;
             }
         }
         else if (slot.type == NodeType::Button && strcmp(key, "valueList") == 0)
         {
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                ButtonState &b = *instances[slot.instanceBase + v].button;
-                b.valueListCount = applyFloatArrayItem(item, b.valueList, static_cast<uint8_t>(synth::kValueListMax));
-                b.listIndex = 0;
-                b.currentValue = b.currentOutput();
+                ButtonControl &control = instances[slot.instanceBase + v].button->controls[buttonControlIndex];
+                control.valueListCount = applyFloatArrayItem(item, control.valueList, static_cast<uint8_t>(synth::kValueListMax));
+                control.listIndex = 0;
+                control.currentValue = control.currentOutput();
             }
         }
         else if (slot.type == NodeType::UpDownButton && strcmp(key, "ccUp") == 0)
@@ -2052,8 +2099,17 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     }
     else if (slot.type == NodeType::Button)
     {
-        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Button,
-                               instances[slot.instanceBase].button->currentValue);
+        const ButtonState *button = instances[slot.instanceBase].button;
+        const ButtonControl &control = button->controls[buttonControlIndex];
+        const bool activeControl = buttonControlIndex / synth::kButtonControlMax == button->activeLayer;
+        const bool valueChanged = cJSON_GetObjectItemCaseSensitive(paramsObj, "value0") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "value127") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "listIndex") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "wasAbove") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "valueList") != nullptr;
+        if (activeControl && valueChanged)
+            pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Button,
+                                  control.currentValue, buttonControlIndex);
     }
     else if (slot.type == NodeType::UpDownButton)
     {

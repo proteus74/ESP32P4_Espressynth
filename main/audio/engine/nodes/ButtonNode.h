@@ -27,7 +27,7 @@ namespace nodes::button
 // (63/64). List: listIndex advances once per press edge (wasAbove flips
 // false->true) rather than being derived from the raw value directly -
 // ported from main.js's buttonStates entries.
-struct ButtonState
+struct ButtonControl
 {
     int16_t cc = -1;
     int8_t channel = -1;
@@ -47,6 +47,19 @@ struct ButtonState
             return valueList[idx];
         }
         return wasAbove ? value127 : value0;
+    }
+};
+
+struct ButtonState
+{
+    uint8_t count = 1;
+    uint8_t layerCount = 1;
+    uint8_t activeLayer = 0;
+    ButtonControl controls[synth::kButtonOutputMax] = {};
+
+    static constexpr uint8_t controlIndex(uint8_t buttonIndex, uint8_t layerIndex)
+    {
+        return static_cast<uint8_t>(layerIndex * synth::kButtonControlMax + buttonIndex);
     }
 };
 
@@ -85,9 +98,11 @@ struct UpDownButtonState
 
 inline void renderButton(NodeInstance &inst, size_t frames)
 {
+    const ButtonState &button = *inst.button;
+    const float value = button.controls[ButtonState::controlIndex(0, button.activeLayer)].currentValue;
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = inst.button->currentValue;
+        inst.outL[i] = value;
     }
 }
 
@@ -105,18 +120,25 @@ inline void renderUpDownButton(NodeInstance &inst, size_t frames)
 
 inline void buildButton(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.button->cc = p.buttonCc;
-    inst.button->channel = p.buttonChannel;
-    inst.button->value0 = p.buttonValue0;
-    inst.button->value127 = p.buttonValue127;
-    inst.button->valueListCount = p.valueListCount;
-    for (uint8_t i = 0; i < p.valueListCount && i < synth::kValueListMax; ++i)
+    ButtonState &button = *inst.button;
+    button.count = p.buttonCount;
+    button.layerCount = p.buttonLayerCount;
+    button.activeLayer = p.buttonActiveLayer < button.layerCount ? p.buttonActiveLayer : 0;
+    for (uint8_t controlIndex = 0; controlIndex < synth::kButtonOutputMax; ++controlIndex)
     {
-        inst.button->valueList[i] = p.valueList[i];
+        const WidgetParams::ButtonControlParams &source = p.buttons[controlIndex];
+        ButtonControl &control = button.controls[controlIndex];
+        control.cc = source.cc;
+        control.channel = source.channel;
+        control.value0 = source.value0;
+        control.value127 = source.value127;
+        control.valueListCount = source.valueListCount;
+        for (uint8_t i = 0; i < source.valueListCount && i < synth::kValueListMax; ++i)
+            control.valueList[i] = source.valueList[i];
+        control.listIndex = source.listIndex < source.valueListCount ? source.listIndex : 0;
+        control.wasAbove = source.wasAbove;
+        control.currentValue = control.currentOutput();
     }
-    inst.button->listIndex = p.buttonListIndex < p.valueListCount ? p.buttonListIndex : 0;
-    inst.button->wasAbove = p.buttonWasAbove;
-    inst.button->currentValue = inst.button->currentOutput();
 }
 
 inline void buildUpDownButton(NodeInstance &inst, const WidgetParams &p)
@@ -155,34 +177,52 @@ inline void destroyUpDownButton(NodeInstance &inst)
     }
 }
 
-inline bool setParamButton(NodeInstance &inst, const char *name, float value)
+inline bool setParamButton(NodeInstance &inst, const char *name, float value, uint8_t controlIndex = 0)
 {
-    if (name == nullptr)
+    if (name == nullptr || inst.button == nullptr)
     {
         return false;
     }
+    if (strcmp(name, "activeLayer") == 0)
+    {
+        int layer = static_cast<int>(value + 0.5f);
+        if (layer < 0) layer = 0;
+        if (layer >= inst.button->layerCount) layer = inst.button->layerCount - 1;
+        inst.button->activeLayer = static_cast<uint8_t>(layer);
+        return true;
+    }
+    if (strcmp(name, "layer") == 0)
+    {
+        const float volts = value < 0.0f ? 0.0f : (value > 10.0f ? 10.0f : value);
+        int layer = static_cast<int>(volts / (10.0f / static_cast<float>(inst.button->layerCount)));
+        if (layer >= inst.button->layerCount) layer = inst.button->layerCount - 1;
+        inst.button->activeLayer = static_cast<uint8_t>(layer);
+        return true;
+    }
+    if (controlIndex >= synth::kButtonOutputMax) return false;
+    ButtonControl &control = inst.button->controls[controlIndex];
     if (strcmp(name, "listIndex") == 0)
     {
-        inst.button->listIndex = static_cast<uint8_t>(value);
-        inst.button->currentValue = inst.button->currentOutput();
+        control.listIndex = static_cast<uint8_t>(value);
+        control.currentValue = control.currentOutput();
         return true;
     }
     if (strcmp(name, "wasAbove") == 0)
     {
-        inst.button->wasAbove = value != 0.0f;
-        inst.button->currentValue = inst.button->currentOutput();
+        control.wasAbove = value != 0.0f;
+        control.currentValue = control.currentOutput();
         return true;
     }
     if (strcmp(name, "value0") == 0)
     {
-        inst.button->value0 = value;
-        inst.button->currentValue = inst.button->currentOutput();
+        control.value0 = value;
+        control.currentValue = control.currentOutput();
         return true;
     }
     if (strcmp(name, "value127") == 0)
     {
-        inst.button->value127 = value;
-        inst.button->currentValue = inst.button->currentOutput();
+        control.value127 = value;
+        control.currentValue = control.currentOutput();
         return true;
     }
     return false;
@@ -224,15 +264,49 @@ inline bool setParamUpDownButton(NodeInstance &inst, const char *name, float val
 
 inline void parsePresetButton(cJSON *p, WidgetParams &out)
 {
-    cJSON *cc = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "cc") : nullptr;
-    out.buttonCc = cJSON_IsNumber(cc) ? static_cast<int16_t>(cc->valueint) : -1;
-    cJSON *ch = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "channel") : nullptr;
-    out.buttonChannel = cJSON_IsNumber(ch) ? static_cast<int8_t>(ch->valueint) : -1;
-    out.buttonValue0 = presetparser::getFloat(p, "value0", 0.0f);
-    out.buttonValue127 = presetparser::getFloat(p, "value127", 10.0f); // CV convention: gate-high default 10V instead of 1
-    out.buttonListIndex = static_cast<uint8_t>(presetparser::getInt(p, "listIndex", 0));
-    out.buttonWasAbove = presetparser::getBool(p, "wasAbove", false);
-    out.valueListCount = presetparser::getFloatArray(p, "valueList", out.valueList, static_cast<uint8_t>(synth::kValueListMax));
+    const int count = presetparser::getInt(p, "buttonCount", 1);
+    out.buttonCount = static_cast<uint8_t>(count < 1 ? 1 : (count > static_cast<int>(synth::kButtonControlMax) ? synth::kButtonControlMax : count));
+    const int layerCount = presetparser::getInt(p, "layerCount", 1);
+    out.buttonLayerCount = static_cast<uint8_t>(layerCount < 1 ? 1 : (layerCount > static_cast<int>(synth::kButtonLayerMax) ? synth::kButtonLayerMax : layerCount));
+    const int activeLayer = presetparser::getInt(p, "activeLayer", 0);
+    out.buttonActiveLayer = static_cast<uint8_t>(activeLayer < 0 ? 0 : (activeLayer >= out.buttonLayerCount ? out.buttonLayerCount - 1 : activeLayer));
+
+    auto parseControl = [](cJSON *item, WidgetParams::ButtonControlParams &control)
+    {
+        if (!cJSON_IsObject(item)) return;
+        control.value0 = presetparser::getFloat(item, "value0", 0.0f);
+        control.value127 = presetparser::getFloat(item, "value127", 10.0f);
+        control.valueListCount = presetparser::getFloatArray(item, "valueList", control.valueList,
+                                                              static_cast<uint8_t>(synth::kValueListMax));
+        control.listIndex = static_cast<uint8_t>(presetparser::getInt(item, "listIndex", 0));
+        control.wasAbove = presetparser::getBool(item, "wasAbove", false);
+    };
+
+    cJSON *layers = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "layers") : nullptr;
+    for (uint8_t layerIndex = 0; layerIndex < out.buttonLayerCount; ++layerIndex)
+    {
+        cJSON *layer = cJSON_IsArray(layers) ? cJSON_GetArrayItem(layers, layerIndex) : nullptr;
+        cJSON *buttons = cJSON_IsObject(layer) ? cJSON_GetObjectItemCaseSensitive(layer, "buttons") : nullptr;
+        for (uint8_t buttonIndex = 0; buttonIndex < out.buttonCount; ++buttonIndex)
+        {
+            cJSON *item = cJSON_IsArray(buttons) ? cJSON_GetArrayItem(buttons, buttonIndex) : nullptr;
+            parseControl(item, out.buttons[ButtonState::controlIndex(buttonIndex, layerIndex)]);
+        }
+    }
+
+    cJSON *bindings = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "bindings") : nullptr;
+    for (uint8_t buttonIndex = 0; buttonIndex < out.buttonCount; ++buttonIndex)
+    {
+        cJSON *binding = cJSON_IsArray(bindings) ? cJSON_GetArrayItem(bindings, buttonIndex) : nullptr;
+        cJSON *cc = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "cc") : nullptr;
+        cJSON *channel = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "channel") : nullptr;
+        for (uint8_t layerIndex = 0; layerIndex < out.buttonLayerCount; ++layerIndex)
+        {
+            WidgetParams::ButtonControlParams &control = out.buttons[ButtonState::controlIndex(buttonIndex, layerIndex)];
+            control.cc = cJSON_IsNumber(cc) ? static_cast<int16_t>(cc->valueint) : -1;
+            control.channel = cJSON_IsNumber(channel) ? static_cast<int8_t>(channel->valueint) : -1;
+        }
+    }
 }
 
 inline void parsePresetUpDownButton(cJSON *p, WidgetParams &out)
@@ -256,4 +330,5 @@ inline void parsePresetUpDownButton(cJSON *p, WidgetParams &out)
 } // namespace nodes::button
 
 using nodes::button::ButtonState;
+using nodes::button::ButtonControl;
 using nodes::button::UpDownButtonState;

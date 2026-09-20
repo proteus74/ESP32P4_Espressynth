@@ -513,11 +513,11 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "switchAtEnd")) return 4;
         return -1;
     case NodeType::Knob:
+    case NodeType::Button:
         return is(portName, "layer") ? 0 : -1;
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
-    case NodeType::Button:
     case NodeType::UpDownButton:
     case NodeType::Unknown:
     default:
@@ -793,11 +793,11 @@ inline int audioInPortCount(NodeType type)
     case NodeType::DrumSequencer:
         return 5; // "clock" + "gate" + "pattern" (control-only) + internal-fallback "rate" + "switchAtEnd" (control-only)
     case NodeType::Knob:
+    case NodeType::Button:
         return 1; // externally controlled layer selector
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
-    case NodeType::Button:
     case NodeType::UpDownButton:
     case NodeType::Unknown:
     default:

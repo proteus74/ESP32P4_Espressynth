@@ -227,12 +227,21 @@ struct WidgetParams
     float valueList[synth::kValueListMax] = {};
     uint8_t valueListCount = 0;
     // button
-    int16_t buttonCc = -1;
-    int8_t buttonChannel = -1;
-    float buttonValue0 = 0.0f;
-    float buttonValue127 = 1.0f;
-    uint8_t buttonListIndex = 0;
-    bool buttonWasAbove = false;
+    struct ButtonControlParams
+    {
+        int16_t cc = -1;
+        int8_t channel = -1;
+        float value0 = 0.0f;
+        float value127 = 10.0f;
+        float valueList[synth::kValueListMax] = {};
+        uint8_t valueListCount = 0;
+        uint8_t listIndex = 0;
+        bool wasAbove = false;
+    };
+    uint8_t buttonCount = 1;
+    uint8_t buttonLayerCount = 1;
+    uint8_t buttonActiveLayer = 0;
+    ButtonControlParams buttons[synth::kButtonOutputMax] = {};
     // up-down-button - shares valueList/valueListCount above
     int16_t upDownCcUp = -1;
     int8_t upDownChannelUp = -1;
