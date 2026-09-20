@@ -153,6 +153,7 @@ inline bool hasStereoOutput(NodeType type)
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
+           type == NodeType::LinkedInput || type == NodeType::LinkedOutput ||
            type == NodeType::StepArpeggiator || type == NodeType::DrumSequencer || type == NodeType::Pan || type == NodeType::OutputSwitch ||
            type == NodeType::OutputMultiplexer || type == NodeType::Clock;
 }
@@ -640,6 +641,10 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::AudioInputLink:
         nodes::link::build(inst, p);
         break;
+    case NodeType::LinkedInput:
+    case NodeType::LinkedOutput:
+        nodes::linkedio::build(inst, p);
+        break;
     case NodeType::MidiIn:
         nodes::midiin::build(inst, p);
         break;
@@ -861,6 +866,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             {
                 inst.audioInPortCount = doc.widgets[i].params.inputCount;
             }
+            else if (w.type == NodeType::LinkedInput || w.type == NodeType::LinkedOutput)
+            {
+                inst.audioInPortCount = doc.widgets[i].params.linkedIoCount;
+            }
             for (int p = 0; p < inst.audioInPortCount; ++p)
             {
                 inst.controlValue[p] = ports::audioInDefault(w.type, p);
@@ -882,7 +891,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.outR = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
                 if (inst.outR != nullptr) ++blockBufferCount;
             }
-            const bool linkBuses = w.type == NodeType::AudioOutputLink || w.type == NodeType::AudioInputLink;
+            const bool linkBuses = w.type == NodeType::AudioOutputLink || w.type == NodeType::AudioInputLink ||
+                                   w.type == NodeType::LinkedInput || w.type == NodeType::LinkedOutput;
             if (inst.outL == nullptr || (hasStereoOutput(w.type) && inst.outR == nullptr))
             {
                 ESP_LOGE(kGraphBuilderTag, "Output buffer allocation failed");
@@ -960,6 +970,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 break;
             case NodeType::AudioOutputLink:
             case NodeType::AudioInputLink:
+            case NodeType::LinkedInput:
+            case NodeType::LinkedOutput:
                 inst.link = allocateNodeState<LinkState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.link == nullptr);
                 break;
@@ -981,8 +993,12 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             if (linkBuses)
             {
                 bool linkBusesAllocated = true;
-                for (float *&bus : inst.link->busOut)
+                const uint8_t busCount = (w.type == NodeType::LinkedInput || w.type == NodeType::LinkedOutput)
+                                             ? doc.widgets[i].params.linkedIoCount
+                                             : synth::kLinkBusCount;
+                for (uint8_t busIndex = 2; busIndex < busCount; ++busIndex)
                 {
+                    float *&bus = inst.link->busOut[busIndex - 2];
                     bus = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
                     if (bus != nullptr)
                     {
@@ -1576,12 +1592,19 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                          sourceLinkId, doc.widgets[i].id);
                 continue;
             }
-            wireConnection(*g, static_cast<uint16_t>(liIdx), 0, i, 0);
+            const uint8_t sourceCount = doc.widgets[liIdx].params.linkedIoCount;
+            const uint8_t targetCount = doc.widgets[i].params.linkedIoCount;
+            const uint8_t channelCount = sourceCount < targetCount ? sourceCount : targetCount;
+            for (uint8_t channel = 0; channel < channelCount; ++channel)
+            {
+                wireConnection(*g, static_cast<uint16_t>(liIdx), channel, i, channel);
+            }
             markDependency(static_cast<uint16_t>(liIdx), i);
             const WidgetSlot &loSlot = g->widgets[i];
             for (uint16_t v = 0; v < loSlot.instanceCount; ++v)
             {
-                g->instances[loSlot.instanceBase + v].audioConnectedPortMask |= synth::portBit(0);
+                for (uint8_t channel = 0; channel < channelCount; ++channel)
+                    g->instances[loSlot.instanceBase + v].audioConnectedPortMask |= synth::portBit(channel);
             }
         }
     }

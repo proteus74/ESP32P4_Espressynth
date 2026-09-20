@@ -1795,7 +1795,8 @@ body.show-node-cpu .widget-cpu-badge {
   gap: 0.35rem;
 }
 
-.widget-instance[data-widget-type="knob"] > .knob-output-ports {
+.widget-instance[data-widget-type="knob"] > .knob-output-ports,
+.widget-instance[data-widget-type="button"] > .knob-output-ports {
   position: absolute;
   left: 0.45rem !important;
   right: 0.45rem !important;
@@ -2951,41 +2952,94 @@ body.show-node-cpu .widget-cpu-badge {
    it, same as any other single-port widget (e.g. gain, vu-meter) - the only
    difference is the port's own label shows the link name/status instead of
    the generic "In"/"Out" text (see createWidget()'s port-row wiring). */
-.widget-instance[data-widget-type="linked-output"] {
-  width: 170px;
+.widget-instance[data-widget-type^="linked-input"],
+.widget-instance[data-widget-type^="linked-output"] {
   min-width: 170px;
-  max-width: 170px;
   box-sizing: border-box;
+  overflow: visible;
 }
 
-.widget-instance[data-widget-type="linked-output"] .port-row-out {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.widget-instance[data-widget-type="linked-output"] .linked-io-status {
+.linked-io-body {
   display: flex;
-  justify-content: flex-end;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.2rem;
 }
 
-.widget-instance[data-widget-type="linked-output"] .linked-io-link-name {
-  flex: 0 0 auto;
-}
-
-.widget-instance[data-widget-type="linked-output"] .linked-io-page-name {
-  flex: 0 1 auto;
-  min-width: 0;
+.linked-io-group-name {
+  max-width: 100%;
   overflow: hidden;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.linked-io-status.missing {
+.widget-instance > .linked-io-ports {
+  position: absolute;
+  z-index: 4;
+  padding: 0;
+  pointer-events: none;
+}
+
+.linked-io-ports .port-row {
+  min-width: 0;
+  padding: 0;
+  pointer-events: none;
+}
+
+.linked-io-ports .port-dot { margin: 0; pointer-events: auto; transform: none; }
+.linked-io-ports .port-row-in > .port-dot,
+.linked-io-ports .port-row-out > .port-dot { margin: 0; transform: none; }
+.linked-io-ports .port-label { flex: 0 1 auto; }
+.linked-io-port-label { font-size: 0.62rem; white-space: nowrap; }
+
+.linked-io-ports-top,
+.linked-io-ports-bottom {
+  right: 0.65rem;
+  left: 0.65rem;
+  display: grid;
+  grid-template-columns: repeat(var(--linked-io-count), minmax(0, 1fr));
+}
+
+.linked-io-ports-top { top: 0; transform: translateY(-50%); }
+.linked-io-ports-bottom { bottom: 0; transform: translateY(50%); }
+.linked-io-ports-top .port-row,
+.linked-io-ports-bottom .port-row { height: 14px; justify-content: center; text-align: center; }
+.linked-io-ports-top .port-label,
+.linked-io-ports-bottom .port-label { position: absolute; max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
+.linked-io-ports-top .port-label { top: 13px; }
+.linked-io-ports-bottom .port-label { bottom: 13px; }
+
+.linked-io-ports-left,
+.linked-io-ports-right {
+  top: 2.6rem;
+  bottom: 0.45rem;
+  display: grid;
+  grid-template-rows: repeat(var(--linked-io-count), minmax(0, 1fr));
+}
+
+.linked-io-ports-left { left: 0; }
+.linked-io-ports-right { right: 0; }
+.linked-io-ports-left .port-row-out,
+.linked-io-ports-right .port-row-in { flex-direction: row-reverse; }
+.linked-io-ports-left .port-row,
+.linked-io-ports-right .port-row { min-width: 80px; gap: 0.3rem; }
+.linked-io-ports-left .port-dot { position: absolute; left: -7px; }
+.linked-io-ports-right .port-dot { position: absolute; right: -7px; }
+.linked-io-ports-left .port-label { margin-left: 12px; }
+.linked-io-ports-right .port-label { margin-right: 12px; }
+
+.linked-io-label-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.linked-io-status.missing,
+.linked-io-group-name.missing {
   color: #f87171;
 }
 

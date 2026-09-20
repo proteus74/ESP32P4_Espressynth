@@ -172,9 +172,11 @@ inline NodeType nodeTypeFromString(const char *typeStr)
     // linked-input/linked-output: freely-placeable linkId-keyed passthrough
     // links - a separate, unrelated mechanism from the fixed 8-bus
     // audio-output-link/audio-input-link pair above.
-    if (strcmp(typeStr, "linked-input") == 0)
+    if (strcmp(typeStr, "linked-input") == 0 || strcmp(typeStr, "linked-input-4") == 0 ||
+        strcmp(typeStr, "linked-input-8") == 0)
         return NodeType::LinkedInput;
-    if (strcmp(typeStr, "linked-output") == 0)
+    if (strcmp(typeStr, "linked-output") == 0 || strcmp(typeStr, "linked-output-4") == 0 ||
+        strcmp(typeStr, "linked-output-8") == 0)
         return NodeType::LinkedOutput;
     if (strcmp(typeStr, "audio-out") == 0)
         return NodeType::AudioOut;

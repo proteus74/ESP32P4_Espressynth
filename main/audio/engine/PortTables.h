@@ -376,7 +376,8 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Spectrum:
         return is(portName, "in") ? 0 : -1;
     case NodeType::LinkedInput:
-        return is(portName, "in") ? 0 : -1;
+        if (is(portName, "in")) return 0;
+        return indexedInPort(portName, synth::kLinkBusCount);
     case NodeType::Oscilloscope:
         if (is(portName, "in1"))
             return 0;
@@ -628,7 +629,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         // a named audioOutIndex lookup.
         return -1;
     case NodeType::LinkedOutput:
-        return is(portName, "out") ? 0 : -1;
+        if (is(portName, "out")) return 0;
+        return indexedOutPort(portName, synth::kLinkBusCount);
     case NodeType::AudioInputLink:
         if (is(portName, "outL")) // legacy bus 1
             return 0;
@@ -775,7 +777,7 @@ inline int audioInPortCount(NodeType type)
         // (never reached via audioInIndex by name - only via a raw-index
         // wireConnection() call from GraphBuilder, same as the fixed 8-bus
         // link's hidden bus slots).
-        return 1;
+        return synth::kLinkBusCount;
     case NodeType::Oscilloscope:
         return 2;
     case NodeType::WavePlayer:

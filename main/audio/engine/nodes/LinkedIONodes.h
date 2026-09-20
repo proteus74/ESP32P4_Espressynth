@@ -18,44 +18,40 @@ namespace nodes::linkedio
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    const float *source = inst.inPorts[0];
-    if (source != nullptr)
+    const uint8_t count = inst.link != nullptr ? inst.link->activeBusCount : 1;
+    for (uint8_t port = 0; port < count; ++port)
     {
-        memcpy(inst.outL, source, frames * sizeof(float));
-        return;
-    }
-    // No real DSP edge feeds port 0 - e.g. a linked-input fed by a
-    // ControlRoute-only source (MidiIn's "gate"/"velocity", a Knob, a
-    // Button, ...) never writes inPorts[], only controlValue[] (see
-    // Graph::deliverNoteControlRoutes/pushControlRouteValue). Falling
-    // straight to silence here (the previous behavior) meant a MidiIn
-    // "Gate" -> linked-input -> linked-output -> Adsr "Gate" chain never
-    // worked, even though the exact same MidiIn -> Adsr "Gate" wire
-    // connected directly works fine. Same portSample()-style fallback
-    // nodes/LinkNodes.h's AudioOutputLink passthrough already uses.
-    const float scalar = inst.controlValue[0];
-    if (scalar == 0.0f)
-    {
-        memset(inst.outL, 0, frames * sizeof(float));
-    }
-    else
-    {
-        for (size_t i = 0; i < frames; ++i)
+        float *output = outputPortBuffer(inst, port);
+        const float *source = inst.inPorts[port];
+        if (source != nullptr)
+            memcpy(output, source, frames * sizeof(float));
+        else if (inst.controlValue[port] == 0.0f)
+            memset(output, 0, frames * sizeof(float));
+        else
         {
-            inst.outL[i] = scalar;
+            for (size_t i = 0; i < frames; ++i) output[i] = inst.controlValue[port];
         }
     }
+}
+
+inline void build(NodeInstance &inst, const WidgetParams &p)
+{
+    if (inst.link != nullptr) inst.link->activeBusCount = p.linkedIoCount;
 }
 
 inline void parseLinkDefinition(cJSON *p, WidgetParams &out)
 {
     snprintf(out.linkId, sizeof(out.linkId), "%s", presetparser::getString(p, "linkId", ""));
     snprintf(out.linkName, sizeof(out.linkName), "%s", presetparser::getString(p, "linkName", ""));
+    const int count = presetparser::getInt(p, "linkCount", 1);
+    out.linkedIoCount = static_cast<uint8_t>(count == 8 ? 8 : (count == 4 ? 4 : 1));
 }
 
 inline void parseLinkSelection(cJSON *p, WidgetParams &out)
 {
     snprintf(out.sourceLinkId, sizeof(out.sourceLinkId), "%s", presetparser::getString(p, "sourceLinkId", ""));
+    const int count = presetparser::getInt(p, "linkCount", 1);
+    out.linkedIoCount = static_cast<uint8_t>(count == 8 ? 8 : (count == 4 ? 4 : 1));
 }
 
 } // namespace nodes::linkedio

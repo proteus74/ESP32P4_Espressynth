@@ -165,6 +165,7 @@ struct WidgetParams
     char linkId[24] = {};
     char linkName[48] = {};
     char sourceLinkId[24] = {};
+    uint8_t linkedIoCount = 1;
     // clock - pulse width in ms; tempo itself comes from the device-wide
     // synth::masterClock() (MasterClock.h), not from the preset.
     float clockPulseMs = 100.0f;

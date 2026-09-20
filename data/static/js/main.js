@@ -3581,7 +3581,7 @@ function createWidget(type, label, x, y, forcedId) {
     const groupName = document.createElement("div");
     groupName.className = "linked-io-group-name";
     groupName.dataset.role = "linked-io-group-name";
-    groupName.textContent = isLinkedInputType(type) ? "(unbenannt)" : "Nicht verbunden";
+    groupName.textContent = isLinkedInputType(type) ? "(unnamed)" : "Not connected";
     body.appendChild(groupName);
     el.appendChild(body);
   }
@@ -5307,6 +5307,8 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   canvasContent.appendChild(el);
+  if (isLinkedInputType(type)) updateLinkedInputVisual(id);
+  if (isLinkedOutputType(type)) updateLinkedOutputVisual(id);
   if (type === "switch") updateSwitchVisual(id);
   if (type === "output-switch") updateOutputSwitchVisual(id);
   if (type === "button") updateButtonVisual(id);
@@ -8122,7 +8124,7 @@ document.getElementById("linkedInputSettingsSave").addEventListener("click", () 
   }
   const trimmed = linkedInputNameInput.value.trim();
   if (!trimmed) {
-    linkedInputNameError.textContent = "Name darf nicht leer sein";
+    linkedInputNameError.textContent = " Name must not be empty";
     linkedInputNameError.style.display = "block";
     return;
   }
@@ -8130,7 +8132,7 @@ document.getElementById("linkedInputSettingsSave").addEventListener("click", () 
     ([otherId, other]) => otherId !== pendingLinkedInputId && other.linkName.trim().toLowerCase() === trimmed.toLowerCase()
   );
   if (duplicate) {
-    linkedInputNameError.textContent = "Name bereits vergeben";
+    linkedInputNameError.textContent = "Name already taken";
     linkedInputNameError.style.display = "block";
     return;
   }
@@ -8155,7 +8157,7 @@ function openLinkedOutputSettings(widgetId) {
   linkedOutputSourceSelect.innerHTML = "";
   const noneOpt = document.createElement("option");
   noneOpt.value = "";
-  noneOpt.textContent = "— Nicht verbunden —";
+  noneOpt.textContent = "— Not connected —";
   linkedOutputSourceSelect.appendChild(noneOpt);
 
   const outputs = [...linkedInputStates.entries()]
@@ -8171,7 +8173,7 @@ function openLinkedOutputSettings(widgetId) {
   if (state.sourceLinkId && !outputs.some((out) => out.linkId === state.sourceLinkId)) {
     const opt = document.createElement("option");
     opt.value = state.sourceLinkId;
-    opt.textContent = `Fehlender Link: ${state.sourceLinkId}`;
+    opt.textContent = `Missing link: ${state.sourceLinkId}`;
     linkedOutputSourceSelect.appendChild(opt);
   }
 
@@ -8777,17 +8779,17 @@ async function renderFileExplorer() {
   
   
   const myToken = ++fileExplorerRenderToken;
-  fileExplorerList.innerHTML = '<div class="file-explorer-loading">⏳ Lädt…</div>';
+  fileExplorerList.innerHTML = '<div class="file-explorer-loading">⏳ Loading…</div>';
 
   const [listData, info] = await Promise.all([fetchFileList(fileExplorerDir), fetchFsInfo()]);
   if (myToken !== fileExplorerRenderToken) return;
 
   if (info?.available) {
     fileExplorerFreeBytes = info.freeBytes;
-    fileExplorerSpace.textContent = `${humanFileSize(info.usedBytes)} / ${humanFileSize(info.totalBytes)} belegt`;
+    fileExplorerSpace.textContent = `${humanFileSize(info.usedBytes)} / ${humanFileSize(info.totalBytes)} used`;
   } else {
     fileExplorerFreeBytes = 0;
-    fileExplorerSpace.textContent = fileExplorerVolume === "sd" ? "Keine SD-Karte verfügbar" : "Nicht verfügbar";
+    fileExplorerSpace.textContent = fileExplorerVolume === "sd" ? "not SD Card available" : "not available";
   }
 
   fileExplorerList.innerHTML = "";
@@ -11210,7 +11212,7 @@ const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq",
   "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
-  "linked-input", "linked-output",
+  ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
 ]);
 
 function getScopeConnectedSourceType(widgetId, portId) {
@@ -12076,7 +12078,7 @@ function updateLinkedOutputVisual(widgetId) {
   if (!status) return;
   const portLabels = el.querySelectorAll(".port-row-out .linked-io-port-label");
   if (!state.sourceLinkId) {
-    status.textContent = "Nicht verbunden";
+    status.textContent = "Not connected";
     status.removeAttribute("title");
     status.classList.remove("missing");
     portLabels.forEach((label, index) => { label.textContent = String(index + 1); });
@@ -12099,7 +12101,7 @@ function updateLinkedOutputVisual(widgetId) {
     status.classList.remove("missing");
     portLabels.forEach((label, index) => { label.textContent = source.labels?.[index] || String(index + 1); });
   } else {
-    status.textContent = "Fehlender Link: " + state.sourceLinkId;
+    status.textContent = "Missing link: " + state.sourceLinkId;
     status.removeAttribute("title");
     status.classList.add("missing");
     portLabels.forEach((label, index) => { label.textContent = String(index + 1); });
@@ -12119,6 +12121,10 @@ function renderLinkedIoLayout(widgetId) {
   ports.className = `widget-ports linked-io-ports linked-io-ports-${side}`;
   ports.style.setProperty("--linked-io-count", state.linkCount);
   el.style.setProperty("--linked-io-count", state.linkCount);
+  const horizontal = side === "top" || side === "bottom";
+  el.style.width = `${horizontal ? Math.max(170, state.linkCount * 72) : 190}px`;
+  const body = el.querySelector(".linked-io-body");
+  if (body) body.style.minHeight = `${horizontal ? 52 : Math.max(44, state.linkCount * 28)}px`;
 }
 
 function refreshLinkedIO() {
@@ -16500,8 +16506,10 @@ function portPosition(portEl) {
 
 const CABLE_SAG_KEY = "espressynth.cableSag";
 const ORTHOGONAL_CABLES_KEY = "espressynth.orthogonalCables";
+const DIRECT_CABLES_KEY = "espressynth.directCables";
 let cableSagEnabled = localStorage.getItem(CABLE_SAG_KEY) === "1";
 let orthogonalCablesEnabled = localStorage.getItem(ORTHOGONAL_CABLES_KEY) === "1";
+let directCablesEnabled = localStorage.getItem(DIRECT_CABLES_KEY) === "1";
 
 function roundedOrthogonalPath(points, radius = 12) {
   const pathPoints = points.filter((point, index) =>
@@ -16568,9 +16576,11 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
     const fromBounds = widgetBounds(fromWidgetEl);
     const toBounds = widgetBounds(toWidgetEl);
     // Coordinates are in canvas units. Dividing by zoom keeps normal leads
-    // 14 screen pixels long, so a cable never appears to turn on its jack.
-    const minimumLead = 14 / zoom;
-    const clearance = 20 / zoom;
+    // a fixed screen-pixel length, so a cable never appears to turn on its
+    // jack. Both are generous rather than tight so a cable visibly leaves
+    // its widget before bending instead of hugging the border.
+    const minimumLead = 24 / zoom;
+    const clearance = 44 / zoom;
     const fromDirection = portOutwardDirection(p1, fromBounds, { x: 1, y: 0 });
     const toDirection = portOutwardDirection(p2, toBounds, { x: -1, y: 0 });
     const horizontalGap = p2.x - p1.x;
@@ -16623,6 +16633,26 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
       ]);
     }
 
+    // Output straight into an input directly above/below it (e.g. Knob <->
+    // Link In, either stacking order - Knob's outputSide can flip which
+    // edge its ports sit on). Both leads are vertical, one horizontal jog
+    // in the gap between widgets. Same shape as the horizontal facingPorts
+    // case, rotated; the sign of fromDirection.y picks which side is "out".
+    const facingPortsVertical = fromDirection.y !== 0 && toDirection.y === -fromDirection.y;
+    const verticalGapOk = facingPortsVertical &&
+      (fromDirection.y === 1 ? fromLead.y <= toLead.y : fromLead.y >= toLead.y);
+    if (verticalGapOk) {
+      const middleY = (fromLead.y + toLead.y) / 2;
+      return roundedOrthogonalPath([
+        p1,
+        fromLead,
+        { x: fromLead.x, y: middleY },
+        { x: toLead.x, y: middleY },
+        toLead,
+        p2,
+      ]);
+    }
+
     // Widgets are stacked, overlap, or their ports face a non-standard edge.
     // Route around their shared top/bottom outside edge.  Crucially, leads
     // stay in path: no branch may replace them with a vertical line at jack.
@@ -16653,6 +16683,7 @@ function orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl) {
 }
 
 function bezierPath(p1, p2, fromWidgetEl, toWidgetEl) {
+  if (directCablesEnabled) return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
   if (orthogonalCablesEnabled) return orthogonalPath(p1, p2, fromWidgetEl, toWidgetEl);
   const horizontalGap = p2.x - p1.x;
   const minimumLead = 10 / zoom;
@@ -16669,6 +16700,7 @@ function bezierPath(p1, p2, fromWidgetEl, toWidgetEl) {
 }
 
 function cableStyleFromFlags() {
+  if (directCablesEnabled) return "direct";
   if (orthogonalCablesEnabled) return "orthogonal";
   if (cableSagEnabled) return "sag";
   return "normal";
@@ -16677,8 +16709,10 @@ function cableStyleFromFlags() {
 function setCableStyle(style) {
   cableSagEnabled = style === "sag";
   orthogonalCablesEnabled = style === "orthogonal";
+  directCablesEnabled = style === "direct";
   localStorage.setItem(CABLE_SAG_KEY, cableSagEnabled ? "1" : "0");
   localStorage.setItem(ORTHOGONAL_CABLES_KEY, orthogonalCablesEnabled ? "1" : "0");
+  localStorage.setItem(DIRECT_CABLES_KEY, directCablesEnabled ? "1" : "0");
   const select = document.getElementById("menuCableStyle");
   if (select) select.value = style;
   drawConnections();

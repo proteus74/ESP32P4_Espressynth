@@ -2238,6 +2238,8 @@ inline void Graph::destroy()
             break;
         case NodeType::AudioOutputLink:
         case NodeType::AudioInputLink:
+        case NodeType::LinkedInput:
+        case NodeType::LinkedOutput:
             if (inst.link != nullptr)
             {
                 for (float *&bus : inst.link->busOut)

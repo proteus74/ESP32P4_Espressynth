@@ -158,6 +158,7 @@ struct FrequencyDividerState
 struct LinkState
 {
     float *busOut[synth::kLinkBusCount - 2] = {};
+    uint8_t activeBusCount = 8;
     // Audio Outputs' per-bus level controls. Raw 0-10V CV; 10V is unity.
     float gainCv[synth::kLinkBusCount] = {10, 10, 10, 10, 10, 10, 10, 10};
 };
