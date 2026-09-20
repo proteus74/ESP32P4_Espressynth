@@ -16,9 +16,12 @@ namespace nodes::drumsequencer
 {
 
 constexpr int kClockPort = 0;
-constexpr int kRatePort = 1;
+constexpr int kGatePort = 1;
+constexpr int kPatternPort = 2;
+constexpr int kRatePort = 3;
+constexpr int kSwitchAtEndPort = 4;
 
-inline uint8_t clampBarCount(int value)
+inline uint8_t clampStepCount(int value)
 {
     if (value <= 4) return 4;
     if (value <= 8) return 8;
@@ -29,6 +32,34 @@ inline uint8_t clampBarCount(int value)
 inline uint8_t clampTrackCount(int value)
 {
     return static_cast<uint8_t>(value < 1 ? 1 : (value > 8 ? 8 : value));
+}
+
+inline float clampPulseMs(float value)
+{
+    return value < 0.1f ? 0.1f : (value > 60000.0f ? 60000.0f : value);
+}
+
+inline float clampMaxBpm(float value)
+{
+    return value < 0.1f ? 0.1f : (value > 10000.0f ? 10000.0f : value);
+}
+
+inline uint8_t clampPatternIndex(int idx, int count)
+{
+    if (count <= 0) return 0;
+    if (idx < 0) return 0;
+    return static_cast<uint8_t>(idx > count - 1 ? count - 1 : idx);
+}
+
+// Splits 0-10V into `count` equal bands, same idea as MultiplexerNode.h's
+// selectFromCv - 10V itself must still resolve to the last pattern.
+inline int patternIndexFromCv(float volts, int count)
+{
+    if (count <= 1) return 0;
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / static_cast<float>(count)));
+    if (idx < 0) idx = 0;
+    if (idx > count - 1) idx = count - 1;
+    return idx;
 }
 
 inline bool cellActive(const uint8_t *bits, size_t index)
@@ -76,26 +107,127 @@ inline int indexedCell(const char *name)
     return value;
 }
 
+inline void triggerStep(DrumSequencerState &s, uint16_t totalSteps, uint32_t pulseSamples)
+{
+    const DrumSequencerPattern &pattern = s.patterns[s.activePattern];
+    for (uint8_t track = 0; track < s.trackCount; ++track)
+    {
+        const size_t cell = static_cast<size_t>(track) * totalSteps + s.currentStep;
+        if (!cellActive(pattern.active, cell)) continue;
+        s.heldVelocity[track] = decodeVelocity(pattern.velocity[cell]);
+        const uint32_t nextPulse = pulseSamples > 0 ? pulseSamples : 1;
+        if (s.pulseSamplesRemaining[track] > 0)
+        {
+            s.pulseSamplesRemaining[track] = 0;
+            s.pendingPulseSamples[track] = nextPulse;
+            s.retriggerGapRemaining[track] = 1;
+        }
+        else
+        {
+            s.pulseSamplesRemaining[track] = nextPulse;
+        }
+    }
+    ++s.currentStep;
+    if (s.currentStep >= totalSteps)
+    {
+        s.currentStep = 0;
+        if (s.pendingPattern != 0xFF)
+        {
+            s.activePattern = s.pendingPattern;
+            s.pendingPattern = 0xFF;
+        }
+    }
+}
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = *inst.drumSequencer;
-    const uint16_t totalSteps = static_cast<uint16_t>(s.barCount) * synth::kDrumSequencerStepsPerBar;
+    const uint16_t totalSteps = s.stepCount;
     if (s.currentStep >= totalSteps) s.currentStep = 0;
 
     const bool clockWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
                              synth::portBit(kClockPort)) != 0;
     const bool rateWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
                             synth::portBit(kRatePort)) != 0;
-    const float rateCv = rateWired ? portSample(inst, kRatePort, 0) : s.internalClockCvVolts;
+    const float rawRateCv = rateWired ? portSample(inst, kRatePort, 0) : s.internalClockCvVolts;
+
+    // "pattern" is control-only (see PortTables::isControlOnlyInput) - read once
+    // per render block, not per sample, matching Multiplexer's "select".
+    const bool patternWired = controlPortConnected(inst, kPatternPort) ||
+                               (inst.audioConnectedPortMask & synth::portBit(kPatternPort)) != 0;
+    const uint8_t requestedPattern = patternWired
+        ? clampPatternIndex(patternIndexFromCv(portSample(inst, kPatternPort, 0), s.patternCount), s.patternCount)
+        : clampPatternIndex(s.manualPatternSelect, s.patternCount);
+
+    // "switchAtEnd" is control-only, same dual-source-fed check as LFO's
+    // oneShot/global: a connected CV substitutes the widget's own toggle.
+    const bool switchAtEndFed = controlPortConnected(inst, kSwitchAtEndPort) ||
+                                 (inst.audioConnectedPortMask & synth::portBit(kSwitchAtEndPort)) != 0;
+    const bool switchAtEndOn = switchAtEndFed ? (portSample(inst, kSwitchAtEndPort, 0) >= cv::kGateThresholdVolts)
+                                               : s.switchAtEnd;
+
+    if (requestedPattern != s.activePattern && requestedPattern != s.pendingPattern)
+    {
+        // Quantizing only makes sense while the sequencer is actually
+        // running (gate high) - with no gate, there is no upcoming step
+        // boundary to wait for, so switch right away.
+        if (switchAtEndOn && s.gatePrev)
+            s.pendingPattern = requestedPattern;
+        else
+        {
+            s.activePattern = requestedPattern;
+            s.pendingPattern = 0xFF;
+        }
+    }
+    const float rateCv = rawRateCv < 0.0f ? 0.0f : (rawRateCv > cv::kMaxVolts ? cv::kMaxVolts : rawRateCv);
     float bpm = (rateCv / cv::kMaxVolts) * s.internalClockMaxBpm;
     if (s.internalClockRoundBpm) bpm = roundf(bpm);
-    const float periodSec = bpm > 0.0f ? 60.0f / bpm : 0.0f;
+    // A step is a 16th note (4 steps per beat), not one beat itself - a
+    // 16-step pattern is one 4/4 bar. 120 BPM must trigger 8 steps/sec.
+    const float periodSec = bpm > 0.0f ? 15.0f / bpm : 0.0f;
     const float dtSec = 1.0f / static_cast<float>(synth::kSampleRate);
     const uint32_t pulseSamples = static_cast<uint32_t>(s.pulseMs * 0.001f * synth::kSampleRate + 0.5f);
 
     for (size_t i = 0; i < frames; ++i)
     {
+        for (uint8_t track = 0; track < s.trackCount; ++track)
+        {
+            if (s.retriggerGapRemaining[track] > 0)
+            {
+                --s.retriggerGapRemaining[track];
+                if (s.retriggerGapRemaining[track] == 0)
+                    s.pulseSamplesRemaining[track] = s.pendingPulseSamples[track];
+            }
+        }
+
+        const bool gateNow = portSample(inst, kGatePort, i) >= cv::kGateThresholdVolts;
+        bool triggeredByGate = false;
+        if (gateNow && !s.gatePrev)
+        {
+            s.currentStep = 0;
+            s.internalPhaseSec = 0.0f;
+            memset(s.pulseSamplesRemaining, 0, sizeof(s.pulseSamplesRemaining));
+            memset(s.pendingPulseSamples, 0, sizeof(s.pendingPulseSamples));
+            memset(s.retriggerGapRemaining, 0, sizeof(s.retriggerGapRemaining));
+            triggerStep(s, totalSteps, pulseSamples);
+            triggeredByGate = true;
+        }
+        else if (!gateNow && s.gatePrev)
+        {
+            memset(s.pulseSamplesRemaining, 0, sizeof(s.pulseSamplesRemaining));
+            memset(s.pendingPulseSamples, 0, sizeof(s.pendingPulseSamples));
+            memset(s.retriggerGapRemaining, 0, sizeof(s.retriggerGapRemaining));
+            // Gate dropped while a quantized switch was still armed - there is
+            // no more running playback to quantize against, so resolve it now.
+            if (s.pendingPattern != 0xFF)
+            {
+                s.activePattern = s.pendingPattern;
+                s.pendingPattern = 0xFF;
+            }
+        }
+        s.gatePrev = gateNow;
+
         bool rising = false;
         if (clockWired)
         {
@@ -117,20 +249,7 @@ inline void render(NodeInstance &inst, size_t frames)
             s.clockPrev = false;
         }
 
-        if (rising)
-        {
-            for (uint8_t track = 0; track < s.trackCount; ++track)
-            {
-                const size_t cell = static_cast<size_t>(track) * totalSteps + s.currentStep;
-                if (cellActive(s.active, cell))
-                {
-                    s.heldVelocity[track] = decodeVelocity(s.velocity[cell]);
-                    s.pulseSamplesRemaining[track] = pulseSamples > 0 ? pulseSamples : 1;
-                }
-            }
-            ++s.currentStep;
-            if (s.currentStep >= totalSteps) s.currentStep = 0;
-        }
+        if (!triggeredByGate && rising && gateNow) triggerStep(s, totalSteps, pulseSamples);
 
         for (uint8_t track = 0; track < s.trackCount; ++track)
         {
@@ -148,19 +267,34 @@ inline void render(NodeInstance &inst, size_t frames)
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     auto &s = *inst.drumSequencer;
-    s.barCount = clampBarCount(p.drumBarCount);
+    s.stepCount = clampStepCount(p.drumStepCount);
     s.trackCount = clampTrackCount(p.drumTrackCount);
-    memcpy(s.active, p.drumActive, sizeof(s.active));
-    memcpy(s.velocity, p.drumVelocity, sizeof(s.velocity));
-    s.pulseMs = p.drumPulseMs > 0.0f ? p.drumPulseMs : 10.0f;
-    s.internalClockCvVolts = p.drumClockCvVolts;
-    s.internalClockMaxBpm = p.drumClockMaxBpm > 0.0f ? p.drumClockMaxBpm : 120.0f;
+    s.patternCount = p.drumPatternCount < 1
+        ? 1
+        : (p.drumPatternCount > synth::kDrumSequencerMaxPatterns
+               ? static_cast<uint8_t>(synth::kDrumSequencerMaxPatterns)
+               : p.drumPatternCount);
+    for (uint8_t i = 0; i < s.patternCount; ++i)
+    {
+        memcpy(s.patterns[i].active, p.drumPatterns[i].active, sizeof(s.patterns[i].active));
+        memcpy(s.patterns[i].velocity, p.drumPatterns[i].velocity, sizeof(s.patterns[i].velocity));
+    }
+    s.manualPatternSelect = clampPatternIndex(p.drumActivePatternIndex, s.patternCount);
+    s.activePattern = s.manualPatternSelect;
+    s.pendingPattern = 0xFF;
+    s.switchAtEnd = p.drumSwitchAtEnd;
+    s.pulseMs = clampPulseMs(p.drumPulseMs);
+    s.internalClockCvVolts = p.drumClockCvVolts < 0.0f ? 0.0f : (p.drumClockCvVolts > cv::kMaxVolts ? cv::kMaxVolts : p.drumClockCvVolts);
+    s.internalClockMaxBpm = clampMaxBpm(p.drumClockMaxBpm);
     s.internalClockRoundBpm = p.drumClockRoundBpm;
     s.currentStep = 0;
     s.clockPrev = false;
+    s.gatePrev = false;
     s.internalPhaseSec = 0.0f;
     memset(s.heldVelocity, 0, sizeof(s.heldVelocity));
     memset(s.pulseSamplesRemaining, 0, sizeof(s.pulseSamplesRemaining));
+    memset(s.pendingPulseSamples, 0, sizeof(s.pendingPulseSamples));
+    memset(s.retriggerGapRemaining, 0, sizeof(s.retriggerGapRemaining));
 }
 
 inline void destroy(NodeInstance &inst)
@@ -178,56 +312,109 @@ inline void destroy(NodeInstance &inst)
 inline bool setParam(NodeInstance &inst, const char *name, float value)
 {
     if (name == nullptr || inst.drumSequencer == nullptr) return false;
+    auto &s = *inst.drumSequencer;
     const int cell = indexedCell(name);
     if (cell >= 0)
     {
         bool active = false;
         uint8_t velocity = 0;
         decodeCellValue(value, active, velocity);
-        setCellActive(inst.drumSequencer->active, static_cast<size_t>(cell), active);
-        inst.drumSequencer->velocity[cell] = velocity;
+        // Cell edits always target the pattern the widget's grid is currently
+        // showing, which the frontend keeps in lockstep with activePattern.
+        DrumSequencerPattern &pattern = s.patterns[s.activePattern];
+        setCellActive(pattern.active, static_cast<size_t>(cell), active);
+        pattern.velocity[cell] = velocity;
         return true;
     }
-    if (strcmp(name, "pulseMs") == 0)
-        inst.drumSequencer->pulseMs = value > 0.0f ? value : 10.0f;
+    if (strcmp(name, "activePatternIndex") == 0)
+    {
+        const uint8_t idx = clampPatternIndex(static_cast<int>(value + 0.5f), s.patternCount);
+        s.manualPatternSelect = idx;
+        if (s.switchAtEnd && s.gatePrev)
+            s.pendingPattern = idx;
+        else
+        {
+            s.activePattern = idx;
+            s.pendingPattern = 0xFF;
+        }
+    }
+    else if (strcmp(name, "switchAtEnd") == 0)
+        s.switchAtEnd = value >= 0.5f;
+    else if (strcmp(name, "pulseMs") == 0)
+        s.pulseMs = clampPulseMs(value);
     else if (strcmp(name, "clockCvVolts") == 0)
-        inst.drumSequencer->internalClockCvVolts = value;
+        s.internalClockCvVolts = value < 0.0f ? 0.0f : (value > cv::kMaxVolts ? cv::kMaxVolts : value);
     else if (strcmp(name, "clockMaxBpm") == 0)
-        inst.drumSequencer->internalClockMaxBpm = value;
+        s.internalClockMaxBpm = clampMaxBpm(value);
     else if (strcmp(name, "clockRoundBpm") == 0)
-        inst.drumSequencer->internalClockRoundBpm = value >= 0.5f;
+        s.internalClockRoundBpm = value >= 0.5f;
     else
         return false;
     return true;
 }
 
+inline void parseCellsInto(cJSON *cells, DrumSequencerPatternParams &pattern, size_t limit)
+{
+    if (!cJSON_IsArray(cells)) return;
+    size_t index = 0;
+    cJSON *item = nullptr;
+    cJSON_ArrayForEach(item, cells)
+    {
+        if (index >= limit) break;
+        const float encoded = cJSON_IsNumber(item) ? static_cast<float>(item->valuedouble) : -11.0f;
+        bool active = false;
+        uint8_t velocity = 255;
+        decodeCellValue(encoded, active, velocity);
+        setCellActive(pattern.active, index, active);
+        pattern.velocity[index] = velocity;
+        ++index;
+    }
+}
+
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.drumBarCount = clampBarCount(presetparser::getInt(p, "barCount", 4));
+    out.drumStepCount = clampStepCount(
+        presetparser::getInt(p, "stepCount", presetparser::getInt(p, "barCount", 16)));
     out.drumTrackCount = clampTrackCount(presetparser::getInt(p, "trackCount", 1));
-    memset(out.drumActive, 0, sizeof(out.drumActive));
-    memset(out.drumVelocity, 255, sizeof(out.drumVelocity));
-    cJSON *cells = p == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(p, "cells");
-    if (cJSON_IsArray(cells))
+    const size_t limit = static_cast<size_t>(out.drumStepCount) * out.drumTrackCount;
+
+    for (uint8_t i = 0; i < synth::kDrumSequencerMaxPatterns; ++i)
     {
-        const size_t limit = static_cast<size_t>(out.drumBarCount) * synth::kDrumSequencerStepsPerBar * out.drumTrackCount;
-        size_t index = 0;
-        cJSON *item = nullptr;
-        cJSON_ArrayForEach(item, cells)
-        {
-            if (index >= limit) break;
-            const float encoded = cJSON_IsNumber(item) ? static_cast<float>(item->valuedouble) : -11.0f;
-            bool active = false;
-            uint8_t velocity = 255;
-            decodeCellValue(encoded, active, velocity);
-            setCellActive(out.drumActive, index, active);
-            out.drumVelocity[index] = velocity;
-            ++index;
-        }
+        memset(out.drumPatterns[i].active, 0, sizeof(out.drumPatterns[i].active));
+        memset(out.drumPatterns[i].velocity, 255, sizeof(out.drumPatterns[i].velocity));
     }
-    out.drumPulseMs = presetparser::getFloat(p, "pulseMs", 10.0f);
-    out.drumClockCvVolts = presetparser::getFloat(p, "clockCvVolts", 0.0f);
-    out.drumClockMaxBpm = presetparser::getFloat(p, "clockMaxBpm", 120.0f);
+
+    cJSON *patternsArr = p == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(p, "patterns");
+    if (cJSON_IsArray(patternsArr) && cJSON_GetArraySize(patternsArr) > 0)
+    {
+        uint8_t patternIdx = 0;
+        cJSON *patternItem = nullptr;
+        cJSON_ArrayForEach(patternItem, patternsArr)
+        {
+            if (patternIdx >= synth::kDrumSequencerMaxPatterns) break;
+            cJSON *cells = cJSON_GetObjectItemCaseSensitive(patternItem, "cells");
+            parseCellsInto(cells, out.drumPatterns[patternIdx], limit);
+            ++patternIdx;
+        }
+        out.drumPatternCount = patternIdx > 0 ? patternIdx : 1;
+    }
+    else
+    {
+        // Backward compatibility: a preset saved before multi-pattern support
+        // only has a top-level "cells" array - load it as pattern 0.
+        cJSON *cells = p == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(p, "cells");
+        parseCellsInto(cells, out.drumPatterns[0], limit);
+        out.drumPatternCount = 1;
+    }
+
+    out.drumActivePatternIndex = clampPatternIndex(
+        presetparser::getInt(p, "activePatternIndex", 0), out.drumPatternCount);
+    out.drumSwitchAtEnd = presetparser::getBool(p, "switchAtEnd", false);
+
+    out.drumPulseMs = clampPulseMs(presetparser::getFloat(p, "pulseMs", 10.0f));
+    const float clockCv = presetparser::getFloat(p, "clockCvVolts", 0.0f);
+    out.drumClockCvVolts = clockCv < 0.0f ? 0.0f : (clockCv > cv::kMaxVolts ? cv::kMaxVolts : clockCv);
+    out.drumClockMaxBpm = clampMaxBpm(presetparser::getFloat(p, "clockMaxBpm", 120.0f));
     out.drumClockRoundBpm = presetparser::getBool(p, "clockRoundBpm", false);
 }
 

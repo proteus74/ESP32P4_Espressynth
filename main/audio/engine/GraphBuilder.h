@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -198,6 +199,37 @@ inline bool parseZonePort(const char *portName, int &zoneIdx, ControlRoute::Kind
         kind = ControlRoute::Kind::MidiVelocity;
     else
         return false;
+    return true;
+}
+
+inline bool parseKnobPort(const char *portName, int &knobIndex, int &layerIndex)
+{
+    if (portName == nullptr)
+        return false;
+    if (strcmp(portName, "voltage") == 0 || strcmp(portName, "value") == 0 || strcmp(portName, "cc") == 0)
+    {
+        knobIndex = 0;
+        layerIndex = 0;
+        return true;
+    }
+    if (strncmp(portName, "voltage", 7) != 0)
+        return false;
+    char *end = nullptr;
+    const long knobNumber = strtol(portName + 7, &end, 10);
+    if (knobNumber < 1 || knobNumber > static_cast<long>(synth::kKnobControlMax))
+        return false;
+    knobIndex = static_cast<int>(knobNumber - 1);
+    layerIndex = 0;
+    if (*end != '\0')
+    {
+        if (strncmp(end, "Layer", 5) != 0)
+            return false;
+        char *layerEnd = nullptr;
+        const long layerNumber = strtol(end + 5, &layerEnd, 10);
+        if (*layerEnd != '\0' || layerNumber < 1 || layerNumber > static_cast<long>(synth::kKnobLayerMax))
+            return false;
+        layerIndex = static_cast<int>(layerNumber - 1);
+    }
     return true;
 }
 
@@ -1187,16 +1219,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         if (fromType == NodeType::Knob && g->controlRouteCount < synth::kMaxConnections)
         {
             int knobIndex = 0;
-            if (strncmp(cd.fromPort, "voltage", 7) == 0 && cd.fromPort[7] != '\0')
-            {
-                knobIndex = atoi(cd.fromPort + 7) - 1;
-            }
-            if (knobIndex < 0 || knobIndex >= static_cast<int>(synth::kKnobControlMax))
+            int layerIndex = 0;
+            if (!parseKnobPort(cd.fromPort, knobIndex, layerIndex))
             {
                 continue;
             }
             const KnobState *sourceKnob = g->instances[g->widgets[fromIdx].instanceBase].knob;
-            if (sourceKnob == nullptr || knobIndex >= static_cast<int>(sourceKnob->count))
+            if (sourceKnob == nullptr || knobIndex >= static_cast<int>(sourceKnob->count) ||
+                layerIndex >= static_cast<int>(sourceKnob->layerCount))
             {
                 continue;
             }
@@ -1207,7 +1237,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // preset still using the old single "value" port name) = the
             // 2-point-mapped 0-10V output - see Graph.h's ControlRoute::Kind.
             route.kind = (strcmp(cd.fromPort, "cc") == 0) ? ControlRoute::Kind::KnobCc : ControlRoute::Kind::Knob;
-            route.side = static_cast<uint8_t>(knobIndex);
+            route.side = KnobState::controlIndex(static_cast<uint8_t>(knobIndex), static_cast<uint8_t>(layerIndex));
             snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
             if (toPort >= 0)
             {

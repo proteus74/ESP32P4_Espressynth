@@ -507,12 +507,16 @@ inline int audioInIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::DrumSequencer:
         if (is(portName, "clock")) return 0;
-        if (is(portName, "rate")) return 1;
+        if (is(portName, "gate")) return 1;
+        if (is(portName, "pattern")) return 2;
+        if (is(portName, "rate")) return 3;
+        if (is(portName, "switchAtEnd")) return 4;
         return -1;
+    case NodeType::Knob:
+        return is(portName, "layer") ? 0 : -1;
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
-    case NodeType::Knob:
     case NodeType::Button:
     case NodeType::UpDownButton:
     case NodeType::Unknown:
@@ -787,11 +791,12 @@ inline int audioInPortCount(NodeType type)
     case NodeType::StepArpeggiator:
         return 22; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate" + "step1".."step16" (CV)
     case NodeType::DrumSequencer:
-        return 2; // "clock" + internal-fallback "rate"
+        return 5; // "clock" + "gate" + "pattern" (control-only) + internal-fallback "rate" + "switchAtEnd" (control-only)
+    case NodeType::Knob:
+        return 1; // externally controlled layer selector
     case NodeType::MidiIn:
     case NodeType::MidiSplit:
     case NodeType::Const:
-    case NodeType::Knob:
     case NodeType::Button:
     case NodeType::UpDownButton:
     case NodeType::Unknown:
@@ -913,6 +918,10 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 16; // "select" - discrete pick, not a modulatable audio-rate signal (see nodes/MultiplexerNode.h)
     case NodeType::OutputMultiplexer:
         return portIdx == 1; // "select" - same reasoning as Multiplexer's own "select" (see nodes/OutputMultiplexerNode.h)
+    case NodeType::Knob:
+        return true; // "layer" is a discrete selector
+    case NodeType::DrumSequencer:
+        return portIdx == 2 || portIdx == 4; // "pattern" (discrete pick) + "switchAtEnd" (on/off, same reasoning as LFO's oneShot/global)
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel"/"gate"/"velocity" - all six
     case NodeType::DxEnvelope:

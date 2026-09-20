@@ -250,6 +250,26 @@ presetImportInput.addEventListener("change", () => {
   if (file) importPresetFromFile(file);
 });
 
+document.getElementById("menuBackup").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  backupSystemToFile();
+});
+
+const backupRestoreInput = document.getElementById("backupRestoreInput");
+
+document.getElementById("menuRestore").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  backupRestoreInput.value = "";
+  backupRestoreInput.click();
+});
+
+backupRestoreInput.addEventListener("change", () => {
+  const file = backupRestoreInput.files[0];
+  if (file) restoreSystemFromFile(file);
+});
+
 document.getElementById("menuFileExplorer").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
@@ -800,6 +820,68 @@ async function importPresetFromFile(file) {
   showToast("Preset imported");
 }
 
+async function backupSystemToFile() {
+  try {
+    const res = await fetch("/api/backup");
+    if (!res.ok) {
+      showToast("Backup failed");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    link.download = `espressynth-backup-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast("Backup downloaded");
+  } catch (err) {
+    appendLog(`Backup failed: ${err.message}`);
+    showToast("Backup failed");
+  }
+}
+
+async function restoreSystemFromFile(file) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch (err) {
+    appendLog(`Backup file is not valid JSON: ${err.message}`);
+    showToast("Invalid backup file");
+    return;
+  }
+  if (!data || typeof data !== "object" || typeof data.presets !== "object") {
+    appendLog("Backup file has an unexpected format.");
+    showToast("Invalid backup file");
+    return;
+  }
+  if (!confirm("Restore this backup? This overwrites presets with the same name on the device.")) {
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/backup/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(`Restore failed: ${err.error || res.status}`);
+      return;
+    }
+    const result = await res.json();
+    await loadPresetByName(null, { activate: false });
+    showToast(`Restored ${result.count ?? 0} preset(s)`);
+  } catch (err) {
+    appendLog(`Restore failed: ${err.message}`);
+    showToast("Restore failed");
+  }
+}
+
 
 
 const WIDGET_TYPES = {
@@ -850,8 +932,16 @@ const WIDGET_TYPES = {
   knob: {
     label: "Knob",
     icon: "🎛️",
-    inputs: [],
-    outputs: [{ id: "voltage", label: "" }, ...Array.from({ length: 16 }, (_, index) => ({ id: `voltage${index + 1}`, label: String(index + 1) }))],
+    inputs: [{ id: "layer", label: "Layer" }],
+    outputs: [
+      { id: "voltage", label: "" },
+      ...Array.from({ length: 16 }, (_, knobIndex) =>
+        Array.from({ length: 4 }, (_, layerIndex) => ({
+          id: layerIndex === 0 ? `voltage${knobIndex + 1}` : `voltage${knobIndex + 1}Layer${layerIndex + 1}`,
+          label: `${knobIndex + 1}.${layerIndex + 1}`,
+        }))
+      ).flat(),
+    ],
   },
   button: {
     label: "Button",
@@ -1280,7 +1370,10 @@ const WIDGET_TYPES = {
     icon: "▦",
     inputs: [
       { id: "clock", label: "Clock" },
+      { id: "gate", label: "Gate" },
+      { id: "pattern", label: "Pattern" },
       { id: "rate", label: "Rate" },
+      { id: "switchAtEnd", label: "Switch @ End" },
     ],
     outputs: Array.from({ length: 8 }, (_, i) => [
       { id: `trigger${i + 1}`, label: `T${i + 1}` },
@@ -1577,7 +1670,7 @@ const AUDIO_PORTS = {
     // path that will ever actually reach a connected Voltmeter/Debug widget.
     out: [],
   },
-  "drum-sequencer": { in: ["clock", "rate"], out: [] },
+  "drum-sequencer": { in: ["clock", "gate", "pattern", "rate", "switchAtEnd"], out: [] },
   chorus: { in: ["in"], out: ["left", "right"] },
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
@@ -2951,12 +3044,17 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "drum-sequencer") {
-    const cellCount = DRUM_DEFAULT_BARS * DRUM_STEPS_PER_BAR;
+    const cellCount = DRUM_DEFAULT_STEPS;
     drumSequencerStates.set(id, {
-      barCount: DRUM_DEFAULT_BARS,
+      stepCount: DRUM_DEFAULT_STEPS,
       trackCount: 1,
-      active: new Array(cellCount).fill(false),
-      velocities: new Array(cellCount).fill(CV_MAX_VOLTS),
+      patterns: [{
+        active: new Array(cellCount).fill(false),
+        velocities: new Array(cellCount).fill(CV_MAX_VOLTS),
+      }],
+      activePatternIndex: 0,
+      pendingPatternIndex: -1,
+      switchAtEnd: false,
       pulseMs: 10,
       clockCvVolts: 0,
       clockMaxBpm: 120,
@@ -2964,22 +3062,25 @@ function createWidget(type, label, x, y, forcedId) {
       currentStep: 0,
       lastStep: -1,
       clockPrev: false,
+      gateVolts: 0,
+      gatePrev: false,
       heldVelocity: new Array(DRUM_MAX_TRACKS).fill(0),
       triggerTimers: new Array(DRUM_MAX_TRACKS).fill(null),
       clockTickTimer: null,
     });
 
-    const clearBtn = document.createElement("button");
-    clearBtn.type = "button";
-    clearBtn.className = "drum-sequencer-clear";
-    clearBtn.textContent = "Clear";
-    clearBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-    clearBtn.addEventListener("click", (e) => {
+    const patternMenuBtn = document.createElement("button");
+    patternMenuBtn.type = "button";
+    patternMenuBtn.className = "drum-sequencer-pattern-menu-btn";
+    patternMenuBtn.textContent = "⋮";
+    patternMenuBtn.title = "Pattern actions";
+    patternMenuBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    patternMenuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      clearDrumSequencer(id);
+      openDrumPatternMenu(id, patternMenuBtn);
     });
     const closeBtn = header.querySelector(".widget-instance-close");
-    header.insertBefore(clearBtn, closeBtn);
+    header.insertBefore(patternMenuBtn, closeBtn);
 
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button, input, .drum-sequencer-grid, .port-dot")) return;
@@ -3775,8 +3876,9 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "knob") {
     knobStates.set(id, {
       count: 1,
-      controls: Array.from({ length: 16 }, () => createKnobControl()),
-      labels: Array(16).fill(""),
+      layerCount: 1,
+      activeLayer: 0,
+      layers: [createKnobLayer()],
       outputSide: "bottom",
     });
     audioEngine.createNode(id, "knob", { value: 0 });
@@ -3788,8 +3890,13 @@ function createWidget(type, label, x, y, forcedId) {
     controls.className = "knob-controls";
     controls.dataset.role = "knob-grid";
     body.appendChild(controls);
+    const layerSelector = document.createElement("div");
+    layerSelector.className = "knob-layer-selector";
+    layerSelector.dataset.role = "knob-layer-selector";
+    body.appendChild(layerSelector);
     el.appendChild(body);
     renderKnobControls(id, controls);
+    renderKnobLayerSelector(id, layerSelector);
   }
 
   if (type === "button") {
@@ -5269,6 +5376,7 @@ function removeWidget(id, force = false) {
   if (pendingMultiplierId === id) pendingMultiplierId = null;
   if (pendingAdderId === id) pendingAdderId = null;
   if (pendingClockId === id) pendingClockId = null;
+  if (pendingDrumSequencerId === id) pendingDrumSequencerId = null;
   if (pendingMixerId === id) pendingMixerId = null;
   if (pendingDxEnvelopeId === id) pendingDxEnvelopeId = null;
   if (pendingWavePlayerId === id) pendingWavePlayerId = null;
@@ -5504,20 +5612,56 @@ function createPortRow(widgetId, port, direction, widgetType) {
 
 const knobStates = new Map();
 let midiLearnTargetId = null;
+const KNOB_MAX_COUNT = 16;
+const KNOB_MAX_LAYERS = 4;
 
 function createKnobControl() {
   return { cc: null, channel: null, raw: 0, point1In: 0, point1Out: 0, point2In: 127, point2Out: CV_MAX_VOLTS, constraintMin: null, constraintMax: null, listText: "" };
 }
 
-function knobPortId(index) {
-  return `voltage${index + 1}`;
+function createKnobLayer(bindingSource = null) {
+  const controls = Array.from({ length: KNOB_MAX_COUNT }, (_, index) => {
+    const control = createKnobControl();
+    if (bindingSource?.controls[index]) {
+      control.cc = bindingSource.controls[index].cc;
+      control.channel = bindingSource.controls[index].channel;
+    }
+    return control;
+  });
+  return { controls, labels: Array(KNOB_MAX_COUNT).fill("") };
+}
+
+function knobLayer(state, layerIndex = state?.activeLayer ?? 0) {
+  return state?.layers?.[layerIndex] || null;
+}
+
+function knobControlIndex(knobIndex, layerIndex) {
+  return layerIndex * KNOB_MAX_COUNT + knobIndex;
+}
+
+function knobPortId(knobIndex, layerIndex = 0) {
+  return layerIndex === 0
+    ? `voltage${knobIndex + 1}`
+    : `voltage${knobIndex + 1}Layer${layerIndex + 1}`;
+}
+
+function parseKnobPortId(portId) {
+  if (portId === "voltage") return { knobIndex: 0, layerIndex: 0 };
+  const match = /^voltage(\d+)(?:Layer(\d+))?$/.exec(portId);
+  if (!match) return null;
+  const knobIndex = Number(match[1]) - 1;
+  const layerIndex = match[2] ? Number(match[2]) - 1 : 0;
+  return knobIndex >= 0 && knobIndex < KNOB_MAX_COUNT && layerIndex >= 0 && layerIndex < KNOB_MAX_LAYERS
+    ? { knobIndex, layerIndex }
+    : null;
 }
 
 // audioEngine.setParam paramName for one control's ConstantSourceNode (see
 // audio-engine.js's "knob" build case) - "value" (index 0, unsuffixed) stays
 // backward compatible with callers that predate multi-knob, "value2".."valueN"
 // address the rest.
-function knobValueParamName(index) {
+function knobValueParamName(knobIndex, layerIndex = 0) {
+  const index = knobControlIndex(knobIndex, layerIndex);
   return index === 0 ? "value" : `value${index + 1}`;
 }
 
@@ -5527,8 +5671,19 @@ function renderKnobPorts(widgetId, portsEl) {
   portsEl.innerHTML = "";
   portsEl.className = `widget-ports knob-output-ports knob-output-${state.outputSide}`;
   portsEl.style.setProperty("--knob-count", state.count);
-  for (let index = 0; index < state.count; index += 1) {
-    portsEl.appendChild(createPortRow(widgetId, { id: knobPortId(index), label: String(index + 1) }, "out", "knob"));
+  portsEl.style.setProperty("--knob-layer-count", state.layerCount);
+  for (let knobIndex = 0; knobIndex < state.count; knobIndex += 1) {
+    const group = document.createElement("div");
+    group.className = "knob-output-group";
+    for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex += 1) {
+      const row = createPortRow(widgetId, {
+        id: knobPortId(knobIndex, layerIndex),
+        label: `L${layerIndex + 1}`,
+      }, "out", "knob");
+      row.classList.toggle("knob-output-active", layerIndex === state.activeLayer);
+      group.appendChild(row);
+    }
+    portsEl.appendChild(group);
   }
 }
 
@@ -5539,11 +5694,15 @@ function renderKnobControls(widgetId, gridElement = null) {
   grid.innerHTML = "";
   const body = grid.closest('[data-role="knob-body"]');
   const columns = state.count;
+  const layer = knobLayer(state);
+  if (!layer) return;
   grid.style.setProperty("--knob-count", state.count);
   grid.style.setProperty("--knob-columns", columns);
   if (body) {
     body.style.setProperty("--knob-count", state.count);
     body.style.setProperty("--knob-columns", columns);
+    body.style.setProperty("--knob-layer-count", state.layerCount);
+    body.classList.toggle("knob-single-layer", state.layerCount === 1);
   }
   for (let index = 0; index < state.count; index += 1) {
     const cell = document.createElement("div");
@@ -5573,12 +5732,62 @@ function renderKnobControls(widgetId, gridElement = null) {
     const label = document.createElement("div");
     label.className = "knob-cc-label";
     label.dataset.role = "knob-label";
-    indicator.style.transform = `rotate(${knobAngle(state.controls[index].raw)}deg)`;
-    value.textContent = formatNumber(mapKnobValue(state.controls[index]));
-    label.textContent = state.labels[index] || `Knob ${index + 1}`;
+    indicator.style.transform = `rotate(${knobAngle(layer.controls[index].raw)}deg)`;
+    value.textContent = formatNumber(mapKnobValue(layer.controls[index]));
+    label.textContent = layer.labels[index] || `Knob ${index + 1}`;
     cell.append(dial, value, label);
     grid.appendChild(cell);
     updateKnobVisual(widgetId, index);
+  }
+}
+
+function knobLayerIndexFromCv(volts, layerCount) {
+  if (layerCount <= 1) return 0;
+  return clamp(Math.floor(clamp(Number(volts) || 0, 0, CV_MAX_VOLTS) / (CV_MAX_VOLTS / layerCount)), 0, layerCount - 1);
+}
+
+function renderKnobLayerSelector(widgetId, target = null) {
+  const state = knobStates.get(widgetId);
+  const container = target || document.getElementById(widgetId)?.querySelector('[data-role="knob-layer-selector"]');
+  if (!state || !container) return;
+  container.innerHTML = "";
+  container.classList.toggle("hidden", state.layerCount === 1);
+  if (state.layerCount === 1) return;
+  const port = createPortRow(widgetId, { id: "layer", label: "Layer" }, "in", "knob");
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = String(state.layerCount - 1);
+  slider.step = "1";
+  slider.value = String(state.activeLayer);
+  slider.disabled = state.layerCount <= 1 || connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "layer");
+  slider.setAttribute("aria-label", "Active layer");
+  slider.addEventListener("mousedown", (event) => event.stopPropagation());
+  slider.addEventListener("input", () => setKnobActiveLayer(widgetId, Number(slider.value), true));
+  const value = document.createElement("span");
+  value.className = "knob-layer-value";
+  value.textContent = `${state.activeLayer + 1}/${state.layerCount}`;
+  container.append(port, slider, value);
+}
+
+function setKnobActiveLayer(widgetId, layerIndex, sendLive = false) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  const next = clamp(Math.round(Number(layerIndex) || 0), 0, state.layerCount - 1);
+  if (next === state.activeLayer && !sendLive) return;
+  state.activeLayer = next;
+  renderKnobControls(widgetId);
+  const el = document.getElementById(widgetId);
+  const slider = el?.querySelector('[data-role="knob-layer-selector"] input[type="range"]');
+  const value = el?.querySelector(".knob-layer-value");
+  if (slider) slider.value = String(next);
+  if (value) value.textContent = `${next + 1}/${state.layerCount}`;
+  el?.querySelectorAll(".knob-output-group").forEach((group) => {
+    Array.from(group.children).forEach((row, index) => row.classList.toggle("knob-output-active", index === next));
+  });
+  if (sendLive) {
+    sendLiveParamUpdateThrottled(widgetId, { activeLayer: next });
+    markDirty();
   }
 }
 
@@ -6189,7 +6398,8 @@ function updateKnobVisual(widgetId, index = 0) {
   const state = knobStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
-  const control = state.controls[index];
+  const layer = knobLayer(state);
+  const control = layer?.controls[index];
   const cell = el.querySelectorAll(".knob-control")[index];
   if (!control || !cell) return;
 
@@ -6200,27 +6410,31 @@ function updateKnobVisual(widgetId, index = 0) {
   if (readout) readout.textContent = formatNumber(mapKnobValue(control));
 
   const label = cell.querySelector('[data-role="knob-label"]');
-  if (label) label.textContent = state.labels[index] || `Knob ${index + 1}`;
+  if (label) label.textContent = layer.labels[index] || `Knob ${index + 1}`;
 }
 
 function setKnobRaw(widgetId, raw, index = 0) {
   const state = knobStates.get(widgetId);
-  const control = state?.controls[index];
+  const layerIndex = state?.activeLayer ?? 0;
+  const control = knobLayer(state, layerIndex)?.controls[index];
   if (!control) return;
   control.raw = clamp(Math.round(raw), 0, 127);
   const mapped = roundFloat(mapKnobValue(control));
-  audioEngine.setParam(widgetId, knobValueParamName(index), mapped);
+  audioEngine.setParam(widgetId, knobValueParamName(index, layerIndex), mapped);
   updateKnobVisual(widgetId, index);
-  propagate(widgetId, knobPortId(index), mapped);
-  if (index === 0) propagate(widgetId, "voltage", mapped);
-  sendLiveParamUpdateThrottled(widgetId, { knobIndex: index + 1, raw: control.raw });
+  propagate(widgetId, knobPortId(index, layerIndex), mapped);
+  if (index === 0 && layerIndex === 0) propagate(widgetId, "voltage", mapped);
+  sendLiveParamUpdateThrottled(widgetId, {
+    knobIndex: knobControlIndex(index, layerIndex) + 1,
+    raw: control.raw,
+  });
 }
 
 function startKnobDrag(e, widgetId, index = 0) {
   e.preventDefault();
   e.stopPropagation();
   const state = knobStates.get(widgetId);
-  const control = state?.controls[index];
+  const control = knobLayer(state)?.controls[index];
   if (!control) return;
 
   const startY = e.clientY;
@@ -6248,26 +6462,23 @@ function routeMidiToKnobs(data) {
 
   if (midiLearnTargetId) {
     const state = knobStates.get(midiLearnTargetId.widgetId);
-    const control = state?.controls[midiLearnTargetId.index];
+    const control = knobLayer(state, 0)?.controls[midiLearnTargetId.index];
     if (control) {
-      
-      
-      
-      
-      control.cc = data.control;
-      control.channel = data.channel;
+      state.layers.forEach((layer) => {
+        layer.controls[midiLearnTargetId.index].cc = data.control;
+        layer.controls[midiLearnTargetId.index].channel = data.channel;
+      });
       const card = knobSettingsGrid.querySelector(`[data-knob-index="${midiLearnTargetId.index}"]`);
       const ccDisplay = card?.querySelector('[data-knob-field="cc"]');
       const learnButton = card?.querySelector('[data-role="knob-learn"]');
-      if (ccDisplay) ccDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
+      if (ccDisplay) ccDisplay.textContent = `${data.control} (Ch ${data.channel + 1})`;
       if (learnButton) learnButton.textContent = "Learn";
       updateKnobVisual(midiLearnTargetId.widgetId, midiLearnTargetId.index);
-      sendLiveParamUpdate(midiLearnTargetId.widgetId, { knobIndex: midiLearnTargetId.index + 1, cc: data.control, channel: data.channel });
-      
-      
-      
-      
-      
+      sendLiveParamUpdate(midiLearnTargetId.widgetId, {
+        knobIndex: midiLearnTargetId.index + 1,
+        cc: data.control,
+        channel: data.channel,
+      });
       savePresetNow();
     }
     midiLearnTargetId = null;
@@ -6275,8 +6486,9 @@ function routeMidiToKnobs(data) {
   }
 
   knobStates.forEach((state, widgetId) => {
-    state.controls.slice(0, state.count).forEach((control, index) => {
-      if (control.cc === data.control && control.channel === data.channel) {
+    const bindings = knobLayer(state, 0);
+    bindings.controls.slice(0, state.count).forEach((binding, index) => {
+      if (binding.cc === data.control && binding.channel === data.channel) {
         setKnobRaw(widgetId, data.value, index);
         markDirty();
       }
@@ -6286,10 +6498,14 @@ function routeMidiToKnobs(data) {
 
 const knobSettingsOverlay = document.getElementById("knobSettingsOverlay");
 const knobSettingsAdd = document.getElementById("knobSettingsAdd");
+const knobSettingsAddLayer = document.getElementById("knobSettingsAddLayer");
+const knobSettingsDeleteLayer = document.getElementById("knobSettingsDeleteLayer");
+const knobSettingsLayerTabs = document.getElementById("knobSettingsLayerTabs");
 const knobOutputSideInput = document.getElementById("knobOutputSideInput");
 const knobSettingsGrid = document.getElementById("knobSettingsGrid");
 let pendingKnobId = null;
 let pendingKnobIndex = 0;
+let pendingKnobLayerIndex = 0;
 
 function createKnobSettingsInput(field, value, { readOnly = false, placeholder = "" } = {}) {
   const input = document.createElement("input");
@@ -6311,12 +6527,40 @@ function updateKnobCardDisabledState(card) {
   });
 }
 
+function renderKnobSettingsLayerTabs(widgetId) {
+  const state = knobStates.get(widgetId);
+  if (!state) return;
+  knobSettingsLayerTabs.innerHTML = "";
+  for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex += 1) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "btn-secondary knob-settings-layer-tab";
+    tab.textContent = `Layer ${layerIndex + 1}`;
+    tab.classList.toggle("active", layerIndex === pendingKnobLayerIndex);
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(layerIndex === pendingKnobLayerIndex));
+    tab.addEventListener("click", () => {
+      syncKnobSettingsGrid(widgetId, pendingKnobLayerIndex);
+      pendingKnobLayerIndex = layerIndex;
+      renderKnobSettingsGrid(widgetId);
+    });
+    knobSettingsLayerTabs.appendChild(tab);
+  }
+  knobSettingsAddLayer.disabled = state.layerCount >= KNOB_MAX_LAYERS;
+  knobSettingsDeleteLayer.disabled = state.layerCount <= 1;
+}
+
 function renderKnobSettingsGrid(widgetId) {
   const state = knobStates.get(widgetId);
   if (!state) return;
+  pendingKnobLayerIndex = clamp(pendingKnobLayerIndex, 0, state.layerCount - 1);
+  const layer = knobLayer(state, pendingKnobLayerIndex);
+  const bindings = knobLayer(state, 0);
+  renderKnobSettingsLayerTabs(widgetId);
   knobSettingsGrid.innerHTML = "";
   for (let index = 0; index < state.count; index += 1) {
-    const control = state.controls[index];
+    const control = layer.controls[index];
+    const binding = bindings.controls[index];
     const card = document.createElement("section");
     card.className = "knob-settings-card";
     card.dataset.knobIndex = String(index);
@@ -6325,21 +6569,32 @@ function renderKnobSettingsGrid(widgetId) {
     number.className = "knob-settings-number";
     number.textContent = String(index + 1);
     card.appendChild(number);
-    card.appendChild(createKnobSettingsInput("label", state.labels[index] ?? ""));
+    card.appendChild(createKnobSettingsInput("label", layer.labels[index] ?? ""));
 
     const cc = document.createElement("div");
     cc.className = "knob-settings-cc";
-    cc.appendChild(createKnobSettingsInput("cc", control.cc === null ? "" : `${control.cc}${control.channel === null ? "" : ` (Ch ${control.channel + 1})`}`, { readOnly: true, placeholder: "-" }));
-    const learn = document.createElement("button");
-    learn.type = "button";
-    learn.className = "btn-secondary";
-    learn.dataset.role = "knob-learn";
-    learn.textContent = "Learn";
-    learn.addEventListener("click", () => {
-      midiLearnTargetId = { widgetId, index };
-      learn.textContent = "Waiting";
-    });
-    cc.appendChild(learn);
+    const ccValue = document.createElement("span");
+    ccValue.className = "knob-settings-cc-value";
+    ccValue.dataset.knobField = "cc";
+    ccValue.textContent = binding.cc === null ? "-" : `${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
+    cc.appendChild(ccValue);
+    if (pendingKnobLayerIndex === 0) {
+      const learn = document.createElement("button");
+      learn.type = "button";
+      learn.className = "btn-secondary";
+      learn.dataset.role = "knob-learn";
+      learn.textContent = "Learn";
+      learn.addEventListener("click", () => {
+        midiLearnTargetId = { widgetId, index };
+        learn.textContent = "Waiting";
+      });
+      cc.appendChild(learn);
+    } else {
+      const inherited = document.createElement("span");
+      inherited.className = "knob-settings-inherited";
+      inherited.textContent = "Shared";
+      cc.appendChild(inherited);
+    }
     card.appendChild(cc);
 
     card.appendChild(createKnobSettingsInput("listText", control.listText ?? ""));
@@ -6358,7 +6613,7 @@ function renderKnobSettingsGrid(widgetId) {
     updateKnobCardDisabledState(card);
     const actions = document.createElement("div");
     actions.className = "knob-settings-actions";
-    [["up", "^", "Move knob left"], ["down", "v", "Move knob right"], ["delete", "x", "Delete knob"]].forEach(([action, text, title]) => {
+    [["up", "↑", "Move knob left"], ["down", "↓", "Move knob right"], ["delete", "✕", "Delete knob"]].forEach(([action, text, title]) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn-secondary";
@@ -6375,13 +6630,15 @@ function renderKnobSettingsGrid(widgetId) {
   }
 }
 
-function syncKnobSettingsGrid(widgetId) {
+function syncKnobSettingsGrid(widgetId, layerIndex = pendingKnobLayerIndex) {
   const state = knobStates.get(widgetId);
   if (!state) return;
+  const layer = knobLayer(state, layerIndex);
+  if (!layer) return;
   const controls = [];
   const labels = [];
   knobSettingsGrid.querySelectorAll("[data-knob-index]").forEach((card) => {
-    const control = state.controls[Number(card.dataset.knobIndex)];
+    const control = layer.controls[Number(card.dataset.knobIndex)];
     const field = (name) => card.querySelector(`[data-knob-field="${name}"]`).value;
     const numberField = (name, fallback) => {
       const value = parseFloatFlexible(field(name));
@@ -6403,39 +6660,90 @@ function syncKnobSettingsGrid(widgetId) {
     labels.push(field("label").trim());
   });
   state.count = controls.length;
-  state.controls = [...controls, ...Array.from({ length: 16 - controls.length }, createKnobControl)];
-  state.labels = [...labels, ...Array(16 - labels.length).fill("")];
+  layer.controls = [...controls, ...Array.from({ length: KNOB_MAX_COUNT - controls.length }, createKnobControl)];
+  layer.labels = [...labels, ...Array(KNOB_MAX_COUNT - labels.length).fill("")];
 }
 
 function editKnobSettingsStructure(widgetId, index, action) {
   const state = knobStates.get(widgetId);
   if (!state) return;
-  syncKnobSettingsGrid(widgetId);
-  if (action === "add" && state.count < 16) {
-    state.controls[state.count] = createKnobControl();
-    state.labels[state.count] = "";
+  syncKnobSettingsGrid(widgetId, pendingKnobLayerIndex);
+  if (action === "add" && state.count < KNOB_MAX_COUNT) {
+    state.layers.forEach((layer, layerIndex) => {
+      layer.controls[state.count] = createKnobControl();
+      if (layerIndex > 0) {
+        layer.controls[state.count].cc = state.layers[0].controls[state.count].cc;
+        layer.controls[state.count].channel = state.layers[0].controls[state.count].channel;
+      }
+      layer.labels[state.count] = "";
+    });
     state.count += 1;
   } else if (action === "delete" && state.count > 1) {
-    state.controls.splice(index, 1);
-    state.controls.push(createKnobControl());
-    state.labels.splice(index, 1);
-    state.labels.push("");
+    state.layers.forEach((layer) => {
+      layer.controls.splice(index, 1);
+      layer.controls.push(createKnobControl());
+      layer.labels.splice(index, 1);
+      layer.labels.push("");
+    });
     state.count -= 1;
   } else if (action === "up" && index > 0) {
-    [state.controls[index - 1], state.controls[index]] = [state.controls[index], state.controls[index - 1]];
-    [state.labels[index - 1], state.labels[index]] = [state.labels[index], state.labels[index - 1]];
+    state.layers.forEach((layer) => {
+      [layer.controls[index - 1], layer.controls[index]] = [layer.controls[index], layer.controls[index - 1]];
+      [layer.labels[index - 1], layer.labels[index]] = [layer.labels[index], layer.labels[index - 1]];
+    });
   } else if (action === "down" && index < state.count - 1) {
-    [state.controls[index], state.controls[index + 1]] = [state.controls[index + 1], state.controls[index]];
-    [state.labels[index], state.labels[index + 1]] = [state.labels[index + 1], state.labels[index]];
+    state.layers.forEach((layer) => {
+      [layer.controls[index], layer.controls[index + 1]] = [layer.controls[index + 1], layer.controls[index]];
+      [layer.labels[index], layer.labels[index + 1]] = [layer.labels[index + 1], layer.labels[index]];
+    });
   }
+  renderKnobSettingsGrid(widgetId);
+}
+
+function addKnobLayer(widgetId) {
+  const state = knobStates.get(widgetId);
+  if (!state || state.layerCount >= KNOB_MAX_LAYERS) return;
+  syncKnobSettingsGrid(widgetId, pendingKnobLayerIndex);
+  state.layers.push(createKnobLayer(state.layers[0]));
+  state.layerCount += 1;
+  pendingKnobLayerIndex = state.layerCount - 1;
+  renderKnobSettingsGrid(widgetId);
+}
+
+function deleteKnobLayer(widgetId) {
+  const state = knobStates.get(widgetId);
+  if (!state || state.layerCount <= 1) return;
+  syncKnobSettingsGrid(widgetId, pendingKnobLayerIndex);
+  const removedLayer = pendingKnobLayerIndex;
+  for (let knobIndex = 0; knobIndex < state.count; knobIndex += 1) {
+    removeConnectionsForPort(widgetId, knobPortId(knobIndex, removedLayer), "out");
+  }
+  const shiftedConnections = connections.filter((connection) => {
+    if (connection.from.widgetId !== widgetId) return false;
+    const parsed = parseKnobPortId(connection.from.portId);
+    return parsed && parsed.layerIndex > removedLayer;
+  });
+  shiftedConnections.forEach(disconnectIfAudio);
+  shiftedConnections.forEach((connection) => {
+    const parsed = parseKnobPortId(connection.from.portId);
+    connection.from.portId = knobPortId(parsed.knobIndex, parsed.layerIndex - 1);
+    connectIfAudio(connection);
+  });
+  state.layers.splice(removedLayer, 1);
+  state.layerCount -= 1;
+  if (state.layerCount === 1) removeConnectionsForPort(widgetId, "layer", "in");
+  if (state.activeLayer === removedLayer) state.activeLayer = Math.min(removedLayer, state.layerCount - 1);
+  else if (state.activeLayer > removedLayer) state.activeLayer -= 1;
+  pendingKnobLayerIndex = Math.min(removedLayer, state.layerCount - 1);
   renderKnobSettingsGrid(widgetId);
 }
 
 function openKnobSettings(widgetId, index = 0) {
   const state = knobStates.get(widgetId);
-  if (!state?.controls[index]) return;
+  if (!knobLayer(state)?.controls[index]) return;
   pendingKnobId = widgetId;
   pendingKnobIndex = index;
+  pendingKnobLayerIndex = state.activeLayer;
   knobOutputSideInput.value = state.outputSide;
   renderKnobSettingsGrid(widgetId);
   midiLearnTargetId = null;
@@ -6446,6 +6754,7 @@ function closeKnobSettings() {
   knobSettingsOverlay.classList.add("hidden");
   pendingKnobId = null;
   pendingKnobIndex = 0;
+  pendingKnobLayerIndex = 0;
   midiLearnTargetId = null;
 }
 
@@ -6456,29 +6765,55 @@ knobSettingsAdd.addEventListener("click", () => {
   if (pendingKnobId) editKnobSettingsStructure(pendingKnobId, 0, "add");
 });
 
+knobSettingsAddLayer.addEventListener("click", () => {
+  if (pendingKnobId) addKnobLayer(pendingKnobId);
+});
+
+knobSettingsDeleteLayer.addEventListener("click", () => {
+  if (pendingKnobId) deleteKnobLayer(pendingKnobId);
+});
+
 document.getElementById("knobSettingsSave").addEventListener("click", () => {
   if (!pendingKnobId) return;
   const state = knobStates.get(pendingKnobId);
   if (state) {
-    syncKnobSettingsGrid(pendingKnobId);
+    syncKnobSettingsGrid(pendingKnobId, pendingKnobLayerIndex);
     state.outputSide = ["top", "bottom", "left", "right"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
-    state.controls.slice(0, state.count).forEach((control, index) => {
-      const mapped = roundFloat(mapKnobValue(control));
-      audioEngine.setParam(pendingKnobId, knobValueParamName(index), mapped);
-      propagate(pendingKnobId, knobPortId(index), mapped);
-      if (index === 0) propagate(pendingKnobId, "voltage", mapped);
-      updateKnobVisual(pendingKnobId, index);
-      sendLiveParamUpdate(pendingKnobId, {
-        knobIndex: index + 1, knobCount: state.count, cc: control.cc, channel: control.channel,
-        point1In: control.point1In, point1Out: control.point1Out,
-        point2In: control.point2In, point2Out: control.point2Out,
-        constraintMin: control.constraintMin, constraintMax: control.constraintMax, valueList: parseValueList(control.listText) || [],
+    state.layers.forEach((layer, layerIndex) => {
+      layer.controls.slice(0, state.count).forEach((control, knobIndex) => {
+        const binding = state.layers[0].controls[knobIndex];
+        control.cc = binding.cc;
+        control.channel = binding.channel;
+        const mapped = roundFloat(mapKnobValue(control));
+        audioEngine.setParam(pendingKnobId, knobValueParamName(knobIndex, layerIndex), mapped);
+        if (layerIndex === state.activeLayer) {
+          propagate(pendingKnobId, knobPortId(knobIndex, layerIndex), mapped);
+          if (knobIndex === 0 && layerIndex === 0) propagate(pendingKnobId, "voltage", mapped);
+        }
+        sendLiveParamUpdate(pendingKnobId, {
+          knobIndex: knobControlIndex(knobIndex, layerIndex) + 1,
+          knobCount: state.count,
+          layerCount: state.layerCount,
+          activeLayer: state.activeLayer,
+          cc: control.cc,
+          channel: control.channel,
+          raw: control.raw,
+          point1In: control.point1In,
+          point1Out: control.point1Out,
+          point2In: control.point2In,
+          point2Out: control.point2Out,
+          constraintMin: control.constraintMin,
+          constraintMax: control.constraintMax,
+          valueList: parseValueList(control.listText) || [],
+        });
       });
     });
     renderKnobControls(pendingKnobId);
+    renderKnobLayerSelector(pendingKnobId);
     const portsEl = document.getElementById(pendingKnobId)?.querySelector(".widget-ports");
     if (portsEl) renderKnobPorts(pendingKnobId, portsEl);
-    savePresetNow(); 
+    drawConnections();
+    savePresetNow();
   }
   closeKnobSettings();
 });
@@ -8616,10 +8951,11 @@ function refreshControlGraph() {
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
   knobStates.forEach((state, id) => {
-    state.controls.slice(0, state.count).forEach((control, index) => {
+    const layerIndex = state.activeLayer;
+    knobLayer(state, layerIndex).controls.slice(0, state.count).forEach((control, index) => {
       const value = roundFloat(mapKnobValue(control));
-      push(id, knobPortId(index), value);
-      if (index === 0) push(id, "voltage", value);
+      push(id, knobPortId(index, layerIndex), value);
+      if (index === 0 && layerIndex === 0) push(id, "voltage", value);
     });
   });
   buttonStates.forEach((state, id) => push(id, "value", buttonCurrentOutput(state)));
@@ -8638,9 +8974,9 @@ function refreshControlGraph() {
     let value = null;
     if (sourceType === "knob" && connection.from.portId.startsWith("voltage")) {
       const sourceState = knobStates.get(connection.from.widgetId);
-      const suffix = connection.from.portId.slice(7);
-      const index = suffix ? Number.parseInt(suffix, 10) - 1 : 0;
-      if (sourceState?.controls[index]) value = mapKnobValue(sourceState.controls[index]);
+      const parsed = parseKnobPortId(connection.from.portId);
+      const control = parsed ? knobLayer(sourceState, parsed.layerIndex)?.controls[parsed.knobIndex] : null;
+      if (control) value = mapKnobValue(control);
     } else if (sourceType === "const" && connection.from.portId === "value") {
       value = constStates.get(connection.from.widgetId)?.value ?? null;
     } else if (sourceType === "button" && connection.from.portId === "value") {
@@ -10607,14 +10943,13 @@ document.getElementById("stepArpSettingsSave").addEventListener("click", () => {
 });
 
 const drumSequencerStates = new Map();
-const DRUM_STEPS_PER_BAR = 16;
-const DRUM_DEFAULT_BARS = 4;
-const DRUM_MAX_BARS = 16;
+const DRUM_DEFAULT_STEPS = 16;
 const DRUM_MAX_TRACKS = 8;
-const DRUM_BAR_COUNTS = [4, 8, 12, 16];
+const DRUM_STEP_COUNTS = [4, 8, 12, 16];
+const DRUM_MAX_PATTERNS = 8;
 
 const drumSequencerSettingsOverlay = document.getElementById("drumSequencerSettingsOverlay");
-const drumSequencerBarCountInput = document.getElementById("drumSequencerBarCountInput");
+const drumSequencerStepCountInput = document.getElementById("drumSequencerStepCountInput");
 const drumSequencerTrackCountInput = document.getElementById("drumSequencerTrackCountInput");
 const drumSequencerPulseMsInput = document.getElementById("drumSequencerPulseMsInput");
 const drumSequencerClockMaxBpmInput = document.getElementById("drumSequencerClockMaxBpmInput");
@@ -10625,7 +10960,7 @@ function openDrumSequencerSettings(widgetId) {
   const state = drumSequencerStates.get(widgetId);
   if (!state) return;
   pendingDrumSequencerId = widgetId;
-  drumSequencerBarCountInput.value = String(state.barCount);
+  drumSequencerStepCountInput.value = String(state.stepCount);
   drumSequencerTrackCountInput.value = String(state.trackCount);
   drumSequencerPulseMsInput.value = String(state.pulseMs);
   drumSequencerClockMaxBpmInput.value = String(state.clockMaxBpm);
@@ -10638,24 +10973,26 @@ function closeDrumSequencerSettings() {
   pendingDrumSequencerId = null;
 }
 
-function reshapeDrumSequencer(state, barCount, trackCount) {
-  const oldSteps = state.barCount * DRUM_STEPS_PER_BAR;
-  const newSteps = barCount * DRUM_STEPS_PER_BAR;
-  const active = new Array(newSteps * trackCount).fill(false);
-  const velocities = new Array(newSteps * trackCount).fill(CV_MAX_VOLTS);
+function reshapeDrumSequencer(state, stepCount, trackCount) {
+  const oldSteps = state.stepCount;
+  const newSteps = stepCount;
   const copyTracks = Math.min(state.trackCount, trackCount);
   const copySteps = Math.min(oldSteps, newSteps);
-  for (let track = 0; track < copyTracks; track += 1) {
-    for (let step = 0; step < copySteps; step += 1) {
-      active[track * newSteps + step] = state.active[track * oldSteps + step] === true;
-      velocities[track * newSteps + step] = state.velocities[track * oldSteps + step];
+  state.patterns = state.patterns.map((old) => {
+    const active = new Array(newSteps * trackCount).fill(false);
+    const velocities = new Array(newSteps * trackCount).fill(CV_MAX_VOLTS);
+    for (let track = 0; track < copyTracks; track += 1) {
+      for (let step = 0; step < copySteps; step += 1) {
+        active[track * newSteps + step] = old.active[track * oldSteps + step] === true;
+        velocities[track * newSteps + step] = old.velocities[track * oldSteps + step];
+      }
     }
-  }
-  state.barCount = barCount;
+    return { active, velocities };
+  });
+  state.stepCount = stepCount;
   state.trackCount = trackCount;
-  state.active = active;
-  state.velocities = velocities;
-  if (state.currentStep >= newSteps) state.currentStep = 0;
+  state.currentStep = 0;
+  state.lastStep = -1;
 }
 
 document.getElementById("drumSequencerSettingsCancel").addEventListener("click", closeDrumSequencerSettings);
@@ -10665,10 +11002,10 @@ document.getElementById("drumSequencerSettingsSave").addEventListener("click", (
   const widgetId = pendingDrumSequencerId;
   const state = drumSequencerStates.get(widgetId);
   if (state) {
-    const requestedBars = Number(drumSequencerBarCountInput.value);
-    const barCount = DRUM_BAR_COUNTS.includes(requestedBars) ? requestedBars : DRUM_DEFAULT_BARS;
+    const requestedSteps = Number(drumSequencerStepCountInput.value);
+    const stepCount = DRUM_STEP_COUNTS.includes(requestedSteps) ? requestedSteps : DRUM_DEFAULT_STEPS;
     const trackCount = clamp(parseInt(drumSequencerTrackCountInput.value, 10) || 1, 1, DRUM_MAX_TRACKS);
-    const structural = barCount !== state.barCount || trackCount !== state.trackCount;
+    const structural = stepCount !== state.stepCount || trackCount !== state.trackCount;
     if (trackCount < state.trackCount) {
       for (let track = trackCount + 1; track <= state.trackCount; track += 1) {
         removeConnectionsForPort(widgetId, `trigger${track}`, "out");
@@ -10676,14 +11013,14 @@ document.getElementById("drumSequencerSettingsSave").addEventListener("click", (
         clearTimeout(state.triggerTimers[track - 1]);
       }
     }
-    if (structural) reshapeDrumSequencer(state, barCount, trackCount);
+    if (structural) reshapeDrumSequencer(state, stepCount, trackCount);
 
     let pulseMs = parseFloatFlexible(drumSequencerPulseMsInput.value);
     if (!Number.isFinite(pulseMs) || pulseMs <= 0) pulseMs = 10;
-    state.pulseMs = pulseMs;
+    state.pulseMs = clamp(pulseMs, 0.1, 60000);
     let maxBpm = parseFloatFlexible(drumSequencerClockMaxBpmInput.value);
     if (!Number.isFinite(maxBpm) || maxBpm <= 0) maxBpm = 120;
-    state.clockMaxBpm = maxBpm;
+    state.clockMaxBpm = clamp(maxBpm, 0.1, 10000);
     state.clockRoundBpm = drumSequencerClockRoundBpmInput.checked === true;
 
     if (structural) {
@@ -13177,16 +13514,29 @@ function stepArpTriggerStep(widgetId, state, el) {
 let drumPaintSession = null;
 
 function drumSequencerTotalSteps(state) {
-  return state.barCount * DRUM_STEPS_PER_BAR;
+  return state.stepCount;
 }
 
 function drumSequencerCellIndex(state, track, step) {
   return track * drumSequencerTotalSteps(state) + step;
 }
 
+function drumSequencerActivePattern(state) {
+  return state.patterns[state.activePatternIndex];
+}
+
+// Splits 0-10V into `count` equal bands - mirrors patternIndexFromCv in
+// nodes/DrumSequencerNode.h so wired-CV pattern selection matches playback.
+function drumPatternIndexFromCv(volts, count) {
+  if (count <= 1) return 0;
+  const idx = Math.floor(volts / (CV_MAX_VOLTS / count));
+  return clamp(idx, 0, count - 1);
+}
+
 function drumSequencerEncodedCell(state, index) {
-  const volts = clamp(Number(state.velocities[index]) || 0, 0, CV_MAX_VOLTS);
-  return state.active[index] ? volts : -(volts + 1);
+  const pattern = drumSequencerActivePattern(state);
+  const volts = clamp(Number(pattern.velocities[index]) || 0, 0, CV_MAX_VOLTS);
+  return pattern.active[index] ? volts : -(volts + 1);
 }
 
 function buildDrumSequencerPort(widgetId, port, direction) {
@@ -13214,6 +13564,26 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   inputs.className = "drum-sequencer-inputs";
   const clockLine = buildDrumSequencerPort(widgetId, { id: "clock", label: "Clock" }, "in");
   inputs.appendChild(clockLine);
+  const gateLine = buildDrumSequencerPort(widgetId, { id: "gate", label: "Gate" }, "in");
+  inputs.appendChild(gateLine);
+
+  const patternLine = buildDrumSequencerPort(widgetId, { id: "pattern", label: "Pattern" }, "in");
+  const patternSlider = document.createElement("input");
+  patternSlider.type = "range";
+  patternSlider.min = "0";
+  patternSlider.max = String(Math.max(0, state.patterns.length - 1));
+  patternSlider.step = "1";
+  patternSlider.className = "drum-sequencer-pattern-select";
+  patternSlider.dataset.role = "drum-sequencer-pattern-select";
+  patternSlider.addEventListener("mousedown", (e) => e.stopPropagation());
+  patternSlider.addEventListener("input", () => setDrumSequencerActivePattern(widgetId, Number(patternSlider.value)));
+  const patternValue = document.createElement("span");
+  patternValue.className = "port-value";
+  patternValue.dataset.role = "drum-sequencer-pattern-value";
+  patternLine.appendChild(patternSlider);
+  patternLine.appendChild(patternValue);
+  inputs.appendChild(patternLine);
+
   const rateLine = buildDrumSequencerPort(widgetId, { id: "rate", label: "Rate" }, "in");
   const rateSlider = document.createElement("input");
   rateSlider.type = "range";
@@ -13230,6 +13600,23 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   rateLine.appendChild(rateSlider);
   rateLine.appendChild(rateValue);
   inputs.appendChild(rateLine);
+
+  const switchAtEndLine = buildDrumSequencerPort(widgetId, { id: "switchAtEnd", label: "Switch @ End" }, "in");
+  const switchAtEndLabel = document.createElement("label");
+  switchAtEndLabel.className = "switch";
+  const switchAtEndToggle = document.createElement("input");
+  switchAtEndToggle.type = "checkbox";
+  switchAtEndToggle.checked = state.switchAtEnd === true;
+  switchAtEndToggle.dataset.role = "drum-sequencer-switch-at-end";
+  switchAtEndToggle.addEventListener("mousedown", (e) => e.stopPropagation());
+  switchAtEndToggle.addEventListener("click", (e) => e.stopPropagation());
+  switchAtEndToggle.addEventListener("change", () => setDrumSequencerSwitchAtEnd(widgetId, switchAtEndToggle.checked));
+  const switchAtEndTrack = document.createElement("span");
+  switchAtEndTrack.className = "switch-track";
+  switchAtEndLabel.appendChild(switchAtEndToggle);
+  switchAtEndLabel.appendChild(switchAtEndTrack);
+  switchAtEndLine.appendChild(switchAtEndLabel);
+  inputs.appendChild(switchAtEndLine);
   portsEl.appendChild(inputs);
 
   const layout = document.createElement("div");
@@ -13239,27 +13626,16 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   const grid = document.createElement("div");
   grid.className = "drum-sequencer-grid";
   const totalSteps = drumSequencerTotalSteps(state);
-  grid.style.gridTemplateColumns = `36px repeat(${totalSteps}, 22px)`;
+  grid.style.gridTemplateColumns = `40px repeat(${totalSteps}, 36px)`;
 
-  const barCorner = document.createElement("span");
-  barCorner.className = "drum-sequencer-track-label drum-sequencer-corner";
-  grid.appendChild(barCorner);
-  for (let bar = 0; bar < state.barCount; bar += 1) {
-    const barLabel = document.createElement("span");
-    barLabel.className = "drum-sequencer-bar-label";
-    barLabel.style.gridColumn = "span 16";
-    barLabel.textContent = `Bar ${bar + 1}`;
-    grid.appendChild(barLabel);
-  }
   const stepCorner = document.createElement("span");
   stepCorner.className = "drum-sequencer-track-label drum-sequencer-corner";
   grid.appendChild(stepCorner);
   for (let step = 0; step < totalSteps; step += 1) {
     const number = document.createElement("span");
     number.className = "drum-sequencer-step-number";
-    if (step % DRUM_STEPS_PER_BAR === 0) number.classList.add("bar-start");
-    number.textContent = String((step % DRUM_STEPS_PER_BAR) + 1);
-    number.title = `Bar ${Math.floor(step / DRUM_STEPS_PER_BAR) + 1}, Step ${(step % DRUM_STEPS_PER_BAR) + 1}`;
+    number.textContent = String(step + 1);
+    number.title = `Step ${step + 1}`;
     grid.appendChild(number);
   }
 
@@ -13273,11 +13649,17 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
       const cell = document.createElement("button");
       cell.type = "button";
       cell.className = "drum-sequencer-cell";
-      if (step % DRUM_STEPS_PER_BAR === 0) cell.classList.add("bar-start");
       cell.dataset.drumCell = String(index);
       cell.dataset.track = String(track);
       cell.dataset.step = String(step);
       cell.addEventListener("mousedown", (e) => startDrumSequencerPaint(e, widgetId, index));
+      cell.addEventListener("click", (e) => {
+        if (e.detail !== 0) return;
+        pushHistorySnapshot();
+        const pattern = drumSequencerActivePattern(state);
+        setDrumSequencerCell(widgetId, index, !pattern.active[index], pattern.velocities[index]);
+        markDirty();
+      });
       cell.addEventListener("mouseenter", (e) => continueDrumSequencerPaint(e, widgetId, index));
       cell.addEventListener("wheel", (e) => adjustDrumSequencerVelocity(e, widgetId, index), { passive: false });
       grid.appendChild(cell);
@@ -13290,7 +13672,7 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   outputs.className = "drum-sequencer-outputs";
   const outputHeader = document.createElement("div");
   outputHeader.className = "drum-sequencer-output-header";
-  outputHeader.textContent = "T / V";
+  outputHeader.textContent = "T\nV";
   outputs.appendChild(outputHeader);
   for (let track = 1; track <= state.trackCount; track += 1) {
     const row = document.createElement("div");
@@ -13309,12 +13691,15 @@ function updateDrumSequencerCell(widgetId, index, targetCell) {
   const state = drumSequencerStates.get(widgetId);
   const cell = targetCell || document.getElementById(widgetId)?.querySelector(`[data-drum-cell="${index}"]`);
   if (!state || !cell) return;
-  const volts = clamp(Number(state.velocities[index]) || 0, 0, CV_MAX_VOLTS);
-  cell.classList.toggle("active", state.active[index] === true);
+  const pattern = drumSequencerActivePattern(state);
+  const volts = clamp(Number(pattern.velocities[index]) || 0, 0, CV_MAX_VOLTS);
+  cell.classList.toggle("active", pattern.active[index] === true);
   cell.style.setProperty("--velocity", String(volts / CV_MAX_VOLTS));
   const track = Number(cell.dataset.track);
   const step = Number(cell.dataset.step);
-  cell.title = `Track ${track + 1}, Bar ${Math.floor(step / DRUM_STEPS_PER_BAR) + 1}, Step ${(step % DRUM_STEPS_PER_BAR) + 1}: ${volts.toFixed(1)} V`;
+  cell.title = `Track ${track + 1}, Step ${step + 1}: ${volts.toFixed(1)} V`;
+  cell.setAttribute("aria-label", cell.title);
+  cell.setAttribute("aria-pressed", pattern.active[index] ? "true" : "false");
 }
 
 function updateDrumSequencerVisual(widgetId) {
@@ -13334,6 +13719,18 @@ function updateDrumSequencerVisual(widgetId) {
   }
   const rateValue = el.querySelector('[data-role="drum-sequencer-rate-value"]');
   if (rateValue) rateValue.textContent = `${formatNumber(drumSequencerBpm(state))} BPM`;
+
+  const patternSlider = el.querySelector('[data-role="drum-sequencer-pattern-select"]');
+  const patternWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pattern");
+  if (patternSlider) {
+    patternSlider.max = String(Math.max(0, state.patterns.length - 1));
+    patternSlider.value = String(state.activePatternIndex);
+    patternSlider.disabled = patternWired;
+  }
+  const patternValue = el.querySelector('[data-role="drum-sequencer-pattern-value"]');
+  if (patternValue) patternValue.textContent = `${state.activePatternIndex + 1}/${state.patterns.length}`;
+  const switchAtEndToggle = el.querySelector('[data-role="drum-sequencer-switch-at-end"]');
+  if (switchAtEndToggle) switchAtEndToggle.checked = state.switchAtEnd === true;
 }
 
 function updateDrumSequencerPlayhead(widgetId) {
@@ -13348,9 +13745,10 @@ function updateDrumSequencerPlayhead(widgetId) {
 
 function setDrumSequencerCell(widgetId, index, active, velocity) {
   const state = drumSequencerStates.get(widgetId);
-  if (!state || index < 0 || index >= state.active.length) return;
-  state.active[index] = active;
-  if (velocity !== undefined) state.velocities[index] = clamp(velocity, 0, CV_MAX_VOLTS);
+  const pattern = state && drumSequencerActivePattern(state);
+  if (!pattern || index < 0 || index >= pattern.active.length) return;
+  pattern.active[index] = active;
+  if (velocity !== undefined) pattern.velocities[index] = clamp(velocity, 0, CV_MAX_VOLTS);
   updateDrumSequencerCell(widgetId, index);
   sendLiveParamUpdateThrottled(widgetId, { [`cell${index}`]: drumSequencerEncodedCell(state, index) });
 }
@@ -13361,11 +13759,12 @@ function startDrumSequencerPaint(e, widgetId, index) {
   e.stopPropagation();
   const state = drumSequencerStates.get(widgetId);
   if (!state) return;
+  const pattern = drumSequencerActivePattern(state);
   pushHistorySnapshot();
   drumPaintSession = {
     widgetId,
-    active: !state.active[index],
-    velocity: state.velocities[index],
+    active: !pattern.active[index],
+    velocity: pattern.velocities[index],
     visited: new Set(),
   };
   paintDrumSequencerCell(widgetId, index);
@@ -13398,27 +13797,39 @@ function adjustDrumSequencerVelocity(e, widgetId, index) {
   e.stopPropagation();
   const state = drumSequencerStates.get(widgetId);
   if (!state) return;
+  const pattern = drumSequencerActivePattern(state);
   const delta = e.deltaY < 0 ? 0.1 : -0.1;
-  setDrumSequencerCell(widgetId, index, state.active[index], Math.round(clamp(state.velocities[index] + delta, 0, CV_MAX_VOLTS) * 10) / 10);
+  setDrumSequencerCell(widgetId, index, pattern.active[index], Math.round(clamp(pattern.velocities[index] + delta, 0, CV_MAX_VOLTS) * 10) / 10);
   markDirty();
+}
+
+function drumSequencerStopTriggers(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  state.triggerTimers.forEach((timer, track) => {
+    clearTimeout(timer);
+    state.triggerTimers[track] = null;
+    setLedActive(document.getElementById(widgetId)?.querySelector(`[data-port-id="trigger${track + 1}"][data-port-dir="out"]`), false);
+    propagate(widgetId, `trigger${track + 1}`, GATE_OFF_VOLTS);
+  });
 }
 
 function clearDrumSequencer(widgetId) {
   const state = drumSequencerStates.get(widgetId);
   if (!state) return;
   pushHistorySnapshot();
-  state.active.fill(false);
-  state.velocities.fill(CV_MAX_VOLTS);
+  const pattern = drumSequencerActivePattern(state);
+  pattern.active.fill(false);
+  pattern.velocities.fill(CV_MAX_VOLTS);
   state.currentStep = 0;
   state.lastStep = -1;
   state.heldVelocity.fill(0);
-  state.triggerTimers.forEach((timer, track) => {
-    clearTimeout(timer);
-    state.triggerTimers[track] = null;
-    propagate(widgetId, `trigger${track + 1}`, GATE_OFF_VOLTS);
+  drumSequencerStopTriggers(widgetId);
+  state.triggerTimers.forEach((_timer, track) => {
     propagate(widgetId, `velocity${track + 1}`, 0);
   });
   updateDrumSequencerVisual(widgetId);
+  drumSequencerRestartInternalClock(widgetId);
   savePresetNow();
 }
 
@@ -13451,35 +13862,171 @@ function drumSequencerRestartInternalClock(widgetId) {
   if (connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "clock")) return;
   const bpm = drumSequencerBpm(state);
   if (bpm <= 0) return;
-  state.clockTickTimer = setInterval(() => drumSequencerTriggerStep(widgetId), 60000 / bpm);
+  // A step is a 16th note (4 steps per beat) - matches DrumSequencerNode.h's render().
+  state.clockTickTimer = setInterval(() => drumSequencerTriggerStep(widgetId), 15000 / bpm);
 }
 
 function drumSequencerTriggerStep(widgetId) {
   const state = drumSequencerStates.get(widgetId);
   const el = document.getElementById(widgetId);
-  if (!state || !el) return;
+  if (!state || !el || state.gateVolts < GATE_THRESHOLD_VOLTS) return;
   const totalSteps = drumSequencerTotalSteps(state);
   const playedStep = state.currentStep;
   state.lastStep = playedStep;
+  const pattern = drumSequencerActivePattern(state);
   for (let track = 0; track < state.trackCount; track += 1) {
     const index = drumSequencerCellIndex(state, track, playedStep);
-    if (!state.active[index]) continue;
-    const velocity = state.velocities[index];
+    if (!pattern.active[index]) continue;
+    const velocity = pattern.velocities[index];
     state.heldVelocity[track] = velocity;
     propagate(widgetId, `velocity${track + 1}`, velocity);
     const triggerPort = `trigger${track + 1}`;
     const triggerDot = el.querySelector(`[data-port-id="${triggerPort}"][data-port-dir="out"]`);
-    setLedActive(triggerDot, true);
-    propagate(widgetId, triggerPort, GATE_ON_VOLTS);
-    clearTimeout(state.triggerTimers[track]);
-    state.triggerTimers[track] = setTimeout(() => {
+    const startPulse = () => {
+      setLedActive(triggerDot, true);
+      propagate(widgetId, triggerPort, GATE_ON_VOLTS);
+      state.triggerTimers[track] = setTimeout(() => {
+        setLedActive(triggerDot, false);
+        propagate(widgetId, triggerPort, GATE_OFF_VOLTS);
+        state.triggerTimers[track] = null;
+      }, state.pulseMs);
+    };
+    if (state.triggerTimers[track]) {
+      clearTimeout(state.triggerTimers[track]);
       setLedActive(triggerDot, false);
       propagate(widgetId, triggerPort, GATE_OFF_VOLTS);
-      state.triggerTimers[track] = null;
-    }, state.pulseMs);
+      state.triggerTimers[track] = setTimeout(startPulse, 1);
+    } else {
+      startPulse();
+    }
   }
   state.currentStep = (playedStep + 1) % totalSteps;
+  if (state.currentStep === 0 && state.pendingPatternIndex !== -1) {
+    state.activePatternIndex = state.pendingPatternIndex;
+    state.pendingPatternIndex = -1;
+    updateDrumSequencerVisual(widgetId);
+  }
   updateDrumSequencerPlayhead(widgetId);
+}
+
+function setDrumSequencerActivePattern(widgetId, index) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  const clamped = clamp(Math.round(index), 0, state.patterns.length - 1);
+  // Quantizing only makes sense while the sequencer is actually running
+  // (gate high) - with no gate, there is no upcoming step boundary to wait
+  // for, so switch right away (mirrors DrumSequencerNode.h's render()).
+  if (state.switchAtEnd && state.gatePrev) {
+    state.pendingPatternIndex = clamped;
+  } else {
+    state.activePatternIndex = clamped;
+    state.pendingPatternIndex = -1;
+    updateDrumSequencerVisual(widgetId);
+  }
+  sendLiveParamUpdateThrottled(widgetId, { activePatternIndex: clamped });
+}
+
+function setDrumSequencerSwitchAtEnd(widgetId, on) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  state.switchAtEnd = on === true;
+  sendLiveParamUpdate(widgetId, { switchAtEnd: state.switchAtEnd ? 1 : 0 });
+}
+
+let drumPatternClipboard = null;
+let drumPatternMenuTargetId = null;
+const drumPatternContextMenu = document.getElementById("drumPatternContextMenu");
+
+function closeDrumPatternMenu() {
+  if (drumPatternContextMenu) drumPatternContextMenu.classList.add("hidden");
+  drumPatternMenuTargetId = null;
+}
+
+function openDrumPatternMenu(widgetId, anchorBtn) {
+  if (!drumPatternContextMenu) return;
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  drumPatternMenuTargetId = widgetId;
+  const deleteBtn = drumPatternContextMenu.querySelector('[data-action="delete"]');
+  if (deleteBtn) deleteBtn.disabled = state.patterns.length <= 1;
+  const pasteBtn = drumPatternContextMenu.querySelector('[data-action="paste"]');
+  if (pasteBtn) pasteBtn.disabled = !drumPatternClipboard;
+  const addBtn = drumPatternContextMenu.querySelector('[data-action="add"]');
+  if (addBtn) addBtn.disabled = state.patterns.length >= DRUM_MAX_PATTERNS;
+  drumPatternContextMenu.classList.remove("hidden");
+  const anchorRect = anchorBtn.getBoundingClientRect();
+  const menuRect = drumPatternContextMenu.getBoundingClientRect();
+  drumPatternContextMenu.style.left = `${Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8)}px`;
+  drumPatternContextMenu.style.top = `${Math.min(anchorRect.bottom + 4, window.innerHeight - menuRect.height - 8)}px`;
+}
+
+function addDrumPattern(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state || state.patterns.length >= DRUM_MAX_PATTERNS) return;
+  pushHistorySnapshot();
+  const cellCount = state.stepCount * state.trackCount;
+  state.patterns.push({
+    active: new Array(cellCount).fill(false),
+    velocities: new Array(cellCount).fill(CV_MAX_VOLTS),
+  });
+  state.activePatternIndex = state.patterns.length - 1;
+  state.pendingPatternIndex = -1;
+  const portsEl = document.getElementById(widgetId)?.querySelector(".widget-ports");
+  if (portsEl) renderDrumSequencerPorts(widgetId, portsEl);
+  markDirty();
+  savePresetNow();
+}
+
+function deleteDrumPattern(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state || state.patterns.length <= 1) return;
+  pushHistorySnapshot();
+  state.patterns.splice(state.activePatternIndex, 1);
+  state.activePatternIndex = Math.min(state.activePatternIndex, state.patterns.length - 1);
+  state.pendingPatternIndex = -1;
+  const portsEl = document.getElementById(widgetId)?.querySelector(".widget-ports");
+  if (portsEl) renderDrumSequencerPorts(widgetId, portsEl);
+  markDirty();
+  savePresetNow();
+}
+
+function copyDrumPattern(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state) return;
+  const pattern = drumSequencerActivePattern(state);
+  drumPatternClipboard = { active: [...pattern.active], velocities: [...pattern.velocities] };
+}
+
+function pasteDrumPattern(widgetId) {
+  const state = drumSequencerStates.get(widgetId);
+  if (!state || !drumPatternClipboard) return;
+  const cellCount = state.stepCount * state.trackCount;
+  if (drumPatternClipboard.active.length !== cellCount) return;
+  pushHistorySnapshot();
+  const pattern = drumSequencerActivePattern(state);
+  pattern.active = [...drumPatternClipboard.active];
+  pattern.velocities = [...drumPatternClipboard.velocities];
+  updateDrumSequencerVisual(widgetId);
+  markDirty();
+  savePresetNow();
+}
+
+if (drumPatternContextMenu) {
+  drumPatternContextMenu.addEventListener("click", (event) => {
+    const action = event.target.closest("button")?.dataset.action;
+    const widgetId = drumPatternMenuTargetId;
+    closeDrumPatternMenu();
+    if (!widgetId || !action) return;
+    if (action === "add") addDrumPattern(widgetId);
+    if (action === "delete") deleteDrumPattern(widgetId);
+    if (action === "copy") copyDrumPattern(widgetId);
+    if (action === "paste") pasteDrumPattern(widgetId);
+    if (action === "clear") clearDrumSequencer(widgetId);
+    if (action === "settings") openDrumSequencerSettings(widgetId);
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("#drumPatternContextMenu, .drum-sequencer-pattern-menu-btn")) closeDrumPatternMenu();
+  });
 }
 
 function recomputeHammondFreq(widgetId, voiceIndex) {
@@ -15796,6 +16343,9 @@ function removeConnectionsForPort(widgetId, portId, direction) {
   if (toRemove.some(connectionTouchesLinkedIO)) refreshLinkedIO();
   refreshControlGraph();
   refreshVoiceGroups();
+  if (direction === "in" && portId === "layer" && knobStates.has(widgetId)) {
+    renderKnobLayerSelector(widgetId);
+  }
 }
 
 // Set while a connection drag (mousedown on an out-dot through mouseup on an in-dot) is in
@@ -15932,6 +16482,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   if (el.dataset.widgetType === "linked-input" && portId === "in") {
     forwardLinkedInputValue(widgetId, value, voiceIndex);
+  }
+
+  if (el.dataset.widgetType === "knob" && portId === "layer") {
+    const state = knobStates.get(widgetId);
+    if (state) {
+      setKnobActiveLayer(widgetId, knobLayerIndexFromCv(value, state.layerCount), false);
+      sendLiveParamUpdateThrottled(widgetId, { layer: clamp(Number(value) || 0, 0, CV_MAX_VOLTS) });
+    }
   }
 
   if (el.dataset.widgetType === "midi-in" && portId === "voices") {
@@ -16618,15 +17176,53 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   if (el.dataset.widgetType === "drum-sequencer") {
     const state = drumSequencerStates.get(widgetId);
-    if (state && portId === "clock") {
+    if (state && portId === "gate") {
+      const gateOn = Number(value) >= GATE_THRESHOLD_VOLTS;
+      setLedActive(el.querySelector('[data-port-id="gate"][data-port-dir="in"]'), gateOn);
+      state.gateVolts = Number(value) || 0;
+      if (gateOn && !state.gatePrev) {
+        state.currentStep = 0;
+        state.lastStep = -1;
+        drumSequencerStopTriggers(widgetId);
+        drumSequencerRestartInternalClock(widgetId);
+        drumSequencerTriggerStep(widgetId);
+      } else if (!gateOn && state.gatePrev) {
+        drumSequencerStopTriggers(widgetId);
+        // Gate dropped while a quantized switch was still armed - there is no
+        // more running playback to quantize against, so resolve it now.
+        if (state.pendingPatternIndex !== -1) {
+          state.activePatternIndex = state.pendingPatternIndex;
+          state.pendingPatternIndex = -1;
+          updateDrumSequencerVisual(widgetId);
+        }
+      }
+      state.gatePrev = gateOn;
+    } else if (state && portId === "clock") {
       const clockOn = Number(value) >= GATE_THRESHOLD_VOLTS;
       setLedActive(el.querySelector('[data-port-id="clock"][data-port-dir="in"]'), clockOn);
-      if (clockOn && !state.clockPrev) drumSequencerTriggerStep(widgetId);
+      if (clockOn && !state.clockPrev && state.gateVolts >= GATE_THRESHOLD_VOLTS) drumSequencerTriggerStep(widgetId);
       state.clockPrev = clockOn;
     } else if (state && portId === "rate") {
       state.clockCvVolts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
       updateDrumSequencerVisual(widgetId);
       drumSequencerRestartInternalClock(widgetId);
+    } else if (state && portId === "pattern") {
+      // "pattern" is control-only (see PortTables::isControlOnlyInput), same
+      // convention as Multiplexer's "select": wired CV picks the pattern
+      // directly, same quantize/immediate handling as the on-widget slider.
+      const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+      const idx = drumPatternIndexFromCv(volts, state.patterns.length);
+      if (state.switchAtEnd && state.gatePrev) {
+        state.pendingPatternIndex = idx;
+      } else {
+        state.activePatternIndex = idx;
+        state.pendingPatternIndex = -1;
+        updateDrumSequencerVisual(widgetId);
+      }
+    } else if (state && portId === "switchAtEnd") {
+      // Control-only, same dual-source-fed convention as LFO's oneShot/global.
+      state.switchAtEnd = Number(value) >= GATE_THRESHOLD_VOLTS;
+      updateDrumSequencerVisual(widgetId);
     }
   }
 
@@ -17557,22 +18153,8 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = knobStates.get(id);
       if (!state) return {};
-      // Mirrors what the firmware parser actually reads (KnobNode.h::
-      // parsePreset: "knobCount" + a "knobs" array of {cc, channel, raw,
-      // point1In, ...}) - the previous `{...state}` spread here saved the
-      // browser's own internal shape (count/controls/labels/outputSide)
-      // instead. The firmware side never recognized those field names, so
-      // every full preset save+reload silently fell back to knobCount=1,
-      // dropping the ControlRoute for every control past the first - a
-      // second/third knob wired to anything would just never update its
-      // target after a reconnect (which always triggers a reload). The
-      // browser's own round-trip still worked despite this (it reads back
-      // its own field names fine), which is why the bug stayed hidden.
-      // "outputSide"/"labels" are UI-only and firmware just ignores them.
-      const count = state.count;
-      const knobs = state.controls.slice(0, count).map((control) => ({
-        cc: control.cc,
-        channel: control.channel,
+      const serializeControl = (control, includeBinding = false) => ({
+        ...(includeBinding ? { cc: control.cc, channel: control.channel } : {}),
         raw: control.raw,
         point1In: control.point1In,
         point1Out: control.point1Out,
@@ -17581,42 +18163,50 @@ const WIDGET_ENGINES = {
         constraintMin: control.constraintMin,
         constraintMax: control.constraintMax,
         valueList: parseValueList(control.listText) || [],
-      }));
+      });
+      const firstLayer = state.layers[0];
       return {
-        knobCount: count,
+        knobCount: state.count,
+        layerCount: state.layerCount,
+        activeLayer: state.activeLayer,
         outputSide: state.outputSide,
-        labels: state.labels.slice(0, count),
-        knobs,
+        bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel }) => ({ cc, channel })),
+        layers: state.layers.slice(0, state.layerCount).map((layer, layerIndex) => ({
+          labels: layer.labels.slice(0, state.count),
+          knobs: layer.controls.slice(0, state.count).map((control) => serializeControl(control, layerIndex === 0)),
+        })),
+        // Layer 1 remains available for old firmware/browser builds.
+        labels: firstLayer.labels.slice(0, state.count),
+        knobs: firstLayer.controls.slice(0, state.count).map((control) => serializeControl(control, true)),
       };
     },
     applyParams: (id, params) => {
       const state = knobStates.get(id);
       if (!state || !params) return;
-      // Three possible shapes, newest first: this engine's own current
-      // "knobs" array (see getParams above); the pre-fix browser-only
-      // "controls" array (still on-disk in any preset saved before this
-      // fix - read it back rather than silently losing that knob's setup);
-      // firmware's oldest flat single-knob shape (top-level cc/raw/... with
-      // no array), same as KnobNode.h::parsePreset's own legacy fallback.
+      const layerEntries = Array.isArray(params.layers) && params.layers.length ? params.layers : null;
       const newFormat = Array.isArray(params.knobs) ? params.knobs : null;
       const oldFormat = !newFormat && Array.isArray(params.controls) ? params.controls : null;
-      const sourceList = newFormat || oldFormat;
+      const sourceList = layerEntries?.[0]?.knobs || newFormat || oldFormat;
       const count = clamp(
         Math.round(Number(params.knobCount ?? params.count ?? (sourceList ? sourceList.length : 1)) || 1),
         1,
-        16
+        KNOB_MAX_COUNT
       );
       state.count = count;
+      state.layerCount = clamp(layerEntries?.length ?? params.layerCount ?? 1, 1, KNOB_MAX_LAYERS);
+      state.activeLayer = clamp(Math.round(Number(params.activeLayer) || 0), 0, state.layerCount - 1);
       if (typeof params.outputSide === "string") state.outputSide = params.outputSide;
-      if (Array.isArray(params.labels)) {
-        params.labels.forEach((label, index) => {
-          if (index < 16) state.labels[index] = typeof label === "string" ? label : "";
-        });
-      }
-      if (sourceList) {
-        sourceList.forEach((raw, index) => {
-          if (index >= 16 || !raw) return;
-          const control = state.controls[index];
+      state.layers = Array.from({ length: state.layerCount }, () => createKnobLayer());
+      const applyControls = (layer, controls, labels) => {
+        if (Array.isArray(labels)) {
+          labels.forEach((label, index) => {
+            if (index < KNOB_MAX_COUNT) layer.labels[index] = typeof label === "string" ? label : "";
+          });
+        }
+        if (!Array.isArray(controls)) return;
+        controls.forEach((raw, index) => {
+          if (index >= KNOB_MAX_COUNT || !raw) return;
+          const control = layer.controls[index];
           control.cc = typeof raw.cc === "number" ? raw.cc : null;
           control.channel = typeof raw.channel === "number" ? raw.channel : null;
           control.raw = typeof raw.raw === "number" ? raw.raw : 0;
@@ -17630,8 +18220,16 @@ const WIDGET_ENGINES = {
             ? raw.valueList.join(", ")
             : (typeof raw.listText === "string" ? raw.listText : "");
         });
+      };
+      if (layerEntries) {
+        state.layers.forEach((layer, layerIndex) => {
+          const entry = layerEntries[layerIndex] || {};
+          applyControls(layer, entry.knobs, entry.labels);
+        });
+      } else if (sourceList) {
+        applyControls(state.layers[0], sourceList, params.labels);
       } else {
-        const control = state.controls[0];
+        const control = state.layers[0].controls[0];
         if (typeof params.cc === "number") control.cc = params.cc;
         if (typeof params.channel === "number") control.channel = params.channel;
         if (typeof params.raw === "number") control.raw = params.raw;
@@ -17643,14 +18241,25 @@ const WIDGET_ENGINES = {
         if (typeof params.constraintMax === "number") control.constraintMax = params.constraintMax;
         if (Array.isArray(params.valueList)) control.listText = params.valueList.join(", ");
       }
+      const bindings = Array.isArray(params.bindings) ? params.bindings : state.layers[0].controls;
+      state.layers.forEach((layer) => {
+        for (let knobIndex = 0; knobIndex < state.count; knobIndex += 1) {
+          const binding = bindings[knobIndex] || state.layers[0].controls[knobIndex];
+          layer.controls[knobIndex].cc = typeof binding?.cc === "number" ? binding.cc : null;
+          layer.controls[knobIndex].channel = typeof binding?.channel === "number" ? binding.channel : null;
+        }
+      });
       renderKnobControls(id);
+      renderKnobLayerSelector(id);
       const portsEl = document.getElementById(id)?.querySelector(".widget-ports");
       if (portsEl) renderKnobPorts(id, portsEl);
-      for (let index = 0; index < count; index += 1) {
-        const mapped = roundFloat(mapKnobValue(state.controls[index]));
-        audioEngine.setParam(id, knobValueParamName(index), mapped);
-        updateKnobVisual(id, index);
-      }
+      state.layers.forEach((layer, layerIndex) => {
+        for (let knobIndex = 0; knobIndex < count; knobIndex += 1) {
+          const mapped = roundFloat(mapKnobValue(layer.controls[knobIndex]));
+          audioEngine.setParam(id, knobValueParamName(knobIndex, layerIndex), mapped);
+        }
+      });
+      for (let knobIndex = 0; knobIndex < count; knobIndex += 1) updateKnobVisual(id, knobIndex);
     },
   },
   button: {
@@ -18412,11 +19021,13 @@ const WIDGET_ENGINES = {
       const state = drumSequencerStates.get(id);
       return state
         ? {
-            barCount: state.barCount,
+            stepCount: state.stepCount,
             trackCount: state.trackCount,
-            cells: state.active.map((active, index) =>
-              active ? state.velocities[index] : -(state.velocities[index] + 1)
-            ),
+            patterns: state.patterns.map((p) => ({
+              cells: p.active.map((active, index) => (active ? p.velocities[index] : -(p.velocities[index] + 1))),
+            })),
+            activePatternIndex: state.activePatternIndex,
+            switchAtEnd: state.switchAtEnd === true,
             pulseMs: state.pulseMs,
             clockCvVolts: state.clockCvVolts,
             clockMaxBpm: state.clockMaxBpm,
@@ -18427,26 +19038,41 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => {
       const state = drumSequencerStates.get(id);
       if (!state || !params) return;
-      const requestedBars = Number(params.barCount);
-      const barCount = DRUM_BAR_COUNTS.includes(requestedBars) ? requestedBars : DRUM_DEFAULT_BARS;
+      const requestedSteps = Number(params.stepCount ?? params.barCount);
+      const stepCount = DRUM_STEP_COUNTS.includes(requestedSteps) ? requestedSteps : DRUM_DEFAULT_STEPS;
       const trackCount = clamp(parseInt(params.trackCount, 10) || 1, 1, DRUM_MAX_TRACKS);
-      reshapeDrumSequencer(state, barCount, trackCount);
-      state.active.fill(false);
-      state.velocities.fill(CV_MAX_VOLTS);
-      if (Array.isArray(params.cells)) {
-        const count = Math.min(params.cells.length, state.active.length);
+      const cellCount = stepCount * trackCount;
+
+      // Backward compatibility: a preset saved before multi-pattern support
+      // only has a top-level "cells" array - load it as the single pattern.
+      let patternsIn = Array.isArray(params.patterns) ? params.patterns : null;
+      if (!patternsIn && Array.isArray(params.cells)) patternsIn = [{ cells: params.cells }];
+      if (!patternsIn || patternsIn.length === 0) patternsIn = [{ cells: [] }];
+
+      state.patterns = patternsIn.slice(0, DRUM_MAX_PATTERNS).map((entry) => {
+        const active = new Array(cellCount).fill(false);
+        const velocities = new Array(cellCount).fill(CV_MAX_VOLTS);
+        const cells = Array.isArray(entry?.cells) ? entry.cells : [];
+        const count = Math.min(cells.length, cellCount);
         for (let index = 0; index < count; index += 1) {
-          const encoded = Number(params.cells[index]);
+          const encoded = Number(cells[index]);
           if (!Number.isFinite(encoded)) continue;
-          state.active[index] = encoded >= 0;
-          state.velocities[index] = clamp(encoded >= 0 ? encoded : -encoded - 1, 0, CV_MAX_VOLTS);
+          active[index] = encoded >= 0;
+          velocities[index] = clamp(encoded >= 0 ? encoded : -encoded - 1, 0, CV_MAX_VOLTS);
         }
-      }
+        return { active, velocities };
+      });
+      state.stepCount = stepCount;
+      state.trackCount = trackCount;
+      state.activePatternIndex = clamp(parseInt(params.activePatternIndex, 10) || 0, 0, state.patterns.length - 1);
+      state.pendingPatternIndex = -1;
+      state.switchAtEnd = params.switchAtEnd === true;
+
       const pulseMs = Number(params.pulseMs);
-      state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? pulseMs : 10;
+      state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? clamp(pulseMs, 0.1, 60000) : 10;
       state.clockCvVolts = clamp(Number(params.clockCvVolts) || 0, 0, CV_MAX_VOLTS);
       const maxBpm = Number(params.clockMaxBpm);
-      state.clockMaxBpm = Number.isFinite(maxBpm) && maxBpm > 0 ? maxBpm : 120;
+      state.clockMaxBpm = Number.isFinite(maxBpm) && maxBpm > 0 ? clamp(maxBpm, 0.1, 10000) : 120;
       state.clockRoundBpm = params.clockRoundBpm === true;
       state.currentStep = 0;
       state.lastStep = -1;
@@ -18561,7 +19187,7 @@ function applyWidgetParams(type, id, params) {
 
 
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 let restoringPreset = false;
 
 function serializePreset() {

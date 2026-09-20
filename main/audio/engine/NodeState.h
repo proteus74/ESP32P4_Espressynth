@@ -369,21 +369,34 @@ struct OutputMultiplexerState
     float *outPorts[kOutputMultiplexerMaxOutputs - 2] = {};
 };
 
+struct DrumSequencerPattern
+{
+    uint8_t active[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
+    uint8_t velocity[synth::kDrumSequencerMaxCells] = {};
+};
+
 struct DrumSequencerState
 {
-    uint8_t barCount = 4;
+    uint8_t stepCount = 16;
     uint8_t trackCount = 1;
     uint16_t currentStep = 0;
     bool clockPrev = false;
+    bool gatePrev = false;
     float pulseMs = 10.0f;
     float internalClockCvVolts = 0.0f;
     float internalClockMaxBpm = 120.0f;
     bool internalClockRoundBpm = false;
     float internalPhaseSec = 0.0f;
-    uint8_t active[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
-    uint8_t velocity[synth::kDrumSequencerMaxCells] = {};
+    DrumSequencerPattern patterns[synth::kDrumSequencerMaxPatterns];
+    uint8_t patternCount = 1;             // 1..kDrumSequencerMaxPatterns
+    uint8_t activePattern = 0;            // pattern currently playing/edited
+    uint8_t manualPatternSelect = 0;      // requested index when "pattern" port is unwired
+    bool switchAtEnd = false;             // "switchAtEnd" port unwired fallback: false = swap immediately, true = swap at step==0 wrap
+    uint8_t pendingPattern = 0xFF;        // 0xFF = no deferred switch armed
     float heldVelocity[synth::kDrumSequencerMaxTracks] = {};
     uint32_t pulseSamplesRemaining[synth::kDrumSequencerMaxTracks] = {};
+    uint32_t pendingPulseSamples[synth::kDrumSequencerMaxTracks] = {};
+    uint8_t retriggerGapRemaining[synth::kDrumSequencerMaxTracks] = {};
     float *outPorts[synth::kDrumSequencerMaxTracks * 2 - 2] = {};
 };
 

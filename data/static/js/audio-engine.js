@@ -1857,7 +1857,7 @@ export class AudioEngine {
         return { type, constant };
       }
       case "knob": {
-        // One ConstantSourceNode per control (fixed 16, like Multiplexer/
+        // One ConstantSourceNode per knob/layer output (16 knobs x 4 layers).
         // Mixer elsewhere in this file - unused ones just stay silent at 0),
         // instead of the single shared node const/button/up-down-button use
         // above - a multi-knob widget's "voltageN" outputs (see main.js's
@@ -1866,7 +1866,7 @@ export class AudioEngine {
         // node. `constant` stays an alias for control 0, for any code still
         // reading it directly.
         const constants = [];
-        for (let i = 0; i < 16; i += 1) {
+        for (let i = 0; i < 64; i += 1) {
           const c = ctx.createConstantSource();
           c.offset.value = i === 0 ? (params.value ?? 0) : 0;
           c.start();
@@ -3926,7 +3926,7 @@ export class AudioEngine {
         if (paramName === "value") applyRamp(entry.constant.offset);
         break;
       case "knob": {
-        // "value" (index 0) or "value2".."value16" (see main.js's
+        // "value" (index 0) or "value2".."value64" (see main.js's
         // knobValueParamName) - each control owns its own ConstantSourceNode
         // (see _buildNode's "knob" case), unlike const/button/up-down-button
         // above which only ever have one.
@@ -4187,13 +4187,12 @@ export class AudioEngine {
     
     if (entry.type === "const" && port === "audio") return entry.constant;
     if (entry.type === "knob") {
-      // "voltage" (bare, index-0 alias) or "voltage1".."voltage16" (see
-      // main.js's knobPortId) - each maps to its own ConstantSourceNode (see
-      // _buildNode's "knob" case) so a knob can feed an audio-rate
-      // destination (e.g. a Multiplexer input) like any other source.
-      const match = /^voltage(\d*)$/.exec(port);
+      // Layer 1 uses voltageN; later layers use voltageNLayerM.
+      const match = /^voltage(\d*)(?:Layer(\d+))?$/.exec(port);
       if (match) {
-        const index = match[1] ? Number(match[1]) - 1 : 0;
+        const knobIndex = match[1] ? Number(match[1]) - 1 : 0;
+        const layerIndex = match[2] ? Number(match[2]) - 1 : 0;
+        const index = layerIndex * 16 + knobIndex;
         return entry.constants?.[index] || null;
       }
     }

@@ -913,6 +913,208 @@ esp_err_t presets_list_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /api/backup (full system backup: named presets + current + last-active marker) ----
+
+namespace {
+// Escapes '"' and '\' so a preset/marker name is safe to embed inside a JSON string literal.
+// presetpaths::isSafeName() already excludes control characters and path separators but not
+// quotes, so this stays defensive.
+void json_escape_to_buf(const char *s, char *out, size_t out_size) {
+    size_t o = 0;
+    for (const char *p = s; *p != '\0' && o + 2 < out_size; ++p) {
+        if (*p == '"' || *p == '\\') {
+            out[o++] = '\\';
+        }
+        out[o++] = *p;
+    }
+    out[o] = '\0';
+}
+} // namespace
+
+esp_err_t backup_export_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"espressynth-backup.json\"");
+
+    char last_active[presetpaths::kMaxNameLen] = {};
+    presetpaths::readLastMarker(last_active, sizeof(last_active));
+    char last_active_escaped[presetpaths::kMaxNameLen * 2] = {};
+    json_escape_to_buf(last_active, last_active_escaped, sizeof(last_active_escaped));
+
+    char header[presetpaths::kMaxNameLen * 2 + 64];
+    snprintf(header, sizeof(header), "{\"version\":1,\"lastActive\":\"%s\",\"presets\":{", last_active_escaped);
+    if (httpd_resp_send_chunk(req, header, strlen(header)) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    DIR *dir = opendir(presetpaths::kDir);
+    if (dir == nullptr) {
+        httpd_resp_send_chunk(req, "}}", 2);
+        httpd_resp_send_chunk(req, nullptr, 0);
+        return ESP_OK;
+    }
+
+    auto *buffer = static_cast<char *>(heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (buffer == nullptr) {
+        closedir(dir);
+        httpd_resp_send_chunk(req, nullptr, 0);
+        return ESP_FAIL;
+    }
+
+    bool first = true;
+    bool write_error = false;
+    struct dirent *entry;
+    while (!write_error && (entry = readdir(dir)) != nullptr) {
+        const char *fname = entry->d_name;
+        if (fname[0] == '.') continue;
+        const size_t len = strlen(fname);
+        if (len < 6 || strcmp(fname + len - 5, ".json") != 0) continue;
+
+        char entry_path[kMaxPathLen];
+        snprintf(entry_path, sizeof(entry_path), "%s/%s", presetpaths::kDir, fname);
+        FILE *file = fopen(entry_path, "rb");
+        if (file == nullptr) continue;
+
+        char name_escaped[presetpaths::kMaxNameLen * 2] = {};
+        json_escape_to_buf(fname, name_escaped, sizeof(name_escaped));
+
+        char key_prefix[presetpaths::kMaxNameLen * 2 + 8];
+        snprintf(key_prefix, sizeof(key_prefix), "%s\"%s\":", first ? "" : ",", name_escaped);
+        if (httpd_resp_send_chunk(req, key_prefix, strlen(key_prefix)) != ESP_OK) {
+            write_error = true;
+            fclose(file);
+            break;
+        }
+        first = false;
+
+        size_t bytes_read;
+        while ((bytes_read = fread(buffer, 1, 4096, file)) > 0) {
+            if (httpd_resp_send_chunk(req, buffer, bytes_read) != ESP_OK) {
+                write_error = true;
+                break;
+            }
+        }
+        fclose(file);
+    }
+    closedir(dir);
+    heap_caps_free(buffer);
+
+    if (write_error) {
+        httpd_resp_send_chunk(req, nullptr, 0);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_send_chunk(req, "}}", 2);
+    httpd_resp_send_chunk(req, nullptr, 0);
+    return ESP_OK;
+}
+
+constexpr size_t kMaxBackupBodyLen = 4 * 1024 * 1024;
+
+esp_err_t backup_restore_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->content_len == 0 || req->content_len > kMaxBackupBodyLen) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid backup size");
+        return ESP_FAIL;
+    }
+
+    auto *body = static_cast<char *>(heap_caps_malloc(req->content_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (body == nullptr) {
+        body = static_cast<char *>(heap_caps_malloc(req->content_len + 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    }
+    if (body == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
+            heap_caps_free(body);
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_ParseWithLength(body, received);
+    heap_caps_free(body);
+    if (root == nullptr) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *presets = cJSON_GetObjectItemCaseSensitive(root, "presets");
+    if (!cJSON_IsObject(presets)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing presets object");
+        return ESP_FAIL;
+    }
+
+    // Ignore mkdir failure: directory is created by Feature::Synth::init() on first boot, this
+    // is only a defensive fallback (see preset_post_handler's identical call).
+    mkdir(presetpaths::kDir, 0775);
+
+    int restored_count = 0;
+    cJSON *entry = nullptr;
+    cJSON_ArrayForEach(entry, presets) {
+        const char *fname = entry->string;
+        if (fname == nullptr) continue;
+
+        char target_path[kMaxPathLen];
+        const size_t flen = strlen(fname);
+        if (strcmp(fname, "current.json") == 0) {
+            snprintf(target_path, sizeof(target_path), "%s", presetpaths::unnamedPath());
+        } else if (flen > 5 && strcmp(fname + flen - 5, ".json") == 0) {
+            char name_only[presetpaths::kMaxNameLen];
+            size_t name_len = flen - 5;
+            if (name_len >= sizeof(name_only)) name_len = sizeof(name_only) - 1;
+            memcpy(name_only, fname, name_len);
+            name_only[name_len] = '\0';
+            if (!presetpaths::isSafeName(name_only)) continue;
+            presetpaths::pathForName(name_only, target_path, sizeof(target_path));
+        } else {
+            continue; // unrecognized key, skip defensively
+        }
+
+        char *serialized = cJSON_PrintUnformatted(entry);
+        if (serialized == nullptr) continue;
+
+        FILE *file = fopen(target_path, "wb");
+        if (file != nullptr) {
+            fwrite(serialized, 1, strlen(serialized), file);
+            fclose(file);
+            ++restored_count;
+        }
+        cJSON_free(serialized);
+    }
+
+    cJSON *last_active_json = cJSON_GetObjectItemCaseSensitive(root, "lastActive");
+    if (cJSON_IsString(last_active_json) && last_active_json->valuestring[0] != '\0' &&
+        presetpaths::isSafeName(last_active_json->valuestring)) {
+        presetpaths::writeLastMarker(last_active_json->valuestring);
+    }
+
+    cJSON_Delete(root);
+
+    // Reload whatever is now the active preset so the running engine reflects the restore.
+    char active_path[kMaxPathLen];
+    char active_name[presetpaths::kMaxNameLen] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    if (active_name[0] != '\0') {
+        Feature::Synth::request_preset_name(active_name);
+    } else {
+        Feature::Synth::request_current_preset();
+    }
+
+    char response[64];
+    snprintf(response, sizeof(response), "{\"restored\":true,\"count\":%d}", restored_count);
+    httpd_resp_sendstr(req, response);
+    return ESP_OK;
+}
+
 // ---- /api/samples, /api/soundfonts ----
 
 esp_err_t samples_list_handler(httpd_req_t *req) {
@@ -1445,6 +1647,17 @@ inline void register_web_routes() {
         .uri = "/api/presets", .method = HTTP_GET, .handler = &presets_list_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &presets_list_uri);
+
+    static const httpd_uri_t backup_export_uri = {
+        .uri = "/api/backup", .method = HTTP_GET, .handler = &backup_export_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &backup_export_uri);
+
+    static const httpd_uri_t backup_restore_uri = {
+        .uri = "/api/backup/restore", .method = HTTP_POST, .handler = &backup_restore_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &backup_restore_uri);
 
     static const httpd_uri_t samples_list_uri = {
         .uri = "/api/samples", .method = HTTP_GET, .handler = &samples_list_handler, .user_ctx = nullptr,

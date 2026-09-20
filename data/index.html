@@ -19,6 +19,8 @@
       <button id="menuSaveAs">Save As</button>
       <button id="menuExport">Export</button>
       <button id="menuImport">Import</button>
+      <button id="menuBackup">System Backup</button>
+      <button id="menuRestore">Restore Backup</button>
       <button id="menuFileExplorer">File Explorer</button>
       <button id="menuBleConnect">BLE Connect</button>
       <button id="menuSettings">Settings</button>
@@ -129,6 +131,15 @@
 <div id="pageTabContextMenu" class="page-tab-context-menu hidden">
   <button type="button" data-action="rename">Rename</button>
   <button type="button" data-action="delete">Delete Page</button>
+</div>
+
+<div id="drumPatternContextMenu" class="page-tab-context-menu hidden">
+  <button type="button" data-action="add">Add Pattern</button>
+  <button type="button" data-action="delete">Delete Pattern</button>
+  <button type="button" data-action="copy">Copy Pattern</button>
+  <button type="button" data-action="paste">Paste Pattern</button>
+  <button type="button" data-action="clear">Clear Pattern</button>
+  <button type="button" data-action="settings">Settings…</button>
 </div>
 
 <div class="workspace">
@@ -308,6 +319,7 @@
 </div>
 
 <input type="file" id="presetImportInput" accept=".json,application/json" hidden>
+<input type="file" id="backupRestoreInput" accept=".json,application/json" hidden>
 
 <div id="saveAsOverlay" class="modal-overlay hidden">
   <div class="modal">
@@ -369,7 +381,10 @@
     <h3>Knob Settings</h3>
     <div class="modal-field-row">
       <button type="button" id="knobSettingsAdd" class="btn-secondary">Add knob</button>
+      <button type="button" id="knobSettingsAddLayer" class="btn-secondary">Add layer</button>
+      <button type="button" id="knobSettingsDeleteLayer" class="btn-secondary">Delete layer</button>
     </div>
+    <div id="knobSettingsLayerTabs" class="knob-settings-layer-tabs" role="tablist" aria-label="Knob layers"></div>
     <div class="knob-settings-head" aria-hidden="true">
       <span>Knob</span><span>Label</span><span>CC</span><span>List</span><span>A In</span><span>A Out</span><span>B In</span><span>B Out</span><span>Min</span><span>Max</span><span>Actions</span>
     </div>
@@ -692,8 +707,8 @@
   <div class="modal">
     <h3>Drum Sequencer Settings</h3>
     <label class="modal-field">
-      <span>Bars</span>
-      <select id="drumSequencerBarCountInput">
+      <span>Steps</span>
+      <select id="drumSequencerStepCountInput">
         <option value="4">4</option>
         <option value="8">8</option>
         <option value="12">12</option>
@@ -706,17 +721,17 @@
     </label>
     <label class="modal-field">
       <span>Trigger Pulse (ms)</span>
-      <input id="drumSequencerPulseMsInput" type="number" min="0.1" step="0.1" value="10">
+      <input id="drumSequencerPulseMsInput" type="number" min="0.1" max="60000" step="0.1" value="10">
     </label>
     <label class="modal-field">
       <span>Rate Maximum BPM at 10 V</span>
-      <input id="drumSequencerClockMaxBpmInput" type="number" min="0.1" step="0.1" value="120">
+      <input id="drumSequencerClockMaxBpmInput" type="number" min="0.1" max="10000" step="0.1" value="120">
     </label>
     <label class="modal-field modal-field-checkbox">
       <input type="checkbox" id="drumSequencerClockRoundBpmInput">
       <span>Whole BPM only</span>
     </label>
-    <p class="modal-hint">Reducing Bars or Tracks permanently deletes removed pattern data. Removed Track cables are disconnected.</p>
+    <p class="modal-hint">Reducing Steps or Tracks permanently deletes removed pattern data. Removed Track cables are disconnected.</p>
     <div class="modal-actions">
       <button id="drumSequencerSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="drumSequencerSettingsSave">Save</button>

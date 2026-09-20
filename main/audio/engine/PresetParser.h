@@ -9,6 +9,13 @@
 #include "NodeTypes.h"
 #include "SynthConfig.h"
 
+// One drum-sequencer pattern grid (see WidgetParams::drumPatterns below).
+struct DrumSequencerPatternParams
+{
+    uint8_t active[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
+    uint8_t velocity[synth::kDrumSequencerMaxCells] = {};
+};
+
 // Every widget-type-specific param this engine understands, flattened into
 // one struct (only the fields relevant to a widget's actual type are
 // populated/used - see GraphBuilder). Mirrors the "params" object per
@@ -203,7 +210,9 @@ struct WidgetParams
         uint8_t valueListCount = 0;
     };
     uint8_t knobCount = 1;
-    KnobControlParams knobs[synth::kKnobControlMax] = {};
+    uint8_t knobLayerCount = 1;
+    uint8_t knobActiveLayer = 0;
+    KnobControlParams knobs[synth::kKnobOutputMax] = {};
     uint8_t knobOutputSide = 1; // top=0, bottom=1, left=2, right=3; browser layout only
     int16_t knobCc = -1;
     int8_t knobChannel = -1;
@@ -316,13 +325,16 @@ struct WidgetParams
     float stepArpClockCvVolts = 0.0f;
     float stepArpClockMaxBpm = 120.0f;
     bool stepArpClockRoundBpm = false;
-    // drum-sequencer - 4/8/12/16 bars, sixteen steps per bar and up to
-    // eight trigger/velocity output pairs. Active flags are packed to keep
-    // PresetDoc bounded; velocity bytes map linearly to 0-10V.
-    uint8_t drumBarCount = 4;
+    // drum-sequencer - one 4/8/12/16-step bar, up to eight trigger/velocity
+    // output pairs, and up to kDrumSequencerMaxPatterns independent pattern
+    // grids sharing that same step/track shape. Active flags are packed to
+    // keep PresetDoc bounded; velocity bytes map linearly to 0-10V.
+    uint8_t drumStepCount = 16;
     uint8_t drumTrackCount = 1;
-    uint8_t drumActive[(synth::kDrumSequencerMaxCells + 7) / 8] = {};
-    uint8_t drumVelocity[synth::kDrumSequencerMaxCells] = {};
+    DrumSequencerPatternParams drumPatterns[synth::kDrumSequencerMaxPatterns];
+    uint8_t drumPatternCount = 1;
+    uint8_t drumActivePatternIndex = 0;
+    bool drumSwitchAtEnd = false;
     float drumPulseMs = 10.0f;
     float drumClockCvVolts = 0.0f;
     float drumClockMaxBpm = 120.0f;

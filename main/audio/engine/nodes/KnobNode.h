@@ -70,41 +70,62 @@ struct KnobControl
 struct KnobState
 {
     uint8_t count = 1;
-    KnobControl controls[synth::kKnobControlMax];
+    uint8_t layerCount = 1;
+    uint8_t activeLayer = 0;
+    KnobControl controls[synth::kKnobOutputMax];
+
+    static constexpr uint8_t controlIndex(uint8_t knobIndex, uint8_t layerIndex)
+    {
+        return static_cast<uint8_t>(layerIndex * synth::kKnobControlMax + knobIndex);
+    }
 };
 
 inline void render(NodeInstance &inst, size_t frames)
 {
+    if (frames > 0 && (inst.audioConnectedPortMask & synth::portBit(0)) != 0)
+    {
+        const float sample = noderender::portSample(inst, 0, frames - 1);
+        const float volts = sample < 0.0f ? 0.0f : (sample > 10.0f ? 10.0f : sample);
+        int layer = static_cast<int>(volts / (10.0f / static_cast<float>(inst.knob->layerCount)));
+        if (layer >= inst.knob->layerCount) layer = inst.knob->layerCount - 1;
+        inst.knob->activeLayer = static_cast<uint8_t>(layer);
+    }
     for (size_t i = 0; i < frames; ++i)
     {
-        inst.outL[i] = inst.knob->controls[0].currentValue;
+        inst.outL[i] = inst.knob->controls[KnobState::controlIndex(0, inst.knob->activeLayer)].currentValue;
     }
 }
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     inst.knob->count = p.knobCount < 1 ? 1 : (p.knobCount > synth::kKnobControlMax ? synth::kKnobControlMax : p.knobCount);
-    for (uint8_t controlIndex = 0; controlIndex < inst.knob->count; ++controlIndex)
+    inst.knob->layerCount = p.knobLayerCount < 1 ? 1 : (p.knobLayerCount > synth::kKnobLayerMax ? synth::kKnobLayerMax : p.knobLayerCount);
+    inst.knob->activeLayer = p.knobActiveLayer < inst.knob->layerCount ? p.knobActiveLayer : 0;
+    for (uint8_t layerIndex = 0; layerIndex < inst.knob->layerCount; ++layerIndex)
     {
-        KnobControl &control = inst.knob->controls[controlIndex];
-        const WidgetParams::KnobControlParams &source = p.knobs[controlIndex];
-        control.cc = source.cc;
-        control.channel = source.channel;
-        control.point1In = source.point1In;
-        control.point1Out = source.point1Out;
-        control.point2In = source.point2In;
-        control.point2Out = source.point2Out;
-        control.hasMin = source.hasConstraintMin;
-        control.minVal = source.constraintMin;
-        control.hasMax = source.hasConstraintMax;
-        control.maxVal = source.constraintMax;
-        control.raw = source.raw;
-        control.valueListCount = source.valueListCount;
-        for (uint8_t i = 0; i < source.valueListCount && i < synth::kValueListMax; ++i)
+        for (uint8_t knobIndex = 0; knobIndex < inst.knob->count; ++knobIndex)
         {
-            control.valueList[i] = source.valueList[i];
+            const uint8_t index = KnobState::controlIndex(knobIndex, layerIndex);
+            KnobControl &control = inst.knob->controls[index];
+            const WidgetParams::KnobControlParams &source = p.knobs[index];
+            control.cc = source.cc;
+            control.channel = source.channel;
+            control.point1In = source.point1In;
+            control.point1Out = source.point1Out;
+            control.point2In = source.point2In;
+            control.point2Out = source.point2Out;
+            control.hasMin = source.hasConstraintMin;
+            control.minVal = source.constraintMin;
+            control.hasMax = source.hasConstraintMax;
+            control.maxVal = source.constraintMax;
+            control.raw = source.raw;
+            control.valueListCount = source.valueListCount;
+            for (uint8_t i = 0; i < source.valueListCount && i < synth::kValueListMax; ++i)
+            {
+                control.valueList[i] = source.valueList[i];
+            }
+            control.currentValue = control.mappedValue();
         }
-        control.currentValue = control.mappedValue();
     }
 }
 
@@ -119,7 +140,27 @@ inline void destroy(NodeInstance &inst)
 
 inline bool setParam(NodeInstance &inst, const char *name, float value, uint8_t controlIndex = 0)
 {
-    if (name == nullptr || controlIndex >= inst.knob->count)
+    if (name == nullptr || inst.knob == nullptr)
+    {
+        return false;
+    }
+    if (strcmp(name, "activeLayer") == 0)
+    {
+        int layer = static_cast<int>(value + 0.5f);
+        if (layer < 0) layer = 0;
+        if (layer >= inst.knob->layerCount) layer = inst.knob->layerCount - 1;
+        inst.knob->activeLayer = static_cast<uint8_t>(layer);
+        return true;
+    }
+    if (strcmp(name, "layer") == 0)
+    {
+        float volts = value < 0.0f ? 0.0f : (value > 10.0f ? 10.0f : value);
+        int layer = static_cast<int>(volts / (10.0f / static_cast<float>(inst.knob->layerCount)));
+        if (layer >= inst.knob->layerCount) layer = inst.knob->layerCount - 1;
+        inst.knob->activeLayer = static_cast<uint8_t>(layer);
+        return true;
+    }
+    if (controlIndex >= synth::kKnobOutputMax)
     {
         return false;
     }
@@ -165,6 +206,10 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
 {
     const int count = presetparser::getInt(p, "knobCount", 1);
     out.knobCount = static_cast<uint8_t>(count < 1 ? 1 : (count > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : count));
+    const int layerCount = presetparser::getInt(p, "layerCount", 1);
+    out.knobLayerCount = static_cast<uint8_t>(layerCount < 1 ? 1 : (layerCount > static_cast<int>(synth::kKnobLayerMax) ? synth::kKnobLayerMax : layerCount));
+    const int activeLayer = presetparser::getInt(p, "activeLayer", 0);
+    out.knobActiveLayer = static_cast<uint8_t>(activeLayer < 0 ? 0 : (activeLayer >= out.knobLayerCount ? out.knobLayerCount - 1 : activeLayer));
     cJSON *cc = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "cc") : nullptr;
     out.knobCc = cJSON_IsNumber(cc) ? static_cast<int16_t>(cc->valueint) : -1;
     cJSON *ch = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "channel") : nullptr;
@@ -199,32 +244,76 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     legacy.valueListCount = out.valueListCount;
     for (uint8_t i = 0; i < out.valueListCount; ++i) legacy.valueList[i] = out.valueList[i];
 
+    auto parseControl = [](cJSON *item, WidgetParams::KnobControlParams &control)
+    {
+        if (!cJSON_IsObject(item)) return;
+        cJSON *itemCc = cJSON_GetObjectItemCaseSensitive(item, "cc");
+        cJSON *itemChannel = cJSON_GetObjectItemCaseSensitive(item, "channel");
+        cJSON *itemMin = cJSON_GetObjectItemCaseSensitive(item, "constraintMin");
+        cJSON *itemMax = cJSON_GetObjectItemCaseSensitive(item, "constraintMax");
+        control.cc = cJSON_IsNumber(itemCc) ? static_cast<int16_t>(itemCc->valueint) : -1;
+        control.channel = cJSON_IsNumber(itemChannel) ? static_cast<int8_t>(itemChannel->valueint) : -1;
+        control.raw = presetparser::getFloat(item, "raw", 0.0f);
+        control.point1In = presetparser::getFloat(item, "point1In", 0.0f);
+        control.point1Out = presetparser::getFloat(item, "point1Out", 0.0f);
+        control.point2In = presetparser::getFloat(item, "point2In", 127.0f);
+        control.point2Out = presetparser::getFloat(item, "point2Out", 10.0f);
+        control.hasConstraintMin = cJSON_IsNumber(itemMin);
+        control.constraintMin = control.hasConstraintMin ? static_cast<float>(itemMin->valuedouble) : 0.0f;
+        control.hasConstraintMax = cJSON_IsNumber(itemMax);
+        control.constraintMax = control.hasConstraintMax ? static_cast<float>(itemMax->valuedouble) : 0.0f;
+        control.valueListCount = presetparser::getFloatArray(item, "valueList", control.valueList, static_cast<uint8_t>(synth::kValueListMax));
+    };
+
     cJSON *controls = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "knobs") : nullptr;
     if (cJSON_IsArray(controls))
     {
         const int arrayCount = cJSON_GetArraySize(controls);
         out.knobCount = static_cast<uint8_t>(arrayCount < 1 ? 1 : (arrayCount > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : arrayCount));
-        for (uint8_t controlIndex = 0; controlIndex < out.knobCount; ++controlIndex)
+        for (uint8_t knobIndex = 0; knobIndex < out.knobCount; ++knobIndex)
         {
-            cJSON *item = cJSON_GetArrayItem(controls, controlIndex);
-            if (!cJSON_IsObject(item)) continue;
-            WidgetParams::KnobControlParams &control = out.knobs[controlIndex];
-            cJSON *itemCc = cJSON_GetObjectItemCaseSensitive(item, "cc");
-            cJSON *itemChannel = cJSON_GetObjectItemCaseSensitive(item, "channel");
-            cJSON *itemMin = cJSON_GetObjectItemCaseSensitive(item, "constraintMin");
-            cJSON *itemMax = cJSON_GetObjectItemCaseSensitive(item, "constraintMax");
-            control.cc = cJSON_IsNumber(itemCc) ? static_cast<int16_t>(itemCc->valueint) : -1;
-            control.channel = cJSON_IsNumber(itemChannel) ? static_cast<int8_t>(itemChannel->valueint) : -1;
-            control.raw = presetparser::getFloat(item, "raw", 0.0f);
-            control.point1In = presetparser::getFloat(item, "point1In", 0.0f);
-            control.point1Out = presetparser::getFloat(item, "point1Out", 0.0f);
-            control.point2In = presetparser::getFloat(item, "point2In", 127.0f);
-            control.point2Out = presetparser::getFloat(item, "point2Out", 10.0f);
-            control.hasConstraintMin = cJSON_IsNumber(itemMin);
-            control.constraintMin = control.hasConstraintMin ? static_cast<float>(itemMin->valuedouble) : 0.0f;
-            control.hasConstraintMax = cJSON_IsNumber(itemMax);
-            control.constraintMax = control.hasConstraintMax ? static_cast<float>(itemMax->valuedouble) : 0.0f;
-            control.valueListCount = presetparser::getFloatArray(item, "valueList", control.valueList, static_cast<uint8_t>(synth::kValueListMax));
+            parseControl(cJSON_GetArrayItem(controls, knobIndex), out.knobs[knobIndex]);
+        }
+    }
+
+    cJSON *layers = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "layers") : nullptr;
+    if (cJSON_IsArray(layers) && cJSON_GetArraySize(layers) > 0)
+    {
+        const int arrayLayerCount = cJSON_GetArraySize(layers);
+        out.knobLayerCount = static_cast<uint8_t>(arrayLayerCount > static_cast<int>(synth::kKnobLayerMax) ? synth::kKnobLayerMax : arrayLayerCount);
+        if (out.knobActiveLayer >= out.knobLayerCount) out.knobActiveLayer = 0;
+        for (uint8_t layerIndex = 0; layerIndex < out.knobLayerCount; ++layerIndex)
+        {
+            cJSON *layer = cJSON_GetArrayItem(layers, layerIndex);
+            cJSON *layerControls = cJSON_IsObject(layer) ? cJSON_GetObjectItemCaseSensitive(layer, "knobs") : nullptr;
+            if (!cJSON_IsArray(layerControls)) continue;
+            if (layerIndex == 0)
+            {
+                const int arrayCount = cJSON_GetArraySize(layerControls);
+                out.knobCount = static_cast<uint8_t>(arrayCount < 1 ? 1 : (arrayCount > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : arrayCount));
+            }
+            for (uint8_t knobIndex = 0; knobIndex < out.knobCount; ++knobIndex)
+            {
+                const uint8_t index = static_cast<uint8_t>(layerIndex * synth::kKnobControlMax + knobIndex);
+                parseControl(cJSON_GetArrayItem(layerControls, knobIndex), out.knobs[index]);
+            }
+        }
+    }
+
+    cJSON *bindings = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "bindings") : nullptr;
+    for (uint8_t knobIndex = 0; knobIndex < out.knobCount; ++knobIndex)
+    {
+        cJSON *binding = cJSON_IsArray(bindings) ? cJSON_GetArrayItem(bindings, knobIndex) : nullptr;
+        const WidgetParams::KnobControlParams &first = out.knobs[knobIndex];
+        cJSON *bindingCc = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "cc") : nullptr;
+        cJSON *bindingChannel = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "channel") : nullptr;
+        const int16_t sharedCc = cJSON_IsNumber(bindingCc) ? static_cast<int16_t>(bindingCc->valueint) : first.cc;
+        const int8_t sharedChannel = cJSON_IsNumber(bindingChannel) ? static_cast<int8_t>(bindingChannel->valueint) : first.channel;
+        for (uint8_t layerIndex = 0; layerIndex < out.knobLayerCount; ++layerIndex)
+        {
+            WidgetParams::KnobControlParams &control = out.knobs[layerIndex * synth::kKnobControlMax + knobIndex];
+            control.cc = sharedCc;
+            control.channel = sharedChannel;
         }
     }
 }

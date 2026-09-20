@@ -30,13 +30,14 @@ constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkB
 // node type (previously Multiplexer's 16 audio inputs + 1 control input =
 // 17). Keep one bit per slot in NodeInstance's connection masks.
 constexpr size_t kMaxAudioInPorts = 22;
-constexpr size_t kDrumSequencerStepsPerBar = 16;
-constexpr size_t kDrumSequencerMaxBars = 16;
+constexpr size_t kDrumSequencerMaxSteps = 16;
 constexpr size_t kDrumSequencerMaxTracks = 8;
-constexpr size_t kDrumSequencerMaxSteps = kDrumSequencerStepsPerBar * kDrumSequencerMaxBars;
 constexpr size_t kDrumSequencerMaxCells = kDrumSequencerMaxSteps * kDrumSequencerMaxTracks;
+constexpr size_t kDrumSequencerMaxPatterns = 8;
 constexpr size_t kValueListMax = 16;   // Knob/Button "value list" mode entry cap
 constexpr size_t kKnobControlMax = 16;
+constexpr size_t kKnobLayerMax = 4;
+constexpr size_t kKnobOutputMax = kKnobControlMax * kKnobLayerMax;
 constexpr size_t kMaxInstances = kMaxWidgets * SYNTH_VOICE_COUNT;
 constexpr size_t kMaxPresetBytes = 256 * 1024;                 // matches WebServer's preset size cap
 

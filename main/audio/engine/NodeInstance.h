@@ -301,8 +301,7 @@ struct NodeInstance
         LinkState *link;
         ValueMapperState *valueMapper;
         HammondState *hammond;
-        // Extra outPorts[] buffers (ports 2..) only needed above 2 configured
-        // outputs - see NodeState.h's OutputMultiplexerState comment.
+        // Extra outPorts[] buffers (ports 2..) for dynamic multi-output nodes.
         OutputMultiplexerState *outputMux;
     };
     // multiplier/adder/divide/abs/link types carry no extra state.

@@ -1016,14 +1016,16 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
             if (widgets[w].type == NodeType::Knob)
             {
                 NodeInstance &knobInst = instances[widgets[w].instanceBase];
-                for (uint8_t controlIndex = 0; controlIndex < knobInst.knob->count; ++controlIndex)
+                for (uint8_t knobIndex = 0; knobIndex < knobInst.knob->count; ++knobIndex)
                 {
-                    KnobControl &k = knobInst.knob->controls[controlIndex];
-                    if (k.cc < 0 || static_cast<uint8_t>(k.cc) != ccNumber ||
-                        k.channel < 0 || static_cast<uint8_t>(k.channel) != ccChannel0)
+                    const KnobControl &binding = knobInst.knob->controls[knobIndex];
+                    if (binding.cc < 0 || static_cast<uint8_t>(binding.cc) != ccNumber ||
+                        binding.channel < 0 || static_cast<uint8_t>(binding.channel) != ccChannel0)
                     {
                         continue;
                     }
+                    const uint8_t controlIndex = KnobState::controlIndex(knobIndex, knobInst.knob->activeLayer);
+                    KnobControl &k = knobInst.knob->controls[controlIndex];
                     k.raw = static_cast<float>(ccValue);
                     k.currentValue = k.mappedValue();
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
@@ -1392,7 +1394,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     {
         cJSON *indexItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "knobIndex");
         if (cJSON_IsNumber(indexItem) && indexItem->valueint > 0 &&
-            indexItem->valueint <= static_cast<int>(synth::kKnobControlMax))
+            indexItem->valueint <= static_cast<int>(synth::kKnobOutputMax))
         {
             knobControlIndex = static_cast<uint8_t>(indexItem->valueint - 1);
         }
@@ -1407,6 +1409,28 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].knob->count = clamped;
             }
         }
+        cJSON *layerCountItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "layerCount");
+        if (cJSON_IsNumber(layerCountItem))
+        {
+            const int count = layerCountItem->valueint;
+            const uint8_t clamped = static_cast<uint8_t>(count < 1 ? 1 :
+                (count > static_cast<int>(synth::kKnobLayerMax) ? synth::kKnobLayerMax : count));
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                KnobState *knob = instances[slot.instanceBase + v].knob;
+                knob->layerCount = clamped;
+                if (knob->activeLayer >= clamped) knob->activeLayer = clamped - 1;
+            }
+        }
+        cJSON *activeLayerItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "activeLayer");
+        if (cJSON_IsNumber(activeLayerItem))
+        {
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                nodes::knob::setParam(instances[slot.instanceBase + v], "activeLayer",
+                                      static_cast<float>(activeLayerItem->valuedouble));
+            }
+        }
     }
 
     cJSON *item = nullptr;
@@ -1417,7 +1441,9 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         {
             continue;
         }
-        if (slot.type == NodeType::Knob && (strcmp(key, "knobIndex") == 0 || strcmp(key, "knobCount") == 0))
+        if (slot.type == NodeType::Knob &&
+            (strcmp(key, "knobIndex") == 0 || strcmp(key, "knobCount") == 0 ||
+             strcmp(key, "layerCount") == 0 || strcmp(key, "activeLayer") == 0))
         {
             continue;
         }
@@ -1658,7 +1684,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             const int16_t cc = cJSON_IsNumber(item) ? static_cast<int16_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->controls[knobControlIndex].cc = cc;
+                KnobState *knob = instances[slot.instanceBase + v].knob;
+                const uint8_t knobIndex = knobControlIndex % synth::kKnobControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < knob->layerCount; ++layerIndex)
+                    knob->controls[KnobState::controlIndex(knobIndex, layerIndex)].cc = cc;
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "channel") == 0)
@@ -1666,7 +1695,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             const int8_t ch = cJSON_IsNumber(item) ? static_cast<int8_t>(item->valueint) : -1;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->controls[knobControlIndex].channel = ch;
+                KnobState *knob = instances[slot.instanceBase + v].knob;
+                const uint8_t knobIndex = knobControlIndex % synth::kKnobControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < knob->layerCount; ++layerIndex)
+                    knob->controls[KnobState::controlIndex(knobIndex, layerIndex)].channel = ch;
             }
         }
         else if (slot.type == NodeType::Knob && strcmp(key, "constraintMin") == 0)
@@ -1970,11 +2002,24 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     // during the drag).
     if (slot.type == NodeType::Knob)
     {
-        const KnobControl &control = instances[slot.instanceBase].knob->controls[knobControlIndex];
-        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Knob,
-                               control.currentValue, knobControlIndex);
-        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::KnobCc,
-                               control.raw, knobControlIndex);
+        const KnobState *knob = instances[slot.instanceBase].knob;
+        const KnobControl &control = knob->controls[knobControlIndex];
+        const bool activeControl = knobControlIndex / synth::kKnobControlMax == knob->activeLayer;
+        const bool valueChanged = cJSON_GetObjectItemCaseSensitive(paramsObj, "raw") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "point1In") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "point1Out") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "point2In") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "point2Out") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "constraintMin") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "constraintMax") != nullptr ||
+                                  cJSON_GetObjectItemCaseSensitive(paramsObj, "valueList") != nullptr;
+        if (activeControl && valueChanged)
+        {
+            pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Knob,
+                                  control.currentValue, knobControlIndex);
+            pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::KnobCc,
+                                  control.raw, knobControlIndex);
+        }
         // Mirror this control's new value back to whatever hardware CC it's
         // learned to (see SynthEngine::MidiCcOut) - a change made from the
         // browser should still move that controller's LED ring/motorized
@@ -1983,7 +2028,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         // message already does that (see SynthEngine::
         // publishMidiControlActivity), a browser-driven change previously
         // didn't.
-        if ((midiCcOut != nullptr || outActivity != nullptr) && control.cc >= 0 && control.channel >= 0)
+        if (activeControl && valueChanged && (midiCcOut != nullptr || outActivity != nullptr) &&
+            control.cc >= 0 && control.channel >= 0)
         {
             const float rawClamped = control.raw < 0.0f ? 0.0f : (control.raw > 127.0f ? 127.0f : control.raw);
             const uint8_t channel8 = static_cast<uint8_t>(control.channel);

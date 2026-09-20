@@ -438,6 +438,15 @@ button:hover {
   opacity: 1;
 }
 
+.page-tab-context-menu button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.page-tab-context-menu button:disabled:hover {
+  background: none;
+}
+
 .master-clock-badge {
   display: flex;
   align-items: center;
@@ -1271,13 +1280,6 @@ body.show-node-cpu .widget-cpu-badge {
   padding-bottom: 0.35rem;
 }
 
-.drum-sequencer-clear {
-  margin-left: auto;
-  margin-right: 0.35rem;
-  padding: 0.08rem 0.4rem;
-  font-size: 0.68rem;
-}
-
 .drum-sequencer-inputs {
   padding: 0.2rem 0;
 }
@@ -1304,6 +1306,26 @@ body.show-node-cpu .widget-cpu-badge {
   margin-left: 0.4rem;
 }
 
+.drum-sequencer-pattern-select {
+  width: 90px;
+  margin-left: 0.4rem;
+}
+
+.drum-sequencer-pattern-menu-btn {
+  margin-left: auto;
+  background: none;
+  color: #94a3b8;
+  font-weight: bold;
+  padding: 0 0.3rem;
+  line-height: 1;
+  margin-right: 0.15rem;
+}
+
+.drum-sequencer-pattern-menu-btn:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .drum-sequencer-pattern-layout {
   display: flex;
   min-width: 0;
@@ -1326,11 +1348,10 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .drum-sequencer-track-label,
-.drum-sequencer-bar-label,
 .drum-sequencer-step-number,
 .drum-sequencer-cell {
-  width: 22px;
-  height: 22px;
+  width: 36px;
+  height: 36px;
   box-sizing: border-box;
 }
 
@@ -1338,7 +1359,7 @@ body.show-node-cpu .widget-cpu-badge {
   position: sticky;
   left: 0;
   z-index: 3;
-  width: 36px;
+  width: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1352,27 +1373,12 @@ body.show-node-cpu .widget-cpu-badge {
   z-index: 4;
 }
 
-.drum-sequencer-bar-label {
-  width: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #cbd5e1;
-  font-size: 0.62rem;
-  border-bottom: 1px solid var(--card-border);
-}
-
 .drum-sequencer-step-number {
   display: flex;
   align-items: center;
   justify-content: center;
   color: #8290a3;
   font-size: 0.52rem;
-}
-
-.drum-sequencer-step-number.bar-start,
-.drum-sequencer-cell.bar-start {
-  border-left: 2px solid #64748b;
 }
 
 .drum-sequencer-cell {
@@ -1386,13 +1392,15 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .drum-sequencer-cell.active {
-  background: linear-gradient(
+  background-color: #18202c;
+  background-image: linear-gradient(
     to top,
     var(--accent) 0,
     var(--accent) calc(var(--velocity) * 100%),
     #263244 calc(var(--velocity) * 100%),
     #263244 100%
   );
+  background-clip: content-box;
   border-color: #93c5fd;
 }
 
@@ -1401,33 +1409,36 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .drum-sequencer-outputs {
-  flex: 0 0 74px;
+  flex: 0 0 58px;
   padding: 0.25rem 0 0.3rem;
   border-left: 1px solid var(--card-border);
 }
 
 .drum-sequencer-output-header {
-  height: 44px;
+  height: 36px;
   text-align: center;
   color: #8290a3;
   font-size: 0.58rem;
-  line-height: 44px;
+  line-height: 16px;
+  white-space: pre-line;
 }
 
 .drum-sequencer-output-pair {
-  height: 22px;
+  height: 36px;
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.35rem;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0;
   padding-right: 0.6rem;
 }
 
 .drum-sequencer-output-pair .drum-sequencer-port-out {
   gap: 0.15rem;
+  min-height: 17px;
 }
 
-.drum-sequencer-output-pair .drum-sequencer-port-out:last-child .port-dot {
+.drum-sequencer-output-pair .port-dot {
   margin-right: -0.9rem;
 }
 
@@ -1652,12 +1663,13 @@ body.show-node-cpu .widget-cpu-badge {
 /* Knob-Widget */
 
 .knob-body {
-  padding: 0.5rem 0.45rem 0.45rem;
+  padding: 0.5rem 0.45rem calc(2.25rem + var(--knob-layer-count, 1) * 0.9rem);
   position: relative;
 }
 
 .widget-instance[data-widget-type="knob"]:has(> .knob-output-top) .knob-body { padding-top: 1.75rem; }
-.widget-instance[data-widget-type="knob"]:has(> .knob-output-bottom) .knob-body { padding-bottom: 1.5rem; }
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-bottom) .knob-body { padding-bottom: calc(2.25rem + var(--knob-layer-count, 1) * 0.9rem); }
+.widget-instance[data-widget-type="knob"]:has(> .knob-output-bottom) .knob-body.knob-single-layer { padding-bottom: 1.5rem; }
 .widget-instance[data-widget-type="knob"]:has(> .knob-output-left) .knob-body { padding-left: 1.8rem; }
 .widget-instance[data-widget-type="knob"]:has(> .knob-output-right) .knob-body { padding-right: 1.8rem; }
 
@@ -1667,6 +1679,20 @@ body.show-node-cpu .widget-cpu-badge {
   align-items: start;
   gap: 0.5rem;
 }
+
+.knob-layer-selector {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.knob-layer-selector.hidden { display: none; }
+
+.knob-layer-selector .port-row { padding: 0; }
+.knob-layer-selector input[type="range"] { min-width: 0; }
+.knob-layer-value { color: var(--accent); font: 0.72rem "Courier New", monospace; }
 
 .knob-control { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; min-width: 0; }
 
@@ -1770,10 +1796,12 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .knob-output-ports { display: grid; grid-template-columns: repeat(var(--knob-count, 1), minmax(0, 1fr)); gap: 0.1rem; }
+.knob-output-group { display: grid; grid-template-rows: repeat(var(--knob-layer-count, 1), minmax(12px, 1fr)); }
 .knob-output-ports .port-row { min-width: 0; padding: 0; }
 .knob-output-ports .port-label { font-size: 0.6rem; }
+.knob-output-ports .port-row:not(.knob-output-active) .port-dot { opacity: 0.45; }
 .knob-output-top, .knob-output-bottom { align-items: start; }
-.knob-output-top .port-row, .knob-output-bottom .port-row { flex-direction: column; gap: 0; justify-content: center; }
+.knob-output-top .port-row, .knob-output-bottom .port-row { gap: 0.15rem; justify-content: center; }
 .knob-output-top .port-label, .knob-output-bottom .port-label { display: none; }
 .knob-output-top .port-row-out, .knob-output-bottom .port-row-out { justify-content: center; }
 .knob-output-top .port-row-out > .port-dot, .knob-output-bottom .port-row-out > .port-dot { margin: 0; }
@@ -3748,9 +3776,9 @@ body.show-node-cpu .widget-cpu-badge {
 .knob-settings-head,
 .knob-settings-card {
   display: grid;
-  grid-template-columns: 32px minmax(96px, 1.25fr) minmax(145px, 1.5fr) minmax(120px, 1.5fr) repeat(6, minmax(68px, 0.8fr)) 92px;
+  grid-template-columns: 32px minmax(96px, 1.2fr) 110px minmax(120px, 1.5fr) repeat(6, clamp(48px, 4vw, 72px)) 102px;
   column-gap: 0.35rem;
-  min-width: 1030px;
+  min-width: 900px;
 }
 
 .knob-settings-head {
@@ -3789,8 +3817,18 @@ body.show-node-cpu .widget-cpu-badge {
 
 .knob-settings-cc {
   display: flex;
+  align-items: center;
   gap: 0.25rem;
   min-width: 0;
+}
+
+.knob-settings-cc-value {
+  flex: 0 1 4.5rem;
+  overflow: hidden;
+  color: #d7dee8;
+  font: 0.76rem "Courier New", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .knob-settings-cc button {
@@ -3802,6 +3840,29 @@ body.show-node-cpu .widget-cpu-badge {
 #knobSettingsAdd {
   padding: 0.3rem 0.55rem;
   font-size: 0.78rem;
+}
+
+#knobSettingsAddLayer,
+#knobSettingsDeleteLayer {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.knob-settings-layer-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+}
+
+.knob-settings-layer-tab.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.knob-settings-inherited {
+  align-self: center;
+  color: #94a3b8;
+  font-size: 0.68rem;
 }
 
 .knob-settings-footer {
@@ -3830,6 +3891,8 @@ body.show-node-cpu .widget-cpu-badge {
 .knob-settings-actions button {
   min-width: 1.7rem;
   padding: 0.3rem 0.4rem;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 #fileExplorerOverlay .file-explorer-modal {

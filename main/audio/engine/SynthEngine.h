@@ -450,10 +450,12 @@ private:
                 // pot but the first would never light up the activity panel.
                 for (uint8_t controlIndex = 0; controlIndex < instance.knob->count; ++controlIndex)
                 {
-                    KnobControl &control = instance.knob->controls[controlIndex];
-                    if (control.cc >= 0 && static_cast<uint8_t>(control.cc) == event.data1 &&
-                        control.channel >= 0 && static_cast<uint8_t>(control.channel) == channel)
+                    const KnobControl &binding = instance.knob->controls[controlIndex];
+                    if (binding.cc >= 0 && static_cast<uint8_t>(binding.cc) == event.data1 &&
+                        binding.channel >= 0 && static_cast<uint8_t>(binding.channel) == channel)
                     {
+                        const KnobControl &control = instance.knob->controls[
+                            KnobState::controlIndex(controlIndex, instance.knob->activeLayer)];
                         publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, controlIndex, channel,
                                                    event.data1, event.data2, control.currentValue);
                         break;
