@@ -22,9 +22,14 @@ enum class NodeType : uint8_t
     Divide,
     FrequencyDivider,
     Abs,
+    LogicAnd,
+    LogicOr,
+    LogicXor,
+    LogicNot,
     ValueMapper,
     Bitcrusher,
     WaveFolder,
+    EnvelopeFollower,
     Pan,
     Chorus,
     Delay,
@@ -151,12 +156,22 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::FrequencyDivider;
     if (strcmp(typeStr, "abs") == 0)
         return NodeType::Abs;
+    if (strcmp(typeStr, "logic-and") == 0)
+        return NodeType::LogicAnd;
+    if (strcmp(typeStr, "logic-or") == 0)
+        return NodeType::LogicOr;
+    if (strcmp(typeStr, "logic-xor") == 0)
+        return NodeType::LogicXor;
+    if (strcmp(typeStr, "logic-not") == 0)
+        return NodeType::LogicNot;
     if (strcmp(typeStr, "value-mapper") == 0)
         return NodeType::ValueMapper;
     if (strcmp(typeStr, "bitcrusher") == 0)
         return NodeType::Bitcrusher;
     if (strcmp(typeStr, "wave-folder") == 0)
         return NodeType::WaveFolder;
+    if (strcmp(typeStr, "envelope-follower") == 0)
+        return NodeType::EnvelopeFollower;
     if (strcmp(typeStr, "pan") == 0)
         return NodeType::Pan;
     if (strcmp(typeStr, "chorus") == 0)

@@ -255,20 +255,7 @@ presetImportInput.addEventListener("change", () => {
   if (file) importPresetFromFile(file);
 });
 
-document.getElementById("menuBackup").addEventListener("click", (e) => {
-  e.stopPropagation();
-  menuItems.forEach((m) => m.classList.remove("open"));
-  backupSystemToFile();
-});
-
 const backupRestoreInput = document.getElementById("backupRestoreInput");
-
-document.getElementById("menuRestore").addEventListener("click", (e) => {
-  e.stopPropagation();
-  menuItems.forEach((m) => m.classList.remove("open"));
-  backupRestoreInput.value = "";
-  backupRestoreInput.click();
-});
 
 backupRestoreInput.addEventListener("change", () => {
   const file = backupRestoreInput.files[0];
@@ -405,6 +392,10 @@ document.addEventListener("keydown", resumeAudioContextOnFirstGesture);
 
 
 const settingsOverlay = document.getElementById("settingsOverlay");
+const gpioSettingsOverlay = document.getElementById("gpioSettingsOverlay");
+const networkSettingsOverlay = document.getElementById("networkSettingsOverlay");
+const gpioSummaryText = document.getElementById("gpioSummaryText");
+const networkSummaryText = document.getElementById("networkSummaryText");
 const ethDhcpInput = document.getElementById("ethDhcpInput");
 const ethStaticFields = document.getElementById("ethStaticFields");
 const ethIpInput = document.getElementById("ethIpInput");
@@ -414,6 +405,12 @@ const ethDnsInput = document.getElementById("ethDnsInput");
 const wifiEnabledInput = document.getElementById("wifiEnabledInput");
 const wifiSsidInput = document.getElementById("wifiSsidInput");
 const wifiPasswordInput = document.getElementById("wifiPasswordInput");
+const wifiDhcpInput = document.getElementById("wifiDhcpInput");
+const wifiStaticFields = document.getElementById("wifiStaticFields");
+const wifiIpInput = document.getElementById("wifiIpInput");
+const wifiMaskInput = document.getElementById("wifiMaskInput");
+const wifiGwInput = document.getElementById("wifiGwInput");
+const wifiDnsInput = document.getElementById("wifiDnsInput");
 const wifiScanButton = document.getElementById("wifiScan");
 const wifiStatus = document.getElementById("wifiStatus");
 const wifiNetworks = document.getElementById("wifiNetworks");
@@ -425,6 +422,7 @@ const gpioAddPullSelect = document.getElementById("gpioAddPullSelect");
 const gpioAddInvertInput = document.getElementById("gpioAddInvertInput");
 const gpioAddBtn = document.getElementById("gpioAddBtn");
 let pendingGpioEntries = [];
+let loadedGpioEntries = [];
 let gpioReservedPins = [];
 
 async function fetchGpioInfo() {
@@ -520,6 +518,10 @@ function updateStaticFieldsVisibility() {
   ethStaticFields.hidden = ethDhcpInput.checked;
 }
 
+function updateWifiStaticFieldsVisibility() {
+  wifiStaticFields.hidden = wifiDhcpInput.checked;
+}
+
 function renderWifiStatus(data) {
   if (!data.wifiAvailable && !data.available) wifiStatus.textContent = "Wi-Fi unavailable on this board";
   else if (data.wifiConnected || data.connected) wifiStatus.textContent = `Connected${data.wifiIp || data.ip ? ` — ${data.wifiIp || data.ip}` : ""}`;
@@ -529,8 +531,32 @@ function renderWifiStatus(data) {
 }
 
 ethDhcpInput.addEventListener("change", updateStaticFieldsVisibility);
+wifiDhcpInput.addEventListener("change", updateWifiStaticFieldsVisibility);
 
 let loadedNetworkSnapshot = null;
+let loadedNetworkData = {};
+
+// Populates every Ethernet/Wi-Fi field from a fetched (or previously loaded)
+// settings object - shared by openSettings' initial load and the Network
+// modal's Cancel (revert to what was last loaded/saved).
+function applyNetworkData(data) {
+  ethDhcpInput.checked = data.ethDhcp !== false;
+  ethIpInput.value = data.ethIp || "";
+  ethMaskInput.value = data.ethMask || "";
+  ethGwInput.value = data.ethGw || "";
+  ethDnsInput.value = data.ethDns || "";
+  wifiEnabledInput.checked = data.wifiEnabled === true;
+  wifiSsidInput.value = data.wifiSsid || "";
+  wifiPasswordInput.value = "";
+  wifiDhcpInput.checked = data.wifiDhcp !== false;
+  wifiIpInput.value = data.wifiIp || "";
+  wifiMaskInput.value = data.wifiMask || "";
+  wifiGwInput.value = data.wifiGw || "";
+  wifiDnsInput.value = data.wifiDns || "";
+  renderWifiStatus(data);
+  updateStaticFieldsVisibility();
+  updateWifiStaticFieldsVisibility();
+}
 
 function currentNetworkSnapshot() {
   return JSON.stringify({
@@ -542,7 +568,25 @@ function currentNetworkSnapshot() {
     wifiEnabled: wifiEnabledInput.checked,
     wifiSsid: wifiSsidInput.value.trim(),
     wifiPassword: wifiPasswordInput.value,
+    wifiDhcp: wifiDhcpInput.checked,
+    wifiIp: wifiIpInput.value.trim(),
+    wifiMask: wifiMaskInput.value.trim(),
+    wifiGw: wifiGwInput.value.trim(),
+    wifiDns: wifiDnsInput.value.trim(),
   });
+}
+
+function updateGpioSummary() {
+  const count = pendingGpioEntries.length;
+  gpioSummaryText.textContent = count === 0 ? "No pins configured" : `${count} pin${count === 1 ? "" : "s"} configured`;
+}
+
+function updateNetworkSummary() {
+  const ethPart = ethDhcpInput.checked ? "Ethernet: DHCP" : "Ethernet: Static IP";
+  const wifiPart = !wifiEnabledInput.checked
+    ? "Wi-Fi disabled"
+    : `Wi-Fi: ${wifiSsidInput.value.trim() || "(no SSID)"}${wifiDhcpInput.checked ? "" : " (static IP)"}`;
+  networkSummaryText.textContent = `${ethPart} · ${wifiPart}`;
 }
 
 async function openSettings() {
@@ -550,15 +594,8 @@ async function openSettings() {
   try {
     const res = await fetch("/api/settings/network");
     const data = await res.json();
-    ethDhcpInput.checked = data.ethDhcp !== false;
-    ethIpInput.value = data.ethIp || "";
-    ethMaskInput.value = data.ethMask || "";
-    ethGwInput.value = data.ethGw || "";
-    ethDnsInput.value = data.ethDns || "";
-    wifiEnabledInput.checked = data.wifiEnabled === true;
-    wifiSsidInput.value = data.wifiSsid || "";
-    wifiPasswordInput.value = "";
-    renderWifiStatus(data);
+    loadedNetworkData = data;
+    applyNetworkData(data);
   } catch (err) {
     appendLog(`Could not load network settings: ${err.message}`);
   }
@@ -568,6 +605,7 @@ async function openSettings() {
   // network settings even when this section was never opened/touched, showing a confusing
   // error for an unrelated Device/GPIO save.
   loadedNetworkSnapshot = currentNetworkSnapshot();
+  updateNetworkSummary();
   try {
     const res = await fetch("/api/settings/device");
     const data = await res.json();
@@ -586,16 +624,17 @@ async function openSettings() {
     const gpioRes = await fetch("/api/settings/gpio");
     const gpioData = await gpioRes.json();
     pendingGpioEntries = Array.isArray(gpioData.entries) ? gpioData.entries.map((e) => ({ ...e })) : [];
+    loadedGpioEntries = pendingGpioEntries.map((e) => ({ ...e }));
     const info = await fetchGpioInfo();
     gpioReservedPins = Array.isArray(info.reserved) ? info.reserved : [];
     gpioAddPinSelect.dataset.range = JSON.stringify({ minPin: info.minPin || 0, maxPin: info.maxPin ?? -1 });
     renderGpioEntryList();
     renderGpioAddPinOptions();
+    updateGpioSummary();
   } catch (err) {
     appendLog(`Could not load GPIO settings: ${err.message}`);
   }
-  updateStaticFieldsVisibility();
-  ethDhcpInput.focus();
+  deviceNameInput.focus();
 }
 
 function closeSettings() {
@@ -612,6 +651,96 @@ document.getElementById("menuSettings").addEventListener("click", (e) => {
 });
 
 document.getElementById("settingsCancel").addEventListener("click", closeSettings);
+
+document.getElementById("settingsBackupBtn").addEventListener("click", () => backupSystemToFile());
+document.getElementById("settingsRestoreBtn").addEventListener("click", () => {
+  backupRestoreInput.value = "";
+  backupRestoreInput.click();
+});
+
+// GPIO now lives in its own popped-out modal (opened from Settings) so its
+// own Save/Cancel apply or discard just the GPIO edits immediately, without
+// touching Device/Network state sitting behind it.
+document.getElementById("openGpioSettings").addEventListener("click", () => {
+  gpioSettingsOverlay.classList.remove("hidden");
+});
+
+function closeGpioSettings({ save } = {}) {
+  if (save) {
+    sendLiveParamUpdate("@gpioSettings", { entries: pendingGpioEntries });
+    loadedGpioEntries = pendingGpioEntries.map((e) => ({ ...e }));
+  } else {
+    pendingGpioEntries = loadedGpioEntries.map((e) => ({ ...e }));
+    renderGpioEntryList();
+    renderGpioAddPinOptions();
+  }
+  updateGpioSummary();
+  gpioSettingsOverlay.classList.add("hidden");
+}
+
+document.getElementById("gpioSettingsSave").addEventListener("click", () => closeGpioSettings({ save: true }));
+document.getElementById("gpioSettingsCancel").addEventListener("click", () => closeGpioSettings({ save: false }));
+gpioSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === gpioSettingsOverlay) closeGpioSettings({ save: false });
+});
+
+// Same idea for Network (Ethernet + Wi-Fi): its own modal, its own
+// Save/Cancel, independent of the main Settings dialog behind it.
+document.getElementById("openNetworkSettings").addEventListener("click", () => {
+  networkSettingsOverlay.classList.remove("hidden");
+});
+
+async function closeNetworkSettings({ save } = {}) {
+  if (!save) {
+    applyNetworkData(loadedNetworkData);
+    updateNetworkSummary();
+    networkSettingsOverlay.classList.add("hidden");
+    return;
+  }
+  if (currentNetworkSnapshot() === loadedNetworkSnapshot) {
+    networkSettingsOverlay.classList.add("hidden");
+    return;
+  }
+  const body = {
+    ethDhcp: ethDhcpInput.checked,
+    ethIp: ethIpInput.value.trim(),
+    ethMask: ethMaskInput.value.trim(),
+    ethGw: ethGwInput.value.trim(),
+    ethDns: ethDnsInput.value.trim(),
+    wifiEnabled: wifiEnabledInput.checked,
+    wifiSsid: wifiSsidInput.value.trim(),
+    wifiPassword: wifiPasswordInput.value,
+    wifiDhcp: wifiDhcpInput.checked,
+    wifiIp: wifiIpInput.value.trim(),
+    wifiMask: wifiMaskInput.value.trim(),
+    wifiGw: wifiGwInput.value.trim(),
+    wifiDns: wifiDnsInput.value.trim(),
+  };
+  try {
+    const res = await fetch("/api/settings/network", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    if (result.error) throw new Error(result.error);
+    loadedNetworkData = { ...loadedNetworkData, ...body };
+    loadedNetworkSnapshot = currentNetworkSnapshot();
+    updateNetworkSummary();
+    networkSettingsOverlay.classList.add("hidden");
+    showToast(result.applied === false ? "Saved; Wi-Fi could not be applied" : "Saved — network changes applied");
+  } catch (err) {
+    appendLog(`Could not save network settings: ${err.message}`);
+    showToast("Could not save network settings");
+  }
+}
+
+document.getElementById("networkSettingsSave").addEventListener("click", () => closeNetworkSettings({ save: true }));
+document.getElementById("networkSettingsCancel").addEventListener("click", () => closeNetworkSettings({ save: false }));
+networkSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === networkSettingsOverlay) closeNetworkSettings({ save: false });
+});
 
 wifiScanButton.addEventListener("click", async () => {
   wifiScanButton.disabled = true;
@@ -650,43 +779,10 @@ wifiScanButton.addEventListener("click", async () => {
   }
 });
 
-document.getElementById("settingsSave").addEventListener("click", async () => {
+document.getElementById("settingsSave").addEventListener("click", () => {
   sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
-  sendLiveParamUpdate("@gpioSettings", { entries: pendingGpioEntries });
-
-  // No /api/settings/network backend exists yet (see openSettings' loadedNetworkSnapshot
-  // comment) - only attempt it, and only surface its failure, when Ethernet/Wi-Fi were
-  // actually touched, so a Device/GPIO-only Save doesn't show an unrelated network error.
-  if (currentNetworkSnapshot() === loadedNetworkSnapshot) {
-    closeSettings();
-    showToast("Saved");
-    return;
-  }
-  const body = {
-    ethDhcp: ethDhcpInput.checked,
-    ethIp: ethIpInput.value.trim(),
-    ethMask: ethMaskInput.value.trim(),
-    ethGw: ethGwInput.value.trim(),
-    ethDns: ethDnsInput.value.trim(),
-    wifiEnabled: wifiEnabledInput.checked,
-    wifiSsid: wifiSsidInput.value.trim(),
-    wifiPassword: wifiPasswordInput.value,
-  };
-  try {
-    const res = await fetch("/api/settings/network", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const result = await res.json();
-    if (result.error) throw new Error(result.error);
-    closeSettings();
-    showToast(result.applied === false ? "Saved; Wi-Fi could not be applied" : "Saved — network changes applied");
-  } catch (err) {
-    appendLog(`Could not save network settings: ${err.message}`);
-    showToast("Could not save network settings");
-  }
+  closeSettings();
+  showToast("Saved");
 });
 
 settingsOverlay.addEventListener("click", (e) => {
@@ -1060,6 +1156,39 @@ const WIDGET_TYPES = {
     inputs: [{ id: "in", label: "In" }],
     outputs: [{ id: "value", label: "" }],
   },
+  "logic-and": {
+    label: "AND",
+    icon: "&",
+    inputs: [
+      { id: "in1", label: "In 1" },
+      { id: "in2", label: "In 2" },
+    ],
+    outputs: [{ id: "value", label: "Out" }],
+  },
+  "logic-or": {
+    label: "OR",
+    icon: "≥1",
+    inputs: [
+      { id: "in1", label: "In 1" },
+      { id: "in2", label: "In 2" },
+    ],
+    outputs: [{ id: "value", label: "Out" }],
+  },
+  "logic-xor": {
+    label: "XOR",
+    icon: "=1",
+    inputs: [
+      { id: "in1", label: "In 1" },
+      { id: "in2", label: "In 2" },
+    ],
+    outputs: [{ id: "value", label: "Out" }],
+  },
+  "logic-not": {
+    label: "NOT",
+    icon: "¬",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [{ id: "value", label: "" }],
+  },
   "value-mapper": {
     label: "Value Mapper",
     icon: "🗺️",
@@ -1426,6 +1555,17 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "envelope-follower": {
+    label: "Envelope Follower",
+    icon: "◟◝",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "attack", label: "Attack" },
+      { id: "release", label: "Release" },
+      { id: "preGain", label: "PreGain" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   pan: {
     label: "Pan",
     icon: "⇄",
@@ -1604,9 +1744,9 @@ const WIDGET_CATEGORIES = [
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
-  { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper"] },
+  { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
-  { label: "Effects", types: ["bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb-light"] },
+  { label: "Effects", types: ["bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
@@ -1716,6 +1856,7 @@ const AUDIO_PORTS = {
   chorus: { in: ["in"], out: ["left", "right"] },
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
+  "envelope-follower": { in: ["in", "attack", "release", "preGain"], out: ["out"] },
   pan: { in: ["in", "pan"], out: ["out1", "out2"] },
   "sample-hold": { in: ["in", "trigger", "threshold"], out: ["out"] },
   
@@ -1770,6 +1911,10 @@ const DUAL_MODE_TYPES = {
   "frequency-divider": { states: () => frequencyDividerStates, audioPorts: "all" },
   abs: { states: () => absStates, audioPorts: "all" },
   "value-mapper": { states: () => valueMapperStates, audioPorts: "all" },
+  "logic-and": { states: () => logicGateStates, audioPorts: "all" },
+  "logic-or": { states: () => logicGateStates, audioPorts: "all" },
+  "logic-xor": { states: () => logicGateStates, audioPorts: "all" },
+  "logic-not": { states: () => logicGateStates, audioPorts: "all" },
   detune: { states: () => detuneStates, audioPorts: { in: ["cv"], out: ["out"] } },
 };
 
@@ -1937,11 +2082,11 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "const", "bitcrusher", "wave-folder", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "const", "bitcrusher", "wave-folder", "envelope-follower", "pan",
 ];
 const FX_PAGE_TYPES = [
   "midi-in", "adsr",
-  "bitcrusher", "wave-folder", "pan", "chorus", "delay", "reverb-light", "audio-out",
+  "bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
 ];
 
@@ -2588,6 +2733,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "logic-and" || type === "logic-or") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openLogicGateSettings(id);
+    });
+  }
+
   if (type === "clock") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -2704,6 +2857,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "envelope-follower") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input")) return;
+      e.stopPropagation();
+      openEnvelopeFollowerSettings(id);
+    });
+  }
+
   if (type === "detune") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -2788,6 +2949,29 @@ function createWidget(type, label, x, y, forcedId) {
 
   if (type === "abs") {
     absStates.set(id, { value: 0, audioMode: false });
+  }
+
+  if (type === "logic-and" || type === "logic-or") {
+    // Unconnected-input default: AND's neutral element is "true" (an open
+    // AND input must not force the whole gate false, mirrors Multiplier's
+    // unconnected factor defaulting to 1); OR's neutral element is "false"
+    // (an open OR input must not force it true) - see updateLogicGateMode,
+    // which re-applies this per-index on every recompute anyway.
+    const unconnectedDefault = type === "logic-and" ? CV_MAX_VOLTS : 0;
+    logicGateStates.set(id, {
+      gateType: type,
+      inputCount: 2,
+      values: new Array(8).fill(unconnectedDefault),
+      audioMode: false,
+    });
+  }
+
+  if (type === "logic-xor") {
+    logicGateStates.set(id, { gateType: type, values: [0, 0], audioMode: false });
+  }
+
+  if (type === "logic-not") {
+    logicGateStates.set(id, { gateType: type, values: [0], audioMode: false });
   }
 
   if (type === "value-mapper") {
@@ -3557,6 +3741,12 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, { ...state });
   }
 
+  if (type === "envelope-follower") {
+    const state = { attack: CV_MAX_VOLTS / 2, release: CV_MAX_VOLTS / 2, preGain: CV_MAX_VOLTS / 2, coeffStride: 4 };
+    envelopeFollowerStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
   if (type === "pan") {
     const state = { pan: CV_MAX_VOLTS / 2 };
     panStates.set(id, state);
@@ -4169,6 +4359,8 @@ function createWidget(type, label, x, y, forcedId) {
     renderMultiplierPorts(id, ports);
   } else if (type === "adder") {
     renderAdderPorts(id, ports);
+  } else if (type === "logic-and" || type === "logic-or") {
+    renderLogicGatePorts(id, ports);
   } else if (type === "divide") {
     renderDividePorts(id, ports);
   } else if (type === "mixer") {
@@ -4726,6 +4918,26 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = `wave-folder-${port.id}-value`;
         row.appendChild(valueSpan);
       }
+      if (type === "envelope-follower" && ENVELOPE_FOLLOWER_SLIDER_PORTS.includes(port.id)) {
+        const state = envelopeFollowerStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state[port.id]);
+        slider.dataset.role = `envelope-follower-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setEnvelopeFollowerParam(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `envelope-follower-${port.id}-value`;
+        row.appendChild(valueSpan);
+      }
       if (type === "pan" && port.id === "pan") {
         const state = panStates.get(id);
         const slider = document.createElement("input");
@@ -5209,6 +5421,14 @@ function createWidget(type, label, x, y, forcedId) {
         readout.textContent = formatNumber(Math.abs(absStates.get(id)?.value ?? 0));
         row.appendChild(readout);
       }
+      if ((type === "logic-xor" || type === "logic-not") && port.id === "value") {
+        row.classList.add("logic-gate-output-row");
+        const readout = document.createElement("span");
+        readout.className = "port-value";
+        readout.dataset.role = "logic-gate-readout";
+        readout.textContent = formatNumber(logicGateValue(logicGateStates.get(id)));
+        row.appendChild(readout);
+      }
       if (type === "value-mapper" && port.id === "out") {
         const label = row.querySelector(".port-label");
         if (label) {
@@ -5333,6 +5553,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "drum-sequencer") updateDrumSequencerVisual(id);
   if (type === "sample-hold") updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
+  if (type === "envelope-follower") updateEnvelopeFollowerVisual(id);
   if (type === "pan") updatePanVisual(id);
   // Main Gain/Volume control (see MAIN_GAIN_WIDGET_TYPES/.gain-control-row above) always sits
   // last in the widget, below every other control - regardless of which code path built it
@@ -5365,6 +5586,7 @@ function removeWidget(id, force = false) {
   frequencyDividerStates.delete(id);
   absStates.delete(id);
   valueMapperStates.delete(id);
+  logicGateStates.delete(id);
   stopClockTimer(id);
   clockStates.delete(id);
   stopLfoTimer(id);
@@ -5399,6 +5621,7 @@ function removeWidget(id, force = false) {
   chorusStates.delete(id);
   bitcrusherStates.delete(id);
   waveFolderStates.delete(id);
+  envelopeFollowerStates.delete(id);
   panStates.delete(id);
   sampleHoldStates.delete(id);
   effectCvStates.delete(id);
@@ -5426,6 +5649,7 @@ function removeWidget(id, force = false) {
   if (pendingMidiInId === id) pendingMidiInId = null;
   if (pendingMultiplierId === id) pendingMultiplierId = null;
   if (pendingAdderId === id) pendingAdderId = null;
+  if (pendingLogicGateId === id) pendingLogicGateId = null;
   if (pendingClockId === id) pendingClockId = null;
   if (pendingDrumSequencerId === id) pendingDrumSequencerId = null;
   if (pendingMixerId === id) pendingMixerId = null;
@@ -9530,7 +9754,7 @@ function updateMultiplierMode(widgetId) {
     }
   }
 
-  updateDualModeAudioNode(widgetId, "multiplier", state, inputPortIds, { inputCount: state.inputCount });
+  updateDualModeAudioNode(widgetId, "multiplier", state, inputPortIds, { inputCount: state.inputCount, values: state.values });
 
   recomputeMultiplier(widgetId);
 }
@@ -9639,7 +9863,7 @@ function refreshControlGraph() {
     }
   });
 
-  const derivedTypes = new Set(["multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "detune"]);
+  const derivedTypes = new Set(["multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "detune", "logic-and", "logic-or", "logic-xor", "logic-not"]);
   const pending = new Set(
     [...document.querySelectorAll(".widget-instance")]
       .filter((el) => derivedTypes.has(el.dataset.widgetType))
@@ -9662,6 +9886,7 @@ function refreshControlGraph() {
       else if (type === "abs") updateAbsMode(id);
       else if (type === "value-mapper") updateValueMapperMode(id);
       else if (type === "detune") updateDetuneMode(id);
+      else if (type === "logic-and" || type === "logic-or" || type === "logic-xor" || type === "logic-not") updateLogicGateMode(id);
       pending.delete(id);
     }
   }
@@ -9892,7 +10117,7 @@ function updateAdderMode(widgetId) {
     }
   }
 
-  updateDualModeAudioNode(widgetId, "adder", state, inputPortIds);
+  updateDualModeAudioNode(widgetId, "adder", state, inputPortIds, { inputCount: state.inputCount, values: state.values });
 
   recomputeAdder(widgetId);
 }
@@ -9938,9 +10163,157 @@ document.getElementById("adderSettingsSave").addEventListener("click", () => {
 
     recomputeAdder(pendingAdderId);
     drawConnections();
-    savePresetNow(); 
+    savePresetNow();
   }
   closeAdderSettings();
+});
+
+
+
+// Shared by all four logic gates (AND/OR/XOR/NOT) - keyed by gateType rather
+// than four near-identical state maps, since they differ only in input
+// count (AND/OR: configurable 2-8, see logicGateSettingsOverlay below;
+// XOR: fixed 2; NOT: fixed 1) and in how logicGateValue() combines the
+// inputs. Mirrors Adder/Multiplier's dual-mode (control-value vs real
+// audio-node) pattern above.
+const logicGateStates = new Map();
+const LOGIC_GATE_MIN_INPUTS = 2;
+const LOGIC_GATE_MAX_INPUTS = 8;
+
+function logicGateInputCount(state) {
+  if (state.gateType === "logic-not") return 1;
+  if (state.gateType === "logic-xor") return 2;
+  return state.inputCount;
+}
+
+// >0V reads as logical 1 (per spec) - mirrors the firmware's
+// nodes::arithmetic::renderLogic*() functions (ArithmeticNodes.h) exactly,
+// including AND's neutral-true/OR's neutral-false unconnected defaults
+// (see updateLogicGateMode).
+function logicGateValue(state) {
+  if (!state) return 0;
+  const values = state.values || [];
+  switch (state.gateType) {
+    case "logic-and": {
+      for (let i = 0; i < state.inputCount; i += 1) {
+        if (!((values[i] ?? 0) > 0)) return 0;
+      }
+      return CV_MAX_VOLTS;
+    }
+    case "logic-or": {
+      for (let i = 0; i < state.inputCount; i += 1) {
+        if ((values[i] ?? 0) > 0) return CV_MAX_VOLTS;
+      }
+      return 0;
+    }
+    case "logic-xor":
+      return ((values[0] ?? 0) > 0) !== ((values[1] ?? 0) > 0) ? CV_MAX_VOLTS : 0;
+    case "logic-not":
+      return (values[0] ?? 0) > 0 ? 0 : CV_MAX_VOLTS;
+    default:
+      return 0;
+  }
+}
+
+// Only AND/OR use this (configurable input count, dispatched in
+// createWidget's port-render chain) - XOR/NOT have a fixed port shape and
+// fall through to the generic `else` branch there, using their static
+// WIDGET_TYPES definition directly.
+function renderLogicGatePorts(widgetId, portsEl) {
+  const state = logicGateStates.get(widgetId);
+  if (!state) return;
+  portsEl.innerHTML = "";
+
+  for (let i = 1; i <= state.inputCount; i += 1) {
+    portsEl.appendChild(createPortRow(widgetId, { id: `in${i}`, label: `In ${i}` }, "in", state.gateType));
+  }
+
+  const outRow = createPortRow(widgetId, { id: "value", label: "" }, "out", state.gateType);
+  outRow.classList.add("logic-gate-output-row");
+  const readout = document.createElement("span");
+  readout.className = "port-value";
+  readout.dataset.role = "logic-gate-readout";
+  readout.textContent = formatNumber(logicGateValue(state));
+  outRow.appendChild(readout);
+  portsEl.appendChild(outRow);
+  layoutPortsGrid(portsEl);
+}
+
+function recomputeLogicGate(widgetId) {
+  const state = logicGateStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const readout = el.querySelector('[data-role="logic-gate-readout"]');
+
+  const value = logicGateValue(state);
+  if (readout) readout.textContent = formatNumber(value);
+  if (!state.audioMode) propagate(widgetId, "value", value);
+}
+
+function updateLogicGateMode(widgetId) {
+  const state = logicGateStates.get(widgetId);
+  if (!state) return;
+  const count = logicGateInputCount(state);
+  const unconnectedDefault = state.gateType === "logic-and" ? CV_MAX_VOLTS : 0;
+  const inputPortIds = [];
+  for (let i = 0; i < count; i += 1) {
+    inputPortIds.push(`in${i + 1}`);
+    if (!connections.some((c) => c.to.widgetId === widgetId && c.to.portId === `in${i + 1}`)) {
+      state.values[i] = unconnectedDefault;
+    }
+  }
+
+  const params = state.gateType === "logic-and" || state.gateType === "logic-or"
+    ? { inputCount: state.inputCount }
+    : undefined;
+  updateDualModeAudioNode(widgetId, state.gateType, state, inputPortIds, params);
+
+  recomputeLogicGate(widgetId);
+}
+
+const logicGateSettingsOverlay = document.getElementById("logicGateSettingsOverlay");
+const logicGateCountInput = document.getElementById("logicGateCountInput");
+let pendingLogicGateId = null;
+
+function openLogicGateSettings(widgetId) {
+  const state = logicGateStates.get(widgetId);
+  if (!state) return;
+  pendingLogicGateId = widgetId;
+  logicGateCountInput.value = state.inputCount;
+  logicGateSettingsOverlay.classList.remove("hidden");
+}
+
+function closeLogicGateSettings() {
+  logicGateSettingsOverlay.classList.add("hidden");
+  pendingLogicGateId = null;
+}
+
+document.getElementById("logicGateSettingsCancel").addEventListener("click", closeLogicGateSettings);
+
+document.getElementById("logicGateSettingsSave").addEventListener("click", () => {
+  if (!pendingLogicGateId) return;
+  const state = logicGateStates.get(pendingLogicGateId);
+  if (state) {
+    let count = parseInt(logicGateCountInput.value, 10);
+    if (Number.isNaN(count)) count = LOGIC_GATE_MIN_INPUTS;
+    count = clamp(count, LOGIC_GATE_MIN_INPUTS, LOGIC_GATE_MAX_INPUTS);
+
+    if (count < state.inputCount) {
+      for (let i = count + 1; i <= state.inputCount; i += 1) {
+        removeConnectionsForPort(pendingLogicGateId, `in${i}`, "in");
+      }
+    }
+    state.inputCount = count;
+
+    const el = document.getElementById(pendingLogicGateId);
+    const portsEl = el ? el.querySelector(".widget-ports") : null;
+    if (portsEl) renderLogicGatePorts(pendingLogicGateId, portsEl);
+
+    recomputeLogicGate(pendingLogicGateId);
+    drawConnections();
+    savePresetNow();
+  }
+  closeLogicGateSettings();
 });
 
 
@@ -9997,7 +10370,7 @@ function updateDivideMode(widgetId) {
     state.values[1] = 1;
   }
 
-  updateDualModeAudioNode(widgetId, "divide", state, ["in1", "in2"]);
+  updateDualModeAudioNode(widgetId, "divide", state, ["in1", "in2"], { values: state.values });
 
   recomputeDivide(widgetId);
 }
@@ -12898,6 +13271,70 @@ function setWaveFolderParam(widgetId, portId, value) {
   updateWaveFolderVisual(widgetId);
   sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
 }
+
+const envelopeFollowerStates = new Map();
+const ENVELOPE_FOLLOWER_SLIDER_PORTS = ["attack", "release", "preGain"];
+
+// Mirrors EnvelopeFollowerNode.h's cv::cvToRange() log-curve mapping - same
+// 3 ranges, so the slider readout shows exactly what the DSP is using.
+function formatEnvelopeFollowerValue(portId, value) {
+  const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  if (portId === "attack") return `${formatNumber(cvToRange(volts, 1, 500, "log"))} ms`;
+  if (portId === "release") return `${formatNumber(cvToRange(volts, 10, 2000, "log"))} ms`;
+  return `${formatNumber(cvToRange(volts, 0.1, 10, "log"))}×`;
+}
+
+function updateEnvelopeFollowerVisual(widgetId) {
+  const state = envelopeFollowerStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  ENVELOPE_FOLLOWER_SLIDER_PORTS.forEach((portId) => {
+    const slider = el.querySelector(`[data-role="envelope-follower-${portId}-slider"]`);
+    if (slider) slider.value = String(state[portId]);
+    const value = el.querySelector(`[data-role="envelope-follower-${portId}-value"]`);
+    if (value) value.textContent = formatEnvelopeFollowerValue(portId, state[portId]);
+  });
+}
+
+function setEnvelopeFollowerParam(widgetId, portId, value) {
+  const state = envelopeFollowerStates.get(widgetId);
+  if (!state || !ENVELOPE_FOLLOWER_SLIDER_PORTS.includes(portId)) return;
+  state[portId] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, portId, state[portId]);
+  updateEnvelopeFollowerVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+}
+
+const envelopeFollowerSettingsOverlay = document.getElementById("envelopeFollowerSettingsOverlay");
+const envelopeFollowerCoeffStrideSelect = document.getElementById("envelopeFollowerCoeffStrideSelect");
+let pendingEnvelopeFollowerId = null;
+
+function openEnvelopeFollowerSettings(widgetId) {
+  const state = envelopeFollowerStates.get(widgetId);
+  if (!state) return;
+  pendingEnvelopeFollowerId = widgetId;
+  envelopeFollowerCoeffStrideSelect.value = String(state.coeffStride ?? 4);
+  envelopeFollowerSettingsOverlay.classList.remove("hidden");
+}
+
+function closeEnvelopeFollowerSettings() {
+  envelopeFollowerSettingsOverlay.classList.add("hidden");
+  pendingEnvelopeFollowerId = null;
+}
+
+document.getElementById("envelopeFollowerSettingsCancel").addEventListener("click", closeEnvelopeFollowerSettings);
+
+document.getElementById("envelopeFollowerSettingsSave").addEventListener("click", () => {
+  if (!pendingEnvelopeFollowerId) return;
+  const state = envelopeFollowerStates.get(pendingEnvelopeFollowerId);
+  if (state) {
+    const coeffStride = parseInt(envelopeFollowerCoeffStrideSelect.value, 10);
+    state.coeffStride = Number.isNaN(coeffStride) ? 4 : clamp(coeffStride, 1, 16);
+    audioEngine.setParam(pendingEnvelopeFollowerId, "coeffStride", state.coeffStride);
+    sendLiveParamUpdate(pendingEnvelopeFollowerId, { coeffStride: state.coeffStride });
+  }
+  closeEnvelopeFollowerSettings();
+});
 
 function formatPanValue(value) {
   const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
@@ -16822,6 +17259,7 @@ function drawConnections() {
   });
   sampleHoldStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
   waveFolderStates.forEach((_, widgetId) => updateWaveFolderVisual(widgetId));
+  envelopeFollowerStates.forEach((_, widgetId) => updateEnvelopeFollowerVisual(widgetId));
   panStates.forEach((_, widgetId) => updatePanVisual(widgetId));
   refreshWiredSliderLocks();
 }
@@ -17259,6 +17697,13 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       if (idx >= 0 && idx < state.inputCount) {
         const num = Number(value);
         state.values[idx] = Number.isNaN(num) ? 0 : num;
+        // If this widget is already in real-audio mode (some OTHER input is
+        // a genuine audio-rate edge), a control-rate value like this one
+        // never reaches the real WebAudio node through the graph edge
+        // itself - push it in directly, or it silently reads as the
+        // node's static default forever (see audio-engine.js's "multiplier"
+        // setParam case).
+        if (state.audioMode) audioEngine.setParam(widgetId, portId, state.values[idx]);
         recomputeMultiplier(widgetId);
         markDirty();
       }
@@ -17272,6 +17717,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       if (idx >= 0 && idx < state.inputCount) {
         const num = Number(value);
         state.values[idx] = Number.isNaN(num) ? 0 : num;
+        // See "multiplier" above.
+        if (state.audioMode) audioEngine.setParam(widgetId, portId, state.values[idx]);
         recomputeAdder(widgetId);
         markDirty();
       }
@@ -17286,6 +17733,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         const num = Number(value);
         const fallback = idx === 0 ? 0 : 1;
         state.values[idx] = Number.isNaN(num) ? fallback : num;
+        // See "multiplier" above.
+        if (state.audioMode) audioEngine.setParam(widgetId, portId, state.values[idx]);
         recomputeDivide(widgetId);
         markDirty();
       }
@@ -17318,6 +17767,19 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     if (state && !Number.isNaN(num)) {
       state.value = num;
       recomputeAbs(widgetId, voiceIndex);
+    }
+  }
+
+  if (["logic-and", "logic-or", "logic-xor", "logic-not"].includes(el.dataset.widgetType)) {
+    const state = logicGateStates.get(widgetId);
+    if (state) {
+      const idx = portId === "in" ? 0 : parseInt(String(portId).replace("in", ""), 10) - 1;
+      if (idx >= 0 && idx < logicGateInputCount(state)) {
+        const num = Number(value);
+        state.values[idx] = Number.isNaN(num) ? 0 : num;
+        recomputeLogicGate(widgetId);
+        markDirty();
+      }
     }
   }
 
@@ -18166,6 +18628,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     setWaveFolderParam(widgetId, portId, Number(value));
   }
 
+  if (el.dataset.widgetType === "envelope-follower" && ENVELOPE_FOLLOWER_SLIDER_PORTS.includes(portId)) {
+    setEnvelopeFollowerParam(widgetId, portId, Number(value));
+  }
+
   if (el.dataset.widgetType === "pan" && portId === "pan") {
     setPanParam(widgetId, Number(value));
   }
@@ -18763,6 +19229,35 @@ function routeMidiToSoundFontPlayer(data) {
   });
 }
 
+let warnedNoMdaPianoMidiWire = false;
+
+function routeMidiToMdaPiano(data) {
+  if (data.type !== "midi") return;
+  const wires = connections.filter(
+    (c) =>
+      c.from.portId === "midi" &&
+      c.to.portId === "midi" &&
+      document.getElementById(c.to.widgetId)?.dataset.widgetType === "mda-piano" &&
+      document.getElementById(c.from.widgetId)?.dataset.widgetType === "midi-in"
+  );
+  if (
+    wires.length === 0 &&
+    !warnedNoMdaPianoMidiWire &&
+    document.querySelector('.widget-instance[data-widget-type="mda-piano"]')
+  ) {
+    warnedNoMdaPianoMidiWire = true;
+    console.warn(
+      'MDA Piano: no "MIDI" wire from a Midi-In widget\'s MIDI output to the MDA Piano\'s MIDI ' +
+        "input - it needs this dedicated wire (separate from Note/Gate/Velocity) to receive notes at all."
+    );
+  }
+  wires.forEach((c) => {
+    const midiInState = midiInStates.get(c.from.widgetId);
+    if (midiInState && midiInState.channel !== null && data.channel !== midiInState.channel) return;
+    audioEngine.handleMdaPianoMidi(c.to.widgetId, data);
+  });
+}
+
 
 
 function applyFilterWidgetParams(id, params, curtis = false) {
@@ -19169,6 +19664,52 @@ const WIDGET_ENGINES = {
     },
   },
   abs: {
+    getParams: () => ({}),
+    applyParams: () => {},
+  },
+  "logic-and": {
+    getParams: (id) => {
+      const state = logicGateStates.get(id);
+      return state ? { inputCount: state.inputCount, values: [...state.values] } : {};
+    },
+    applyParams: (id, params) => {
+      const state = logicGateStates.get(id);
+      if (!state || !params) return;
+      state.inputCount = clamp(params.inputCount || 2, LOGIC_GATE_MIN_INPUTS, LOGIC_GATE_MAX_INPUTS);
+      if (Array.isArray(params.values)) state.values = params.values.slice();
+      const el = document.getElementById(id);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderLogicGatePorts(id, portsEl);
+    },
+  },
+  "logic-or": {
+    getParams: (id) => {
+      const state = logicGateStates.get(id);
+      return state ? { inputCount: state.inputCount, values: [...state.values] } : {};
+    },
+    applyParams: (id, params) => {
+      const state = logicGateStates.get(id);
+      if (!state || !params) return;
+      state.inputCount = clamp(params.inputCount || 2, LOGIC_GATE_MIN_INPUTS, LOGIC_GATE_MAX_INPUTS);
+      if (Array.isArray(params.values)) state.values = params.values.slice();
+      const el = document.getElementById(id);
+      const portsEl = el ? el.querySelector(".widget-ports") : null;
+      if (portsEl) renderLogicGatePorts(id, portsEl);
+    },
+  },
+  "logic-xor": {
+    getParams: (id) => {
+      const state = logicGateStates.get(id);
+      return state ? { values: [...state.values] } : {};
+    },
+    applyParams: (id, params) => {
+      const state = logicGateStates.get(id);
+      if (!state || !params) return;
+      if (Array.isArray(params.values)) state.values = params.values.slice();
+      recomputeLogicGate(id);
+    },
+  },
+  "logic-not": {
     getParams: () => ({}),
     applyParams: () => {},
   },
@@ -19921,6 +20462,24 @@ const WIDGET_ENGINES = {
       state.mix = clamp(Number(params.mix ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS);
       WAVE_FOLDER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
       updateWaveFolderVisual(id);
+    },
+  },
+  "envelope-follower": {
+    getParams: (id) => {
+      const state = envelopeFollowerStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = envelopeFollowerStates.get(id);
+      if (!state || !params) return;
+      state.attack = clamp(Number(params.attack ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      state.release = clamp(Number(params.release ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      state.preGain = clamp(Number(params.preGain ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      const coeffStride = parseInt(params.coeffStride, 10);
+      state.coeffStride = Number.isNaN(coeffStride) ? 4 : clamp(coeffStride, 1, 16);
+      ENVELOPE_FOLLOWER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
+      audioEngine.setParam(id, "coeffStride", state.coeffStride);
+      updateEnvelopeFollowerVisual(id);
     },
   },
   pan: {
@@ -20950,6 +21509,7 @@ function connectWs() {
       routeMidiToSwitches(data);
       routeMidiToOutputSwitches(data);
       routeMidiToSoundFontPlayer(data);
+      routeMidiToMdaPiano(data);
       routeMidiToMasterClock(data);
       routeMidiToPresetNav(data);
       if (["note_on", "note_off"].includes(data.midiType)) {

@@ -1,9 +1,5 @@
 
- 
-Clock sollte doch irgendwie einen Frequency Ausgang haben, der dann in den LFO gehen kann. 
- 
-Drum Sequencer 
-
+  
 i2c Display und SPI Display 
 
 GPIO Input Schalter / BUtton
@@ -15,3 +11,14 @@ Automatisches Bauen verschiedener Standardkonfigurationen
  
  
 MIT license. 
+
+Envelope Follower (Audio-zu-CV): Analysiert die Lautstärke eines Audiosignals und wandelt sie in ein Steuersignal (CV) um. Perfekt für Sidechain-Effekte oder dynamische Filterfahrten.
+
+Logic Gates (AND, OR, XOR, NOT): Da du schon Mathe-Module hast, wären logische Verknüpfungen für Trigger- und Gate-Signale super, um komplexe, rhythmische Muster zu verschalten.
+
+Burst Generator / Trigger Delay: Ein Modul, das auf einen Trigger hin eine Serie von schnellen, abfallenden Triggern ausgibt (für Drum-Rolls oder komplexe Modulationen) oder Signale verzögert.
+
+Chaos / Lorenz / Rössler Generator: Neben dem Standard-LFO und Sample & Hold sorgen chaotische Attraktoren für organische, unvorhersehbare und lebendige Modulationsverläufe (perfekt für Ambient oder experimentelle Sounds).
+
+
+Quantizer: Nimmt kontinuierliche CV-Signale (z. B. von einem Random-Generator oder LFO) und zwingt sie in eine definierte musikalische Tonleiter (z. B. Moll, Dur, Pentatonik), damit Zufallsmodulationen immer im Takt bzw. in der Tonart bleiben.

@@ -14,6 +14,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
@@ -170,6 +171,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::WaveFolder:
         return nodes::wavefolder::setParam(inst, name, value);
+
+    case NodeType::EnvelopeFollower:
+        return nodes::envelopefollower::setParam(inst, name, value);
 
     case NodeType::Pan:
         return nodes::pan::setParam(inst, name, value);

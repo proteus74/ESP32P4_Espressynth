@@ -260,6 +260,32 @@ struct PanState
     float pan = 5.0f;
 };
 
+// Envelope Follower: attack/release/preGain all use the shared 0-10V CV
+// convention, mapped via cv::cvToRange() with a log curve (see
+// EnvelopeFollowerNode.h) - 5V (the default for all three) lands at
+// attack≈22ms, release≈141ms, preGain=1.0x exactly (geometric centre of
+// 0.1x..10x). `envelope` is the running one-pole state carried across
+// blocks (not reset between blocks, unlike the CV controls above).
+struct EnvelopeFollowerState
+{
+    float attackCv = 5.0f;
+    float releaseCv = 5.0f;
+    float preGainCv = 5.0f;
+    float envelope = 0.0f;
+    // Settings-dialog field (main.js's envelopeFollowerCoeffStrideSelect),
+    // same idea/range as FilterState::coeffStride: when attack/release/
+    // preGain is genuinely audio-rate-fed, the (expf()-based) attack/
+    // release coefficients only get recomputed every coeffStride-th sample
+    // instead of every sample - envelope tracking itself (the cheap part)
+    // still runs every sample regardless. Default 4.
+    uint8_t coeffStride = 4;
+    // Cached derived values (see FilterState::coeffsDirty/audioCoeffsInitialized).
+    float coeffAttack = 0.0f;
+    float coeffRelease = 0.0f;
+    float preGain = 1.0f;
+    bool coeffsDirty = true;
+};
+
 // Free-running pulse generator, one per Clock-type node instance - mirrors
 // main.js's Clock widget (fireClockPulse/restartClockTimer), but
 // sample-accurate instead of per-JS setInterval. bpm itself is NOT stored

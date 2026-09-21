@@ -16,6 +16,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
@@ -144,6 +145,8 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Multiplier:
     case NodeType::Adder:
+    case NodeType::LogicAnd:
+    case NodeType::LogicOr:
         nodes::arithmetic::parsePresetMultiplierOrAdder(p, out);
         break;
     case NodeType::Bitcrusher:
@@ -151,6 +154,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::parsePreset(p, out);
+        break;
+    case NodeType::EnvelopeFollower:
+        nodes::envelopefollower::parsePreset(p, out);
         break;
     case NodeType::Pan:
         nodes::pan::parsePreset(p, out);

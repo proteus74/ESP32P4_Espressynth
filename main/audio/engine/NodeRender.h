@@ -16,6 +16,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
@@ -165,6 +166,18 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Abs:
         nodes::arithmetic::renderAbs(inst, frames);
         break;
+    case NodeType::LogicAnd:
+        nodes::arithmetic::renderLogicAnd(inst, frames);
+        break;
+    case NodeType::LogicOr:
+        nodes::arithmetic::renderLogicOr(inst, frames);
+        break;
+    case NodeType::LogicXor:
+        nodes::arithmetic::renderLogicXor(inst, frames);
+        break;
+    case NodeType::LogicNot:
+        nodes::arithmetic::renderLogicNot(inst, frames);
+        break;
     case NodeType::ValueMapper:
         nodes::valuemapper::render(inst, frames);
         break;
@@ -173,6 +186,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::render(inst, frames);
+        break;
+    case NodeType::EnvelopeFollower:
+        nodes::envelopefollower::render(inst, frames);
         break;
     case NodeType::Pan:
         nodes::pan::render(inst, frames);

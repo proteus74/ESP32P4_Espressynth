@@ -117,9 +117,13 @@ struct WidgetParams
     // wave-folder - all four controls are raw 0-10V CV values.
     float waveFolderDrive = 0.0f, waveFolderSymmetry = 5.0f;
     float waveFolderGain = 10.0f, waveFolderMix = 10.0f;
+    // envelope-follower - attack/release/preGain, raw 0-10V CV values (see
+    // EnvelopeFollowerNode.h's cv::cvToRange log-curve mapping).
+    float envelopeFollowerAttack = 5.0f, envelopeFollowerRelease = 5.0f, envelopeFollowerPreGain = 5.0f;
+    uint8_t envelopeFollowerCoeffStride = 4;
     // pan - single CV, centre (5V) = hard center.
     float panCv = 5.0f;
-    // mixer/multiplier/adder
+    // mixer/multiplier/adder/logic-and/logic-or
     uint8_t inputCount = 2;
     float mixerGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};
     float outputGain = 1.0f;

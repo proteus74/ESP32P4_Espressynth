@@ -265,6 +265,134 @@ inline void renderFrequencyDivider(NodeInstance &inst, size_t frames)
     }
 }
 
+// Logic gates: >0V on an input reads as logical 1 - deliberately NOT
+// cv::kGateThresholdVolts, which is a separate, higher 5V convention used
+// elsewhere for note-gate detection. Output is
+// cv::kGateOnVolts/kGateOffVolts (10V/0V), so a gate's output can drive a
+// trigger/gate input - or another logic gate's input - exactly like any
+// other gate signal in this codebase.
+inline void renderLogicAnd(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    // See renderMultiplier()'s comment above.
+    float values[synth::kMaxAudioInPorts] = {};
+    if (allPortsConstantForBlock(inst, inst.audioInPortCount, frames, values))
+    {
+        bool allHigh = true;
+        for (int p = 0; p < inst.audioInPortCount; ++p)
+        {
+            if (!(values[p] > 0.0f))
+            {
+                allHigh = false;
+                break;
+            }
+        }
+        const float result = allHigh ? cv::kGateOnVolts : cv::kGateOffVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = result;
+        }
+        return;
+    }
+    for (size_t i = 0; i < frames; ++i)
+    {
+        bool allHigh = true;
+        for (int p = 0; p < inst.audioInPortCount; ++p)
+        {
+            if (!(portSample(inst, p, i) > 0.0f))
+            {
+                allHigh = false;
+                break;
+            }
+        }
+        inst.outL[i] = allHigh ? cv::kGateOnVolts : cv::kGateOffVolts;
+    }
+}
+
+inline void renderLogicOr(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    // See renderMultiplier()'s comment above.
+    float values[synth::kMaxAudioInPorts] = {};
+    if (allPortsConstantForBlock(inst, inst.audioInPortCount, frames, values))
+    {
+        bool anyHigh = false;
+        for (int p = 0; p < inst.audioInPortCount; ++p)
+        {
+            if (values[p] > 0.0f)
+            {
+                anyHigh = true;
+                break;
+            }
+        }
+        const float result = anyHigh ? cv::kGateOnVolts : cv::kGateOffVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = result;
+        }
+        return;
+    }
+    for (size_t i = 0; i < frames; ++i)
+    {
+        bool anyHigh = false;
+        for (int p = 0; p < inst.audioInPortCount; ++p)
+        {
+            if (portSample(inst, p, i) > 0.0f)
+            {
+                anyHigh = true;
+                break;
+            }
+        }
+        inst.outL[i] = anyHigh ? cv::kGateOnVolts : cv::kGateOffVolts;
+    }
+}
+
+inline void renderLogicXor(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    // Fixed 2 inputs - see renderMultiplier()'s comment above for the
+    // constant-block fast path this mirrors.
+    float a = 0.0f;
+    float b = 0.0f;
+    const bool aConstant = audioPortConstantForBlock(inst, 0, frames, a);
+    const bool bConstant = audioPortConstantForBlock(inst, 1, frames, b);
+    if (aConstant && bConstant)
+    {
+        const float result = ((a > 0.0f) != (b > 0.0f)) ? cv::kGateOnVolts : cv::kGateOffVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = result;
+        }
+        return;
+    }
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const bool ai = portSample(inst, 0, i) > 0.0f;
+        const bool bi = portSample(inst, 1, i) > 0.0f;
+        inst.outL[i] = (ai != bi) ? cv::kGateOnVolts : cv::kGateOffVolts;
+    }
+}
+
+inline void renderLogicNot(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    // See renderMultiplier()'s comment above.
+    float value = 0.0f;
+    if (audioPortConstantForBlock(inst, 0, frames, value))
+    {
+        const float result = (value > 0.0f) ? cv::kGateOffVolts : cv::kGateOnVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = result;
+        }
+        return;
+    }
+    for (size_t i = 0; i < frames; ++i)
+    {
+        inst.outL[i] = (portSample(inst, 0, i) > 0.0f) ? cv::kGateOffVolts : cv::kGateOnVolts;
+    }
+}
+
 inline void renderAbs(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
@@ -307,7 +435,8 @@ inline void parsePresetFrequencyDivider(cJSON *p, WidgetParams &out)
     out.frequencyDivider = quantizeFrequencyDivider(presetparser::getFloat(p, "divider", 2.0f));
 }
 
-// Shared by Multiplier and Adder (both configurable 2-8 inputs).
+// Shared by Multiplier, Adder, and the AND/OR logic gates (all configurable
+// 2-8 inputs).
 inline void parsePresetMultiplierOrAdder(cJSON *p, WidgetParams &out)
 {
     const int inputCount = presetparser::getInt(p, "inputCount", 2);

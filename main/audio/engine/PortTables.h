@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "CvConventions.h"
 #include "NodeTypes.h"
 
 // C++ port of static/js/main.js's AUDIO_PORTS/getPortKind table - which
@@ -253,6 +254,8 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
+    case NodeType::LogicAnd:
+    case NodeType::LogicOr:
         return indexedInPort(portName);
     case NodeType::Multiplexer:
         // "select" (control-only, see isControlOnlyInput) picks which of
@@ -270,6 +273,7 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 1;
         return -1;
     case NodeType::Divide:
+    case NodeType::LogicXor:
     {
         // Fixed 2 inputs (in1/in2) - unlike Mixer/Multiplier/Adder's
         // configurable 2-8, so bound indexedInPort's range down to 2.
@@ -284,6 +288,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         return -1;
     case NodeType::Abs:
     case NodeType::ValueMapper:
+    case NodeType::LogicNot:
         return is(portName, "in") ? 0 : -1;
     case NodeType::Bitcrusher:
         if (is(portName, "in")) return 0;
@@ -296,6 +301,12 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "symmetry")) return 2;
         if (is(portName, "gain")) return 3;
         if (is(portName, "mix")) return 4;
+        return -1;
+    case NodeType::EnvelopeFollower:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "attack")) return 1;
+        if (is(portName, "release")) return 2;
+        if (is(portName, "preGain")) return 3;
         return -1;
     case NodeType::Pan:
         if (is(portName, "in")) return 0;
@@ -588,6 +599,10 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Multiplier:
     case NodeType::Adder:
     case NodeType::Divide:
+    case NodeType::LogicAnd:
+    case NodeType::LogicOr:
+    case NodeType::LogicXor:
+    case NodeType::LogicNot:
         return is(portName, "value") ? 0 : -1;
     case NodeType::FrequencyDivider:
         return (is(portName, "cv") || is(portName, "hz")) ? 0 : -1;
@@ -598,6 +613,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Bitcrusher:
         return is(portName, "out") ? 0 : -1;
     case NodeType::WaveFolder:
+        return is(portName, "out") ? 0 : -1;
+    case NodeType::EnvelopeFollower:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Pan:
         if (is(portName, "out1"))
@@ -728,22 +745,28 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
+    case NodeType::LogicAnd:
+    case NodeType::LogicOr:
         return 8;
     case NodeType::Multiplexer:
         return 17; // "in1".."in16" + "select" (CV)
     case NodeType::OutputMultiplexer:
         return 2; // "in" + "select" (CV)
     case NodeType::Divide:
+    case NodeType::LogicXor:
         return 2;
     case NodeType::FrequencyDivider:
         return 2;
     case NodeType::Abs:
     case NodeType::ValueMapper:
+    case NodeType::LogicNot:
         return 1;
     case NodeType::Bitcrusher:
         return 3;
     case NodeType::WaveFolder:
         return 5;
+    case NodeType::EnvelopeFollower:
+        return 4; // "in" + "attack" + "release" + "preGain" (CV)
     case NodeType::Pan:
         return 2; // "in" + "pan"
     case NodeType::SampleHold:
@@ -826,6 +849,10 @@ inline float audioInDefault(NodeType type, int portIdx)
         return 0.0f;
     case NodeType::SoundFontPlayer:
         return portIdx == 0 ? 1.0f : 0.0f;
+    case NodeType::LogicAnd:
+        // Neutral element for AND (like Multiplier's 1.0f) - an unconnected
+        // input must not force the whole gate false.
+        return cv::kGateOnVolts;
     default:
         return 0.0f;
     }
@@ -867,7 +894,7 @@ inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder ||
-           type == NodeType::DrumSequencer;
+           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely
@@ -892,6 +919,10 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::FrequencyDivider:
     case NodeType::Abs:
     case NodeType::ValueMapper:
+    case NodeType::LogicAnd:
+    case NodeType::LogicOr:
+    case NodeType::LogicXor:
+    case NodeType::LogicNot:
         return true; // all inputs
     case NodeType::Oscillator:
         return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5; // pitch/tune/waveform/feedback

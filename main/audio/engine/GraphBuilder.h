@@ -22,6 +22,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
@@ -620,6 +621,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::WaveFolder:
         nodes::wavefolder::build(inst, p);
         break;
+    case NodeType::EnvelopeFollower:
+        nodes::envelopefollower::build(inst, p);
+        break;
     case NodeType::Pan:
         nodes::pan::build(inst, p);
         break;
@@ -862,7 +866,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // NodeInstance.h's `primary` doc comment (Lfo/Gain "Global" mode).
             inst.primary = &g->instances[w.instanceBase];
             inst.audioInPortCount = static_cast<uint8_t>(ports::audioInPortCount(w.type));
-            if (w.type == NodeType::Mixer || w.type == NodeType::Multiplier || w.type == NodeType::Adder)
+            if (w.type == NodeType::Mixer || w.type == NodeType::Multiplier || w.type == NodeType::Adder ||
+                w.type == NodeType::LogicAnd || w.type == NodeType::LogicOr)
             {
                 inst.audioInPortCount = doc.widgets[i].params.inputCount;
             }
