@@ -263,7 +263,11 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
       outR[frame] = Math.max(-1, Math.min(1, r));
     }
     for (let v = 0; v < activevoices; v += 1) {
-      if (voices[v].env < 0.0001) voices[v] = voices[--activevoices];
+      // Copy fields, never the reference: the C++ original's
+      // voice[v] = voice[--activevoices] is a struct copy. Aliasing two slots
+      // onto one object makes the render loop advance it twice per frame
+      // (an octave up) and lets the next noteOn overwrite a sounding voice.
+      if (voices[v].env < 0.0001) Object.assign(voices[v], voices[--activevoices]);
     }
   }
 
@@ -3680,7 +3684,11 @@ export class AudioEngine {
           seed.start();
           return seed;
         });
-        const processor = ctx.createScriptProcessor(256, MDA_PIANO_PORTS.length, 2);
+        // 2048, not the 256 the other ScriptProcessor nodes use: this one
+        // renders up to 32 sampled voices plus the effects chain per block,
+        // and a 5.3 ms main-thread deadline drops whole blocks (audible as
+        // clicks). Costs ~43 ms preview latency.
+        const processor = ctx.createScriptProcessor(2048, MDA_PIANO_PORTS.length, 2);
         inputMerger.connect(processor);
         const splitter = ctx.createChannelSplitter(2);
         processor.connect(splitter);

@@ -3359,7 +3359,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "mda-piano") {
-    mdaPianoStates.set(id, {
+    const state = {
       maxVoices: 32,
       enableModWheel: false,
       enablePitchWheel: false,
@@ -3373,7 +3373,9 @@ function createWidget(type, label, x, y, forcedId) {
       choPhaSpeed: 5,
       preGain: CV_MAX_VOLTS,
       gain: CV_MAX_VOLTS,
-    });
+    };
+    mdaPianoStates.set(id, state);
+    audioEngine.createNode(id, "mda-piano", state);
   }
 
   if (type === "audio-out" || type === "usb-out" || type === "es8311-out" || type === "wm8960-out") {
@@ -18491,12 +18493,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     const state = mdaPianoStates.get(widgetId);
     if (state && ["enableModWheel", "enablePitchWheel"].includes(portId)) {
       state[portId] = Number(value) >= 0.5;
+      audioEngine.setParam(widgetId, portId, state[portId]);
       updateMdaPianoControls(widgetId);
       sendLiveParamUpdate(widgetId, { [portId]: state[portId] });
     } else if (state && MDA_PIANO_CV_PARAMS.includes(portId)) {
       const num = Number(value);
       if (!Number.isNaN(num)) {
         state[portId] = clamp(num, 0, CV_MAX_VOLTS);
+        audioEngine.setParam(widgetId, portId, state[portId]);
         updateMdaPianoControls(widgetId);
         sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
       }
@@ -20029,10 +20033,13 @@ const WIDGET_ENGINES = {
       state.maxVoices = clamp(Math.round(Number(params.maxVoices) || 32), 4, 128);
       state.enableModWheel = params.enableModWheel === true;
       state.enablePitchWheel = params.enablePitchWheel === true;
+      audioEngine.setParam(id, "enableModWheel", state.enableModWheel);
+      audioEngine.setParam(id, "enablePitchWheel", state.enablePitchWheel);
       MDA_PIANO_CV_PARAMS.forEach((portId) => {
         const fallback = state[portId];
         const value = Number(params[portId]);
         state[portId] = clamp(Number.isNaN(value) ? fallback : value, 0, CV_MAX_VOLTS);
+        audioEngine.setParam(id, portId, state[portId]);
       });
       updateMdaPianoControls(id);
     },
