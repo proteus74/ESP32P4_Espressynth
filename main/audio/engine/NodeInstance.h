@@ -256,6 +256,7 @@ struct NodeInstance
         SoundFontPlayerState soundFontPlayer;
         MdaPianoState mdaPiano;
         ClockState clock;
+        BurstGeneratorState burstGenerator;
         SampleHoldState sampleHold;
         OutputSwitchState outputSwitch;
         CvInState cvIn;
@@ -415,6 +416,9 @@ struct NodeInstance
             break;
         case NodeType::Clock:
             new (&clock) ClockState();
+            break;
+        case NodeType::BurstGenerator:
+            new (&burstGenerator) BurstGeneratorState();
             break;
         case NodeType::SampleHold:
             new (&sampleHold) SampleHoldState();

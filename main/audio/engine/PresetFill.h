@@ -16,6 +16,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
@@ -157,6 +158,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::EnvelopeFollower:
         nodes::envelopefollower::parsePreset(p, out);
+        break;
+    case NodeType::BurstGenerator:
+        nodes::burstgenerator::parsePreset(p, out);
         break;
     case NodeType::Pan:
         nodes::pan::parsePreset(p, out);

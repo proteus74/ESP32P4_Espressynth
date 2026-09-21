@@ -308,6 +308,13 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "release")) return 2;
         if (is(portName, "preGain")) return 3;
         return -1;
+    case NodeType::BurstGenerator:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "mode")) return 1;
+        if (is(portName, "count")) return 2;
+        if (is(portName, "time")) return 3;
+        if (is(portName, "decay")) return 4;
+        return -1;
     case NodeType::Pan:
         if (is(portName, "in")) return 0;
         if (is(portName, "pan")) return 1;
@@ -616,6 +623,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return is(portName, "out") ? 0 : -1;
     case NodeType::EnvelopeFollower:
         return is(portName, "out") ? 0 : -1;
+    case NodeType::BurstGenerator:
+        return is(portName, "out") ? 0 : -1;
     case NodeType::Pan:
         if (is(portName, "out1"))
             return 0;
@@ -767,6 +776,8 @@ inline int audioInPortCount(NodeType type)
         return 5;
     case NodeType::EnvelopeFollower:
         return 4; // "in" + "attack" + "release" + "preGain" (CV)
+    case NodeType::BurstGenerator:
+        return 5; // "in" + "mode" + "count" + "time" + "decay" (CV)
     case NodeType::Pan:
         return 2; // "in" + "pan"
     case NodeType::SampleHold:

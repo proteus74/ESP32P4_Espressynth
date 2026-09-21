@@ -22,6 +22,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
 #include "nodes/ChorusNode.h"
@@ -623,6 +624,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::EnvelopeFollower:
         nodes::envelopefollower::build(inst, p);
+        break;
+    case NodeType::BurstGenerator:
+        nodes::burstgenerator::build(inst, p);
         break;
     case NodeType::Pan:
         nodes::pan::build(inst, p);

@@ -121,6 +121,11 @@ struct WidgetParams
     // EnvelopeFollowerNode.h's cv::cvToRange log-curve mapping).
     float envelopeFollowerAttack = 5.0f, envelopeFollowerRelease = 5.0f, envelopeFollowerPreGain = 5.0f;
     uint8_t envelopeFollowerCoeffStride = 4;
+    // burst-generator - mode/count/time/decay, raw 0-10V CV values (see
+    // BurstGeneratorNode.h's cv::cvToRange mapping). mode <5V = burst,
+    // >=5V = trigger delay.
+    float burstGeneratorMode = 0.0f, burstGeneratorCount = 5.0f;
+    float burstGeneratorTime = 5.0f, burstGeneratorDecay = 5.0f;
     // pan - single CV, centre (5V) = hard center.
     float panCv = 5.0f;
     // mixer/multiplier/adder/logic-and/logic-or

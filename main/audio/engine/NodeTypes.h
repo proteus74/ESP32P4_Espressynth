@@ -52,6 +52,7 @@ enum class NodeType : uint8_t
     SoundFontPlayer,
     MidiSplit,
     Clock,
+    BurstGenerator,
     SampleHold,
     ReverbLight,
     Hammond,
@@ -229,6 +230,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::MdaPiano;
     if (strcmp(typeStr, "clock") == 0)
         return NodeType::Clock;
+    if (strcmp(typeStr, "burst-generator") == 0)
+        return NodeType::BurstGenerator;
     if (strcmp(typeStr, "sample-hold") == 0)
         return NodeType::SampleHold;
     if (strcmp(typeStr, "hammond") == 0)

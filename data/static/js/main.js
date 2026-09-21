@@ -1566,6 +1566,19 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "burst-generator": {
+    label: "Burst Gen",
+    pickerLabel: "Burst Generator / Trigger Delay",
+    icon: "⁘",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "mode", label: "Mode" },
+      { id: "count", label: "Count" },
+      { id: "time", label: "Time" },
+      { id: "decay", label: "Decay" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   pan: {
     label: "Pan",
     icon: "⇄",
@@ -1742,7 +1755,7 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
-  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold"] },
+  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold", "burst-generator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
@@ -1857,6 +1870,7 @@ const AUDIO_PORTS = {
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
   "envelope-follower": { in: ["in", "attack", "release", "preGain"], out: ["out"] },
+  "burst-generator": { in: ["in", "mode", "count", "time", "decay"], out: ["out"] },
   pan: { in: ["in", "pan"], out: ["out1", "out2"] },
   "sample-hold": { in: ["in", "trigger", "threshold"], out: ["out"] },
   
@@ -2096,7 +2110,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "cv-in", "cv-out", "digital-in", "digital-out"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
 
 
 
@@ -3761,6 +3775,12 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, { ...state });
   }
 
+  if (type === "burst-generator") {
+    const state = { mode: 0, count: CV_MAX_VOLTS / 2, time: CV_MAX_VOLTS / 2, decay: CV_MAX_VOLTS / 2 };
+    burstGeneratorStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
   if (type === "delay" || type === "reverb-light") {
     const state = defaultEffectCvState(type);
     effectCvStates.set(id, state);
@@ -4940,6 +4960,44 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = `envelope-follower-${port.id}-value`;
         row.appendChild(valueSpan);
       }
+      if (type === "burst-generator" && port.id === "mode") {
+        const state = burstGeneratorStates.get(id);
+        const select = document.createElement("select");
+        select.className = "port-select";
+        [["burst", "Burst"], ["delay", "Trigger Delay"]].forEach(([value, label]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          select.appendChild(option);
+        });
+        select.value = state.mode >= CV_MAX_VOLTS / 2 ? "delay" : "burst";
+        select.dataset.role = "burst-generator-mode-select";
+        select.addEventListener("mousedown", (e) => e.stopPropagation());
+        select.addEventListener("click", (e) => e.stopPropagation());
+        select.addEventListener("change", () => setBurstGeneratorMode(id, select.value));
+        row.appendChild(select);
+      }
+      if (type === "burst-generator" && BURST_GENERATOR_SLIDER_PORTS.includes(port.id)) {
+        const state = burstGeneratorStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state[port.id]);
+        slider.dataset.role = `burst-generator-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setBurstGeneratorParam(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `burst-generator-${port.id}-value`;
+        valueSpan.textContent = formatBurstGeneratorValue(port.id, state[port.id], state.mode >= CV_MAX_VOLTS / 2);
+        row.appendChild(valueSpan);
+      }
       if (type === "pan" && port.id === "pan") {
         const state = panStates.get(id);
         const slider = document.createElement("input");
@@ -5556,6 +5614,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "sample-hold") updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
   if (type === "envelope-follower") updateEnvelopeFollowerVisual(id);
+  if (type === "burst-generator") updateBurstGeneratorVisual(id);
   if (type === "pan") updatePanVisual(id);
   // Main Gain/Volume control (see MAIN_GAIN_WIDGET_TYPES/.gain-control-row above) always sits
   // last in the widget, below every other control - regardless of which code path built it
@@ -11586,7 +11645,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
   "esp-eq",
-  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
+  "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
 ]);
 
@@ -13337,6 +13396,57 @@ document.getElementById("envelopeFollowerSettingsSave").addEventListener("click"
   }
   closeEnvelopeFollowerSettings();
 });
+
+const burstGeneratorStates = new Map();
+const BURST_GENERATOR_SLIDER_PORTS = ["count", "time", "decay"];
+
+// Mirrors BurstGeneratorNode.h's cv::cvToRange() mapping. "time"'s real-world
+// range depends on mode (burst: 5-300ms inter-pulse spacing; delay: 1-2000ms
+// delay), so its display must read the widget's current mode, not just its
+// own CV value.
+function formatBurstGeneratorValue(portId, value, isDelayMode) {
+  const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  if (portId === "count") return `${Math.round(cvToRange(volts, 1, 8, "linear"))}`;
+  if (portId === "time") {
+    return isDelayMode
+      ? `${formatNumber(cvToRange(volts, 1, 2000, "log"))} ms`
+      : `${formatNumber(cvToRange(volts, 5, 300, "log"))} ms`;
+  }
+  return `${formatNumber(cvToRange(volts, 0, 0.9, "linear") * 100)} %`;
+}
+
+function updateBurstGeneratorVisual(widgetId) {
+  const state = burstGeneratorStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const isDelayMode = state.mode >= CV_MAX_VOLTS / 2;
+  const select = el.querySelector('[data-role="burst-generator-mode-select"]');
+  if (select) select.value = isDelayMode ? "delay" : "burst";
+  BURST_GENERATOR_SLIDER_PORTS.forEach((portId) => {
+    const slider = el.querySelector(`[data-role="burst-generator-${portId}-slider"]`);
+    if (slider) slider.value = String(state[portId]);
+    const value = el.querySelector(`[data-role="burst-generator-${portId}-value"]`);
+    if (value) value.textContent = formatBurstGeneratorValue(portId, state[portId], isDelayMode);
+  });
+}
+
+function setBurstGeneratorParam(widgetId, portId, value) {
+  const state = burstGeneratorStates.get(widgetId);
+  if (!state || !BURST_GENERATOR_SLIDER_PORTS.includes(portId)) return;
+  state[portId] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, portId, state[portId]);
+  updateBurstGeneratorVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+}
+
+function setBurstGeneratorMode(widgetId, modeStr) {
+  const state = burstGeneratorStates.get(widgetId);
+  if (!state) return;
+  state.mode = modeStr === "delay" ? CV_MAX_VOLTS : 0;
+  audioEngine.setParam(widgetId, "mode", state.mode);
+  updateBurstGeneratorVisual(widgetId);
+  sendLiveParamUpdate(widgetId, { mode: state.mode });
+}
 
 function formatPanValue(value) {
   const volts = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
@@ -18636,6 +18746,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     setEnvelopeFollowerParam(widgetId, portId, Number(value));
   }
 
+  if (el.dataset.widgetType === "burst-generator") {
+    if (portId === "mode") {
+      setBurstGeneratorMode(widgetId, Number(value) >= GATE_THRESHOLD_VOLTS ? "delay" : "burst");
+    } else if (BURST_GENERATOR_SLIDER_PORTS.includes(portId)) {
+      setBurstGeneratorParam(widgetId, portId, Number(value));
+    }
+  }
+
   if (el.dataset.widgetType === "pan" && portId === "pan") {
     setPanParam(widgetId, Number(value));
   }
@@ -20500,6 +20618,23 @@ const WIDGET_ENGINES = {
       state.pan = clamp(Number(params.pan ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
       audioEngine.setParam(id, "pan", state.pan);
       updatePanVisual(id);
+    },
+  },
+  "burst-generator": {
+    getParams: (id) => {
+      const state = burstGeneratorStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = burstGeneratorStates.get(id);
+      if (!state || !params) return;
+      state.mode = clamp(Number(params.mode ?? 0) || 0, 0, CV_MAX_VOLTS);
+      state.count = clamp(Number(params.count ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      state.time = clamp(Number(params.time ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      state.decay = clamp(Number(params.decay ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(id, "mode", state.mode);
+      BURST_GENERATOR_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
+      updateBurstGeneratorVisual(id);
     },
   },
   "sample-hold": {

@@ -302,6 +302,34 @@ struct ClockState
     bool pulseActive = false;
 };
 
+// Burst Generator / Trigger Delay: on a rising edge of "in", either fires a
+// retriggered burst of "count" fast, decaying pulses spaced "time" ms apart
+// (drum-roll/complex-modulation use), or a single pulse "time" ms after the
+// edge (trigger delay). All four params use the shared 0-10V CV convention;
+// "mode" is a plain threshold switch (<5V burst, >=5V delay) exactly like
+// Delay's bypass (see DelayNode.h/DelayState) rather than a string preset
+// field, so it stays live-modulatable/CV-controllable like every other knob
+// here. pendingSamples/pendingAmplitude is a small unordered set of
+// scheduled-but-not-yet-fired pulses (swap-removed as they fire, see
+// BurstGeneratorNode.h::render) - burst mode schedules up to kMaxPending at
+// once on the triggering edge, delay mode always schedules exactly one.
+struct BurstGeneratorState
+{
+    float modeCv = 0.0f;
+    float countCv = 5.0f;
+    float timeCv = 5.0f;
+    float decayCv = 5.0f;
+
+    static constexpr uint8_t kMaxPending = 8;
+    uint32_t pendingSamples[kMaxPending] = {};
+    float pendingAmplitude[kMaxPending] = {};
+    uint8_t pendingCount = 0;
+
+    bool prevTriggerAbove = false;
+    uint32_t outSamplesLeft = 0;
+    float outAmplitude = 0.0f;
+};
+
 // CV In (ADS1115) / CV Out (GP8413) - External Hardware widgets. Port/address/channel are
 // resolved once in build() into a Feature::IO slot index (see nodes/CvInNode.h/CvOutNode.h);
 // re-resolving here would need a FreeRTOS include in this otherwise plain-POD state header,

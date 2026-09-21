@@ -3119,6 +3119,18 @@ body.show-node-cpu .widget-cpu-badge {
   cursor: pointer;
 }
 
+.port-select {
+  flex: 0 0 128px;
+  width: 128px;
+  padding: 0.1rem 0.2rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.2rem;
+  font-size: 0.65rem;
+  cursor: pointer;
+}
+
 .port-slider::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;

@@ -3354,11 +3354,97 @@ export class AudioEngine {
         };
         return entry;
       }
+      case "burst-generator": {
+        // Mirrors the firmware's nodes::burstgenerator::render()
+        // (BurstGeneratorNode.h) 1:1: on a rising trigger edge, schedules
+        // either one delayed pulse (mode >= 5V) or a decaying burst of
+        // "count" pulses spaced "time" ms apart, tracked as a small
+        // sample-countdown queue (swap-removed as entries fire).
+        const inputMerger = ctx.createChannelMerger(5);
+        const processor = ctx.createScriptProcessor(256, 5, 1);
+        const burstDefaults = { mode: 0, count: 5, time: 5, decay: 5 };
+        const controlSources = ["mode", "count", "time", "decay"].map((name, index) => {
+          const source = ctx.createConstantSource();
+          source.offset.value = clampRange(Number(params[name] ?? burstDefaults[name]), 0, CV_MAX_VOLTS);
+          source.connect(inputMerger, 0, index + 1);
+          source.start();
+          return source;
+        });
+        inputMerger.connect(processor);
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          controlSources,
+          controlValues: controlSources.map((source) => source.offset.value),
+          controlConnectionCounts: [0, 0, 0, 0],
+        };
+        const kMaxPending = 8;
+        const kOutPulseSamples = Math.round(0.005 * ctx.sampleRate);
+        let prevTriggerAbove = false;
+        const pendingSamples = new Array(kMaxPending).fill(0);
+        const pendingAmplitude = new Array(kMaxPending).fill(0);
+        let pendingCount = 0;
+        let outSamplesLeft = 0;
+        let outAmplitude = 0;
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const modeCv = event.inputBuffer.getChannelData(1);
+          const countCv = event.inputBuffer.getChannelData(2);
+          const timeCv = event.inputBuffer.getChannelData(3);
+          const decayCv = event.inputBuffer.getChannelData(4);
+          const output = event.outputBuffer.getChannelData(0);
+          for (let i = 0; i < output.length; i += 1) {
+            const delayMode = clampRange(modeCv[i], 0, CV_MAX_VOLTS) >= CV_MAX_VOLTS / 2;
+            const triggerAbove = input[i] >= CV_MAX_VOLTS / 2;
+            if (triggerAbove && !prevTriggerAbove) {
+              if (delayMode) {
+                const delayMs = cvToRange(clampRange(timeCv[i], 0, CV_MAX_VOLTS), 1, 2000, "log");
+                pendingSamples[0] = Math.round(delayMs * 0.001 * ctx.sampleRate);
+                pendingAmplitude[0] = CV_MAX_VOLTS;
+                pendingCount = 1;
+              } else {
+                const pulses = Math.round(
+                  cvToRange(clampRange(countCv[i], 0, CV_MAX_VOLTS), 1, kMaxPending, "linear")
+                );
+                const intervalMs = cvToRange(clampRange(timeCv[i], 0, CV_MAX_VOLTS), 5, 300, "log");
+                const decay = cvToRange(clampRange(decayCv[i], 0, CV_MAX_VOLTS), 0, 0.9, "linear");
+                const intervalSamples = Math.round(intervalMs * 0.001 * ctx.sampleRate);
+                let amplitude = CV_MAX_VOLTS;
+                for (let p = 0; p < pulses; p += 1) {
+                  pendingSamples[p] = intervalSamples * p;
+                  pendingAmplitude[p] = amplitude;
+                  amplitude *= 1 - decay;
+                }
+                pendingCount = pulses;
+              }
+            }
+            prevTriggerAbove = triggerAbove;
+
+            for (let p = 0; p < pendingCount; ) {
+              if (pendingSamples[p] === 0) {
+                outSamplesLeft = kOutPulseSamples;
+                outAmplitude = pendingAmplitude[p];
+                pendingCount -= 1;
+                pendingSamples[p] = pendingSamples[pendingCount];
+                pendingAmplitude[p] = pendingAmplitude[pendingCount];
+              } else {
+                pendingSamples[p] -= 1;
+                p += 1;
+              }
+            }
+
+            output[i] = outSamplesLeft > 0 ? outAmplitude : 0;
+            if (outSamplesLeft > 0) outSamplesLeft -= 1;
+          }
+        };
+        return entry;
+      }
       case "chorus": {
-        
-        
-        
-        
+
+
+
+
         const inputNode = ctx.createGain();
         inputNode.gain.value = 1;
 
@@ -4875,6 +4961,15 @@ export class AudioEngine {
         }
         break;
       }
+      case "burst-generator": {
+        const index = ["mode", "count", "time", "decay"].indexOf(paramName);
+        if (index >= 0) {
+          const safe = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          entry.controlValues[index] = safe;
+          if (entry.controlConnectionCounts[index] === 0) applyRampValue(entry.controlSources[index].offset, safe);
+        }
+        break;
+      }
       case "pan":
         if (paramName === "pan") {
           entry.panValue = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
@@ -5134,6 +5229,7 @@ export class AudioEngine {
     if (entry.type === "bitcrusher" && port === "out") return entry.processor;
     if (entry.type === "wave-folder" && port === "out") return entry.processor;
     if (entry.type === "envelope-follower" && port === "out") return entry.processor;
+    if (entry.type === "burst-generator" && port === "out") return entry.processor;
     if (entry.type === "pan" && port === "out1") return entry.out1;
     if (entry.type === "pan" && port === "out2") return entry.out2;
     if (entry.type === "sample-hold" && port === "out") return entry.processor;
@@ -5245,6 +5341,7 @@ export class AudioEngine {
     if (entry.type === "bitcrusher" && port === "in") return entry.processor;
     if (entry.type === "wave-folder" && ["in", "drive", "symmetry", "gain", "mix"].includes(port)) return entry.inputMerger;
     if (entry.type === "envelope-follower" && ["in", "attack", "release", "preGain"].includes(port)) return entry.inputMerger;
+    if (entry.type === "burst-generator" && ["in", "mode", "count", "time", "decay"].includes(port)) return entry.inputMerger;
     if (entry.type === "pan" && (port === "in" || port === "pan")) return entry.inputMerger;
     if (entry.type === "sample-hold" && (port === "in" || port === "trigger" || port === "threshold")) return entry.inputMerger;
     if (entry.type === "chorus" && port === "in") return entry.inputNode;
@@ -5336,6 +5433,23 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "envelope-follower") {
       const inputIndex = { in: 0, attack: 1, release: 2, preGain: 3 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        if (inputIndex > 0 && toEntry.controlConnectionCounts[inputIndex - 1]++ === 0) {
+          toEntry.controlSources[inputIndex - 1].disconnect(toEntry.inputMerger, 0, inputIndex);
+        }
+        from.connect(toEntry.inputMerger, 0, inputIndex);
+      } catch (err) {
+        if (inputIndex > 0 && --toEntry.controlConnectionCounts[inputIndex - 1] <= 0) {
+          toEntry.controlConnectionCounts[inputIndex - 1] = 0;
+          toEntry.controlSources[inputIndex - 1].connect(toEntry.inputMerger, 0, inputIndex);
+        }
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "burst-generator") {
+      const inputIndex = { in: 0, mode: 1, count: 2, time: 3, decay: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from === undefined || !from || inputIndex === undefined) return;
       try {
@@ -5620,6 +5734,20 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "envelope-follower") {
       const inputIndex = { in: 0, attack: 1, release: 2, preGain: 3 }[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (from === undefined || !from || inputIndex === undefined) return;
+      try {
+        from.disconnect(toEntry.inputMerger, 0, inputIndex);
+        if (inputIndex > 0 && --toEntry.controlConnectionCounts[inputIndex - 1] <= 0) {
+          toEntry.controlConnectionCounts[inputIndex - 1] = 0;
+          toEntry.controlSources[inputIndex - 1].connect(toEntry.inputMerger, 0, inputIndex);
+        }
+      } catch (err) {
+      }
+      return;
+    }
+    if (toEntry && toEntry.type === "burst-generator") {
+      const inputIndex = { in: 0, mode: 1, count: 2, time: 3, decay: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from === undefined || !from || inputIndex === undefined) return;
       try {
