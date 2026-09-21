@@ -103,6 +103,15 @@ struct WidgetParams
     float eqGainDb = 0.0f;
     // eq-only bypass (see EspEqState::bypass).
     bool eqBypass = false;
+    // graphic-eq: 8 fixed-Q peaking bands, frequency editable only via the
+    // settings dialog (not CV), gain per band editable via CV/slider (see
+    // GraphicEqState). geqOutputGain is raw 0-10V CV (10V = unity, see
+    // cv::vcaGain) - NOT pre-converted, unlike geqGainDb which mirrors
+    // eqGainDb's already-in-dB convention.
+    float geqGainDb[8] = {};
+    float geqFreqHz[8] = {63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 14000.0f};
+    float geqOutputGain = 10.0f;
+    bool geqBypass = false;
     // gain - "amount" (Output Gain) and "curve" are raw CV (0-10V, see
     // CvConventions.h): amount 10V = unity gain default, curve 5V = unity
     // default (see GainState/cv::curveGain). gainGlobal is the "global"

@@ -205,6 +205,23 @@ struct EspEqState
     bool bypass = false;
 };
 
+// Second ESP_AUDIO_EFFECTS-backed node - an 8-band graphic EQ. Same S32
+// scratch/handle plumbing as EspEqState, just filter_num=8 instead of 1 (see
+// GraphicEqEffect.h). Q is fixed per band (not user-editable, no port for
+// it); only each band's gain (settings-fixed frequency, CV/slider-editable
+// gain) and a final output trim are live-controllable.
+struct GraphicEqState
+{
+    static constexpr int kBandCount = 8;
+    void *handle = nullptr;
+    espae::S32PlanarScratch scratch;
+    float frequencyHz[kBandCount] = {63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 14000.0f};
+    float gainDb[kBandCount] = {};
+    float outputGainCv = 10.0f; // 0-10V, 10V = unity (cv::vcaGain)
+    bool ready = false;
+    bool bypass = false;
+};
+
 struct GainState
 {
     // "amount" (Output Gain). Raw CV (0-10V, see CvConventions.h): 0V =

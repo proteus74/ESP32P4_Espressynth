@@ -1450,6 +1450,25 @@ const WIDGET_TYPES = {
     outputs: [{ id: "out", label: "Out" }],
   },
   "esp-eq": { label: "EQ", icon: "📶", inputs: [{ id: "inL", label: "In L" }, { id: "inR", label: "In R" }, { id: "bypass", label: "Bypass" }, { id: "frequency", label: "Frequency" }, { id: "q", label: "Q" }, { id: "gainDb", label: "Gain dB" }], outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }] },
+  "graphic-eq": {
+    label: "8-Band EQ",
+    icon: "📶",
+    inputs: [
+      { id: "inL", label: "In L" },
+      { id: "inR", label: "In R" },
+      { id: "bypass", label: "Bypass" },
+      { id: "band1", label: "63 Hz" },
+      { id: "band2", label: "125 Hz" },
+      { id: "band3", label: "250 Hz" },
+      { id: "band4", label: "500 Hz" },
+      { id: "band5", label: "1 kHz" },
+      { id: "band6", label: "2 kHz" },
+      { id: "band7", label: "5 kHz" },
+      { id: "band8", label: "14 kHz" },
+      { id: "gain", label: "Gain" },
+    ],
+    outputs: [{ id: "outL", label: "Out L" }, { id: "outR", label: "Out R" }],
+  },
   mixer: {
     label: "Mixer",
     icon: "🎧",
@@ -1758,7 +1777,7 @@ const WIDGET_CATEGORIES = [
   { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold", "burst-generator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
-  { label: "Filter", types: ["filter", "curtis-filter", "esp-eq"] },
+  { label: "Filter", types: ["filter", "curtis-filter", "esp-eq", "graphic-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
@@ -1822,6 +1841,7 @@ const AUDIO_PORTS = {
   filter: { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "curtis-filter": { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "esp-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
+  "graphic-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
 
 
 
@@ -1995,6 +2015,48 @@ function getVisualPortKind(widgetId, portId, direction) {
   return getPortKind(widgetId, portId, direction);
 }
 
+// Inline oscilloscope panel embedded under an oscillator/fm-oscillator
+// widget's own controls - shown/hidden in bulk via body.show-oscilloscopes
+// (see setOscilloscopesVisible), drawn by tickAudioMonitors using
+// audioEngine.getOscilloscopeWaveform (own analyser tap on the node's
+// "value" output, independent of the patchable "oscilloscope" widget).
+function appendOscilloscopePanel(body, port = "value") {
+  const panel = document.createElement("div");
+  panel.className = "osc-scope-panel";
+  const canvas = document.createElement("canvas");
+  canvas.className = "osc-scope-canvas";
+  canvas.dataset.role = "osc-scope-canvas";
+  canvas.dataset.scopePort = port;
+  canvas.width = 160;
+  canvas.height = 48;
+  panel.appendChild(canvas);
+  body.appendChild(panel);
+}
+
+const OSCILLOSCOPE_WIDGET_TYPES = ["oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"];
+
+const GRAPHIC_EQ_DEFAULT_FREQS = [63, 125, 250, 500, 1000, 2000, 5000, 14000];
+
+function formatHzLabel(hz) {
+  return hz >= 1000 ? `${formatNumber(hz / 1000)} kHz` : `${formatNumber(hz)} Hz`;
+}
+
+function formatGraphicEqHzLabel(hz) {
+  const rounded = Math.round(Number(hz));
+  return rounded >= 1000 && rounded % 1000 === 0 ? `${rounded / 1000} kHz` : `${rounded} Hz`;
+}
+
+function formatGraphicEqAxisLabel(hz) {
+  const rounded = Math.round(Number(hz));
+  return rounded >= 1000 && rounded % 1000 === 0 ? `${rounded / 1000}k` : `${rounded}`;
+}
+
+function validGraphicEqFrequencies(frequencies) {
+  return Array.isArray(frequencies) && frequencies.length === GRAPHIC_EQ_DEFAULT_FREQS.length &&
+    frequencies.every((hz, i) => Number.isInteger(Number(hz)) && Number(hz) >= 20 && Number(hz) <= 20000 &&
+      (i === 0 || Number(hz) > Number(frequencies[i - 1])));
+}
+
 const WAVE_TYPE_LABELS = {
   sine: "Sine",
   square: "Square",
@@ -2110,7 +2172,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
 
 
 
@@ -2644,6 +2706,10 @@ function createWidget(type, label, x, y, forcedId) {
   header.addEventListener("dblclick", (e) => {
     if (e.target.closest("button")) return;
     e.stopPropagation();
+    if (type === "audio-output-link" || type === "audio-input-link") {
+      openAudioLinkSettings(id);
+      return;
+    }
     startWidgetRename(labelSpan);
   });
 
@@ -2711,6 +2777,14 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openLinkedOutputSettings(id);
+    });
+  }
+
+  if (type === "audio-output-link" || type === "audio-input-link") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input")) return;
+      e.stopPropagation();
+      openAudioLinkSettings(id);
     });
   }
 
@@ -2900,6 +2974,14 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openEffectCvSettings(id);
+    });
+  }
+
+  if (type === "graphic-eq") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openGraphicEqSettings(id);
     });
   }
 
@@ -3118,6 +3200,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     body.appendChild(waveButtons);
     body.appendChild(freqLabel);
+    appendOscilloscopePanel(body);
     el.appendChild(body);
   }
 
@@ -3186,6 +3269,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     body.appendChild(waveButtons);
     body.appendChild(freqLabel);
+    appendOscilloscopePanel(body);
     el.appendChild(body);
   }
 
@@ -3219,6 +3303,7 @@ function createWidget(type, label, x, y, forcedId) {
     freqLabel.dataset.role = "hammond-freq-label";
     freqLabel.textContent = `${formatNumber(hammondState.freq)} Hz`;
     body.appendChild(freqLabel);
+    appendOscilloscopePanel(body);
     el.appendChild(body);
 
     el.addEventListener("dblclick", (e) => {
@@ -3349,6 +3434,7 @@ function createWidget(type, label, x, y, forcedId) {
     sampleLabel.textContent = "No sample";
 
     body.appendChild(sampleLabel);
+    appendOscilloscopePanel(body, "left");
     el.appendChild(body);
   }
 
@@ -3369,6 +3455,7 @@ function createWidget(type, label, x, y, forcedId) {
     presetLabel.dataset.role = "soundfont-player-preset-label";
     body.appendChild(fileLabel);
     body.appendChild(presetLabel);
+    appendOscilloscopePanel(body, "left");
     el.appendChild(body);
   }
 
@@ -3390,6 +3477,11 @@ function createWidget(type, label, x, y, forcedId) {
     };
     mdaPianoStates.set(id, state);
     audioEngine.createNode(id, "mda-piano", state);
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body oscilloscope-only-body";
+    appendOscilloscopePanel(body, "left");
+    el.appendChild(body);
   }
 
   if (type === "audio-out" || type === "usb-out" || type === "es8311-out" || type === "wm8960-out") {
@@ -3787,6 +3879,15 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, effectCvParamsToValues(type, state));
   }
 
+  if (type === "graphic-eq") {
+    const cvState = defaultEffectCvState(type);
+    effectCvStates.set(id, cvState);
+    graphicEqStates.set(id, { frequencies: [...GRAPHIC_EQ_DEFAULT_FREQS], outputGain: CV_MAX_VOLTS });
+    const params = { ...effectCvParamsToValues(type, cvState), gain: CV_MAX_VOLTS };
+    GRAPHIC_EQ_DEFAULT_FREQS.forEach((hz, i) => { params[`freq${i + 1}`] = hz; });
+    audioEngine.createNode(id, type, params);
+  }
+
   if (isLinkedIoType(type)) {
     const body = document.createElement("div");
     body.className = "widget-instance-body linked-io-body";
@@ -3799,8 +3900,11 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "audio-output-link" || type === "audio-input-link") {
-    const state = type === "audio-input-link" ? { gains: Array(LINK_BUS_COUNT).fill(CV_MAX_VOLTS) } : {};
-    if (type === "audio-input-link") audioInputLinkStates.set(id, state);
+    const state = type === "audio-input-link"
+      ? { gains: Array(LINK_BUS_COUNT).fill(CV_MAX_VOLTS), labels: Array(LINK_BUS_COUNT).fill("") }
+      : { labels: Array(LINK_BUS_COUNT).fill("") };
+    if (type === "audio-output-link") audioOutputLinkStates.set(id, state);
+    else audioInputLinkStates.set(id, state);
     audioEngine.createNode(id, type, state);
   }
 
@@ -5068,6 +5172,30 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatEffectCvValue(type, port.id, state[port.id]);
         row.appendChild(valueSpan);
       }
+      if (type === "graphic-eq" && port.id === "gain") {
+        const state = graphicEqStates.get(id);
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state.outputGain);
+        slider.dataset.role = "graphic-eq-gain-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "gain", parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "graphic-eq-gain-value";
+        valueSpan.textContent = formatNumber(state.outputGain);
+        row.appendChild(valueSpan);
+      }
       if (type === "oscillator" && port.id === "tune") {
         const oscState = oscillatorStates.get(id);
 
@@ -5586,9 +5714,48 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(scopeBody);
   }
 
+  if (type === "filter" || type === "curtis-filter") {
+    const scopeBody = document.createElement("div");
+    scopeBody.className = "widget-instance-body spectrum-body";
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "spectrum-canvas";
+    canvas.dataset.role = "filter-spectrum-canvas";
+    canvas.width = 220;
+    canvas.height = 80;
+
+    scopeBody.appendChild(canvas);
+    el.appendChild(scopeBody);
+  }
+
+  if (type === "graphic-eq") {
+    const scopeBody = document.createElement("div");
+    scopeBody.className = "widget-instance-body spectrum-body";
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "spectrum-canvas";
+    canvas.dataset.role = "graphic-eq-spectrum-canvas";
+    canvas.width = 220;
+    canvas.height = 80;
+
+    scopeBody.appendChild(canvas);
+    const bandLabels = document.createElement("div");
+    bandLabels.className = "graphic-eq-band-labels";
+    bandLabels.dataset.role = "graphic-eq-band-labels";
+    GRAPHIC_EQ_DEFAULT_FREQS.forEach(() => {
+      const label = document.createElement("span");
+      label.className = "graphic-eq-band-label";
+      bandLabels.appendChild(label);
+    });
+    scopeBody.appendChild(bandLabels);
+    el.appendChild(scopeBody);
+  }
+
   canvasContent.appendChild(el);
   if (isLinkedInputType(type)) updateLinkedInputVisual(id);
   if (isLinkedOutputType(type)) updateLinkedOutputVisual(id);
+  if (type === "audio-output-link") updateAudioOutputLinkVisual(id);
+  if (type === "audio-input-link") updateAudioInputLinkVisual(id);
   if (type === "switch") updateSwitchVisual(id);
   if (type === "output-switch") updateOutputSwitchVisual(id);
   if (type === "button") updateButtonVisual(id);
@@ -5660,6 +5827,7 @@ function removeWidget(id, force = false) {
   mdaPianoStates.delete(id);
   detuneStates.delete(id);
   audioOutStates.delete(id);
+  audioOutputLinkStates.delete(id);
   audioInputLinkStates.delete(id);
   linkedInputStates.delete(id);
   linkedOutputStates.delete(id);
@@ -8427,6 +8595,48 @@ document.getElementById("linkedInputSettingsSave").addEventListener("click", () 
   refreshLinkedIO();
   savePresetNow();
   closeLinkedInputSettings();
+});
+
+const audioLinkSettingsOverlay = document.getElementById("audioLinkSettingsOverlay");
+const audioLinkLabels = document.getElementById("audioLinkLabels");
+
+function openAudioLinkSettings(widgetId) {
+  if (!audioLinkSettingsOverlay || !audioLinkLabels) return;
+  pendingAudioLinkId = widgetId;
+  const labels = getAudioLinkLabels(widgetId);
+  audioLinkLabels.innerHTML = "";
+  for (let index = 0; index < LINK_BUS_COUNT; index += 1) {
+    const field = document.createElement("label");
+    field.className = "modal-field";
+    const title = document.createElement("span");
+    title.textContent = `Bus ${index + 1} label`;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 32;
+    input.placeholder = String(index + 1);
+    input.value = labels[index] || "";
+    input.dataset.audioLinkLabel = String(index);
+    field.append(title, input);
+    audioLinkLabels.appendChild(field);
+  }
+  audioLinkSettingsOverlay.classList.remove("hidden");
+}
+
+function closeAudioLinkSettings() {
+  audioLinkSettingsOverlay?.classList.add("hidden");
+  pendingAudioLinkId = null;
+}
+
+document.getElementById("audioLinkSettingsCancel").addEventListener("click", closeAudioLinkSettings);
+document.getElementById("audioLinkSettingsSave").addEventListener("click", () => {
+  if (!pendingAudioLinkId) return;
+  const labels = Array.from(
+    audioLinkLabels.querySelectorAll("[data-audio-link-label]"),
+    (input) => input.value.trim(),
+  );
+  setAudioLinkLabels(labels);
+  savePresetNow();
+  closeAudioLinkSettings();
 });
 
 const linkedOutputSettingsOverlay = document.getElementById("linkedOutputSettingsOverlay");
@@ -11608,9 +11818,37 @@ function tickAudioMonitors() {
     drawSpectrum(canvas, spectrum);
     drawEqCurve(canvas, response);
   });
+  document.querySelectorAll('.widget-instance[data-widget-type="filter"], .widget-instance[data-widget-type="curtis-filter"]').forEach((el) => {
+    const canvas = el.querySelector('[data-role="filter-spectrum-canvas"]');
+    if (!canvas) return;
+    const spectrum = audioEngine.getFilterSpectrum(el.id);
+    const response = audioEngine.getFilterFrequencyResponse(el.id);
+    if (!spectrum || !response) return;
+    drawSpectrum(canvas, spectrum);
+    drawEqCurve(canvas, response);
+  });
+  document.querySelectorAll('.widget-instance[data-widget-type="graphic-eq"]').forEach((el) => {
+    const canvas = el.querySelector('[data-role="graphic-eq-spectrum-canvas"]');
+    if (!canvas) return;
+    const spectrum = audioEngine.getGraphicEqSpectrum(el.id);
+    const response = audioEngine.getGraphicEqFrequencyResponse(el.id);
+    const state = graphicEqStates.get(el.id);
+    if (!spectrum || !response || !state) return;
+    drawGraphicEqPreview(canvas, spectrum, response, state.frequencies, audioEngine.ctx?.sampleRate || 44100);
+  });
   document.querySelectorAll('.widget-instance[data-widget-type="midi-in"]').forEach((el) => {
     updateMidiInVoiceSlotsLabel(el.id);
   });
+  if (oscilloscopesVisible) {
+    document
+      .querySelectorAll(OSCILLOSCOPE_WIDGET_TYPES.map((t) => `.widget-instance[data-widget-type="${t}"]`).join(", "))
+      .forEach((el) => {
+        const canvas = el.querySelector('[data-role="osc-scope-canvas"]');
+        if (!canvas) return;
+        const waveform = audioEngine.getOscilloscopeWaveform(el.id, canvas.dataset.scopePort || "value");
+        if (waveform) drawOscillatorScopePanel(canvas, waveform);
+      });
+  }
   requestAnimationFrame(tickAudioMonitors);
 }
 
@@ -11644,7 +11882,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
-  "esp-eq",
+  "esp-eq", "graphic-eq",
   "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
 ]);
@@ -11761,6 +11999,28 @@ function drawOscilloscope(canvas, waveform1, waveform2, cvMode, state) {
   }
 }
 
+// Mini fixed trace (no trigger-level UI) for the oscillator/fm-oscillator
+// widgets' own inline scope panel - always auto-triggers at 0V.
+function drawOscillatorScopePanel(canvas, waveform) {
+  const ctx2d = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx2d.clearRect(0, 0, w, h);
+  const range = SCOPE_AUDIO_DISPLAY_VOLTS;
+  const toY = (v) => (1 - clamp(v, -range, range) / range) * (h / 2);
+  const sampleCount = Math.min(1024, waveform.length);
+  const startIndex = scopeWindowStart(waveform, 0, sampleCount);
+  ctx2d.strokeStyle = "rgba(255, 255, 255, 0.15)";
+  ctx2d.lineWidth = 1;
+  ctx2d.beginPath();
+  ctx2d.moveTo(0, h / 2);
+  ctx2d.lineTo(w, h / 2);
+  ctx2d.stroke();
+  ctx2d.lineWidth = 1.5;
+  ctx2d.strokeStyle = SCOPE_CH1_COLOR;
+  drawOscilloscopeTrace(ctx2d, waveform, w, toY, startIndex, sampleCount);
+}
+
 
 
 
@@ -11841,6 +12101,66 @@ function drawEqCurve(canvas, magResponse) {
     else ctx2d.lineTo(x, y);
   }
   ctx2d.stroke();
+}
+
+function graphicEqLogPosition(hz, sampleRate) {
+  const minHz = 20;
+  const maxHz = Math.min(sampleRate / 2 - 1, 20000);
+  return clamp((Math.log(clamp(hz, minHz, maxHz)) - Math.log(minHz)) /
+    (Math.log(maxHz) - Math.log(minHz)), 0, 1);
+}
+
+function drawGraphicEqPreview(canvas, spectrum, magResponse, frequencies, sampleRate) {
+  const ctx2d = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const plotBottom = h;
+  const minHz = 20;
+  const maxHz = Math.min(sampleRate / 2 - 1, 20000);
+  const xForHz = (hz) => graphicEqLogPosition(hz, sampleRate) * w;
+
+  ctx2d.clearRect(0, 0, w, h);
+  ctx2d.fillStyle = "rgba(148, 163, 184, 0.12)";
+  [20, 100, 1000, 10000, 20000].forEach((hz) => {
+    if (hz > maxHz) return;
+    const x = xForHz(hz);
+    ctx2d.fillRect(x, 0, 1, plotBottom);
+  });
+
+  ctx2d.fillStyle = "#4ade80";
+  for (let i = 1; i < spectrum.length; i += 1) {
+    const frequency = (i * sampleRate) / (2 * spectrum.length);
+    if (frequency < minHz || frequency > maxHz) continue;
+    const nextFrequency = (Math.min(i + 1, spectrum.length - 1) * sampleRate) / (2 * spectrum.length);
+    const x = xForHz(frequency);
+    const width = Math.max(1, xForHz(nextFrequency) - x);
+    const barHeight = (spectrum[i] / 255) * plotBottom;
+    ctx2d.fillRect(x, plotBottom - barHeight, width, barHeight);
+  }
+
+  const curveRangeDb = 24;
+  ctx2d.strokeStyle = "#facc15";
+  ctx2d.lineWidth = 2;
+  ctx2d.beginPath();
+  for (let i = 0; i < magResponse.length; i += 1) {
+    const frequency = minHz * Math.pow(maxHz / minHz, i / Math.max(1, magResponse.length - 1));
+    const db = clamp(20 * Math.log10(Math.max(magResponse[i], 1e-6)), -curveRangeDb, curveRangeDb);
+    const x = xForHz(frequency);
+    const y = plotBottom / 2 - (db / curveRangeDb) * (plotBottom / 2 - 2);
+    if (i === 0) ctx2d.moveTo(x, y);
+    else ctx2d.lineTo(x, y);
+  }
+  ctx2d.stroke();
+
+  ctx2d.lineWidth = 1;
+  frequencies.forEach((frequency) => {
+    const x = xForHz(frequency);
+    ctx2d.strokeStyle = "rgba(250, 204, 21, 0.65)";
+    ctx2d.beginPath();
+    ctx2d.moveTo(x, 0);
+    ctx2d.lineTo(x, plotBottom);
+    ctx2d.stroke();
+  });
 }
 
 requestAnimationFrame(tickAudioMonitors);
@@ -12440,6 +12760,7 @@ function mapFmWaveformValue(value) {
 
 
 const audioOutStates = new Map();
+const audioOutputLinkStates = new Map();
 const audioInputLinkStates = new Map();
 // Freely-placeable linked-io widgets (unrelated to the fixed 8-bus
 // audio-output-link/audio-input-link pair above). linkedInputStates:
@@ -12450,6 +12771,7 @@ const activeLinkedControlRoutes = new Set();
 const linkedAudioRouteIds = new Set();
 let pendingLinkedInputId = null;
 let pendingLinkedOutputId = null;
+let pendingAudioLinkId = null;
 
 function generateLinkId() {
   let id;
@@ -12638,16 +12960,61 @@ function setAudioOutParams(widgetId, params, sendLive = true) {
   if (sendLive) sendLiveParamUpdateThrottled(widgetId, { muted: state.muted, gain: state.gain });
 }
 
+function getAudioLinkLabels(widgetId = null) {
+  const masterState = audioOutputLinkStates.values().next().value;
+  const inputState = widgetId ? audioInputLinkStates.get(widgetId) : null;
+  return masterState?.labels || inputState?.labels || Array(LINK_BUS_COUNT).fill("");
+}
+
+function formatAudioLinkPortLabel(index, label) {
+  return label ? `${index + 1}: ${label}` : String(index + 1);
+}
+
+function updateAudioOutputLinkVisual(widgetId) {
+  const el = document.getElementById(widgetId);
+  if (!el) return;
+  const labels = getAudioLinkLabels();
+  el.querySelectorAll(".port-row-in").forEach((row) => {
+    const match = /^in([1-8])$/.exec(row.dataset.portId || "");
+    const label = row.querySelector(".port-label");
+    if (match && label) {
+      const index = Number(match[1]) - 1;
+      label.textContent = formatAudioLinkPortLabel(index, labels[index]);
+      label.title = label.textContent;
+    }
+  });
+}
+
 function updateAudioInputLinkVisual(widgetId) {
   const state = audioInputLinkStates.get(widgetId);
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
+  const labels = getAudioLinkLabels(widgetId);
+  el.querySelectorAll(".port-row-in, .port-row-out").forEach((row) => {
+    const match = /^(?:gain|out)([1-8])$/.exec(row.dataset.portId || "");
+    const label = row.querySelector(".port-label");
+    if (match && label) {
+      const index = Number(match[1]) - 1;
+      label.textContent = formatAudioLinkPortLabel(index, labels[index]);
+      label.title = label.textContent;
+    }
+  });
   state.gains.forEach((gain, channel) => {
     const slider = el.querySelector(`[data-role="audio-input-link-gain-${channel}"]`);
     const value = el.querySelector(`[data-role="audio-input-link-gain-value-${channel}"]`);
     if (slider) slider.value = String(gain);
     if (value) value.textContent = `${formatNumber(gain)} V`;
   });
+}
+
+function setAudioLinkLabels(labels) {
+  const normalized = Array.from({ length: LINK_BUS_COUNT }, (_, index) => (
+    typeof labels[index] === "string" ? labels[index].trim() : ""
+  ));
+  audioOutputLinkStates.forEach((state) => { state.labels = [...normalized]; });
+  audioInputLinkStates.forEach((state) => { state.labels = [...normalized]; });
+  document.querySelectorAll('.widget-instance[data-widget-type="audio-output-link"]').forEach((el) => updateAudioOutputLinkVisual(el.id));
+  document.querySelectorAll('.widget-instance[data-widget-type="audio-input-link"]').forEach((el) => updateAudioInputLinkVisual(el.id));
 }
 
 function setAudioInputLinkGain(widgetId, channel, value, sendLive = true) {
@@ -12712,6 +13079,11 @@ function updateGainVisual(widgetId) {
 
 
 const filterStates = new Map();
+// graphic-eq's non-CV scalars - band center frequencies (settings-dialog
+// only, NOT CV-controllable) and the final output trim (raw 0-10V CV, see
+// the "gain" port slider). Per-band GAIN lives in effectCvStates instead
+// (see EFFECT_CV_PARAMS["graphic-eq"]) since that's the CV-controllable part.
+const graphicEqStates = new Map();
 const ESP_EFFECT_DEFAULTS = {
   "esp-eq": { filterType: "peak", frequency: 1000, q: 1, gainDb: 0, bypass: false },
 };
@@ -13091,6 +13463,71 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
     });
   }
   closeFilterSettings();
+});
+
+
+
+const graphicEqSettingsOverlay = document.getElementById("graphicEqSettingsOverlay");
+const graphicEqSettingsError = document.getElementById("graphicEqSettingsError");
+const graphicEqFreqInputs = GRAPHIC_EQ_DEFAULT_FREQS.map((_, i) =>
+  document.getElementById(`graphicEqFreq${i + 1}Input`));
+let pendingGraphicEqId = null;
+
+function setGraphicEqSettingsError(message = "") {
+  if (!graphicEqSettingsError) return;
+  graphicEqSettingsError.textContent = message;
+  graphicEqSettingsError.style.display = message ? "block" : "none";
+}
+
+function openGraphicEqSettings(widgetId) {
+  const state = graphicEqStates.get(widgetId);
+  if (!state) return;
+  pendingGraphicEqId = widgetId;
+  setGraphicEqSettingsError();
+  graphicEqFreqInputs.forEach((input, i) => { input.value = state.frequencies[i]; });
+  graphicEqSettingsOverlay.classList.remove("hidden");
+}
+
+function closeGraphicEqSettings() {
+  graphicEqSettingsOverlay.classList.add("hidden");
+  pendingGraphicEqId = null;
+}
+
+document.getElementById("graphicEqSettingsCancel").addEventListener("click", closeGraphicEqSettings);
+
+document.getElementById("graphicEqSettingsSave").addEventListener("click", () => {
+  if (!pendingGraphicEqId) return;
+  const state = graphicEqStates.get(pendingGraphicEqId);
+  if (state) {
+    const frequencies = graphicEqFreqInputs.map((input) => {
+      const hz = parseFloatFlexible(input.value);
+      return hz;
+    });
+    const rangeIndex = frequencies.findIndex((hz) => !Number.isFinite(hz) || hz < 20 || hz > 20000);
+    if (rangeIndex >= 0) {
+      setGraphicEqSettingsError(`Band ${rangeIndex + 1} muss zwischen 20 und 20000 Hz liegen.`);
+      return;
+    }
+    const integerIndex = frequencies.findIndex((hz) => !Number.isInteger(hz));
+    if (integerIndex >= 0) {
+      setGraphicEqSettingsError(`Band ${integerIndex + 1} muss eine ganze Zahl sein.`);
+      return;
+    }
+    const orderIndex = frequencies.findIndex((hz, i) => i > 0 && hz <= frequencies[i - 1]);
+    if (orderIndex >= 0) {
+      setGraphicEqSettingsError(`Band ${orderIndex + 1} muss höher als Band ${orderIndex} liegen.`);
+      return;
+    }
+    state.frequencies = frequencies;
+    state.frequencies.forEach((hz, i) => audioEngine.setParam(pendingGraphicEqId, `freq${i + 1}`, hz));
+    updateGraphicEqVisual(pendingGraphicEqId);
+    sendLiveParamUpdate(pendingGraphicEqId, {
+      frequencies: state.frequencies,
+      freq1: state.frequencies[0], freq2: state.frequencies[1], freq3: state.frequencies[2], freq4: state.frequencies[3],
+      freq5: state.frequencies[4], freq6: state.frequencies[5], freq7: state.frequencies[6], freq8: state.frequencies[7],
+    });
+  }
+  closeGraphicEqSettings();
 });
 
 
@@ -13551,6 +13988,20 @@ const EFFECT_CV_PARAMS = {
     { portId: "wetLevel", paramName: "wetLevelDb", label: "Wet Level", unit: "dB", defaultMin: -96, defaultMax: 0, defaultCurve: "linear", defaultValue: -6 },
     { portId: "dryLevel", paramName: "dryLevelDb", label: "Dry Level", unit: "dB", defaultMin: -96, defaultMax: 0, defaultCurve: "linear", defaultValue: 0 },
   ],
+  // 8-band graphic EQ: each band's gain is a bipolar CV (0-10V, 5V = 0 dB
+  // center, min/max -15..15 dB matches esp-eq's own gainDb clamp range) -
+  // frequency is NOT here, it's settings-dialog-only (see graphicEqStates/
+  // openGraphicEqSettings), not CV-controllable.
+  "graphic-eq": GRAPHIC_EQ_DEFAULT_FREQS.map((hz, i) => ({
+    portId: `band${i + 1}`,
+    paramName: `gain${i + 1}`,
+    label: formatGraphicEqHzLabel(hz),
+    unit: "dB",
+    defaultMin: -15,
+    defaultMax: 15,
+    defaultCurve: "linear",
+    defaultValue: 0,
+  })),
 };
 
 
@@ -13560,13 +14011,13 @@ function isReverbType(type) {
 }
 
 // Types whose "bypass" flows through the generic effectCvStates/
-// makeEffectCvEngine machinery below (reverb-light already did; delay gets
-// bypass the same way). Chorus/esp-eq have their OWN state maps
+// makeEffectCvEngine machinery below (reverb-light already did; delay/
+// graphic-eq get bypass the same way). Chorus/esp-eq have their OWN state maps
 // (chorusStates/espEffectStates) and do NOT go through this engine - see
 // hasBypass() below for the full cross-type set used by the shared
 // toggle-switch UI.
 function isEffectCvBypassType(type) {
-  return isReverbType(type) || type === "delay";
+  return isReverbType(type) || type === "delay" || type === "graphic-eq";
 }
 
 // Every widget type that gets a Bypass toggle switch (see the port-row
@@ -13646,6 +14097,26 @@ function updateEffectCvVisual(widgetId) {
     const toggle = el.querySelector(`[data-role="${type}-bypass-switch"]`);
     if (toggle) toggle.checked = state.bypass === true;
   }
+}
+
+function updateGraphicEqVisual(widgetId) {
+  updateEffectCvVisual(widgetId);
+  const el = document.getElementById(widgetId);
+  const state = graphicEqStates.get(widgetId);
+  if (!el || !state) return;
+  const gainSlider = el.querySelector('[data-role="graphic-eq-gain-slider"]');
+  if (gainSlider) gainSlider.value = String(state.outputGain);
+  const gainValue = el.querySelector('[data-role="graphic-eq-gain-value"]');
+  if (gainValue) gainValue.textContent = formatNumber(state.outputGain);
+  state.frequencies.forEach((hz, i) => {
+    const row = el.querySelector(`[data-port-id="band${i + 1}"] .port-label`);
+    if (row) row.textContent = formatGraphicEqHzLabel(hz);
+    const label = el.querySelector(`[data-role="graphic-eq-band-labels"] .graphic-eq-band-label:nth-child(${i + 1})`);
+    if (label) {
+      label.textContent = formatGraphicEqAxisLabel(hz);
+      label.style.left = `${graphicEqLogPosition(hz, audioEngine.ctx?.sampleRate || 44100) * 100}%`;
+    }
+  });
 }
 
 function makeEffectCvEngine(type) {
@@ -18758,6 +19229,17 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     setPanParam(widgetId, Number(value));
   }
 
+  if (el.dataset.widgetType === "graphic-eq" && portId === "gain") {
+    const state = graphicEqStates.get(widgetId);
+    if (state) {
+      state.outputGain = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "gain", state.outputGain);
+      const valueSpan = el.querySelector('[data-role="graphic-eq-gain-value"]');
+      if (valueSpan) valueSpan.textContent = formatNumber(state.outputGain);
+      sendLiveParamUpdateThrottled(widgetId, { gain: state.outputGain });
+    }
+  }
+
   if (isEffectCvBypassType(el.dataset.widgetType) && portId === "bypass") {
     const state = effectCvStates.get(widgetId);
     if (state) {
@@ -19417,6 +19899,8 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   audioEngine.setParam(id, "global", state.global);
   updateFilterVisual(id);
 }
+
+const graphicEqCvEngine = makeEffectCvEngine("graphic-eq");
 
 const WIDGET_ENGINES = {
   annotation: {
@@ -20179,17 +20663,21 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => setAudioOutParams(id, params || {}, false),
   },
   "audio-output-link": {
-    getParams: () => ({}),
-    applyParams: () => {},
+    getParams: () => ({ labels: [...getAudioLinkLabels()] }),
+    applyParams: (id, params) => {
+      if (Array.isArray(params?.labels)) setAudioLinkLabels(params.labels);
+      updateAudioOutputLinkVisual(id);
+    },
   },
   "audio-input-link": {
     getParams: (id) => {
       const state = audioInputLinkStates.get(id);
-      return state ? { gains: [...state.gains] } : {};
+      return state ? { gains: [...state.gains], labels: [...getAudioLinkLabels(id)] } : {};
     },
     applyParams: (id, params) => {
       const state = audioInputLinkStates.get(id);
       if (!state) return;
+      if (Array.isArray(params?.labels)) setAudioLinkLabels(params.labels);
       if (Array.isArray(params?.gains)) {
         for (let channel = 0; channel < LINK_BUS_COUNT; channel += 1) {
           state.gains[channel] = clamp(Number(params.gains[channel] ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
@@ -20281,6 +20769,25 @@ const WIDGET_ENGINES = {
       return state ? { ...state } : {};
     },
     applyParams: (id, params) => applyFilterWidgetParams(id, params, true),
+  },
+  "graphic-eq": {
+    getParams: (id) => ({
+      ...graphicEqCvEngine.getParams(id),
+      frequencies: [...(graphicEqStates.get(id)?.frequencies || GRAPHIC_EQ_DEFAULT_FREQS)],
+    }),
+    applyParams: (id, params) => {
+      graphicEqCvEngine.applyParams(id, params);
+      const state = graphicEqStates.get(id);
+      if (!state || !params) return;
+      const freqs = validGraphicEqFrequencies(params.frequencies)
+        ? params.frequencies.map(Number)
+        : [...state.frequencies];
+      state.frequencies = freqs;
+      state.outputGain = typeof params.gain === "number" ? clamp(params.gain, 0, CV_MAX_VOLTS) : CV_MAX_VOLTS;
+      freqs.forEach((hz, i) => audioEngine.setParam(id, `freq${i + 1}`, hz));
+      audioEngine.setParam(id, "gain", state.outputGain);
+      updateGraphicEqVisual(id);
+    },
   },
   ...Object.fromEntries(Object.keys(ESP_EFFECT_DEFAULTS).map((type) => [type, {
     getParams: (id) => ({ ...(espEffectStates.get(id) || ESP_EFFECT_DEFAULTS[type]) }),
@@ -21456,6 +21963,17 @@ function updateCpuLoadDisplay(core0, core1, underruns) {
 const NODE_CPU_VISIBLE_KEY = "espressynth.nodeCpuVisible";
 let nodeCpuVisible = localStorage.getItem(NODE_CPU_VISIBLE_KEY) === "1";
 
+const OSCILLOSCOPES_VISIBLE_KEY = "espressynth.oscilloscopesVisible";
+let oscilloscopesVisible = localStorage.getItem(OSCILLOSCOPES_VISIBLE_KEY) === "1";
+
+function setOscilloscopesVisible(visible) {
+  oscilloscopesVisible = visible;
+  document.body.classList.toggle("show-oscilloscopes", visible);
+  localStorage.setItem(OSCILLOSCOPES_VISIBLE_KEY, visible ? "1" : "0");
+  const checkbox = document.getElementById("menuShowOscilloscopes");
+  if (checkbox) checkbox.checked = visible;
+}
+
 function setNodeCpuVisible(visible) {
   nodeCpuVisible = visible;
   document.body.classList.toggle("show-node-cpu", visible);
@@ -21859,6 +22377,12 @@ menuToggleNodeCpu.checked = nodeCpuVisible;
 menuToggleNodeCpu.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
 menuToggleNodeCpu.addEventListener("change", () => setNodeCpuVisible(menuToggleNodeCpu.checked));
 setNodeCpuVisible(nodeCpuVisible);
+
+const menuShowOscilloscopes = document.getElementById("menuShowOscilloscopes");
+menuShowOscilloscopes.checked = oscilloscopesVisible;
+menuShowOscilloscopes.closest(".dropdown-check").addEventListener("click", (e) => e.stopPropagation());
+menuShowOscilloscopes.addEventListener("change", () => setOscilloscopesVisible(menuShowOscilloscopes.checked));
+setOscilloscopesVisible(oscilloscopesVisible);
 
 const menuCableStyle = document.getElementById("menuCableStyle");
 menuCableStyle.value = cableStyleFromFlags();

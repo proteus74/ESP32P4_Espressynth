@@ -15,6 +15,7 @@ enum class NodeType : uint8_t
     Adsr,
     Filter,
     EspEq,
+    GraphicEq,
     Gain,
     Mixer,
     Multiplier,
@@ -143,6 +144,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Filter;
     if (strcmp(typeStr, "esp-eq") == 0)
         return NodeType::EspEq;
+    if (strcmp(typeStr, "graphic-eq") == 0)
+        return NodeType::GraphicEq;
     if (strcmp(typeStr, "gain") == 0)
         return NodeType::Gain;
     if (strcmp(typeStr, "mixer") == 0)

@@ -8,6 +8,7 @@
 #include "CvConventions.h"
 
 #include "EspEqEffect.h"
+#include "GraphicEqEffect.h"
 #include "PresetParser.h"
 #include "SoundFontPlayer.h"
 
@@ -113,6 +114,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::EspEq:
         parsePresetEspEq(p, out);
+        break;
+    case NodeType::GraphicEq:
+        parsePresetGraphicEq(p, out);
         break;
     case NodeType::Gain:
         nodes::gain::parsePreset(p, out);

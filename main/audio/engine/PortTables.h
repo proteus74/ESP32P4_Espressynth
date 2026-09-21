@@ -251,6 +251,12 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "inR"))
             return 1;
         return -1;
+    case NodeType::GraphicEq:
+        if (is(portName, "inL"))
+            return 0;
+        if (is(portName, "inR"))
+            return 1;
+        return -1;
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
@@ -597,6 +603,12 @@ inline int audioOutIndex(NodeType type, const char *portName)
         if (is(portName, "outR"))
             return 1;
         return -1;
+    case NodeType::GraphicEq:
+        if (is(portName, "outL"))
+            return 0;
+        if (is(portName, "outR"))
+            return 1;
+        return -1;
     case NodeType::Mixer:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Multiplexer:
@@ -751,6 +763,8 @@ inline int audioInPortCount(NodeType type)
         return 4; // "in" + "amount" (CV) + "curve" (CV) + "global" (CV)
     case NodeType::EspEq:
         return 2;
+    case NodeType::GraphicEq:
+        return 2;
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
@@ -903,7 +917,7 @@ inline bool hasNoOutputs(NodeType type)
 // Heavy post-mix effects that must never be multiplied per synth voice.
 inline bool isGlobalOnly(NodeType type)
 {
-    return type == NodeType::EspEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
+    return type == NodeType::EspEq || type == NodeType::GraphicEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder ||
            type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower;
 }

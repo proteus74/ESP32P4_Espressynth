@@ -211,15 +211,18 @@ extern "C" void app_main(void) {
 #if (defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)) || \
     defined(CONFIG_APP_ENABLE_SYNTH)
     uint32_t seconds = 0;
-#if defined(CONFIG_APP_ENABLE_SYNTH) && defined(CONFIG_APP_ENABLE_WEBSERVER)
-    uint8_t webUiTicks = 0;
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    uint8_t synthTicks = 0;
 #endif
     while (true) {
-#if defined(CONFIG_APP_ENABLE_SYNTH) && defined(CONFIG_APP_ENABLE_WEBSERVER)
+#if defined(CONFIG_APP_ENABLE_SYNTH)
         vTaskDelay(pdMS_TO_TICKS(50));
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
         Feature::Synth::broadcast_cv_status_tick();
-        if (++webUiTicks < 20) continue;
-        webUiTicks = 0;
+#endif
+        Feature::Synth::log_midi_cc_debug_tick();
+        if (++synthTicks < 20) continue;
+        synthTicks = 0;
 #else
         vTaskDelay(pdMS_TO_TICKS(1000));
 #endif

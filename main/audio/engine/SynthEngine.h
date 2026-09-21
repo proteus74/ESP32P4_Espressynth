@@ -300,6 +300,18 @@ public:
         return true;
     }
 
+    bool readMidiCcDebugSnapshot(MidiCcDebugSnapshot &out) const
+    {
+        const uint32_t sequence = midiCcDebugSequence_.load(std::memory_order_acquire);
+        if (sequence == 0)
+        {
+            return false;
+        }
+        out = midiCcDebugSnapshot_;
+        out.sequence = sequence;
+        return true;
+    }
+
     // Set whenever a build (see buildFromFile) had to use fewer voices than
     // requested - either because the requested count wouldn't fit in
     // internal RAM alone (see GraphBuilder::build's retry-with-fewer-voices
@@ -518,6 +530,16 @@ private:
         midiControlSequence_.fetch_add(1, std::memory_order_release);
     }
 
+    void publishMidiCcDebugSnapshot(const MidiCcDebugSnapshot &snapshot)
+    {
+        if (snapshot.targetCount == 0)
+        {
+            return;
+        }
+        midiCcDebugSnapshot_ = snapshot;
+        midiCcDebugSequence_.fetch_add(1, std::memory_order_release);
+    }
+
     static void taskEntry(void *arg);
     void taskLoop();
     // voiceCeiling caps the voice count regardless of what the preset's
@@ -691,6 +713,9 @@ private:
     std::atomic<float> midiControlRaw_{0.0f};
     std::atomic<float> midiControlValue_{0.0f};
     std::atomic<uint32_t> midiControlSequence_{0};
+    MidiCcDebugSnapshot midiCcDebugSnapshot_{};
+    MidiCcDebugSnapshot midiCcDebugScratch_{};
+    std::atomic<uint32_t> midiCcDebugSequence_{0};
     std::atomic<uint32_t> voicesCapEventId_{0};
     std::atomic<uint16_t> voicesCapRequested_{0};
     std::atomic<uint16_t> voicesCapEffective_{0};
@@ -1218,7 +1243,11 @@ inline void SynthEngine::taskLoop()
             }
             while (midiEventQueue_ != nullptr && xQueueReceive(midiEventQueue_, &event, 0) == pdTRUE)
             {
-                liveGraph_->handleMidiEvent(event);
+                liveGraph_->handleMidiEvent(event, &midiCcDebugScratch_);
+                if (event.codeIndex == 0xB)
+                {
+                    publishMidiCcDebugSnapshot(midiCcDebugScratch_);
+                }
                 handleMasterClockMidi(event);
                 publishMidiControlActivity(event);
                 ++midiEventCount;

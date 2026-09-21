@@ -10,6 +10,7 @@
 #include "esp_log.h"
 
 #include "EspEqEffect.h"
+#include "GraphicEqEffect.h"
 #include "Graph.h"
 #include "MemoryDiagnostics.h"
 #include "PortTables.h"
@@ -162,7 +163,7 @@ inline bool hasStereoOutput(NodeType type)
 
 inline bool requiresInputBlockBuffers(NodeType type)
 {
-    return type == NodeType::EspEq;
+    return type == NodeType::EspEq || type == NodeType::GraphicEq;
 }
 
 // Parses "zone<1-4><suffix>" (e.g. "zone2Gate") into a 0-based zone index
@@ -586,6 +587,10 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         initEspEq(*inst.espEq, p.eqFilterType, p.eqFrequency, p.eqQ, p.eqGainDb);
         inst.espEq->bypass = p.eqBypass;
         break;
+    case NodeType::GraphicEq:
+        initGraphicEq(*inst.graphicEq, p.geqFreqHz, p.geqGainDb, p.geqOutputGain);
+        inst.graphicEq->bypass = p.geqBypass;
+        break;
     case NodeType::Gain:
         nodes::gain::build(inst, p);
         break;
@@ -960,6 +965,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             case NodeType::EspEq:
                 inst.espEq = allocateNodeState<EspEqState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.espEq == nullptr);
+                break;
+            case NodeType::GraphicEq:
+                inst.graphicEq = allocateNodeState<GraphicEqState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.graphicEq == nullptr);
                 break;
             case NodeType::Knob:
                 inst.knob = allocateNodeState<KnobState>(outputPsramFallbacks);

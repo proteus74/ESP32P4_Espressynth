@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -16,6 +17,7 @@
 #include "CvConventions.h"
 #include "EngineStats.h"
 #include "EspEqEffect.h"
+#include "GraphicEqEffect.h"
 #include "NodeInstance.h"
 #include "NodeRender.h"
 #include "ParamDispatch.h"
@@ -75,6 +77,28 @@ struct KnobLiveChangeInfo
     uint8_t cc = 0;
     uint8_t raw = 0;
     float value = 0.0f;
+};
+
+constexpr size_t kMaxMidiCcDebugTargets = 16;
+
+struct MidiCcDebugTarget
+{
+    char sourceLabel[48] = {};
+    char targetLabel[48] = {};
+    char paramName[16] = {};
+    float value = 0.0f;
+    bool raw = false;
+};
+
+struct MidiCcDebugSnapshot
+{
+    uint32_t sequence = 0;
+    uint8_t channel = 0;
+    uint8_t cc = 0;
+    uint8_t rawValue = 0;
+    uint8_t targetCount = 0;
+    uint8_t omittedTargets = 0;
+    MidiCcDebugTarget targets[kMaxMidiCcDebugTargets];
 };
 
 struct Edge
@@ -176,7 +200,7 @@ public:
     };
 
     void renderBlock(Outputs &out, size_t frames);
-    void handleMidiEvent(const UsbMidiEvent &event);
+    void handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapshot *debugOut = nullptr);
     uint16_t activeSoundFontVoiceCount() const;
     void midiVoiceUsage(uint16_t &active, uint16_t &maximum) const;
 
@@ -334,6 +358,63 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
                 target.controlValue[route.targetPort] = targetValue;
             }
         }
+    }
+}
+
+inline void copyMidiCcDebugText(char *destination, size_t destinationSize, const char *source)
+{
+    if (destination == nullptr || destinationSize == 0)
+    {
+        return;
+    }
+    size_t length = 0;
+    if (source != nullptr)
+    {
+        while (length + 1 < destinationSize && source[length] != '\0')
+        {
+            destination[length] = source[length];
+            ++length;
+        }
+    }
+    destination[length] = '\0';
+}
+
+inline void appendMidiCcDebugTargets(const Graph &graph, uint16_t sourceWidget, uint8_t sourceSide,
+                                     float mappedValue, float rawValue, MidiCcDebugSnapshot *debugOut)
+{
+    if (debugOut == nullptr)
+    {
+        return;
+    }
+
+    const WidgetSlot &source = graph.widgets[sourceWidget];
+    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
+    {
+        const ControlRoute &route = graph.controlRoutes[r];
+        if (route.sourceWidget != sourceWidget || route.side != sourceSide ||
+            (route.kind != ControlRoute::Kind::Knob && route.kind != ControlRoute::Kind::KnobCc))
+        {
+            continue;
+        }
+
+        if (debugOut->targetCount >= kMaxMidiCcDebugTargets)
+        {
+            if (debugOut->omittedTargets < 0xFF)
+            {
+                ++debugOut->omittedTargets;
+            }
+            continue;
+        }
+
+        const WidgetSlot &target = graph.widgets[route.targetWidget];
+        MidiCcDebugTarget &entry = debugOut->targets[debugOut->targetCount++];
+        copyMidiCcDebugText(entry.sourceLabel, sizeof(entry.sourceLabel),
+                            source.label[0] != '\0' ? source.label : source.id);
+        copyMidiCcDebugText(entry.targetLabel, sizeof(entry.targetLabel),
+                            target.label[0] != '\0' ? target.label : target.id);
+        copyMidiCcDebugText(entry.paramName, sizeof(entry.paramName), route.paramName);
+        entry.raw = route.kind == ControlRoute::Kind::KnobCc;
+        entry.value = entry.raw ? rawValue : mappedValue;
     }
 }
 
@@ -978,8 +1059,13 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     }
 }
 
-inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
+inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapshot *debugOut)
 {
+    if (debugOut != nullptr && event.codeIndex == 0xB)
+    {
+        *debugOut = {};
+    }
+
     // Direct MIDI cable: each wired MidiIn->SoundFontPlayer route delivers
     // complete channel messages straight to that SoundFontPlayer's own
     // synth (a preset can have several, see soundfont::sweepFileCache() -
@@ -1011,6 +1097,13 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         const uint8_t ccValue = event.data2;
         const uint8_t ccChannel0 = event.status & 0x0F;
 
+        if (debugOut != nullptr)
+        {
+            debugOut->channel = ccChannel0;
+            debugOut->cc = ccNumber;
+            debugOut->rawValue = ccValue;
+        }
+
         for (uint16_t w = 0; w < widgetCount; ++w)
         {
             if (widgets[w].type == NodeType::Knob)
@@ -1030,6 +1123,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     k.currentValue = k.mappedValue();
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
+                    appendMidiCcDebugTargets(*this, w, controlIndex, k.currentValue, k.raw, debugOut);
                 }
             }
             else if (widgets[w].type == NodeType::Button)
@@ -2029,6 +2123,14 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].espEq->bypass = bypass;
             }
         }
+        else if (slot.type == NodeType::GraphicEq && strcmp(key, "bypass") == 0 && cJSON_IsBool(item))
+        {
+            const bool bypass = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].graphicEq->bypass = bypass;
+            }
+        }
         else if ((slot.type == NodeType::AudioOut || slot.type == NodeType::UsbOut ||
                   slot.type == NodeType::Es8311Out || slot.type == NodeType::Wm8960Out) &&
                  strcmp(key, "muted") == 0 && cJSON_IsBool(item))
@@ -2185,6 +2287,14 @@ inline void Graph::destroy()
                 destroyEspEq(*inst.espEq);
                 heap_caps_free(inst.espEq);
                 inst.espEq = nullptr;
+            }
+            break;
+        case NodeType::GraphicEq:
+            if (inst.graphicEq != nullptr)
+            {
+                destroyGraphicEq(*inst.graphicEq);
+                heap_caps_free(inst.graphicEq);
+                inst.graphicEq = nullptr;
             }
             break;
         case NodeType::Chorus:

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "EspEqEffect.h"
+#include "GraphicEqEffect.h"
 #include "NodeInstance.h"
 #include "NodeTypes.h"
 #include "SoundFontPlayer.h"
@@ -156,6 +158,31 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
             return updateEspEq(eq, eq.filterType, eq.frequencyHz, value, eq.gainDb);
         if (paramDispatchIs(name, "gainDb"))
             return updateEspEq(eq, eq.filterType, eq.frequencyHz, eq.q, value);
+        return false;
+    }
+    case NodeType::GraphicEq:
+    {
+        auto &geq = *inst.graphicEq;
+        if (paramDispatchIs(name, "bypass"))
+        {
+            geq.bypass = value >= 0.5f;
+            return true;
+        }
+        if (paramDispatchIs(name, "gain"))
+        {
+            geq.outputGainCv = value;
+            return true;
+        }
+        for (int i = 0; i < GraphicEqState::kBandCount; ++i)
+        {
+            char paramName[8];
+            snprintf(paramName, sizeof(paramName), "gain%d", i + 1);
+            if (paramDispatchIs(name, paramName))
+                return updateGraphicEqBandGain(geq, i, value);
+            snprintf(paramName, sizeof(paramName), "freq%d", i + 1);
+            if (paramDispatchIs(name, paramName))
+                return updateGraphicEqBandFrequency(geq, i, value);
+        }
         return false;
     }
     case NodeType::Mixer:

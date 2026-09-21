@@ -7,6 +7,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -149,6 +150,69 @@ inline void log_p0_baseline_tick() {
         ESP_LOGI(kTag, "  widget %-20s dsp=%.2f%% edge=%.2f%%", widgetId, static_cast<double>(dspPercent),
                  static_cast<double>(edgePercent));
     }
+}
+
+inline void log_midi_cc_debug_tick()
+{
+    static uint32_t lastSequence = 0;
+    static int64_t lastLogUs = 0;
+    constexpr int64_t kMinimumIntervalUs = 250000;
+    constexpr size_t kMessageSize = 2048;
+
+    static MidiCcDebugSnapshot snapshot{};
+    if (!engine().readMidiCcDebugSnapshot(snapshot) || snapshot.sequence == lastSequence)
+    {
+        return;
+    }
+    lastSequence = snapshot.sequence;
+
+    const int64_t nowUs = esp_timer_get_time();
+    if (lastLogUs != 0 && nowUs - lastLogUs < kMinimumIntervalUs)
+    {
+        return;
+    }
+
+    static char message[kMessageSize] = {};
+    message[0] = '\0';
+    int used = snprintf(message, sizeof(message), "MIDI CC channel=%u cc=%u raw=%u",
+                        static_cast<unsigned>(snapshot.channel + 1), static_cast<unsigned>(snapshot.cc),
+                        static_cast<unsigned>(snapshot.rawValue));
+    if (used < 0)
+    {
+        return;
+    }
+    if (used >= static_cast<int>(sizeof(message)))
+    {
+        used = static_cast<int>(sizeof(message)) - 1;
+    }
+
+    for (uint8_t i = 0; i < snapshot.targetCount && used < static_cast<int>(sizeof(message)) - 1; ++i)
+    {
+        const MidiCcDebugTarget &target = snapshot.targets[i];
+        const char *unit = target.raw ? " raw" : " V";
+        const int remaining = static_cast<int>(sizeof(message)) - used;
+        const int written = snprintf(message + used, remaining, " | %s: %s.%s=%.3f%s",
+                                     target.sourceLabel, target.targetLabel, target.paramName,
+                                     static_cast<double>(target.value), unit);
+        if (written < 0)
+        {
+            break;
+        }
+        if (written >= remaining)
+        {
+            used = static_cast<int>(sizeof(message)) - 1;
+            break;
+        }
+        used += written;
+    }
+    if (snapshot.omittedTargets > 0 && used < static_cast<int>(sizeof(message)) - 1)
+    {
+        snprintf(message + used, sizeof(message) - used, " | +%u weitere Ziele",
+                 static_cast<unsigned>(snapshot.omittedTargets));
+    }
+
+    ESP_LOGI("midi_cc", "%s", message);
+    lastLogUs = nowUs;
 }
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)

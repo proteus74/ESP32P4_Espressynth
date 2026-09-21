@@ -2199,6 +2199,42 @@ body.show-node-cpu .widget-cpu-badge {
   color: #94a3b8;
 }
 
+/* Eingeklapptes Mini-Oszilloskop im Oszillator-/FM-Oszillator-Widget
+   (nur sichtbar bei aktivem "Show Oscilloscopes" im View-Menu) */
+
+.osc-scope-panel {
+  display: none;
+  margin-top: 0.4rem;
+}
+
+body.show-oscilloscopes .osc-scope-panel {
+  display: flex;
+  justify-content: center;
+}
+
+.osc-scope-canvas {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.3rem;
+}
+
+/* MDA Piano has no other body content - only render the body's padding
+   once the scope panel inside it actually shows, else it's an empty
+   padded gap under the header. */
+
+.oscilloscope-only-body {
+  padding: 0;
+}
+
+.oscilloscope-only-body .osc-scope-panel {
+  margin-top: 0;
+}
+
+body.show-oscilloscopes .oscilloscope-only-body {
+  padding: 0.6rem 0.7rem;
+}
+
 /* LFO-Widget (wiederverwendet .osc-wave-buttons/.osc-wave-btn/.osc-freq-label) */
 
 .lfo-body {
@@ -2692,6 +2728,21 @@ body.show-node-cpu .widget-cpu-badge {
   background: var(--bg);
   border: 1px solid var(--card-border);
   border-radius: 0.3rem;
+}
+
+.graphic-eq-band-labels {
+  position: relative;
+  width: 100%;
+  height: 0.8rem;
+  color: #facc15;
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.graphic-eq-band-label {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .spectrum-axis-canvas {
@@ -3199,7 +3250,18 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="audio-input-link"] .port-row-in > .port-label {
-  flex: 0 0 12px;
+  flex: 0 1 128px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-instance[data-widget-type="audio-output-link"] .port-row-in > .port-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .widget-instance[data-widget-type="audio-input-link"] .port-slider {

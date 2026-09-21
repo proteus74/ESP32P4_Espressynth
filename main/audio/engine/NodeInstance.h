@@ -296,6 +296,7 @@ struct NodeInstance
         FilterState *filter;
         CurtisFilterState *curtisFilter;
         EspEqState *espEq;
+        GraphicEqState *graphicEq;
         KnobState *knob;
         ButtonState *button;
         UpDownButtonState *upDownButton;

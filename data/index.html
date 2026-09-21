@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260916-link-labels-2">
+<link rel="stylesheet" href="/static/css/style.css?v=20260921-link-label-nowrap-1">
 </head>
 <body>
 
@@ -57,6 +57,10 @@
       <label class="dropdown-check">
         <input type="checkbox" id="menuToggleNodeCpu">
         <span>Show Node CPU %</span>
+      </label>
+      <label class="dropdown-check">
+        <input type="checkbox" id="menuShowOscilloscopes">
+        <span>Show Oscilloscopes</span>
       </label>
       <label class="dropdown-range" for="menuWidgetOpacity">
         <span class="dropdown-range-label">
@@ -616,6 +620,18 @@
   </div>
 </div>
 
+<div id="audioLinkSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Audio Bus Labels</h3>
+    <p class="modal-hint">Shared by To Master and Audio Outputs.</p>
+    <div id="audioLinkLabels" class="linked-io-label-settings"></div>
+    <div class="modal-actions">
+      <button id="audioLinkSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="audioLinkSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="linkedOutputSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Link Out Settings</h3>
@@ -1150,6 +1166,27 @@
   </div>
 </div>
 
+<div id="graphicEqSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>8-Band EQ Settings</h3>
+    <p class="modal-hint">Band center frequencies (Hz). Gain per band is CV/slider-controlled on the widget itself.</p>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Band 1 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq1Input" value="63"></label>
+      <label class="modal-field"><span>Band 2 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq2Input" value="125"></label>
+      <label class="modal-field"><span>Band 3 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq3Input" value="250"></label>
+      <label class="modal-field"><span>Band 4 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq4Input" value="500"></label>
+    </div>
+    <div class="modal-field-row">
+      <label class="modal-field"><span>Band 5 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq5Input" value="1000"></label>
+      <label class="modal-field"><span>Band 6 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq6Input" value="2000"></label>
+      <label class="modal-field"><span>Band 7 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq7Input" value="5000"></label>
+      <label class="modal-field"><span>Band 8 (Hz)</span><input type="text" inputmode="numeric" id="graphicEqFreq8Input" value="14000"></label>
+    </div>
+    <p class="modal-hint modal-hint-error" id="graphicEqSettingsError" style="display:none;"></p>
+    <div class="modal-actions"><button id="graphicEqSettingsCancel" class="btn-secondary">Cancel</button><button id="graphicEqSettingsSave">Save</button></div>
+  </div>
+</div>
+
 <div id="envelopeFollowerSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Envelope Follower Settings</h3>
@@ -1270,6 +1307,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260919-mda-live-1"></script>
+<script type="module" src="/static/js/main.js?v=20260921-audio-label-nowrap-1"></script>
 </body>
 </html>

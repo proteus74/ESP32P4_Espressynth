@@ -7,6 +7,7 @@
 
 #include "CvConventions.h"
 #include "EspEqEffect.h"
+#include "GraphicEqEffect.h"
 #include "NodeInstance.h"
 #include "SoundFontPlayer.h"
 #include "SynthConfig.h"
@@ -151,6 +152,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::EspEq:
         processEspEq(*inst.espEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
+        break;
+    case NodeType::GraphicEq:
+        processGraphicEq(*inst.graphicEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
         break;
     case NodeType::Multiplier:
         nodes::arithmetic::renderMultiplier(inst, frames);

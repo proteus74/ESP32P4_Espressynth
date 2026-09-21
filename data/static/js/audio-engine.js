@@ -42,6 +42,13 @@ function parseValueList(str) {
 
 
 const CV_MAX_VOLTS = 10;
+const GRAPHIC_EQ_DEFAULT_FREQS = [63, 125, 250, 500, 1000, 2000, 5000, 14000];
+
+function validGraphicEqFrequencies(frequencies) {
+  return Array.isArray(frequencies) && frequencies.length === GRAPHIC_EQ_DEFAULT_FREQS.length &&
+    frequencies.every((hz, i) => Number.isInteger(Number(hz)) && Number(hz) >= 20 && Number(hz) <= 20000 &&
+      (i === 0 || Number(hz) > Number(frequencies[i - 1])));
+}
 // Nominal peak amplitude of the AUDIO signal domain (oscillator/Hammond/
 // sample-player waveform values), as opposed to CV_MAX_VOLTS (the CV
 // domain) - mirrors cv::kAudioPeakVolts in CvConventions.h 1:1.
@@ -2733,6 +2740,20 @@ export class AudioEngine {
           entry.resonanceSharedGate.connect(section.Q);
         });
         entry._sharedWired = false;
+
+        // Inline spectrum + filter-curve preview (32 bands is plenty for a
+        // small widget panel - same idea as "esp-eq" below).
+        entry.spectrumAnalyser = ctx.createAnalyser();
+        entry.spectrumAnalyser.fftSize = 64;
+        entry.spectrumBuffer = new Uint8Array(entry.spectrumAnalyser.frequencyBinCount);
+        filterOutput.connect(entry.spectrumAnalyser);
+        entry.responseFreqs = new Float32Array(entry.spectrumAnalyser.frequencyBinCount);
+        for (let i = 0; i < entry.responseFreqs.length; i += 1) {
+          entry.responseFreqs[i] = (i * ctx.sampleRate) / 2 / entry.responseFreqs.length;
+        }
+        entry.responseMag = new Float32Array(entry.responseFreqs.length);
+        entry.responsePhase = new Float32Array(entry.responseFreqs.length);
+
         return entry;
       }
       case "esp-eq": {
@@ -2777,6 +2798,73 @@ export class AudioEngine {
           responseFreqs,
           responseMag: new Float32Array(binCount),
           responsePhase: new Float32Array(binCount),
+        };
+      }
+      case "graphic-eq": {
+        // 8 fixed-Q peaking bands cascaded in series per channel - mirrors
+        // the firmware's single esp_ae_eq handle with filter_num=8
+        // (GraphicEqEffect.h). Frequency is settings-dialog-only (not CV);
+        // each band's gain IS CV-controllable (see EFFECT_CV_PARAMS in
+        // main.js: 0-10V, 5V = 0 dB center, mapped to dB before it reaches
+        // setParam - same convention as esp-eq's own "gainDb").
+        const bandCount = 8;
+        const freqs = validGraphicEqFrequencies(params.frequencies)
+          ? params.frequencies.map(Number)
+          : [...GRAPHIC_EQ_DEFAULT_FREQS];
+        const gains = Array.from({ length: bandCount }, (_, i) => Number(params[`gain${i + 1}`]) || 0);
+        const makeBands = () => freqs.map((hz, i) => {
+          const f = ctx.createBiquadFilter();
+          f.type = "peaking";
+          f.frequency.value = hz;
+          f.Q.value = 1.41;
+          f.gain.value = gains[i];
+          return f;
+        });
+        const bandsL = makeBands();
+        const bandsR = makeBands();
+        for (let i = 1; i < bandCount; i += 1) {
+          bandsL[i - 1].connect(bandsL[i]);
+          bandsR[i - 1].connect(bandsR[i]);
+        }
+        const outputGainL = ctx.createGain();
+        const outputGainR = ctx.createGain();
+        outputGainL.gain.value = clampRange((Number(params.gain ?? CV_MAX_VOLTS) || 0) / CV_MAX_VOLTS, 0, 1);
+        outputGainR.gain.value = outputGainL.gain.value;
+        bandsL[bandCount - 1].connect(outputGainL);
+        bandsR[bandCount - 1].connect(outputGainR);
+
+        const geqSpectrumAnalyser = ctx.createAnalyser();
+        geqSpectrumAnalyser.fftSize = 1024;
+        const geqBinCount = geqSpectrumAnalyser.frequencyBinCount;
+        const geqSpectrumBuffer = new Uint8Array(geqBinCount);
+        outputGainL.connect(geqSpectrumAnalyser);
+        const geqResponseCount = 128;
+        const geqResponseFreqs = new Float32Array(geqResponseCount);
+        const geqMinHz = 20;
+        const geqMaxHz = Math.min(ctx.sampleRate / 2 - 1, 20000);
+        for (let i = 0; i < geqResponseCount; i += 1) {
+          geqResponseFreqs[i] = geqMinHz * Math.pow(geqMaxHz / geqMinHz, i / (geqResponseCount - 1));
+        }
+
+        return {
+          type,
+          bandsL,
+          bandsR,
+          inputL: bandsL[0],
+          inputR: bandsR[0],
+          outputL: outputGainL,
+          outputR: outputGainR,
+          outputGainL,
+          outputGainR,
+          gainDb: gains,
+          freqHz: freqs,
+          bypass: false,
+          spectrumAnalyser: geqSpectrumAnalyser,
+          spectrumBuffer: geqSpectrumBuffer,
+          responseFreqs: geqResponseFreqs,
+          responseMag: new Float32Array(geqResponseCount),
+          responsePhase: new Float32Array(geqResponseCount),
+          bandMagScratch: new Float32Array(geqResponseCount),
         };
       }
       case "mixer": {
@@ -3986,6 +4074,65 @@ export class AudioEngine {
     return entry.responseMag;
   }
 
+  getFilterSpectrum(id) {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return null;
+    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
+    if (!entry || (entry.type !== "filter" && entry.type !== "curtis-filter")) return null;
+    entry.spectrumAnalyser.getByteFrequencyData(entry.spectrumBuffer);
+    return entry.spectrumBuffer;
+  }
+
+  // Sections are identical biquads cascaded in series (see the "filter"/
+  // "curtis-filter" _buildNode case), so the combined magnitude of the
+  // active ones is section[0]'s own response raised to the active count.
+  getFilterFrequencyResponse(id) {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return null;
+    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
+    if (!entry || (entry.type !== "filter" && entry.type !== "curtis-filter")) return null;
+    if (entry.filterType === "none") {
+      // Bypassed - signal skips the sections entirely (dryGain=1/wetGain=0),
+      // so the flat unfiltered response is the honest curve to show here.
+      entry.responseMag.fill(1);
+      return entry.responseMag;
+    }
+    entry.sections[0].getFrequencyResponse(entry.responseFreqs, entry.responseMag, entry.responsePhase);
+    const activeCount = filterSectionCount(entry.slope);
+    if (activeCount > 1) {
+      for (let i = 0; i < entry.responseMag.length; i += 1) entry.responseMag[i] **= activeCount;
+    }
+    return entry.responseMag;
+  }
+
+  getGraphicEqSpectrum(id) {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return null;
+    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
+    if (!entry || entry.type !== "graphic-eq") return null;
+    entry.spectrumAnalyser.getByteFrequencyData(entry.spectrumBuffer);
+    return entry.spectrumBuffer;
+  }
+
+  // 8 DIFFERENT bands cascaded in series - unlike Filter's identical
+  // sections, each band's magnitude must be sampled and multiplied in
+  // separately (bypass shows a flat line, same reasoning as Filter's own
+  // "none" case above).
+  getGraphicEqFrequencyResponse(id) {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return null;
+    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
+    if (!entry || entry.type !== "graphic-eq") return null;
+    entry.responseMag.fill(1);
+    if (!entry.bypass) {
+      entry.bandsL.forEach((band) => {
+        band.getFrequencyResponse(entry.responseFreqs, entry.bandMagScratch, entry.responsePhase);
+        for (let i = 0; i < entry.responseMag.length; i += 1) entry.responseMag[i] *= entry.bandMagScratch[i];
+      });
+    }
+    return entry.responseMag;
+  }
+
   
   
   
@@ -4016,6 +4163,31 @@ export class AudioEngine {
     }
     tap.analyser.getFloatTimeDomainData(tap.buffer);
     return tap.buffer[tap.buffer.length - 1];
+  }
+
+  // Per-widget oscilloscope preview (e.g. "oscillator"/"fm-oscillator" inline
+  // scope panel) - same lazy-tap pattern as getPortValue above but with a
+  // larger fftSize so the caller gets a full waveform, not just one sample.
+  // Reuses _valueMonitorTaps so removeNode()'s `${id}:` prefix cleanup below
+  // also disconnects this tap.
+  getOscilloscopeWaveform(id, port = "value") {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return null;
+    const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
+    const node = this._resolveOutputFromEntry(entry, port);
+    if (!node) return null;
+    const key = `${id}:scope:${port}`;
+    let tap = this._valueMonitorTaps.get(key);
+    if (!tap || tap.node !== node) {
+      if (tap) tap.analyser.disconnect();
+      const analyser = this.ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      node.connect(analyser);
+      tap = { node, analyser, buffer: new Float32Array(analyser.fftSize) };
+      this._valueMonitorTaps.set(key, tap);
+    }
+    tap.analyser.getFloatTimeDomainData(tap.buffer);
+    return tap.buffer;
   }
 
   _removeEntry(entry) {
@@ -4268,6 +4440,10 @@ export class AudioEngine {
       if (entry.analyser) entry.analyser.disconnect();
       if (entry.spectrumAnalyser) entry.spectrumAnalyser.disconnect();
       if (entry.limiter) entry.limiter.disconnect();
+      if (entry.bandsL) entry.bandsL.forEach((b) => b.disconnect());
+      if (entry.bandsR) entry.bandsR.forEach((b) => b.disconnect());
+      if (entry.outputGainL) entry.outputGainL.disconnect();
+      if (entry.outputGainR) entry.outputGainR.disconnect();
       if (entry.type === "wave-player") {
         if (entry.source) {
           entry.source.stop();
@@ -4686,6 +4862,32 @@ export class AudioEngine {
           entry.inputR.type = eqFilterTypeToBiquad(value);
         }
         break;
+      case "graphic-eq": {
+        const bandGainMatch = /^gain(\d)$/.exec(paramName);
+        const bandFreqMatch = /^freq(\d)$/.exec(paramName);
+        if (paramName === "bypass") {
+          entry.bypass = value === true || value === 1;
+          entry.bandsL.forEach((band, i) => applyRampValue(band.gain, entry.bypass ? 0 : entry.gainDb[i]));
+          entry.bandsR.forEach((band, i) => applyRampValue(band.gain, entry.bypass ? 0 : entry.gainDb[i]));
+        } else if (paramName === "gain") {
+          const g = clampRange((Number(value) || 0) / CV_MAX_VOLTS, 0, 1);
+          applyRampValue(entry.outputGainL.gain, g);
+          applyRampValue(entry.outputGainR.gain, g);
+        } else if (bandGainMatch) {
+          const i = Number(bandGainMatch[1]) - 1;
+          entry.gainDb[i] = Number(value) || 0;
+          if (!entry.bypass) {
+            applyRampValue(entry.bandsL[i].gain, entry.gainDb[i]);
+            applyRampValue(entry.bandsR[i].gain, entry.gainDb[i]);
+          }
+        } else if (bandFreqMatch) {
+          const i = Number(bandFreqMatch[1]) - 1;
+          entry.freqHz[i] = Number(value) || entry.freqHz[i];
+          applyRampValue(entry.bandsL[i].frequency, entry.freqHz[i]);
+          applyRampValue(entry.bandsR[i].frequency, entry.freqHz[i]);
+        }
+        break;
+      }
       case "frequency-divider":
         
         
@@ -5210,6 +5412,7 @@ export class AudioEngine {
       return entry.filterOutput || entry.filterNode;
     }
     if (entry.type.startsWith("esp-") && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
+    if (entry.type === "graphic-eq" && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
     if (entry.type === "mixer" && port === "out") return entry.sum;
     if (entry.type === "multiplexer" && port === "value") return entry.output;
     if (entry.type === "output-multiplexer") return entry.outputGains.get(port) || null;
@@ -5281,6 +5484,7 @@ export class AudioEngine {
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "cutoff") return entry.cutoffCv.prescale;
     if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "resonance") return entry.resonanceCv.prescale;
     if (entry.type.startsWith("esp-") && (port === "inL" || port === "inR")) return port === "inL" ? entry.inputL : entry.inputR;
+    if (entry.type === "graphic-eq" && (port === "inL" || port === "inR")) return port === "inL" ? entry.inputL : entry.inputR;
     if (entry.type === "mixer") return entry.inputGains.get(port) || null;
     if (entry.type === "multiplexer") return entry.inputGains.get(port) || null;
     if (entry.type === "switch") {
