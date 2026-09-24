@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260921-link-label-nowrap-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20260924-sample-loading-1">
 </head>
 <body>
 
@@ -91,6 +91,8 @@
       <span id="masterClockBpmLabel">120</span> BPM
     </button>
     <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
+    <button id="loadSamplesBtn" class="load-samples-btn" type="button" hidden
+      title="Sample loading is off in Settings - click to download the samples for this preset now">Load Samples</button>
     <span id="midiNoDevice" class="midi-name">No device</span>
     <div id="midiDeviceList" class="midi-device-list"></div>
     <span id="midiActivity" class="midi-activity"></span>
@@ -193,6 +195,17 @@
           </label>
           <button id="presetNextLearnBtn" type="button" class="btn-secondary">Learn</button>
         </div>
+      </div>
+
+      <div class="settings-section">
+        <h4 class="modal-section-title">Browser Preview</h4>
+        <label class="modal-field modal-field-checkbox">
+          <input type="checkbox" id="loadSamplesSetting">
+          <span>Load samples in the browser</span>
+        </label>
+        <p class="modal-field-hint">Applies to this browser only. When off, Wave Player, SoundFont Player and
+          MDA Piano don't download their samples on page load (faster start); use "Load Samples" in the top
+          bar to fetch them later.</p>
       </div>
 
       <div class="settings-section">
@@ -1327,6 +1340,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260924-wavetable-1"></script>
+<script type="module" src="/static/js/main.js?v=20260924-wavetable-2"></script>
 </body>
 </html>

@@ -11,25 +11,65 @@ function isNoiseWave(waveType) {
   return waveType === "noise" || waveType === "pink-noise";
 }
 
-// Web Audio has no falling-sawtooth OscillatorType, so "sawtooth-down" is a
-// custom PeriodicWave: the native sawtooth's Fourier series negated
-// (2/(pi*n) * (-1)^(n+1) -> 2/(pi*n) * (-1)^n). Bandlimiting is done by the
-// browser, same as for the built-in types. PeriodicWaves belong to one
-// AudioContext, hence the per-context cache.
-const SAWTOOTH_DOWN_HARMONICS = 64;
-const sawtoothDownWaves = new WeakMap();
+// Every periodic waveform is a custom PeriodicWave in the firmware's phase
+// convention (PhaseOsc::sampleAt in DspPrimitives.h): phase 0 is the start of
+// the cycle, the rising saw starts at -1, the falling saw at +1, the triangle
+// at its minimum -1 and the square high. WebAudio's built-in "sawtooth"/
+// "triangle" are sine series that start at 0 - a quarter/half cycle off, which
+// is audible on every note-on phase reset and made the LFO's phase offset land
+// elsewhere than on hardware. `phaseCycles` pre-rotates the series (the LFO's
+// "phase" param, applied live like PhaseOsc's read-time phase offset).
+// Unnormalized so the fundamental matches the firmware's naive waveforms;
+// bandlimiting is done by the browser. PeriodicWaves belong to one
+// AudioContext, hence the per-context cache (phase 0 only - phased LFO waves
+// are built on demand).
+const FIRMWARE_WAVE_HARMONICS = 1024;
+const firmwareWaveCache = new WeakMap();
 
-function getSawtoothDownWave(ctx) {
-  let wave = sawtoothDownWaves.get(ctx);
-  if (!wave) {
-    const real = new Float32Array(SAWTOOTH_DOWN_HARMONICS + 1);
-    const imag = new Float32Array(SAWTOOTH_DOWN_HARMONICS + 1);
-    for (let n = 1; n <= SAWTOOTH_DOWN_HARMONICS; n += 1) {
-      imag[n] = (2 / (Math.PI * n)) * (n % 2 === 0 ? 1 : -1);
-    }
-    wave = ctx.createPeriodicWave(real, imag);
-    sawtoothDownWaves.set(ctx, wave);
+function firmwareWaveSeries(waveType, k) {
+  switch (waveType) {
+    case "square":
+      return k % 2 === 1 ? { a: 0, b: 4 / (Math.PI * k) } : null;
+    case "triangle":
+      return k % 2 === 1 ? { a: -8 / (Math.PI * Math.PI * k * k), b: 0 } : null;
+    case "sawtooth":
+    case "linear-up":
+    case "supersaw":
+      return { a: 0, b: -2 / (Math.PI * k) };
+    case "sawtooth-down":
+    case "linear-down":
+      return { a: 0, b: 2 / (Math.PI * k) };
+    default:
+      return k === 1 ? { a: 0, b: 1 } : null;
   }
+}
+
+function getFirmwareWave(ctx, waveType, phaseCycles = 0) {
+  const phase = ((Number(phaseCycles) || 0) % 1 + 1) % 1;
+  const shape = waveType === "square" || waveType === "triangle" || waveType === "sawtooth" ||
+    waveType === "linear-up" || waveType === "supersaw" || waveType === "sawtooth-down" ||
+    waveType === "linear-down" ? waveType : "sine";
+  let perCtx = firmwareWaveCache.get(ctx);
+  if (!perCtx) {
+    perCtx = new Map();
+    firmwareWaveCache.set(ctx, perCtx);
+  }
+  if (phase === 0 && perCtx.has(shape)) return perCtx.get(shape);
+  const harmonics = shape === "sine" ? 1 : FIRMWARE_WAVE_HARMONICS;
+  const real = new Float32Array(harmonics + 1);
+  const imag = new Float32Array(harmonics + 1);
+  const theta = 2 * Math.PI * phase;
+  for (let k = 1; k <= harmonics; k += 1) {
+    const term = firmwareWaveSeries(shape, k);
+    if (!term) continue;
+    // f(p + phase): a*cos(k(w+t)) + b*sin(k(w+t)) re-expanded around w.
+    const c = Math.cos(k * theta);
+    const s = Math.sin(k * theta);
+    real[k] = term.a * c + term.b * s;
+    imag[k] = term.b * c - term.a * s;
+  }
+  const wave = ctx.createPeriodicWave(real, imag, { disableNormalization: true });
+  if (phase === 0) perCtx.set(shape, wave);
   return wave;
 }
 
@@ -40,9 +80,8 @@ function isLinearWave(waveType) {
 // Free-running, "linear-up"/"linear-down" repeat exactly like the sawtooth
 // shapes - they only differ when one-shot / per-note (see applyLfoLinear and
 // applyOscLinear), where they hold their end value instead of falling back.
-function setOscWaveType(ctx, osc, waveType) {
-  if (waveType === "sawtooth-down" || waveType === "linear-down") osc.setPeriodicWave(getSawtoothDownWave(ctx));
-  else osc.type = waveType === "linear-up" ? "sawtooth" : waveType;
+function setOscWaveType(ctx, osc, waveType, phaseCycles = 0) {
+  osc.setPeriodicWave(getFirmwareWave(ctx, waveType, phaseCycles));
 }
 
 // True while an LFO is a linear wave in One Shot: then it is not an
@@ -59,14 +98,14 @@ function lfoHeldRaw(entry) {
   if (entry.lfoWavetable) {
     return sampleBank(entry.wtTables, (entry.lfoPhase ?? 0) / 360, (entry.wtMorph ?? 0) / 10);
   }
-  return lfoWaveValueAtPhase(entry.lfoWaveType ?? entry.lfoOsc.type, entry.lfoPhase ?? 0);
+  return lfoWaveValueAtPhase(entry.lfoWaveType, entry.lfoPhase ?? 0);
 }
 
 // Oscillator "linear-up"/"linear-down": one ramp per note (gate), then hold.
 // A ConstantSource (entry.linearSource) replaces the oscillator in the signal
 // path (like the noise sources); the ramp lasts one cycle of the last direct-
 // set frequency (pitch arriving over an audio-rate cable is not readable here,
-// so that case falls back to middle C).
+// so that case uses the last direct-set note, or middle C).
 function oscExtraSource(entry, waveType) {
   if (waveType === "noise") return entry.noiseSource;
   if (waveType === "pink-noise") return entry.pinkNoiseSource;
@@ -75,7 +114,7 @@ function oscExtraSource(entry, waveType) {
 
 function applyOscLinear(ctx, entry) {
   const now = ctx.currentTime;
-  const hz = entry.osc.frequency.value > 0 ? entry.osc.frequency.value : 261.63;
+  const hz = entry.osc.frequency.value > 0 ? entry.osc.frequency.value : (entry.directHz > 0 ? entry.directHz : 261.63);
   const up = entry.waveType === "linear-up";
   const offset = entry.linearSource.offset;
   offset.cancelScheduledValues(now);
@@ -150,6 +189,8 @@ function parseValueList(str) {
 
 
 const CV_MAX_VOLTS = 10;
+// Mirrors nodes::lfo::kMaxRateHz (LfoNode.h) and main.js's LFO_MAX_RATE_HZ.
+const LFO_MAX_RATE_HZ = 500;
 const GRAPHIC_EQ_DEFAULT_FREQS = [63, 125, 250, 500, 1000, 2000, 5000, 14000];
 
 function validGraphicEqFrequencies(frequencies) {
@@ -164,26 +205,12 @@ const AUDIO_PEAK_VOLTS = 5;
 const LINK_BUS_COUNT = 8;
 const GATE_THRESHOLD_VOLTS = 5;
 const ANALYSER_BLACKMAN_COHERENT_GAIN = 0.42;
-// fm-oscillator preview: WebAudio's OscillatorNode has no phase-modulation
-// input (only frequency/detune AudioParams), so the browser approximates the
-// firmware's true phase modulation (see nodes/FmOscillatorNode.h's
-// kFmIndexMaxPhaseDeviation) with plain linear frequency modulation instead -
-// the modulator signal, scaled by this many Hz at max fmIndex/full-scale
-// modulator amplitude, is summed directly into the carrier's osc.frequency.
-// Expect the browser preview and real hardware to sound similar but not
-// identical for this node; the firmware is the authoritative output.
-const FM_INDEX_MAX_HZ_DEVIATION = 2000;
-// WebAudio preview approximation for firmware's one-sample phase feedback.
-// One delayed raw sample modulates carrier frequency; hardware remains the
-// authoritative phase-modulation implementation.
+// Plain-oscillator self-feedback preview: the firmware phase-modulates by the
+// previous sample (up to kSelfFeedbackMaxPhaseDeviation); a native
+// OscillatorNode has no phase input, so one delayed sample modulates its
+// frequency instead. (The fm-oscillator runs the exact phase modulation, see
+// createFmOscillatorCore.)
 const SELF_FEEDBACK_MAX_HZ_DEVIATION = 2000;
-const SUPER_SAW_CENTS = [-28, -14, -7, 7, 14, 28];
-
-function superSawWeights(volts) {
-  const mix = clampRange((Number(volts) || 0) / CV_MAX_VOLTS, 0, 1);
-  const norm = 1 / (1 + 6 * mix);
-  return { center: norm, side: mix * norm };
-}
 
 
 
@@ -704,20 +731,486 @@ function cvToRange(volts, minVal, maxVal, curve) {
   return minVal + v * (maxVal - minVal);
 }
 
-// Slope in dB per octave -> how many cascaded biquad sections the preview
-// engine runs. The firmware resolves this per pole (6 dB each); the browser
-// only approximates, rounding up to whole 12 dB sections.
-const FILTER_MAX_SECTIONS = 3;
+// ============================================================================
+// Filter / Curtis-filter DSP - 1:1 ports of nodes/FilterNode.h and
+// nodes/CurtisFilterNode.h, run per sample inside a ScriptProcessor (see the
+// "filter"/"curtis-filter" _buildNode case). Web Audio's BiquadFilterNode could
+// not reproduce either: it has no odd-pole (6 dB) slopes, reads lowpass/
+// highpass Q in dB, and the CEM3320-style filter is a saturating TPT cascade,
+// not a biquad at all.
+// ============================================================================
+const FILTER_MAX_POLES = 6; // cv::kFilterMaxPoles, 6 dB per pole
 
-function filterSectionCount(slopeDb) {
-  const poles = Math.round((Number(slopeDb) || 12) / 6);
-  return clampRange(Math.ceil(poles / 2), 1, FILTER_MAX_SECTIONS);
+function flushDenorm(x) {
+  return x > -1e-15 && x < 1e-15 ? 0 : x;
 }
 
+function filterPolesFromSlope(slopeDb) {
+  const poles = Math.trunc((Number(slopeDb) || 12) / 6);
+  return clampRange(poles, 1, FILTER_MAX_POLES);
+}
 
+// filterKindFromString() (NodeTypes.h): anything unknown is a lowpass.
+const FILTER_KINDS = ["none", "lowpass", "highpass", "bandpass", "notch", "lowshelf", "highshelf", "allpass"];
+function normalizeFilterKind(kind) {
+  return FILTER_KINDS.includes(kind) ? kind : "lowpass";
+}
 
+function filterSupportsOnePole(kind) {
+  return kind === "lowpass" || kind === "highpass";
+}
 
+// biquadCount()/usesOnePole() in FilterNode.h: LP/HP spend one biquad per two
+// poles plus a one-pole stage for an odd pole; the other kinds round up.
+function filterBiquadCount(kind, slopeDb) {
+  const poles = filterPolesFromSlope(slopeDb);
+  if (filterSupportsOnePole(kind)) return Math.trunc(poles / 2);
+  return Math.max(1, Math.trunc((poles + 1) / 2));
+}
 
+function filterUsesOnePole(kind, slopeDb) {
+  return filterSupportsOnePole(kind) && filterPolesFromSlope(slopeDb) % 2 !== 0;
+}
+
+function filterCutoffHz(entry, cutoffCv, sampleRate) {
+  const hz = cvToRange(cutoffCv, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
+  return clampRange(hz, 20, sampleRate / 2 - 100);
+}
+
+function filterResonanceQ(entry, resonanceCv) {
+  return Math.max(0.05, cvToRange(resonanceCv, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve));
+}
+
+// Biquad::set*() (DspPrimitives.h, RBJ cookbook) - Q is a plain ratio.
+function setBiquadCoeffs(stage, kind, cutoffHz, qOrGainDb, sampleRate) {
+  const w0 = (2 * Math.PI * cutoffHz) / sampleRate;
+  const sinw0 = Math.sin(w0);
+  const cosw0 = Math.cos(w0);
+  let b0;
+  let b1;
+  let b2;
+  let a0;
+  let a1;
+  let a2;
+  if (kind === "lowshelf" || kind === "highshelf") {
+    const a = 10 ** (qOrGainDb / 40);
+    const twoSqrtAAlpha = 2 * Math.sqrt(a) * sinw0 * 0.70710678;
+    if (kind === "lowshelf") {
+      b0 = a * ((a + 1) - (a - 1) * cosw0 + twoSqrtAAlpha);
+      b1 = 2 * a * ((a - 1) - (a + 1) * cosw0);
+      b2 = a * ((a + 1) - (a - 1) * cosw0 - twoSqrtAAlpha);
+      a0 = (a + 1) + (a - 1) * cosw0 + twoSqrtAAlpha;
+      a1 = -2 * ((a - 1) + (a + 1) * cosw0);
+      a2 = (a + 1) + (a - 1) * cosw0 - twoSqrtAAlpha;
+    } else {
+      b0 = a * ((a + 1) + (a - 1) * cosw0 + twoSqrtAAlpha);
+      b1 = -2 * a * ((a - 1) + (a + 1) * cosw0);
+      b2 = a * ((a + 1) + (a - 1) * cosw0 - twoSqrtAAlpha);
+      a0 = (a + 1) - (a - 1) * cosw0 + twoSqrtAAlpha;
+      a1 = 2 * ((a - 1) - (a + 1) * cosw0);
+      a2 = (a + 1) - (a - 1) * cosw0 - twoSqrtAAlpha;
+    }
+  } else {
+    const alpha = sinw0 / (2 * qOrGainDb);
+    a0 = 1 + alpha;
+    a1 = -2 * cosw0;
+    a2 = 1 - alpha;
+    if (kind === "highpass") {
+      b0 = (1 + cosw0) / 2;
+      b1 = -(1 + cosw0);
+      b2 = (1 + cosw0) / 2;
+    } else if (kind === "bandpass") {
+      b0 = alpha;
+      b1 = 0;
+      b2 = -alpha;
+    } else if (kind === "notch") {
+      b0 = 1;
+      b1 = -2 * cosw0;
+      b2 = 1;
+    } else if (kind === "allpass") {
+      b0 = 1 - alpha;
+      b1 = -2 * cosw0;
+      b2 = 1 + alpha;
+    } else {
+      b0 = (1 - cosw0) / 2;
+      b1 = 1 - cosw0;
+      b2 = (1 - cosw0) / 2;
+    }
+  }
+  const inv = 1 / a0;
+  stage.b0 = b0 * inv;
+  stage.b1 = b1 * inv;
+  stage.b2 = b2 * inv;
+  stage.a1 = a1 * inv;
+  stage.a2 = a2 * inv;
+}
+
+function createFilterDsp(entry, sampleRate) {
+  const stages = Array.from({ length: FILTER_MAX_POLES / 2 }, () => ({ b0: 1, b1: 0, b2: 0, a1: 0, a2: 0, z1: 0, z2: 0 }));
+  const dsp = {
+    stages,
+    onePoleCoeff: 0,
+    onePoleZ: 0,
+    renderedKind: "none",
+    lastCutoffCv: 0,
+    lastResonanceCv: 0,
+    audioCoeffsInitialized: false,
+    // applyCoeffs(): every active stage shares one coefficient set.
+    applyCoeffs(kind, cutoffCv, resonanceCv) {
+      const cutoff = filterCutoffHz(entry, cutoffCv, sampleRate);
+      this.onePoleCoeff = Math.exp((-2 * Math.PI * cutoff) / sampleRate);
+      const count = filterBiquadCount(kind, entry.slope);
+      const shelf = isShelfFilterType(kind);
+      const value = shelf ? shelfGainDbFromCv(resonanceCv) / count : filterResonanceQ(entry, resonanceCv);
+      for (let i = 0; i < count; i += 1) setBiquadCoeffs(stages[i], kind, cutoff, value, sampleRate);
+    },
+    // Slope changes reset every stage but the first, like setParam("slope").
+    resetUpperStages() {
+      for (let i = 1; i < stages.length; i += 1) {
+        stages[i].z1 = 0;
+        stages[i].z2 = 0;
+      }
+    },
+    render(input, cutoffBuf, resonanceBuf, output, cutoffFed, resonanceFed) {
+      const kind = entry.filterType;
+      if (kind === "none") {
+        this.renderedKind = "none";
+        output.set(input);
+        return;
+      }
+      if (kind !== this.renderedKind) {
+        this.renderedKind = kind;
+        entry.coeffsDirty = true;
+        this.audioCoeffsInitialized = false;
+      }
+      const count = filterBiquadCount(kind, entry.slope);
+      const onePole = filterUsesOnePole(kind, entry.slope);
+      const highpass = kind === "highpass";
+      const audioFed = cutoffFed || resonanceFed;
+      const stride = clampRange(Math.trunc(entry.coeffStride) || 4, 1, 16);
+      if (!audioFed && entry.coeffsDirty) {
+        this.applyCoeffs(kind, entry.cutoff, entry.resonance);
+        entry.coeffsDirty = false;
+      }
+      for (let i = 0; i < output.length; i += 1) {
+        if (audioFed && i % stride === 0) {
+          const cutoffCv = cutoffFed ? cutoffBuf[i] : entry.cutoff;
+          const resonanceCv = resonanceFed ? resonanceBuf[i] : entry.resonance;
+          if (!this.audioCoeffsInitialized || cutoffCv !== this.lastCutoffCv || resonanceCv !== this.lastResonanceCv) {
+            this.applyCoeffs(kind, cutoffCv, resonanceCv);
+            this.lastCutoffCv = cutoffCv;
+            this.lastResonanceCv = resonanceCv;
+            this.audioCoeffsInitialized = true;
+          }
+        }
+        let y = input[i];
+        for (let k = 0; k < count; k += 1) {
+          const st = stages[k];
+          const out = st.b0 * y + st.z1;
+          st.z1 = flushDenorm(st.b1 * y - st.a1 * out + st.z2);
+          st.z2 = flushDenorm(st.b2 * y - st.a2 * out);
+          y = out;
+        }
+        if (onePole) {
+          this.onePoleZ = flushDenorm(y * (1 - this.onePoleCoeff) + this.onePoleZ * this.onePoleCoeff);
+          y = highpass ? y - this.onePoleZ : this.onePoleZ;
+        }
+        output[i] = y;
+      }
+    },
+    // Magnitude of the current coefficient set at each frequency (UI curve).
+    response(freqs, mag) {
+      const kind = entry.filterType;
+      if (kind === "none") {
+        mag.fill(1);
+        return;
+      }
+      const count = filterBiquadCount(kind, entry.slope);
+      const onePole = filterUsesOnePole(kind, entry.slope);
+      const st = stages[0];
+      const c = this.onePoleCoeff;
+      for (let i = 0; i < freqs.length; i += 1) {
+        const w = (2 * Math.PI * freqs[i]) / sampleRate;
+        const c1 = Math.cos(w);
+        const s1 = Math.sin(w);
+        const c2 = Math.cos(2 * w);
+        const s2 = Math.sin(2 * w);
+        let m = 1;
+        if (count > 0) {
+          const nr = st.b0 + st.b1 * c1 + st.b2 * c2;
+          const ni = -(st.b1 * s1 + st.b2 * s2);
+          const dr = 1 + st.a1 * c1 + st.a2 * c2;
+          const di = -(st.a1 * s1 + st.a2 * s2);
+          m = Math.sqrt((nr * nr + ni * ni) / (dr * dr + di * di || 1e-30)) ** count;
+        }
+        if (onePole) {
+          const dr = 1 - c * c1;
+          const di = c * s1;
+          const den = Math.sqrt(dr * dr + di * di) || 1e-30;
+          // LP: (1-c)/(1-c z^-1); HP: c(1-z^-1)/(1-c z^-1)
+          const num = kind === "highpass" ? c * Math.sqrt((1 - c1) ** 2 + s1 * s1) : 1 - c;
+          m *= num / den;
+        }
+        mag[i] = m;
+      }
+    },
+  };
+  return dsp;
+}
+
+function curtisAsymmetricClip(value) {
+  const normalized = value / AUDIO_PEAK_VOLTS;
+  const drive = normalized >= 0 ? 1.08 : 0.96;
+  return AUDIO_PEAK_VOLTS * Math.tanh(normalized * drive);
+}
+
+function createCurtisFilterDsp(entry, sampleRate) {
+  const stage = new Float64Array(FILTER_MAX_POLES);
+  const dsp = {
+    g: 0.1,
+    feedback: 0,
+    renderedKind: "none",
+    lastCutoffCv: 0,
+    lastResonanceCv: 0,
+    audioCoeffsInitialized: false,
+    // updateCoefficients() in CurtisFilterNode.h.
+    updateCoefficients(cutoffCv, resonanceCv, poles) {
+      const hz = filterCutoffHz(entry, cutoffCv, sampleRate);
+      const phase = (0.5 * hz) / sampleRate;
+      const cosW = Math.cos(2 * Math.PI * phase);
+      const tanW = Math.sin(2 * Math.PI * phase) / (Math.abs(cosW) < 0.0001 ? 0.0001 : cosW);
+      this.g = clampRange(tanW / (1 + tanW), 0.0001, 0.9995);
+      if (isShelfFilterType(entry.filterType)) {
+        this.feedback = 0;
+      } else {
+        const q = filterResonanceQ(entry, resonanceCv);
+        const qSpan = entry.resonanceMaxQ - entry.resonanceMinQ;
+        const amount = clampRange(qSpan > 0.0001 ? (q - entry.resonanceMinQ) / qSpan : 0, 0, 1);
+        this.feedback = amount * (poles >= 4 ? 0.985 : 0.94);
+      }
+      entry.coeffsDirty = false;
+    },
+    resetUpperStages() {},
+    render(input, cutoffBuf, resonanceBuf, output, cutoffFed, resonanceFed) {
+      const kind = entry.filterType;
+      if (kind === "none") {
+        this.renderedKind = "none";
+        output.set(input);
+        return;
+      }
+      if (kind !== this.renderedKind) {
+        this.renderedKind = kind;
+        entry.coeffsDirty = true;
+        this.audioCoeffsInitialized = false;
+      }
+      const poles = filterPolesFromSlope(entry.slope);
+      const audioFed = cutoffFed || resonanceFed;
+      const stride = clampRange(Math.trunc(entry.coeffStride) || 4, 1, 16);
+      if (!audioFed && entry.coeffsDirty) this.updateCoefficients(entry.cutoff, entry.resonance, poles);
+      const shelfGain = isShelfFilterType(kind) ? 10 ** (shelfGainDbFromCv(entry.resonance) / 20) - 1 : 0;
+      for (let i = 0; i < output.length; i += 1) {
+        if (audioFed && i % stride === 0) {
+          const cutoffCv = cutoffFed ? cutoffBuf[i] : entry.cutoff;
+          const resonanceCv = resonanceFed ? resonanceBuf[i] : entry.resonance;
+          if (!this.audioCoeffsInitialized || cutoffCv !== this.lastCutoffCv || resonanceCv !== this.lastResonanceCv) {
+            this.updateCoefficients(cutoffCv, resonanceCv, poles);
+            this.lastCutoffCv = cutoffCv;
+            this.lastResonanceCv = resonanceCv;
+            this.audioCoeffsInitialized = true;
+          }
+        }
+        const x = input[i];
+        const driven = curtisAsymmetricClip(x + curtisAsymmetricClip(stage[poles - 1] * this.feedback));
+        let chain = driven;
+        let previous = driven;
+        for (let p = 0; p < poles; p += 1) {
+          previous = chain;
+          const v = (chain - stage[p]) * this.g;
+          const out = v + stage[p];
+          stage[p] = out + v;
+          chain = out;
+        }
+        const bandpass = previous - chain;
+        const highpass = x - 2 * previous + chain;
+        let y;
+        switch (kind) {
+          case "highpass": y = highpass; break;
+          case "bandpass": y = bandpass; break;
+          case "notch": y = chain + highpass; break;
+          case "allpass": y = x - 4 * bandpass; break;
+          case "lowshelf": y = x + shelfGain * chain; break;
+          case "highshelf": y = x + shelfGain * highpass; break;
+          default: y = chain; break;
+        }
+        output[i] = curtisAsymmetricClip(y);
+      }
+    },
+    // Small-signal (linear, unclipped) magnitude of the TPT cascade with its
+    // resonance feedback - for the widget's curve display only.
+    response(freqs, mag) {
+      const kind = entry.filterType;
+      if (kind === "none") {
+        mag.fill(1);
+        return;
+      }
+      const poles = filterPolesFromSlope(entry.slope);
+      const g = this.g;
+      const k = this.feedback;
+      const shelfGain = isShelfFilterType(kind) ? 10 ** (shelfGainDbFromCv(entry.resonance) / 20) - 1 : 0;
+      const mul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+      const div = (a, b) => {
+        const d = b[0] * b[0] + b[1] * b[1] || 1e-30;
+        return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d];
+      };
+      for (let i = 0; i < freqs.length; i += 1) {
+        const w = (2 * Math.PI * freqs[i]) / sampleRate;
+        const zi = [Math.cos(w), -Math.sin(w)]; // z^-1
+        const den = [1 - (1 - 2 * g) * zi[0], -(1 - 2 * g) * zi[1]];
+        const h1 = div([g * (1 + zi[0]), g * zi[1]], den); // one TPT stage
+        const s1 = div([2 * g * zi[0], 2 * g * zi[1]], den); // its state
+        let hPrev = [1, 0];
+        for (let p = 1; p < poles; p += 1) hPrev = mul(hPrev, h1);
+        const hLast = mul(hPrev, h1);
+        const loop = mul(s1, hPrev);
+        const u = div([1, 0], [1 - k * loop[0], -k * loop[1]]);
+        const prev = mul(hPrev, u);
+        const last = mul(hLast, u);
+        const bp = [prev[0] - last[0], prev[1] - last[1]];
+        const hp = [1 - 2 * prev[0] + last[0], -2 * prev[1] + last[1]];
+        let y;
+        switch (kind) {
+          case "highpass": y = hp; break;
+          case "bandpass": y = bp; break;
+          case "notch": y = [last[0] + hp[0], last[1] + hp[1]]; break;
+          case "allpass": y = [1 - 4 * bp[0], -4 * bp[1]]; break;
+          case "lowshelf": y = [1 + shelfGain * last[0], shelfGain * last[1]]; break;
+          case "highshelf": y = [1 + shelfGain * hp[0], shelfGain * hp[1]]; break;
+          default: y = last; break;
+        }
+        mag[i] = Math.hypot(y[0], y[1]);
+      }
+    },
+  };
+  return dsp;
+}
+
+// ============================================================================
+// FM oscillator core - per-sample port of nodes/FmOscillatorNode.h's render()
+// together with PhaseOsc (DspPrimitives.h). Phase is kept in cycles [0,1];
+// linear ramps saturate at 1 until the next phase reset instead of wrapping.
+// ============================================================================
+const FM_INDEX_MAX_PHASE_DEVIATION = 4; // kFmIndexMaxPhaseDeviation (cycles)
+const FM_SELF_FEEDBACK_MAX_PHASE_DEVIATION = 1; // kSelfFeedbackMaxPhaseDeviation
+const SUPER_SAW_CENTS = [-28, -14, -7, 7, 14, 28];
+// fm-oscillator CV ports that replace a fallback constant (see _fmCvInput).
+const FM_CV_INPUT_PORTS = ["fmIndex", "feedback", "superSawDetune", "superSawMix"];
+
+// PhaseOsc::sampleAt() for a phase in cycles (any value, wrapped here).
+function firmwareWaveSample(waveType, phase, dutyThreshold = 0.5) {
+  const p = phase - Math.floor(phase);
+  switch (waveType) {
+    case "square":
+      return p < dutyThreshold ? 1 : -1;
+    case "triangle":
+      return 4 * Math.abs(p - (p < 0.5 ? 0 : 1)) - 1;
+    case "sawtooth":
+    case "linear-up":
+      return 2 * p - 1;
+    case "sawtooth-down":
+    case "linear-down":
+      return 1 - 2 * p;
+    default:
+      return Math.sin(2 * Math.PI * p);
+  }
+}
+
+function createFmOscillatorCore(entry, sampleRate) {
+  let phase = 0;
+  const sidePhases = new Float64Array(SUPER_SAW_CENTS.length);
+  let feedbackSample = 0;
+  let noiseState = 0x12345678;
+  let pinkB0 = 0;
+  let pinkB1 = 0;
+  let pinkB2 = 0;
+  const nextNoise = () => {
+    noiseState ^= noiseState << 13;
+    noiseState ^= noiseState >>> 17;
+    noiseState ^= noiseState << 5;
+    return ((noiseState >>> 0) / 4294967295) * 2 - 1;
+  };
+  const nextPinkNoise = () => {
+    const white = nextNoise();
+    pinkB0 = 0.99765 * pinkB0 + white * 0.099046;
+    pinkB1 = 0.963 * pinkB1 + white * 0.2965164;
+    pinkB2 = 0.57 * pinkB2 + white * 1.0526913;
+    return clampRange((pinkB0 + pinkB1 + pinkB2 + white * 0.1848) * 0.25, -1, 1);
+  };
+  return {
+    // Graph.h resets only the main phase on note-on; SuperSaw sides run on.
+    resetPhase() {
+      phase = 0;
+    },
+    render(inputs, output) {
+      const [hzBuf, fmInBuf, fmIndexBuf, feedbackBuf, detuneBuf, mixBuf] = inputs;
+      const wave = entry.waveType;
+      const invSr = 1 / sampleRate;
+      if (wave === "noise" || wave === "pink-noise") {
+        const next = wave === "noise" ? nextNoise : nextPinkNoise;
+        for (let i = 0; i < output.length; i += 1) output[i] = next();
+        return;
+      }
+      // Block-rate like the firmware (portSample(inst, port, 0)).
+      const phaseOffsetScale = (fmIndexBuf[0] / CV_MAX_VOLTS) * FM_INDEX_MAX_PHASE_DEVIATION / AUDIO_PEAK_VOLTS;
+      const feedbackAmount = clampRange(feedbackBuf[0] / CV_MAX_VOLTS, 0, 1) * FM_SELF_FEEDBACK_MAX_PHASE_DEVIATION;
+      const feedbackActive = feedbackAmount !== 0;
+      if (wave === "supersaw") {
+        const detune = clampRange(detuneBuf[0] / CV_MAX_VOLTS, 0, 1);
+        const mix = clampRange(mixBuf[0] / CV_MAX_VOLTS, 0, 1);
+        const norm = 1 / (1 + 6 * mix);
+        const sideWeight = mix * norm;
+        const ratios = SUPER_SAW_CENTS.map((cents) => 2 ** ((cents * detune) / 1200));
+        if (detune === 0) sidePhases.fill(phase);
+        for (let i = 0; i < output.length; i += 1) {
+          const inc = hzBuf[i] * invSr;
+          let offset = fmInBuf[i] * phaseOffsetScale; // 0 while "fmIn" is unpatched
+          if (feedbackActive) offset += feedbackSample * feedbackAmount;
+          let sample = firmwareWaveSample("sawtooth", phase + offset) * norm;
+          phase = (phase + inc) % 1;
+          if (phase < 0) phase += 1;
+          let sideSum = 0;
+          for (let v = 0; v < ratios.length; v += 1) {
+            sideSum += firmwareWaveSample("sawtooth", sidePhases[v] + offset);
+            let next = (sidePhases[v] + inc * ratios[v]) % 1;
+            if (next < 0) next += 1;
+            sidePhases[v] = next;
+          }
+          sample += sideSum * sideWeight;
+          if (feedbackActive) feedbackSample = sample;
+          output[i] = sample;
+        }
+        return;
+      }
+      const linear = isLinearWave(wave);
+      const duty = wave === "square" ? clampRange(entry.dutyCycle / CV_MAX_VOLTS, 0, 1) : 0.5;
+      for (let i = 0; i < output.length; i += 1) {
+        let offset = fmInBuf[i] * phaseOffsetScale; // 0 while "fmIn" is unpatched
+        if (feedbackActive) offset += feedbackSample * feedbackAmount;
+        const sample = linear && offset === 0 && phase >= 1
+          ? (wave === "linear-up" ? 1 : -1)
+          : firmwareWaveSample(wave, phase + offset, duty);
+        if (feedbackActive) feedbackSample = sample;
+        const inc = hzBuf[i] * invSr;
+        if (linear) {
+          phase = Math.min(1, phase + Math.max(0, inc));
+        } else {
+          phase = (phase + inc) % 1;
+          if (phase < 0) phase += 1;
+        }
+        output[i] = sample;
+      }
+    },
+  };
+}
 
 function vcaAmountFromCv(volts, curve) {
   const v = clampRange(volts / CV_MAX_VOLTS, 0, 1);
@@ -736,11 +1229,11 @@ function vcaAmountFromCv(volts, curve) {
 
 
 const VCA_CURVE_SAMPLES = 1024;
-function buildVcaCurve(curve) {
+function buildVcaCurve(curve, scale = 1) {
   const samples = new Float32Array(VCA_CURVE_SAMPLES);
   for (let i = 0; i < VCA_CURVE_SAMPLES; i += 1) {
     const v = i / (VCA_CURVE_SAMPLES - 1); 
-    samples[i] = curve === "exponential" ? (10 ** v - 1) / 9 : curve === "gainCurve" ? v * 2 : v;
+    samples[i] = (curve === "exponential" ? (10 ** v - 1) / 9 : curve === "gainCurve" ? v * 2 : v) * scale;
   }
   return samples;
 }
@@ -816,29 +1309,22 @@ function mapValueMapperRaw(value, p) {
 
 
 
-function valueMapperDomain(p) {
-  const lo = Math.min(p.point1In, p.point2In);
-  const hi = Math.max(p.point1In, p.point2In);
-  const span = hi - lo;
-  const margin = span > 0 ? span * 0.5 : 1;
-  return { lo: lo - margin, hi: hi + margin };
-}
 
-const VALUE_MAPPER_CURVE_SAMPLES = 1024;
-function buildValueMapperCurve(p, domainLo, domainHi) {
-  const samples = new Float32Array(VALUE_MAPPER_CURVE_SAMPLES);
-  for (let i = 0; i < VALUE_MAPPER_CURVE_SAMPLES; i += 1) {
-    const v = domainLo + ((domainHi - domainLo) * i) / (VALUE_MAPPER_CURVE_SAMPLES - 1);
-    samples[i] = mapValueMapperRaw(v, p);
-  }
-  return samples;
-}
 
 
 
 
 function eqFilterTypeToBiquad(filterType) {
   return filterType === "peak" ? "peaking" : filterType || "peaking";
+}
+
+// The firmware's biquads (RBJ cookbook) take Q as a plain ratio for every
+// type; Web Audio's BiquadFilterNode instead reads Q in dB for "lowpass"/
+// "highpass" (alpha = sin(w0) / (2 * 10^(Q/20))), so those two need the
+// ratio converted or the resonance comes out far too weak.
+function biquadQ(biquadType, q) {
+  if (biquadType === "lowpass" || biquadType === "highpass") return 20 * Math.log10(Math.max(q, 1e-4));
+  return q;
 }
 
 // A shelving biquad ignores Q and is shaped by its gain instead, so the Filter
@@ -864,19 +1350,12 @@ function shelfGainDbFromCv(volts) {
 
 
 
-const LFO_WAVE_PHASE_CORRECTION_CYCLES = { triangle: 0.75 };
-
-function lfoStartOffsetSeconds(waveType, phaseDeg, rate) {
-  const correction = LFO_WAVE_PHASE_CORRECTION_CYCLES[waveType] || 0;
-  return (phaseDeg / 360 + correction) / rate;
-}
-
 function lfoWaveValueAtPhase(waveType, phaseDeg) {
   const phase = ((phaseDeg / 360) % 1 + 1) % 1;
   if (waveType === "square") return phase < 0.5 ? 1 : -1;
   if (waveType === "triangle") return 4 * Math.abs(phase - Math.floor(phase + 0.5)) - 1;
-  if (waveType === "sawtooth") return 2 * phase - 1;
-  if (waveType === "sawtooth-down") return 1 - 2 * phase;
+  if (waveType === "sawtooth" || waveType === "linear-up") return 2 * phase - 1;
+  if (waveType === "sawtooth-down" || waveType === "linear-down") return 1 - 2 * phase;
   return Math.sin(phase * Math.PI * 2);
 }
 
@@ -903,6 +1382,13 @@ export class AudioEngine {
 
 
     this._mdaPianoBankPromise = null;
+    // Browser-only switch (see setSampleLoadingEnabled): while off, sample
+    // players (wave-player, soundfont-player, mda-piano) don't download their
+    // files; the loads are parked here (entry -> loader) until
+    // loadDeferredSamples() runs them.
+    this._sampleLoadingEnabled = true;
+    this._deferredSampleLoads = new Map();
+    this.onDeferredSamplesChange = null;
 
     this._assetLoadTotal = 0;
     this._assetLoadDone = 0;
@@ -972,6 +1458,28 @@ export class AudioEngine {
   
   
   
+  // Clamps like espEqMakeFilterPara() (EspEqEffect.h) and converts the
+  // firmware's linear Q for the Web Audio biquad (see biquadQ()).
+  _applyEspEqParams(entry, glideSeconds) {
+    const now = this.ctx.currentTime;
+    const biquadType = eqFilterTypeToBiquad(entry.filterType);
+    const hz = clampRange(Number(entry.frequency) || 20, 20, this.ctx.sampleRate / 2 - 1);
+    const q = biquadQ(biquadType, clampRange(Number(entry.q) || 0.1, 0.1, 20));
+    const gainDb = clampRange(Number(entry.gainDb) || 0, -15, 15);
+    [entry.filterL, entry.filterR].forEach((filter) => {
+      filter.type = biquadType;
+      if (glideSeconds > 0) {
+        filter.frequency.setTargetAtTime(hz, now, glideSeconds);
+        filter.Q.setTargetAtTime(q, now, glideSeconds);
+        filter.gain.setTargetAtTime(gainDb, now, glideSeconds);
+      } else {
+        filter.frequency.value = hz;
+        filter.Q.value = q;
+        filter.gain.value = gainDb;
+      }
+    });
+  }
+
   _createDelayChannel(ctx, params) {
     const input = ctx.createGain();
     input.gain.value = 1;
@@ -992,13 +1500,23 @@ export class AudioEngine {
     const output = ctx.createGain();
     output.gain.value = 1;
 
+    // Bypass (DelayNode.h): input straight to output, echo path muted.
+    const bypass = params.bypass === true;
+    const processed = ctx.createGain();
+    processed.gain.value = bypass ? 0 : 1;
+    const bypassGain = ctx.createGain();
+    bypassGain.gain.value = bypass ? 1 : 0;
+
     input.connect(delay);
     input.connect(dry);
     delay.connect(wet);
-    dry.connect(output);
-    wet.connect(output);
+    dry.connect(processed);
+    wet.connect(processed);
+    processed.connect(output);
+    input.connect(bypassGain);
+    bypassGain.connect(output);
 
-    return { input, delay, feedbackGain, dry, wet, output };
+    return { input, delay, feedbackGain, dry, wet, processed, bypassGain, output };
   }
 
   
@@ -1010,15 +1528,11 @@ export class AudioEngine {
   }
 
   
-  _dampingToHz(damping) {
-    return 20000 - Math.max(0, Math.min(1, damping)) * 19800;
-  }
+
 
   
   
-  _roomSizeToSeconds(roomSize) {
-    return 0.1 + Math.max(0, Math.min(1, roomSize)) * 7.9;
-  }
+
 
   
   
@@ -1092,57 +1606,12 @@ export class AudioEngine {
     const now = this.ctx.currentTime;
 
     if (entry.type === "fm-oscillator") {
-      const oldOscs = [entry.osc, ...entry.sideOscs];
-      const newCenter = this.ctx.createOscillator();
-      if (entry.waveType === "sawtooth-down" || entry.waveType === "linear-down") setOscWaveType(this.ctx, newCenter, entry.waveType);
-      else newCenter.type = entry.osc.type;
-      newCenter.frequency.value = entry.osc.frequency.value;
-      newCenter.connect(entry.normalCarrierGain);
-      newCenter.connect(entry.superSawCenterGain);
-      const newSides = SUPER_SAW_CENTS.map((_, index) => {
-        const side = this.ctx.createOscillator();
-        side.type = "sawtooth";
-        side.frequency.value = entry.sideOscs[index].frequency.value;
-        side.connect(entry.superSawSideGains[index]);
-        return side;
-      });
-      oldOscs.forEach((old) => {
-        try {
-          entry.pitchWaveShaper.disconnect(old.frequency);
-          entry.fmDepthGain.disconnect(old.frequency);
-          entry.feedbackGain.disconnect(old.frequency);
-        } catch (err) {
-        }
-      });
-      entry.sideOscs.forEach((old, index) => {
-        try {
-          entry.superSawDetuneScales[index].disconnect(old.detune);
-        } catch (err) {
-        }
-      });
-      [newCenter, ...newSides].forEach((fresh) => {
-        entry.pitchWaveShaper.connect(fresh.frequency);
-        entry.fmDepthGain.connect(fresh.frequency);
-        entry.feedbackGain.connect(fresh.frequency);
-        fresh.start(now);
-      });
-      newSides.forEach((side, index) => entry.superSawDetuneScales[index].connect(side.detune));
-      oldOscs.forEach((old) => {
-        try {
-          old.stop(now);
-          old.disconnect();
-        } catch (err) {
-        }
-      });
-      entry.osc = newCenter;
-      entry.sideOscs = newSides;
-      if (isLinearWave(entry.waveType)) applyOscLinear(this.ctx, entry);
+      entry.core.resetPhase();
       return;
     }
 
     const newOsc = this.ctx.createOscillator();
-    if (entry.waveType === "sawtooth-down" || entry.waveType === "linear-down") setOscWaveType(this.ctx, newOsc, entry.waveType);
-    else newOsc.type = entry.osc.type;
+    setOscWaveType(this.ctx, newOsc, isNoiseWave(entry.waveType) ? "sine" : entry.waveType);
     newOsc.frequency.value = entry.osc.frequency.value;
     newOsc.detune.value = entry.osc.detune.value;
     try {
@@ -1150,10 +1619,6 @@ export class AudioEngine {
       entry.pitchWaveShaper.connect(newOsc.frequency);
       entry.feedbackGain.disconnect(entry.osc.frequency);
       entry.feedbackGain.connect(newOsc.frequency);
-      if (entry.fmDepthGain) {
-        entry.fmDepthGain.disconnect(entry.osc.frequency);
-        entry.fmDepthGain.connect(newOsc.frequency);
-      }
     } catch (err) {
     }
     newOsc.connect(entry.feedbackDelay);
@@ -1207,7 +1672,62 @@ export class AudioEngine {
     return this._mdaPianoBankPromise;
   }
 
+  setSampleLoadingEnabled(enabled) {
+    this._sampleLoadingEnabled = enabled !== false;
+  }
+
+  isSampleLoadingEnabled() {
+    return this._sampleLoadingEnabled;
+  }
+
+  // Number of sample players currently waiting for their files.
+  getDeferredSampleCount() {
+    return this._deferredSampleLoads.size;
+  }
+
+  // Downloads everything that was skipped while sample loading was off.
+  loadDeferredSamples() {
+    const pending = [...this._deferredSampleLoads.values()];
+    this._deferredSampleLoads.clear();
+    pending.forEach((load) => load());
+    this._notifyDeferredSamples();
+  }
+
+  _notifyDeferredSamples() {
+    if (typeof this.onDeferredSamplesChange === "function") {
+      this.onDeferredSamplesChange(this._deferredSampleLoads.size);
+    }
+  }
+
+  // Runs `load` now, or parks it per entry while sample loading is off (a
+  // later request for the same entry, e.g. a new file, replaces it).
+  _requestSampleLoad(entry, load) {
+    if (this._sampleLoadingEnabled) {
+      load();
+      return;
+    }
+    this._deferredSampleLoads.set(entry, load);
+    this._notifyDeferredSamples();
+  }
+
+  _loadMdaPianoEntry(entry) {
+    this._requestSampleLoad(entry, () => {
+      this._loadMdaPianoBank().then((instruments) => {
+        entry.instruments = instruments;
+      });
+    });
+  }
+
   _loadWavePlayerBuffer(entry) {
+    entry.buffer = null;
+    if (!entry.sampleFile) {
+      if (this._deferredSampleLoads.delete(entry)) this._notifyDeferredSamples();
+      return;
+    }
+    this._requestSampleLoad(entry, () => this._fetchWavePlayerBuffer(entry));
+  }
+
+  _fetchWavePlayerBuffer(entry) {
     entry.buffer = null;
     if (!entry.sampleFile || !this.ctx) return;
 
@@ -1292,6 +1812,10 @@ export class AudioEngine {
   _loadSf2Entry(entry) {
     entry.parsed = null;
     if (!entry.path) return;
+    this._requestSampleLoad(entry, () => this._fetchSf2Entry(entry));
+  }
+
+  _fetchSf2Entry(entry) {
     this._assetLoadTotal += 1;
     this.getSf2Info(entry.volume, entry.path).then((parsed) => {
       entry.parsed = parsed;
@@ -1318,7 +1842,7 @@ export class AudioEngine {
     if (params.program !== undefined) entry.program = params.program;
     if (params.gain !== undefined) {
       entry.gain = params.gain;
-      const g = ((Number(params.gain) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+      const g = entry.gainCvActive ? 0 : ((Number(params.gain) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
       const now = this.ctx.currentTime;
       [entry.leftOut, entry.rightOut].forEach((node) => {
         node.gain.cancelScheduledValues(now);
@@ -1408,11 +1932,20 @@ export class AudioEngine {
     }
     source.playbackRate.value = 2 ** (this._sf2SemitoneOffset(entry, channel, region, key) / 12);
 
+    // tsf's voice lowpass: only active for initialFilterFc <= 13500 cents and
+    // below 0.499 * sampleRate; its resonance is initialFilterQ centibels,
+    // which is exactly what Web Audio's lowpass Q already expects (dB).
+    // Inactive -> a 0 dB peaking biquad, i.e. an exact passthrough.
     const filterNode = ctx.createBiquadFilter();
-    filterNode.type = "lowpass";
-    const fc = region.initialFilterFc <= 13500 ? cents2Hertz(region.initialFilterFc) : 20000;
-    filterNode.frequency.value = Math.min(fc, ctx.sampleRate / 2 - 100);
-    filterNode.Q.value = clampRange(10 ** (region.initialFilterQ / 10 / 20), 0.1, 20);
+    const fc = region.initialFilterFc <= 13500 ? cents2Hertz(region.initialFilterFc) : ctx.sampleRate;
+    if (fc < 0.499 * ctx.sampleRate) {
+      filterNode.type = "lowpass";
+      filterNode.frequency.value = fc;
+      filterNode.Q.value = region.initialFilterQ / 10;
+    } else {
+      filterNode.type = "peaking";
+      filterNode.gain.value = 0;
+    }
 
     const envelopeGain = ctx.createGain();
     const pannerNode = ctx.createStereoPanner();
@@ -1754,16 +2287,7 @@ export class AudioEngine {
   
   
   
-  _generateImpulseResponse(ctx, seconds) {
-    const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
-    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i += 1) {
-      const decay = (1 - i / length) ** 2.5;
-      data[i] = (Math.random() * 2 - 1) * decay;
-    }
-    return buffer;
-  }
+
 
   
   
@@ -1774,7 +2298,7 @@ export class AudioEngine {
   
   
   
-  _createCvGainChain(ctx, curve) {
+  _createCvGainChain(ctx, curve, scale = 1) {
     const prescale = ctx.createGain();
     prescale.gain.value = 2 / CV_MAX_VOLTS;
     const shiftConst = ctx.createConstantSource();
@@ -1785,7 +2309,7 @@ export class AudioEngine {
     prescale.connect(sumNode);
     shiftConst.connect(sumNode);
     const waveShaper = ctx.createWaveShaper();
-    waveShaper.curve = buildVcaCurve(curve);
+    waveShaper.curve = buildVcaCurve(curve, scale);
     sumNode.connect(waveShaper);
     return { prescale, shiftConst, sumNode, waveShaper };
   }
@@ -1817,22 +2341,6 @@ export class AudioEngine {
   
   
   
-  _reciprocalCurve() {
-    if (!this._reciprocalCurveCache) {
-      const N = 2049;
-      const epsilon = 0.02;
-      const curve = new Float32Array(N);
-      for (let i = 0; i < N; i += 1) {
-        let x = (i / (N - 1)) * 2 - 1;
-        if (Math.abs(x) < epsilon) {
-          x = x < 0 ? -epsilon : epsilon;
-        }
-        curve[i] = 1 / x;
-      }
-      this._reciprocalCurveCache = curve;
-    }
-    return this._reciprocalCurveCache;
-  }
 
   
   
@@ -1849,11 +2357,11 @@ export class AudioEngine {
       const curve = new Float32Array(N);
       for (let i = 0; i < N; i += 1) {
         const x = (i / (N - 1)) * 2 - 1; 
-        let divider = x * 128;
-        if (divider < 1) divider = 1;
-        if (divider > 128) divider = 128;
         // 1 V/oct CV: dividing frequency by N means subtracting log2(N) V.
-        curve[i] = -Math.log2(divider);
+        // The divider snaps to 1/2/4/8/16 exactly like the firmware's
+        // frequencyDividerPitchOffset() (ArithmeticNodes.h).
+        const divider = x * 128;
+        curve[i] = -(divider <= 1.5 ? 0 : divider <= 3 ? 1 : divider <= 6 ? 2 : divider <= 12 ? 3 : 4);
       }
       this._frequencyDividerCvOffsetCurveCache = curve;
     }
@@ -1973,7 +2481,9 @@ export class AudioEngine {
         
         const outGain = ctx.createGain();
         outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
-        const gainCv = this._createCvGainChain(ctx, "linear");
+        // A "gain" cable replaces outGain's own value (zeroed on connect), so
+        // the CV path carries the same AUDIO_PEAK_VOLTS rescale.
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
         gainCv.waveShaper.connect(outGain.gain);
         ampGain.connect(outGain);
 
@@ -2074,6 +2584,9 @@ export class AudioEngine {
         return {
           type,
           osc,
+          directHz: params.frequency ?? 0,
+          extraNodes: [pitchSum, pitchRestGate, tuneSum, tuneRestGate, pitchPreScale, pitchShaperInput, pitchWaveShaper],
+          extraSources: [linearSource, pitchRestConst, tuneRestConst, pitchFinalShift],
           noiseSource,
           pinkNoiseSource,
           linearSource,
@@ -2102,113 +2615,58 @@ export class AudioEngine {
         };
       }
       case "fm-oscillator": {
-        // Structurally a clone of "oscillator" above (same carrier/pitch-CV
-        // machinery, copy-pasted rather than shared to keep each _buildNode
-        // case self-contained, matching the firmware's one-node-per-file
-        // convention) plus a phase-modulation-FM approximation: see
-        // FM_INDEX_MAX_HZ_DEVIATION's comment for why this is linear
-        // frequency modulation here, not true phase modulation like the
-        // firmware.
+        // Per-sample port of nodes/FmOscillatorNode.h in a ScriptProcessor
+        // (createFmOscillatorCore): true phase modulation (fmIn * fmIndex,
+        // up to kFmIndexMaxPhaseDeviation cycles), one-sample phase feedback,
+        // variable square duty cycle, SuperSaw and the saturating linear
+        // ramps - none of which a native OscillatorNode can do. The CV plumbing
+        // around it (amplitude/gain/pitch/tune chains) is the same as the
+        // plain oscillator's. Merger channels: 0 Hz, 1 fmIn, 2 fmIndex,
+        // 3 feedback, 4 superSawDetune, 5 superSawMix (all raw volts).
         const waveType = params.waveType || "sine";
-        const osc = ctx.createOscillator();
-        setOscWaveType(ctx, osc, waveType === "supersaw" ? "sawtooth" : (isNoiseWave(waveType) ? "sine" : waveType));
-        osc.frequency.value = params.frequency ?? 0;
-        const sideOscs = SUPER_SAW_CENTS.map(() => {
-          const side = ctx.createOscillator();
-          side.type = "sawtooth";
-          side.frequency.value = params.frequency ?? 0;
-          return side;
-        });
+        const inputMerger = ctx.createChannelMerger(6);
+        const processor = ctx.createScriptProcessor(256, 6, 1);
+        inputMerger.connect(processor);
 
-        const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-        const noiseData = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < noiseData.length; i += 1) {
-          noiseData[i] = Math.random() * 2 - 1;
-        }
-        const noiseSource = ctx.createBufferSource();
-        noiseSource.buffer = noiseBuffer;
-        noiseSource.loop = true;
+        // Hz: direct-set frequency (freqConst) or the pitch-CV chain below.
+        const freqSum = ctx.createGain();
+        freqSum.connect(inputMerger, 0, 0);
+        const freqConst = ctx.createConstantSource();
+        freqConst.offset.value = params.frequency ?? 0;
+        freqConst.start();
+        freqConst.connect(freqSum);
 
-        const pinkNoiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-        fillPinkNoise(pinkNoiseBuffer.getChannelData(0));
-        const pinkNoiseSource = ctx.createBufferSource();
-        pinkNoiseSource.buffer = pinkNoiseBuffer;
-        pinkNoiseSource.loop = true;
+        const fmInScale = ctx.createGain(); // "fmIn" port: raw volts
+        fmInScale.connect(inputMerger, 0, 1);
+
+        // fallback constant -> gate -> input -> merger; a cable closes the gate.
+        const makeCvInput = (channel, initial) => {
+          const fallback = ctx.createConstantSource();
+          fallback.offset.value = initial;
+          fallback.start();
+          const gate = ctx.createGain();
+          const input = ctx.createGain();
+          fallback.connect(gate);
+          gate.connect(input);
+          input.connect(inputMerger, 0, channel);
+          return { fallback, gate, input };
+        };
+        const fmIndexIn = makeCvInput(2, params.fmIndex ?? 0);
+        const feedbackIn = makeCvInput(3, params.feedback ?? 0);
+        const superSawDetuneIn = makeCvInput(4, params.superSawDetune ?? CV_MAX_VOLTS / 2);
+        const superSawMixIn = makeCvInput(5, params.superSawMix ?? CV_MAX_VOLTS / 2);
 
         const ampGain = ctx.createGain();
         ampGain.gain.value = 0;
+        processor.connect(ampGain);
         const ampCv = this._createCvGainChain(ctx, "linear");
         ampCv.waveShaper.connect(ampGain.gain);
 
-        const periodicSum = ctx.createGain();
-        const normalCarrierGain = ctx.createGain();
-        const superSawBus = ctx.createGain();
-        const superSawEnable = ctx.createGain();
-        const superSawCenterGain = ctx.createGain();
-        const superSawSideGains = sideOscs.map(() => ctx.createGain());
-        normalCarrierGain.gain.value = waveType === "supersaw" || isNoiseWave(waveType) || isLinearWave(waveType) ? 0 : 1;
-        superSawEnable.gain.value = waveType === "supersaw" ? 1 : 0;
-        osc.connect(normalCarrierGain);
-        normalCarrierGain.connect(periodicSum);
-        osc.connect(superSawCenterGain);
-        superSawCenterGain.connect(superSawBus);
-        sideOscs.forEach((side, index) => {
-          side.connect(superSawSideGains[index]);
-          superSawSideGains[index].connect(superSawBus);
-        });
-        superSawBus.connect(superSawEnable);
-        superSawEnable.connect(periodicSum);
-        periodicSum.connect(ampGain);
-
-        const superSawDetuneFallback = ctx.createConstantSource();
-        superSawDetuneFallback.offset.value = params.superSawDetune ?? CV_MAX_VOLTS / 2;
-        superSawDetuneFallback.start();
-        const superSawDetuneFallbackGate = ctx.createGain();
-        superSawDetuneFallbackGate.gain.value = 1;
-        const superSawDetuneInput = ctx.createGain();
-        superSawDetuneFallback.connect(superSawDetuneFallbackGate);
-        superSawDetuneFallbackGate.connect(superSawDetuneInput);
-        const superSawDetuneScales = SUPER_SAW_CENTS.map((cents, index) => {
-          const scale = ctx.createGain();
-          scale.gain.value = cents / CV_MAX_VOLTS;
-          superSawDetuneInput.connect(scale);
-          scale.connect(sideOscs[index].detune);
-          return scale;
-        });
-
-        const superSawMixFallback = ctx.createConstantSource();
-        superSawMixFallback.offset.value = params.superSawMix ?? CV_MAX_VOLTS / 2;
-        superSawMixFallback.start();
-        const superSawMixFallbackGate = ctx.createGain();
-        superSawMixFallbackGate.gain.value = 1;
-        const superSawMixInput = ctx.createGain();
-        const superSawMixNorm = ctx.createGain();
-        superSawMixNorm.gain.value = 1 / CV_MAX_VOLTS;
-        superSawMixFallback.connect(superSawMixFallbackGate);
-        superSawMixFallbackGate.connect(superSawMixInput);
-        superSawMixInput.connect(superSawMixNorm);
-        const centerCurve = new Float32Array(1024);
-        const sideCurve = new Float32Array(1024);
-        for (let i = 0; i < centerCurve.length; i += 1) {
-          const m = clampRange(-1 + (2 * i) / (centerCurve.length - 1), 0, 1);
-          const weights = superSawWeights(m * CV_MAX_VOLTS);
-          centerCurve[i] = weights.center;
-          sideCurve[i] = weights.side;
-        }
-        const superSawCenterShaper = ctx.createWaveShaper();
-        const superSawSideShaper = ctx.createWaveShaper();
-        superSawCenterShaper.curve = centerCurve;
-        superSawSideShaper.curve = sideCurve;
-        superSawMixNorm.connect(superSawCenterShaper);
-        superSawMixNorm.connect(superSawSideShaper);
-        superSawCenterGain.gain.value = 0;
-        superSawSideGains.forEach((gain) => { gain.gain.value = 0; });
-        superSawCenterShaper.connect(superSawCenterGain.gain);
-        superSawSideGains.forEach((gain) => superSawSideShaper.connect(gain.gain));
-
         const outGain = ctx.createGain();
         outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
-        const gainCv = this._createCvGainChain(ctx, "linear");
+        // A "gain" cable replaces outGain's own value (zeroed on connect), so
+        // the CV path carries the same AUDIO_PEAK_VOLTS rescale.
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
         gainCv.waveShaper.connect(outGain.gain);
         ampGain.connect(outGain);
 
@@ -2246,88 +2704,21 @@ export class AudioEngine {
         const pitchWaveShaper = ctx.createWaveShaper();
         pitchWaveShaper.curve = buildPitchCvCurve();
         pitchShaperInput.connect(pitchWaveShaper);
-        pitchWaveShaper.connect(osc.frequency);
-        sideOscs.forEach((side) => pitchWaveShaper.connect(side.frequency));
+        pitchWaveShaper.connect(freqSum);
 
-        // "fmIn" (audio-rate modulator input) + "fmIndex" (0-10V depth CV):
-        // fmInScale normalizes the incoming +-AUDIO_PEAK_VOLTS waveform to
-        // +-1, fmDepthGain scales that by the current index (in Hz) and sums
-        // the result directly into osc.frequency - additive with the
-        // pitchWaveShaper connection above, exactly like Web Audio already
-        // sums multiple signals into one AudioParam elsewhere in this file.
-        const fmInScale = ctx.createGain();
-        fmInScale.gain.value = 1 / AUDIO_PEAK_VOLTS;
-        const fmDepthGain = ctx.createGain();
-        fmDepthGain.gain.value = ((params.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
-        fmInScale.connect(fmDepthGain);
-        fmDepthGain.connect(osc.frequency);
-        sideOscs.forEach((side) => fmDepthGain.connect(side.frequency));
-
-        const fmIndexCv = this._createCvGainChain(ctx, "linear");
-        const fmIndexCvScale = ctx.createGain();
-        fmIndexCvScale.gain.value = FM_INDEX_MAX_HZ_DEVIATION;
-        fmIndexCv.waveShaper.connect(fmIndexCvScale);
-        fmIndexCvScale.connect(fmDepthGain.gain);
-
-        const feedbackDelay = ctx.createDelay(1);
-        feedbackDelay.delayTime.value = 1 / ctx.sampleRate;
-        const feedbackGain = ctx.createGain();
-        feedbackGain.gain.value = ((params.feedback ?? 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION;
-        periodicSum.connect(feedbackDelay);
-        feedbackDelay.connect(feedbackGain);
-        feedbackGain.connect(osc.frequency);
-        sideOscs.forEach((side) => feedbackGain.connect(side.frequency));
-        const feedbackCv = this._createCvGainChain(ctx, "linear");
-        const feedbackCvScale = ctx.createGain();
-        feedbackCvScale.gain.value = SELF_FEEDBACK_MAX_HZ_DEVIATION;
-        feedbackCv.waveShaper.connect(feedbackCvScale);
-        feedbackCvScale.connect(feedbackGain.gain);
-
-        // Linear waves: per-note ramp source, see applyOscLinear.
-        const linearSource = ctx.createConstantSource();
-        linearSource.offset.value = waveType === "linear-down" ? -1 : 1;
-        linearSource.start();
-        osc.start();
-        sideOscs.forEach((side) => side.start());
-        noiseSource.start();
-        pinkNoiseSource.start();
-        if (waveType === "noise") {
-          noiseSource.connect(ampGain);
-        } else if (waveType === "pink-noise") {
-          pinkNoiseSource.connect(ampGain);
-        } else if (isLinearWave(waveType)) {
-          linearSource.connect(ampGain);
-        }
-
-        return {
+        const entry = {
           type,
-          osc,
-          sideOscs,
-          noiseSource,
-          pinkNoiseSource,
-          linearSource,
+          inputMerger,
+          processor,
+          freqConst,
+          directHz: params.frequency ?? 0,
+          fmInScale,
+          fmIndexIn,
+          feedbackIn,
+          superSawDetuneIn,
+          superSawMixIn,
           ampGain,
           ampCv,
-          periodicSum,
-          normalCarrierGain,
-          superSawBus,
-          superSawEnable,
-          superSawCenterGain,
-          superSawSideGains,
-          superSawDetuneFallback,
-          superSawDetuneFallbackGate,
-          superSawDetuneInput,
-          superSawDetuneScales,
-          superSawDetune: params.superSawDetune ?? CV_MAX_VOLTS / 2,
-          superSawDetuneCvActive: false,
-          superSawMixFallback,
-          superSawMixFallbackGate,
-          superSawMixInput,
-          superSawMixNorm,
-          superSawCenterShaper,
-          superSawSideShaper,
-          superSawMix: params.superSawMix ?? CV_MAX_VOLTS / 2,
-          superSawMixCvActive: false,
           waveType,
           outGain,
           gainCv,
@@ -2342,21 +2733,28 @@ export class AudioEngine {
           pitchWaveShaper,
           pitchCvActive: false,
           tuneCvActive: false,
-          fmInScale,
-          fmDepthGain,
-          fmIndexCv,
           fmIndex: params.fmIndex ?? 0,
           fmIndexCvActive: false,
-          feedbackDelay,
-          feedbackGain,
-          feedbackCv,
-          feedbackCvScale,
           feedback: params.feedback ?? 0,
           feedbackCvActive: false,
-          // No audible effect in this preview (see the setParam "dutyCycle"
-          // case's comment) - tracked only so getParam/state round-trips.
+          superSawDetune: params.superSawDetune ?? CV_MAX_VOLTS / 2,
+          superSawDetuneCvActive: false,
+          superSawMix: params.superSawMix ?? CV_MAX_VOLTS / 2,
+          superSawMixCvActive: false,
           dutyCycle: params.dutyCycle ?? CV_MAX_VOLTS / 2,
+          extraNodes: [freqSum, fmInScale, pitchSum, pitchRestGate, tuneSum, tuneRestGate, pitchPreScale,
+            pitchShaperInput, pitchWaveShaper,
+            ...[fmIndexIn, feedbackIn, superSawDetuneIn, superSawMixIn].flatMap((cv) => [cv.gate, cv.input])],
+          extraSources: [freqConst, pitchRestConst, tuneRestConst, pitchFinalShift,
+            fmIndexIn.fallback, feedbackIn.fallback, superSawDetuneIn.fallback, superSawMixIn.fallback],
         };
+        entry.core = createFmOscillatorCore(entry, ctx.sampleRate);
+        processor.onaudioprocess = (event) => {
+          const inputs = [];
+          for (let c = 0; c < 6; c += 1) inputs.push(event.inputBuffer.getChannelData(c));
+          entry.core.render(inputs, event.outputBuffer.getChannelData(0));
+        };
+        return entry;
       }
       case "hammond": {
         // Nine drawbar oscillators sharing the SAME pitch-CV chain as
@@ -2372,7 +2770,9 @@ export class AudioEngine {
           Array.isArray(params.ratios) && params.ratios.length === 9
             ? params.ratios
             : [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];
-        const NORM = AUDIO_PEAK_VOLTS / 9; // mirrors kDrawbarNorm - nine unit sines -> <=AUDIO_PEAK_VOLTS at full registration
+        // kDrawbarNorm is AUDIO_PEAK_VOLTS / 9; the AUDIO_PEAK_VOLTS part is
+        // already applied by outGain (same as the oscillator), so only 1/9 here.
+        const NORM = 1 / 9;
 
         const ampGain = ctx.createGain();
         ampGain.gain.value = 0;
@@ -2381,7 +2781,9 @@ export class AudioEngine {
 
         const outGain = ctx.createGain();
         outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
-        const gainCv = this._createCvGainChain(ctx, "linear");
+        // A "gain" cable replaces outGain's own value (zeroed on connect), so
+        // the CV path carries the same AUDIO_PEAK_VOLTS rescale.
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
         gainCv.waveShaper.connect(outGain.gain);
 
         const norm = ctx.createGain();
@@ -2462,6 +2864,9 @@ export class AudioEngine {
         return {
           type,
           oscs,
+          directHz: 0,
+          extraNodes: [pitchSum, pitchRestGate, tuneSum, tuneRestGate, pitchPreScale, pitchShaperInput, pitchWaveShaper],
+          extraSources: [pitchRestConst, tuneRestConst, pitchFinalShift],
           footageScale,
           drawbarGains,
           drawbarCv,
@@ -2500,7 +2905,7 @@ export class AudioEngine {
         const amplitude = params.amplitude ?? CV_MAX_VOLTS;
         const halfSwing = amplitude / 2;
         const center = params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing;
-        const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, 50);
+        const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, LFO_MAX_RATE_HZ);
         const rate = clampRange(Number(params.rate ?? 2) || 0, 0, maxRate);
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
@@ -2511,7 +2916,7 @@ export class AudioEngine {
           : createDefaultBank();
         const wtMorph = clampRange(Number(params.morph ?? 0) || 0, 0, CV_MAX_VOLTS);
         const lfoOsc = ctx.createOscillator();
-        setOscWaveType(ctx, lfoOsc, waveType);
+        setOscWaveType(ctx, lfoOsc, waveType, phase / 360);
         lfoOsc.frequency.value = rate;
         const lfoGain = ctx.createGain();
         lfoGain.gain.value = oneShot ? 0 : halfSwing;
@@ -2531,11 +2936,19 @@ export class AudioEngine {
         
         
         
+        // lfoSum -> clamp -> rawOut: LfoNode.h clamps every output sample to
+        // 0..CV_MAX_VOLTS (a fixed zero point plus a large amplitude would
+        // otherwise swing past the CV window).
+        const lfoSum = ctx.createGain();
+        lfoSum.gain.value = 1;
+        lfoOsc.connect(lfoGain);
+        lfoGain.connect(lfoSum);
+        centerOffset.connect(lfoSum);
+        const clamp = this._createRangeGainChain(ctx, 0, CV_MAX_VOLTS, buildRangeCurve(0, CV_MAX_VOLTS, "linear"));
+        lfoSum.connect(clamp.prescale);
         const rawOut = ctx.createGain();
         rawOut.gain.value = 1;
-        lfoOsc.connect(lfoGain);
-        lfoGain.connect(rawOut);
-        centerOffset.connect(rawOut);
+        clamp.waveShaper.connect(rawOut);
         const ownGate = ctx.createGain();
         ownGate.gain.value = 1;
         const sharedGate = ctx.createGain();
@@ -2552,12 +2965,16 @@ export class AudioEngine {
         
         
         
-        lfoOsc.start(Math.max(ctx.currentTime, ctx.currentTime - lfoStartOffsetSeconds(waveType, phase, rate)));
+        // The phase offset lives in the PeriodicWave itself (see
+        // getFirmwareWave), so a plain start is already phase-exact.
+        lfoOsc.start();
         const lfoEntry = {
           type,
           lfoOsc,
           lfoGain,
           centerOffset,
+          extraNodes: [lfoSum, clamp.prescale, clamp.sumNode, clamp.waveShaper],
+          extraSources: [clamp.shiftConst],
           rawOut,
           ownGate,
           sharedGate,
@@ -2642,20 +3059,48 @@ export class AudioEngine {
         output.gain.value = 1;
         gain1.connect(output);
         gain2.connect(output);
-        return { type, gain1, gain2, output };
+        return { type, gain1, gain2, output, extraNodes: [gain1, gain2] };
       }
       case "output-switch": {
-        // Inverted topology from "switch" above: one shared input fans out
-        // to two independently-gated outputs instead of two inputs summing
-        // into one output.
+        // One input, two outputs - mirrors OutputSwitchNode.h: the selected
+        // output follows the input, the other one HOLDS the last value it
+        // carried (held1/held2), it does not drop to 0V.
         const input = ctx.createGain();
+        const processor = ctx.createScriptProcessor(256, 1, 2);
+        input.connect(processor);
+        const splitter = ctx.createChannelSplitter(2);
+        processor.connect(splitter);
         const gain1 = ctx.createGain();
         const gain2 = ctx.createGain();
-        gain1.gain.value = params.selectOut2 ? 0 : 1;
-        gain2.gain.value = params.selectOut2 ? 1 : 0;
-        input.connect(gain1);
-        input.connect(gain2);
-        return { type, input, gain1, gain2 };
+        splitter.connect(gain1, 0);
+        splitter.connect(gain2, 1);
+        const entry = {
+          type,
+          input,
+          processor,
+          splitter,
+          gain1,
+          gain2,
+          extraNodes: [gain1, gain2],
+          selectOut2: params.selectOut2 === true,
+          held1: Number(params.held1) || 0,
+          held2: Number(params.held2) || 0,
+        };
+        processor.onaudioprocess = (event) => {
+          const src = event.inputBuffer.getChannelData(0);
+          const out1 = event.outputBuffer.getChannelData(0);
+          const out2 = event.outputBuffer.getChannelData(1);
+          if (entry.selectOut2) {
+            out2.set(src);
+            out1.fill(entry.held1);
+            entry.held2 = src[src.length - 1];
+          } else {
+            out1.set(src);
+            out2.fill(entry.held2);
+            entry.held1 = src[src.length - 1];
+          }
+        };
+        return entry;
       }
       case "audio-out":
       case "usb-out":
@@ -2668,8 +3113,8 @@ export class AudioEngine {
         // right before its SoftLimiter) - folded into the same trim multiply
         // instead of a separate node, since GainNode.gain already multiplies
         // whatever's connected either way.
-        leftGain.gain.value = 1 / AUDIO_PEAK_VOLTS;
-        rightGain.gain.value = 1 / AUDIO_PEAK_VOLTS;
+        leftGain.gain.value = (Number(params.left ?? 1) || 0) / AUDIO_PEAK_VOLTS;
+        rightGain.gain.value = (Number(params.right ?? 1) || 0) / AUDIO_PEAK_VOLTS;
         const merger = ctx.createChannelMerger(2);
         const outputGain = ctx.createGain();
         outputGain.gain.value = Math.max(0, Math.min(1, (params.gain ?? 10) / 10));
@@ -2793,52 +3238,35 @@ export class AudioEngine {
       }
       case "filter":
       case "curtis-filter": {
-        const filterInput = ctx.createGain();
+        // filterInput -> merger ch0, cutoff CV -> ch1, resonance CV -> ch2 ->
+        // ScriptProcessor running createFilterDsp()/createCurtisFilterDsp()
+        // -> filterOutput. The CV chains now pass raw volts (clamped 0-10V,
+        // same as cvToRange() does on hardware); the processor maps them.
         const isCurtis = type === "curtis-filter";
-        // Both filter widgets share this chain: FILTER_MAX_SECTIONS identical
-        // biquads in series, with one tap gain per section. The selected slope
-        // opens exactly one tap, so the wet path carries 1, 2 or 3 sections.
-        const sections = Array.from({ length: FILTER_MAX_SECTIONS }, () => ctx.createBiquadFilter());
-        const sectionTaps = sections.map(() => ctx.createGain());
-        const filterNode = sections[0];
-        const filterNode2 = sections[1];
-        const filteredOutput = ctx.createGain();
+        const filterInput = ctx.createGain();
+        const inputMerger = ctx.createChannelMerger(3);
+        filterInput.connect(inputMerger, 0, 0);
+        const cutoffCvSum = ctx.createGain();
+        const resonanceCvSum = ctx.createGain();
+        cutoffCvSum.connect(inputMerger, 0, 1);
+        resonanceCvSum.connect(inputMerger, 0, 2);
+        const processor = ctx.createScriptProcessor(256, 3, 1);
+        inputMerger.connect(processor);
         const filterOutput = ctx.createGain();
-        const dryGain = ctx.createGain();
-        const wetGain = ctx.createGain();
-        const initialFilterType = params.bypass === true ? "none" : (params.filterType || "lowpass");
-        const initialSlope = Number(params.slope) || (isCurtis ? 24 : 12);
-        const initialBiquadType = initialFilterType === "none" ? "lowpass" : initialFilterType;
-        const initialSections = filterSectionCount(initialSlope);
-        filterInput.connect(dryGain);
-        dryGain.connect(filterOutput);
-        filterInput.connect(sections[0]);
-        sections.forEach((section, index) => {
-          section.type = initialBiquadType;
-          if (index > 0) sections[index - 1].connect(section);
-          section.connect(sectionTaps[index]);
-          sectionTaps[index].gain.value = index === initialSections - 1 ? 1 : 0;
-          sectionTaps[index].connect(filteredOutput);
-        });
-        filteredOutput.connect(wetGain);
-        wetGain.connect(filterOutput);
-        dryGain.gain.value = initialFilterType === "none" ? 1 : 0;
-        wetGain.gain.value = initialFilterType === "none" ? 0 : 1;
-        
-        
-        
+        processor.connect(filterOutput);
+        // curtisLegacyFilterKind()/curtisLegacySlopeDb() (NodeTypes.h): the
+        // CEM3320 filter once stored type+slope as "lp24"/"lp12"/"bp12"/"hp12".
+        const legacySlope = isCurtis ? { lp24: 24, lp12: 12, bp12: 12, hp12: 12 }[params.filterType] : undefined;
+        const legacyKind = isCurtis ? { lp24: "lowpass", lp12: "lowpass", bp12: "bandpass", hp12: "highpass" }[params.filterType] : undefined;
         const entry = {
           type,
           filterInput,
-          filterNode,
-          filterNode2,
-          sections,
-          sectionTaps,
-          filteredOutput,
+          inputMerger,
+          processor,
           filterOutput,
-          dryGain,
-          wetGain,
-          filterType: initialFilterType,
+          cutoffCvSum,
+          resonanceCvSum,
+          filterType: params.bypass === true ? "none" : normalizeFilterKind(legacyKind || params.filterType),
           cutoff: params.cutoff ?? 5,
           cutoffMinHz: params.cutoffMinHz ?? 20,
           cutoffMaxHz: params.cutoffMaxHz ?? 20000,
@@ -2847,56 +3275,45 @@ export class AudioEngine {
           resonanceMinQ: params.resonanceMinQ ?? 0.1,
           resonanceMaxQ: params.resonanceMaxQ ?? 20,
           resonanceCurve: params.resonanceCurve ?? "log",
-          slope: initialSlope,
+          slope: filterPolesFromSlope(legacySlope ?? params.slope ?? (isCurtis ? 24 : 12)) * 6,
+          coeffStride: clampRange(Math.trunc(Number(params.coeffStride ?? 4)) || 4, 1, 16),
+          coeffsDirty: true,
           cutoffCvActive: false,
           resonanceCvActive: false,
+          globalPrimary: null,
         };
-        const initialFrequency = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-        const initialQ = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-        const initialShelfGainDb = shelfGainDbFromCv(entry.resonance) / initialSections;
-        sections.forEach((section) => {
-          section.frequency.value = initialFrequency;
-          section.Q.value = initialQ;
-          if (isShelfFilterType(initialFilterType)) section.gain.value = initialShelfGainDb;
-        });
-        
-        
-        
-        
-        
-        
-        
-        
-        entry.cutoffCv = this._createCvGainChain(ctx, "linear");
-        entry.cutoffCv.waveShaper.curve = buildRangeCurve(entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-        entry.resonanceCv = this._createCvGainChain(ctx, "linear");
-        entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-        
-        
-        
-        
-        
-        
+        entry.dsp = isCurtis ? createCurtisFilterDsp(entry, ctx.sampleRate) : createFilterDsp(entry, ctx.sampleRate);
+        processor.onaudioprocess = (event) => {
+          const src = entry.globalPrimary || entry;
+          entry.dsp.render(
+            event.inputBuffer.getChannelData(0),
+            event.inputBuffer.getChannelData(1),
+            event.inputBuffer.getChannelData(2),
+            event.outputBuffer.getChannelData(0),
+            src.cutoffCvActive,
+            src.resonanceCvActive,
+          );
+        };
+        entry.cutoffCv = this._createCvGainChain(ctx, "linear", CV_MAX_VOLTS);
+        entry.resonanceCv = this._createCvGainChain(ctx, "linear", CV_MAX_VOLTS);
+        // Own/shared gates: in Global mode every voice follows voice 0's CV
+        // (see _setGlobalMode), like the firmware's `src = *inst.primary`.
         entry.cutoffOwnGate = ctx.createGain();
         entry.cutoffOwnGate.gain.value = 1;
         entry.cutoffSharedGate = ctx.createGain();
         entry.cutoffSharedGate.gain.value = 0;
         entry.cutoffCv.waveShaper.connect(entry.cutoffOwnGate);
+        entry.cutoffOwnGate.connect(cutoffCvSum);
+        entry.cutoffSharedGate.connect(cutoffCvSum);
         entry.resonanceOwnGate = ctx.createGain();
         entry.resonanceOwnGate.gain.value = 1;
         entry.resonanceSharedGate = ctx.createGain();
         entry.resonanceSharedGate.gain.value = 0;
         entry.resonanceCv.waveShaper.connect(entry.resonanceOwnGate);
-        // Every section tracks the same cutoff/resonance CV - a section that is
-        // currently tapped out still has to be in tune for the moment the slope
-        // switches onto it.
-        sections.forEach((section) => {
-          entry.cutoffOwnGate.connect(section.frequency);
-          entry.cutoffSharedGate.connect(section.frequency);
-          entry.resonanceOwnGate.connect(section.Q);
-          entry.resonanceSharedGate.connect(section.Q);
-        });
+        entry.resonanceOwnGate.connect(resonanceCvSum);
+        entry.resonanceSharedGate.connect(resonanceCvSum);
         entry._sharedWired = false;
+        entry.extraNodes = [cutoffCvSum, resonanceCvSum];
 
         // Inline spectrum + filter-curve preview (32 bands is plenty for a
         // small widget panel - same idea as "esp-eq" below).
@@ -2914,48 +3331,62 @@ export class AudioEngine {
         return entry;
       }
       case "esp-eq": {
-        
-        
-        
-        
-        
-        
-        const filterL = ctx.createBiquadFilter();
-        const filterR = ctx.createBiquadFilter();
-        [filterL, filterR].forEach((f) => {
-          f.type = eqFilterTypeToBiquad(params.filterType);
-          f.frequency.value = params.frequency ?? 1000;
-          f.Q.value = params.q ?? 1;
-          f.gain.value = params.gainDb ?? 0;
-        });
-        
-        
-        
-        
+        // One biquad per channel, parameters clamped like espEqMakeFilterPara()
+        // (EspEqEffect.h). inputX -> filterX -> processedX -> outputX, plus an
+        // inputX -> bypassX -> outputX passthrough for "bypass".
+        const bypass = params.bypass === true;
+        const make = () => {
+          const input = ctx.createGain();
+          const filter = ctx.createBiquadFilter();
+          const processed = ctx.createGain();
+          const bypassGain = ctx.createGain();
+          const output = ctx.createGain();
+          processed.gain.value = bypass ? 0 : 1;
+          bypassGain.gain.value = bypass ? 1 : 0;
+          input.connect(filter);
+          filter.connect(processed);
+          processed.connect(output);
+          input.connect(bypassGain);
+          bypassGain.connect(output);
+          return { input, filter, processed, bypassGain, output };
+        };
+        const chanL = make();
+        const chanR = make();
+        const entry = {
+          type,
+          inputL: chanL.input,
+          filterL: chanL.filter,
+          processedL: chanL.processed,
+          bypassL: chanL.bypassGain,
+          outputL: chanL.output,
+          inputR: chanR.input,
+          filterR: chanR.filter,
+          processedR: chanR.processed,
+          bypassR: chanR.bypassGain,
+          outputR: chanR.output,
+          bypass,
+          filterType: params.filterType || "peak",
+          frequency: params.frequency ?? 1000,
+          q: params.q ?? 1,
+          gainDb: params.gainDb ?? 0,
+        };
+        this._applyEspEqParams(entry, 0);
         const spectrumAnalyser = ctx.createAnalyser();
         spectrumAnalyser.fftSize = 256;
         const binCount = spectrumAnalyser.frequencyBinCount;
-        const spectrumBuffer = new Uint8Array(binCount);
-        filterL.connect(spectrumAnalyser);
-        
-        
-        
+        chanL.filter.connect(spectrumAnalyser);
         const responseFreqs = new Float32Array(binCount);
         for (let i = 0; i < binCount; i += 1) {
           responseFreqs[i] = (i * ctx.sampleRate) / 2 / binCount;
         }
-        return {
-          type,
-          inputL: filterL,
-          outputL: filterL,
-          inputR: filterR,
-          outputR: filterR,
+        return Object.assign(entry, {
           spectrumAnalyser,
-          spectrumBuffer,
+          spectrumBuffer: new Uint8Array(binCount),
           responseFreqs,
           responseMag: new Float32Array(binCount),
           responsePhase: new Float32Array(binCount),
-        };
+          extraNodes: [chanL.filter, chanR.filter],
+        });
       }
       case "graphic-eq": {
         // 8 fixed-Q peaking bands cascaded in series per channel - mirrors
@@ -2969,12 +3400,13 @@ export class AudioEngine {
           ? params.frequencies.map(Number)
           : [...GRAPHIC_EQ_DEFAULT_FREQS];
         const gains = Array.from({ length: bandCount }, (_, i) => Number(params[`gain${i + 1}`]) || 0);
+        // graphicEqMakeFilterPara() clamps: fc 20..Nyquist-1, gain +/-15 dB.
         const makeBands = () => freqs.map((hz, i) => {
           const f = ctx.createBiquadFilter();
           f.type = "peaking";
-          f.frequency.value = hz;
+          f.frequency.value = clampRange(hz, 20, ctx.sampleRate / 2 - 1);
           f.Q.value = 1.41;
-          f.gain.value = gains[i];
+          f.gain.value = clampRange(gains[i], -15, 15);
           return f;
         });
         const bandsL = makeBands();
@@ -2989,12 +3421,31 @@ export class AudioEngine {
         outputGainR.gain.value = outputGainL.gain.value;
         bandsL[bandCount - 1].connect(outputGainL);
         bandsR[bandCount - 1].connect(outputGainR);
+        // Bypass is a full passthrough in processGraphicEq() - it skips the
+        // output gain as well, not just the bands.
+        const bypass = params.bypass === true;
+        const makeRouting = (firstBand, outputGain) => {
+          const input = ctx.createGain();
+          const bypassGain = ctx.createGain();
+          const processed = ctx.createGain();
+          const output = ctx.createGain();
+          processed.gain.value = bypass ? 0 : 1;
+          bypassGain.gain.value = bypass ? 1 : 0;
+          input.connect(firstBand);
+          outputGain.connect(processed);
+          processed.connect(output);
+          input.connect(bypassGain);
+          bypassGain.connect(output);
+          return { input, bypassGain, processed, output };
+        };
+        const routeL = makeRouting(bandsL[0], outputGainL);
+        const routeR = makeRouting(bandsR[0], outputGainR);
 
         const geqSpectrumAnalyser = ctx.createAnalyser();
         geqSpectrumAnalyser.fftSize = 1024;
         const geqBinCount = geqSpectrumAnalyser.frequencyBinCount;
         const geqSpectrumBuffer = new Uint8Array(geqBinCount);
-        outputGainL.connect(geqSpectrumAnalyser);
+        routeL.output.connect(geqSpectrumAnalyser);
         const geqResponseCount = 128;
         const geqResponseFreqs = new Float32Array(geqResponseCount);
         const geqMinHz = 20;
@@ -3007,15 +3458,19 @@ export class AudioEngine {
           type,
           bandsL,
           bandsR,
-          inputL: bandsL[0],
-          inputR: bandsR[0],
-          outputL: outputGainL,
-          outputR: outputGainR,
+          inputL: routeL.input,
+          inputR: routeR.input,
+          outputL: routeL.output,
+          outputR: routeR.output,
+          processedL: routeL.processed,
+          processedR: routeR.processed,
+          bypassL: routeL.bypassGain,
+          bypassR: routeR.bypassGain,
           outputGainL,
           outputGainR,
           gainDb: gains,
           freqHz: freqs,
-          bypass: false,
+          bypass,
           spectrumAnalyser: geqSpectrumAnalyser,
           spectrumBuffer: geqSpectrumBuffer,
           responseFreqs: geqResponseFreqs,
@@ -3132,32 +3587,31 @@ export class AudioEngine {
         return { type, sum, seeds, inputCount, controlConnectionCounts: new Array(inputCount).fill(0) };
       }
       case "divide": {
-        
-        
-        
-        
-        
-        
-        
-        
+        // Exact per-sample port of renderDivide() (ArithmeticNodes.h): any
+        // numerator/denominator range, and a zero denominator outputs 0 (a
+        // WaveShaper reciprocal only covered |den| <= 1). seedNum/seedDen are
+        // the fallback values while an input carries no audio-rate cable.
         const divideValues = params.values || [];
+        const inputMerger = ctx.createChannelMerger(2);
+        const processor = ctx.createScriptProcessor(256, 2, 1);
         const seedNum = ctx.createConstantSource();
         seedNum.offset.value = divideValues[0] ?? 0;
         seedNum.start();
         const seedDen = ctx.createConstantSource();
         seedDen.offset.value = divideValues[1] ?? 1;
         seedDen.start();
-
-        const reciprocal = ctx.createWaveShaper();
-        reciprocal.curve = this._reciprocalCurve();
-        seedDen.connect(reciprocal);
-
-        const outGain = ctx.createGain();
-        outGain.gain.value = 0;
-        seedNum.connect(outGain);
-        reciprocal.connect(outGain.gain);
-
-        return { type, seedNum, seedDen, reciprocal, outGain, output: outGain, controlConnectionCounts: [0, 0] };
+        seedNum.connect(inputMerger, 0, 0);
+        seedDen.connect(inputMerger, 0, 1);
+        inputMerger.connect(processor);
+        processor.onaudioprocess = (event) => {
+          const num = event.inputBuffer.getChannelData(0);
+          const den = event.inputBuffer.getChannelData(1);
+          const output = event.outputBuffer.getChannelData(0);
+          for (let i = 0; i < output.length; i += 1) {
+            output[i] = den[i] === 0 ? 0 : num[i] / den[i];
+          }
+        };
+        return { type, seedNum, seedDen, inputMerger, processor, output: processor, controlConnectionCounts: [0, 0] };
       }
       case "frequency-divider": {
         
@@ -3191,8 +3645,15 @@ export class AudioEngine {
         outGain.gain.value = 1;
         seedNum.connect(outGain);
         reciprocal.connect(outGain);
+        // Output clamped to 0..CV_MAX_VOLTS like applyFrequencyDividerOffset().
+        const clamp = this._createRangeGainChain(ctx, 0, CV_MAX_VOLTS, buildRangeCurve(0, CV_MAX_VOLTS, "linear"));
+        outGain.connect(clamp.prescale);
 
-        return { type, seedNum, seedDen, prescale, reciprocal, outGain, output: outGain };
+        return {
+          type, seedNum, seedDen, prescale, reciprocal, outGain, output: clamp.waveShaper,
+          extraNodes: [clamp.prescale, clamp.sumNode, clamp.waveShaper],
+          extraSources: [clamp.shiftConst],
+        };
       }
       case "abs": {
 
@@ -3230,15 +3691,22 @@ export class AudioEngine {
         return { type, seeds, perInputShapers, sum, output, inputCount };
       }
       case "logic-or": {
-        // Unconnected inputs contribute nothing to the sum (WebAudio mixes
-        // every connection into one node's default input, same as
-        // "adder"), which is already the correct OR default (false).
+        // Each input is booleanized on its own (0V / 10V) before summing -
+        // summing raw volts first let a negative input cancel a positive one
+        // (e.g. -5V OR +3V read false). Unconnected inputs contribute 0
+        // (false), the correct OR default.
         const sum = ctx.createGain();
         sum.gain.value = 1;
+        const perInputShapers = Array.from({ length: 8 }, () => {
+          const shaper = ctx.createWaveShaper();
+          shaper.curve = this._logicStepCurve();
+          shaper.connect(sum);
+          return shaper;
+        });
         const output = ctx.createWaveShaper();
         output.curve = this._logicStepCurve();
         sum.connect(output);
-        return { type, sum, output };
+        return { type, sum, perInputShapers, output };
       }
       case "logic-xor": {
         const seedA = ctx.createConstantSource();
@@ -3271,16 +3739,16 @@ export class AudioEngine {
         return { type, waveShaper };
       }
       case "value-mapper": {
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        const vmParams = {
+        // Per-sample mappedValue() (ValueMapperNode.h) - the old WaveShaper
+        // curve only covered the point range +/-50% and clamped beyond it,
+        // while the firmware extrapolates the line (up to the constraints).
+        const input = ctx.createGain();
+        const processor = ctx.createScriptProcessor(256, 1, 1);
+        input.connect(processor);
+        const entry = {
+          type,
+          input,
+          processor,
           point1In: params.point1In ?? 0,
           point1Out: params.point1Out ?? 0,
           point2In: params.point2In ?? 127,
@@ -3289,11 +3757,12 @@ export class AudioEngine {
           constraintMax: params.constraintMax ?? null,
           list: parseValueList(params.listText),
         };
-        const domain = valueMapperDomain(vmParams);
-        const chain = this._createRangeGainChain(
-          ctx, domain.lo, domain.hi, buildValueMapperCurve(vmParams, domain.lo, domain.hi)
-        );
-        return { type, chain, ...vmParams };
+        processor.onaudioprocess = (event) => {
+          const src = event.inputBuffer.getChannelData(0);
+          const out = event.outputBuffer.getChannelData(0);
+          for (let i = 0; i < out.length; i += 1) out[i] = mapValueMapperRaw(src[i], entry);
+        };
+        return entry;
       }
       case "detune": {
         const cvIn = ctx.createGain();
@@ -3412,7 +3881,9 @@ export class AudioEngine {
           const bits = Math.round(16 - 14 * amount);
           const holdSamples = Math.round(1 + 31 * amount * amount);
           const levels = (2 ** (bits - 1)) - 1;
-          const step = 1 / levels;
+          // Quantizes the +/-AUDIO_PEAK_VOLTS audio domain, like
+          // BitcrusherNode.h (a +/-1 step would crush 5x too finely).
+          const step = AUDIO_PEAK_VOLTS / levels;
           for (let i = 0; i < input.length; i += 1) {
             if (entry.holdCounter === 0) {
               entry.heldSample = Math.round(input[i] / step) * step;
@@ -3625,7 +4096,7 @@ export class AudioEngine {
           controlConnectionCounts: [0, 0, 0, 0],
         };
         const kMaxPending = 8;
-        const kOutPulseSamples = Math.round(0.005 * ctx.sampleRate);
+        const kOutPulseSamples = Math.floor(0.005 * ctx.sampleRate);
         let prevTriggerAbove = false;
         const pendingSamples = new Array(kMaxPending).fill(0);
         const pendingAmplitude = new Array(kMaxPending).fill(0);
@@ -3645,16 +4116,16 @@ export class AudioEngine {
             if (triggerAbove && !prevTriggerAbove) {
               if (delayMode) {
                 const delayMs = cvToRange(clampRange(timeCv[i], 0, CV_MAX_VOLTS), 1, 2000, "log");
-                pendingSamples[0] = Math.round(delayMs * 0.001 * ctx.sampleRate);
+                pendingSamples[0] = Math.floor(delayMs * 0.001 * ctx.sampleRate);
                 pendingAmplitude[0] = CV_MAX_VOLTS;
                 pendingCount = 1;
               } else {
-                const pulses = Math.round(
-                  cvToRange(clampRange(countCv[i], 0, CV_MAX_VOLTS), 1, kMaxPending, "linear")
+                const pulses = Math.floor(
+                  cvToRange(clampRange(countCv[i], 0, CV_MAX_VOLTS), 1, kMaxPending, "linear") + 0.5
                 );
                 const intervalMs = cvToRange(clampRange(timeCv[i], 0, CV_MAX_VOLTS), 5, 300, "log");
                 const decay = cvToRange(clampRange(decayCv[i], 0, CV_MAX_VOLTS), 0, 0.9, "linear");
-                const intervalSamples = Math.round(intervalMs * 0.001 * ctx.sampleRate);
+                const intervalSamples = Math.floor(intervalMs * 0.001 * ctx.sampleRate);
                 let amplitude = CV_MAX_VOLTS;
                 for (let p = 0; p < pulses; p += 1) {
                   pendingSamples[p] = intervalSamples * p;
@@ -3714,6 +4185,27 @@ export class AudioEngine {
         depthGainL.connect(delayL.delayTime);
         depthGainR.connect(delayR.delayTime);
 
+        // Bypass: ChorusNode.h passes the input straight to both outputs.
+        const bypass = params.bypass === true;
+        const processedL = ctx.createGain();
+        const processedR = ctx.createGain();
+        const bypassL = ctx.createGain();
+        const bypassR = ctx.createGain();
+        const outputL = ctx.createGain();
+        const outputR = ctx.createGain();
+        processedL.gain.value = bypass ? 0 : 1;
+        processedR.gain.value = bypass ? 0 : 1;
+        bypassL.gain.value = bypass ? 1 : 0;
+        bypassR.gain.value = bypass ? 1 : 0;
+        delayL.connect(processedL);
+        delayR.connect(processedR);
+        inputNode.connect(bypassL);
+        inputNode.connect(bypassR);
+        processedL.connect(outputL);
+        bypassL.connect(outputL);
+        processedR.connect(outputR);
+        bypassR.connect(outputR);
+
         return {
           type,
           inputNode,
@@ -3722,6 +4214,13 @@ export class AudioEngine {
           depthGainR,
           delayL,
           delayR,
+          processedL,
+          processedR,
+          bypassL,
+          bypassR,
+          outputL,
+          outputR,
+          bypass,
         };
       }
       case "delay": {
@@ -3743,83 +4242,112 @@ export class AudioEngine {
           dryGainR: chanR.dry,
           wetGainR: chanR.wet,
           outputR: chanR.output,
+          processedL: chanL.processed,
+          processedR: chanR.processed,
+          bypassL: chanL.bypassGain,
+          bypassR: chanR.bypassGain,
+          bypass: params.bypass === true,
         };
       }
       case "reverb-light": {
-        
-        
-        
-        
-        
-        
+        // 1:1 port of renderReverbLight() (ReverbNode.h): mono sum -> four
+        // feedback combs (Freeverb lengths scaled to the sample rate, gains
+        // from the room size's RT60) -> two Schroeder allpasses -> one-pole
+        // damping lowpass, then dry/wet per channel. Replaces a convolver
+        // with a random noise impulse, which sounded nothing like hardware.
         const inputNodeL = ctx.createGain();
-        inputNodeL.gain.value = 1;
         const inputNodeR = ctx.createGain();
-        inputNodeR.gain.value = 1;
-
-        const monoSum = ctx.createGain();
-        monoSum.gain.value = 0.5;
-        inputNodeL.connect(monoSum);
-        inputNodeR.connect(monoSum);
-
-        const convolver = ctx.createConvolver();
-        convolver.buffer = this._generateImpulseResponse(ctx, this._roomSizeToSeconds(params.roomSize ?? 0.5));
-        const dampFilter = ctx.createBiquadFilter();
-        dampFilter.type = "lowpass";
-        dampFilter.frequency.value = this._dampingToHz(params.damping ?? 0.5);
-        const wet = ctx.createGain();
-        wet.gain.value = 10 ** ((params.wetLevelDb ?? -6) / 20);
-        monoSum.connect(convolver);
-        convolver.connect(dampFilter);
-        dampFilter.connect(wet);
-
-        const dryL = ctx.createGain();
-        dryL.gain.value = 10 ** ((params.dryLevelDb ?? 0) / 20);
-        const dryR = ctx.createGain();
-        dryR.gain.value = 10 ** ((params.dryLevelDb ?? 0) / 20);
-        inputNodeL.connect(dryL);
-        inputNodeR.connect(dryR);
-
-        const processedL = ctx.createGain();
-        processedL.gain.value = params.bypass ? 0 : 1;
-        const processedR = ctx.createGain();
-        processedR.gain.value = params.bypass ? 0 : 1;
-        const bypassL = ctx.createGain();
-        bypassL.gain.value = params.bypass ? 1 : 0;
-        const bypassR = ctx.createGain();
-        bypassR.gain.value = params.bypass ? 1 : 0;
+        const inputMerger = ctx.createChannelMerger(2);
+        inputNodeL.connect(inputMerger, 0, 0);
+        inputNodeR.connect(inputMerger, 0, 1);
+        const processor = ctx.createScriptProcessor(256, 2, 2);
+        inputMerger.connect(processor);
+        const splitter = ctx.createChannelSplitter(2);
+        processor.connect(splitter);
         const outputL = ctx.createGain();
-        outputL.gain.value = 1;
         const outputR = ctx.createGain();
-        outputR.gain.value = 1;
+        splitter.connect(outputL, 0);
+        splitter.connect(outputR, 1);
 
-        dryL.connect(processedL);
-        wet.connect(processedL);
-        dryR.connect(processedR);
-        wet.connect(processedR);
-        inputNodeL.connect(bypassL);
-        inputNodeR.connect(bypassR);
-        processedL.connect(outputL);
-        bypassL.connect(outputL);
-        processedR.connect(outputR);
-        bypassR.connect(outputR);
-
+        const sampleRate = ctx.sampleRate;
+        const scale = sampleRate / 44100;
+        const makeLine = (len44k) => {
+          const length = Math.max(1, Math.floor(len44k * scale + 0.5));
+          return { buffer: new Float32Array(length), index: 0 };
+        };
+        const flushDenorm = (x) => (x > -1e-15 && x < 1e-15 ? 0 : x);
+        const rv = {
+          combs: [1116, 1188, 1277, 1356].map(makeLine),
+          allpasses: [556, 441].map(makeLine),
+          combGain: [0, 0, 0, 0],
+          dampCoeff: 0,
+          dampState: 0,
+          roomSize: Number(params.roomSize ?? 0.5),
+          damping: Number(params.damping ?? 0.5),
+          wetGain: 10 ** (Number(params.wetLevelDb ?? -6) / 20),
+          dryGain: 10 ** (Number(params.dryLevelDb ?? 0) / 20),
+          bypass: params.bypass === true,
+          recomputeCombGains() {
+            const sizeSec = 0.1 + this.roomSize * 7.9;
+            this.combs.forEach((comb, c) => {
+              const g = 10 ** (-3 * comb.buffer.length / (sampleRate * sizeSec));
+              this.combGain[c] = clampRange(g, 0, 0.98);
+            });
+          },
+          recomputeDamping() {
+            const cutoffHz = 20000 - this.damping * 19800;
+            this.dampCoeff = Math.exp(-2 * Math.PI * cutoffHz / sampleRate);
+          },
+        };
+        rv.recomputeCombGains();
+        rv.recomputeDamping();
+        const kAllpassG = 0.5;
+        processor.onaudioprocess = (event) => {
+          const inL = event.inputBuffer.getChannelData(0);
+          const inR = event.inputBuffer.getChannelData(1);
+          const outL = event.outputBuffer.getChannelData(0);
+          const outR = event.outputBuffer.getChannelData(1);
+          if (rv.bypass) {
+            outL.set(inL);
+            outR.set(inR);
+            return;
+          }
+          const { combs, allpasses, combGain } = rv;
+          for (let i = 0; i < outL.length; i += 1) {
+            const xl = inL[i];
+            const xr = inR[i];
+            const mono = (xl + xr) * 0.5;
+            let combSum = 0;
+            for (let c = 0; c < 4; c += 1) {
+              const comb = combs[c];
+              const delayed = comb.buffer[comb.index];
+              comb.buffer[comb.index] = flushDenorm(mono + delayed * combGain[c]);
+              comb.index = comb.index + 1 === comb.buffer.length ? 0 : comb.index + 1;
+              combSum += delayed;
+            }
+            let ap = combSum * 0.25;
+            for (let a = 0; a < 2; a += 1) {
+              const line = allpasses[a];
+              const buf = line.buffer[line.index];
+              const apOut = -kAllpassG * ap + buf;
+              line.buffer[line.index] = flushDenorm(ap + kAllpassG * buf);
+              line.index = line.index + 1 === line.buffer.length ? 0 : line.index + 1;
+              ap = apOut;
+            }
+            rv.dampState = flushDenorm(ap * (1 - rv.dampCoeff) + rv.dampState * rv.dampCoeff);
+            const wet = rv.dampState * rv.wetGain;
+            outL[i] = xl * rv.dryGain + wet;
+            outR[i] = xr * rv.dryGain + wet;
+          }
+        };
         return {
           type,
-          roomSize: params.roomSize ?? 0.5,
-          bypass: params.bypass === true,
+          reverb: rv,
           inputNodeL,
           inputNodeR,
-          monoSum,
-          convolver,
-          dampFilter,
-          wet,
-          dryL,
-          dryR,
-          processedL,
-          processedR,
-          bypassL,
-          bypassR,
+          inputMerger,
+          processor,
+          splitter,
           outputL,
           outputR,
         };
@@ -3834,21 +4362,23 @@ export class AudioEngine {
           node.gain.value = 1;
           return node;
         });
-        const linkGainPrescales = type === "audio-input-link"
+        // Level CV per bus: cv::vcaGain(v, false), i.e. clamped to 0..1.
+        const linkGainChains = type === "audio-input-link"
           ? Array.from({ length: LINK_BUS_COUNT }, (_, i) => {
-              const prescale = ctx.createGain();
-              prescale.gain.value = 1 / CV_MAX_VOLTS;
-              prescale.connect(nodes[i].gain);
+              const chain = this._createCvGainChain(ctx, "linear");
+              chain.waveShaper.connect(nodes[i].gain);
               nodes[i].gain.value = gainVolts[i] / CV_MAX_VOLTS;
-              return prescale;
+              return chain;
             })
-          : null;
+          : [];
         return {
           type,
           nodes,
           linkGainVolts: gainVolts,
-          linkGainPrescales,
+          linkGainPrescales: type === "audio-input-link" ? linkGainChains.map((chain) => chain.prescale) : null,
           linkGainConnectionCount: Array(LINK_BUS_COUNT).fill(0),
+          extraNodes: linkGainChains.flatMap((chain) => [chain.sumNode, chain.waveShaper]),
+          extraSources: linkGainChains.map((chain) => chain.shiftConst),
         };
       }
       case "vu-meter": {
@@ -3929,7 +4459,8 @@ export class AudioEngine {
         const outGain = ctx.createGain();
         outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
         ampGain.connect(outGain);
-        const gainCv = this._createCvGainChain(ctx, "linear");
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
+        gainCv.waveShaper.connect(outGain.gain);
         const splitter = ctx.createChannelSplitter(2);
         outGain.connect(splitter);
         const leftOut = ctx.createGain();
@@ -3974,11 +4505,18 @@ export class AudioEngine {
         rightOut.gain.value = initialGain;
         splitter.connect(leftOut, 0, 0);
         splitter.connect(rightOut, 1, 0);
+        // "gain" cable: replaces the knob value (base gains zeroed on
+        // connect), same AUDIO_PEAK_VOLTS-scaled path as the oscillator's.
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
+        gainCv.waveShaper.connect(leftOut.gain);
+        gainCv.waveShaper.connect(rightOut.gain);
         const entry = {
           type,
           splitter,
           leftOut,
           rightOut,
+          gainCv,
+          gainCvActive: false,
           gain: params.gain ?? CV_MAX_VOLTS,
           volume: params.volume || "flash",
           path: params.path || "",
@@ -4045,9 +4583,7 @@ export class AudioEngine {
           currentInstrumentIndex: -1,
           modWheel: 1,
         };
-        this._loadMdaPianoBank().then((instruments) => {
-          entry.instruments = instruments;
-        });
+        this._loadMdaPianoEntry(entry);
 
         processor.onaudioprocess = (event) => {
           const outL = event.outputBuffer.getChannelData(0);
@@ -4227,7 +4763,11 @@ export class AudioEngine {
     if (!wrapper) return null;
     const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
     if (!entry || entry.type !== "esp-eq") return null;
-    entry.inputL.getFrequencyResponse(entry.responseFreqs, entry.responseMag, entry.responsePhase);
+    if (entry.bypass) {
+      entry.responseMag.fill(1);
+      return entry.responseMag;
+    }
+    entry.filterL.getFrequencyResponse(entry.responseFreqs, entry.responseMag, entry.responsePhase);
     return entry.responseMag;
   }
 
@@ -4240,25 +4780,23 @@ export class AudioEngine {
     return entry.spectrumBuffer;
   }
 
-  // Sections are identical biquads cascaded in series (see the "filter"/
-  // "curtis-filter" _buildNode case), so the combined magnitude of the
-  // active ones is section[0]'s own response raised to the active count.
+  // Magnitude of the processor's current coefficients (see the dsp objects'
+  // response()), sampled at the widget's responseFreqs.
   getFilterFrequencyResponse(id) {
     const wrapper = this.nodes.get(id);
     if (!wrapper) return null;
     const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
     if (!entry || (entry.type !== "filter" && entry.type !== "curtis-filter")) return null;
-    if (entry.filterType === "none") {
-      // Bypassed - signal skips the sections entirely (dryGain=1/wetGain=0),
-      // so the flat unfiltered response is the honest curve to show here.
-      entry.responseMag.fill(1);
-      return entry.responseMag;
+    if (entry.coeffsDirty && !entry.cutoffCvActive && !entry.resonanceCvActive) {
+      // Not rendered yet since the last change - show the new settings.
+      if (entry.type === "curtis-filter") {
+        entry.dsp.updateCoefficients(entry.cutoff, entry.resonance, filterPolesFromSlope(entry.slope));
+      } else if (entry.filterType !== "none") {
+        entry.dsp.applyCoeffs(entry.filterType, entry.cutoff, entry.resonance);
+      }
+      entry.coeffsDirty = false;
     }
-    entry.sections[0].getFrequencyResponse(entry.responseFreqs, entry.responseMag, entry.responsePhase);
-    const activeCount = filterSectionCount(entry.slope);
-    if (activeCount > 1) {
-      for (let i = 0; i < entry.responseMag.length; i += 1) entry.responseMag[i] **= activeCount;
-    }
+    entry.dsp.response(entry.responseFreqs, entry.responseMag);
     return entry.responseMag;
   }
 
@@ -4349,12 +4887,22 @@ export class AudioEngine {
 
   _removeEntry(entry) {
     if (!entry) return;
+    if (this._deferredSampleLoads.delete(entry)) this._notifyDeferredSamples();
+    // Generic cleanup lists (each node on its own, so one already-stopped
+    // source can't abort the rest): extraSources get stop()+disconnect(),
+    // extraNodes just disconnect().
+    (entry.extraSources || []).forEach((node) => {
+      try { node.stop(); } catch (err) { /* already stopped */ }
+      try { node.disconnect(); } catch (err) { /* already disconnected */ }
+    });
+    (entry.extraNodes || []).forEach((node) => {
+      try { node.disconnect(); } catch (err) { /* already disconnected */ }
+    });
     try {
       if (entry.osc) {
         entry.osc.stop();
         entry.osc.disconnect();
       }
-      if (entry.sideOscs) entry.sideOscs.forEach((osc) => { osc.stop(); osc.disconnect(); });
       if (entry.noiseSource) {
         entry.noiseSource.stop();
         entry.noiseSource.disconnect();
@@ -4483,23 +5031,9 @@ export class AudioEngine {
         entry.feedbackCv.shiftConst.disconnect();
       }
       if (entry.fmInScale) entry.fmInScale.disconnect();
-      if (entry.fmDepthGain) entry.fmDepthGain.disconnect();
       if (entry.feedbackDelay) entry.feedbackDelay.disconnect();
       if (entry.feedbackGain) entry.feedbackGain.disconnect();
       if (entry.feedbackCvScale) entry.feedbackCvScale.disconnect();
-      ["periodicSum", "normalCarrierGain", "superSawBus", "superSawEnable", "superSawCenterGain",
-        "superSawDetuneFallbackGate", "superSawDetuneInput", "superSawMixFallbackGate",
-        "superSawMixInput", "superSawMixNorm", "superSawCenterShaper", "superSawSideShaper"].forEach((key) => {
-        if (entry[key]) entry[key].disconnect();
-      });
-      if (entry.superSawSideGains) entry.superSawSideGains.forEach((gain) => gain.disconnect());
-      if (entry.superSawDetuneScales) entry.superSawDetuneScales.forEach((gain) => gain.disconnect());
-      ["superSawDetuneFallback", "superSawMixFallback"].forEach((key) => {
-        if (entry[key]) {
-          entry[key].stop();
-          entry[key].disconnect();
-        }
-      });
       if (entry.oscs) entry.oscs.forEach((o) => { o.stop(); o.disconnect(); });
       if (entry.footageScale) entry.footageScale.forEach((g) => g.disconnect());
       if (entry.drawbarGains) entry.drawbarGains.forEach((g) => g.disconnect());
@@ -4824,18 +5358,13 @@ export class AudioEngine {
       if (!entry || entry.type !== "lfo") return;
       const oldOsc = entry.lfoOsc;
       const newOsc = this.ctx.createOscillator();
-      setOscWaveType(this.ctx, newOsc, entry.lfoWaveType ?? oldOsc.type);
+      setOscWaveType(this.ctx, newOsc, entry.lfoWaveType, (entry.lfoPhase ?? 0) / 360);
       newOsc.frequency.value = oldOsc.frequency.value;
       // In Wavetable mode the wavetable source (not the oscillator) drives
       // lfoGain - restart its phase instead.
       if (!entry.lfoWavetable) newOsc.connect(entry.lfoGain);
       this._resetLfoWavetablePhase(entry);
-      
-      
-      
-      const phase = entry.lfoPhase ?? 0;
-      const rate = newOsc.frequency.value || 2;
-      newOsc.start(Math.max(this.ctx.currentTime, this.ctx.currentTime - lfoStartOffsetSeconds(entry.lfoWaveType ?? newOsc.type, phase, rate)));
+      newOsc.start();
       try {
         oldOsc.disconnect();
         oldOsc.stop();
@@ -4913,86 +5442,61 @@ export class AudioEngine {
       case "oscillator":
       case "fm-oscillator":
         if (paramName === "frequency") {
-          
-          
-          
-          
-          
-          
+          entry.directHz = Number(value) || 0;
           if (!entry.pitchCvActive && !entry.tuneCvActive) {
-            applyRamp(entry.osc.frequency);
-            entry.sideOscs?.forEach((side) => applyRamp(side.frequency));
+            applyRamp(entry.freqConst ? entry.freqConst.offset : entry.osc.frequency);
+          } else {
+            this._refreshPitchChain(entry);
           }
         } else if (paramName === "tuneVolts") {
-          
-          
-          
-          
-          
-          applyRampValue(entry.tuneRestConst.offset, value);
+          entry.tuneRestConst.offset.value = Number(value);
+          if (entry.pitchCvActive || entry.tuneCvActive) this._refreshPitchChain(entry);
         } else if (paramName === "waveType") {
+          if (entry.type === "fm-oscillator") {
+            // Read per block by createFmOscillatorCore.
+            entry.waveType = value;
+            break;
+          }
           // Noise / linear ramps are separate sources wired straight into
-          // ampGain; every other wave plays through the oscillator itself
-          // (fm-oscillator: via normalCarrierGain, so nothing to rewire).
+          // ampGain; every other wave plays through the oscillator itself.
           const fromExtra = oscExtraSource(entry, entry.waveType);
           const toExtra = oscExtraSource(entry, value);
-          if (entry.type === "fm-oscillator") {
-            entry.normalCarrierGain.gain.value = value === "supersaw" || toExtra ? 0 : 1;
-            entry.superSawEnable.gain.value = value === "supersaw" ? 1 : 0;
-            if (fromExtra !== toExtra) {
-              fromExtra?.disconnect(entry.ampGain);
-              toExtra?.connect(entry.ampGain);
-            }
-            if (!isNoiseWave(value)) setOscWaveType(this.ctx, entry.osc, value === "supersaw" ? "sawtooth" : value);
-          } else {
-            if (!isNoiseWave(value)) setOscWaveType(this.ctx, entry.osc, value);
-            if (fromExtra !== toExtra) {
-              (fromExtra ?? entry.osc).disconnect(entry.ampGain);
-              (toExtra ?? entry.osc).connect(entry.ampGain);
-            }
+          if (!isNoiseWave(value)) setOscWaveType(this.ctx, entry.osc, value);
+          if (fromExtra !== toExtra) {
+            (fromExtra ?? entry.osc).disconnect(entry.ampGain);
+            (toExtra ?? entry.osc).connect(entry.ampGain);
           }
           entry.waveType = value;
           if (isLinearWave(value)) applyOscLinear(this.ctx, entry);
         } else if (paramName === "detune") {
-          applyRamp(entry.osc.detune);
+          // Plain oscillator only (detuneMul); FmOscillatorNode.h has none.
+          if (entry.osc) applyRamp(entry.osc.detune);
         } else if (paramName === "amplitude") {
           applyRamp(entry.ampGain.gain);
         } else if (paramName === "gain") {
           entry.gain = value;
-          
-          
-          
           if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         } else if (paramName === "gate") {
           if (value > GATE_THRESHOLD_VOLTS) this.retriggerOscillatorEntry(entry);
-        } else if (paramName === "fmIndex") {
-          // fm-oscillator only (entry.fmDepthGain doesn't exist on a plain
-          // oscillator entry, and this param name is never sent to one).
-          entry.fmIndex = value;
-          if (!entry.fmIndexCvActive) {
-            applyRampValue(entry.fmDepthGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION);
+        } else if (entry.type === "fm-oscillator") {
+          // fallback constants feeding createFmOscillatorCore (raw volts)
+          const cvInput = {
+            fmIndex: [entry.fmIndexIn, "fmIndexCvActive"],
+            feedback: [entry.feedbackIn, "feedbackCvActive"],
+            superSawDetune: [entry.superSawDetuneIn, "superSawDetuneCvActive"],
+            superSawMix: [entry.superSawMixIn, "superSawMixCvActive"],
+          }[paramName];
+          if (cvInput) {
+            entry[paramName] = value;
+            if (!entry[cvInput[1]]) applyRampValue(cvInput[0].fallback.offset, Number(value) || 0);
+          } else if (paramName === "dutyCycle") {
+            entry.dutyCycle = Number(value) || 0;
           }
         } else if (paramName === "feedback") {
           entry.feedback = value;
           if (!entry.feedbackCvActive) {
             applyRampValue(entry.feedbackGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * SELF_FEEDBACK_MAX_HZ_DEVIATION);
           }
-        } else if (paramName === "dutyCycle") {
-          // State tracked for preset round-tripping only - no audible
-          // effect here. The native WebAudio OscillatorNode's "square" type
-          // (see the "fm-oscillator" _buildNode case above) is a fixed 50%
-          // pulse with no pulse-width control; reproducing the firmware's
-          // exact variable-duty square would need a custom PeriodicWave or
-          // AudioWorklet. Same "preview approximates, hardware is
-          // authoritative" precedent already documented for FM_INDEX_MAX_HZ_
-          // DEVIATION/SELF_FEEDBACK_MAX_HZ_DEVIATION above.
-          entry.dutyCycle = value;
-        } else if (paramName === "superSawDetune") {
-          entry.superSawDetune = value;
-          if (!entry.superSawDetuneCvActive) applyRampValue(entry.superSawDetuneFallback.offset, value);
-        } else if (paramName === "superSawMix") {
-          entry.superSawMix = value;
-          if (!entry.superSawMixCvActive) applyRampValue(entry.superSawMixFallback.offset, value);
         }
         break;
       case "hammond": {
@@ -5012,15 +5516,22 @@ export class AudioEngine {
           const k = Number(rt[1]) - 1;
           entry.ratios[k] = value;
           entry.footageScale[k].gain.value = value;
+          if (!entry.pitchCvActive && !entry.tuneCvActive) {
+            entry.oscs[k].frequency.value = (entry.directHz ?? 0) * value;
+          }
         } else if (paramName === "frequency") {
           // Only when no live pitch/tune cable owns the shared pitch chain -
           // same guard as the oscillator case above, applied to all nine
           // oscillators (each scaled by its own ratio).
+          entry.directHz = Number(value) || 0;
           if (!entry.pitchCvActive && !entry.tuneCvActive) {
             entry.oscs.forEach((o, k) => applyRampValue(o.frequency, value * entry.ratios[k]));
+          } else {
+            this._refreshPitchChain(entry);
           }
         } else if (paramName === "tuneVolts") {
-          applyRampValue(entry.tuneRestConst.offset, value);
+          entry.tuneRestConst.offset.value = Number(value);
+          if (entry.pitchCvActive || entry.tuneCvActive) this._refreshPitchChain(entry);
         } else if (paramName === "amplitude") {
           applyRamp(entry.ampGain.gain);
         } else if (paramName === "gain") {
@@ -5074,104 +5585,51 @@ export class AudioEngine {
         break;
       case "filter":
       case "curtis-filter": {
-        
-        
-        
-        
-        
-        
-        
-        
-        const recomputeCutoff = () => {
-          if (!entry.cutoffCvActive) {
-            const frequency = cvToRange(entry.cutoff, entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-            entry.sections.forEach((section) => applyRampValue(section.frequency, frequency));
-          }
-        };
-        const recomputeResonance = () => {
-          // Shelf types take this control as their gain instead of Q, split
-          // across the active sections so the total shelf lift stays put as the
-          // slope changes. Only on the manual path - an audio-rate cable on
-          // "resonance" still feeds Q, which a shelving biquad ignores.
-          if (isShelfFilterType(entry.filterType)) {
-            const shelfGainDb = shelfGainDbFromCv(entry.resonance) / filterSectionCount(entry.slope);
-            entry.sections.forEach((section) => applyRampValue(section.gain, shelfGainDb));
-            return;
-          }
-          if (!entry.resonanceCvActive) {
-            const q = cvToRange(entry.resonance, entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-            entry.sections.forEach((section) => applyRampValue(section.Q, q));
-          }
-        };
-        if (paramName === "cutoff") {
-          entry.cutoff = value;
-          recomputeCutoff();
-        } else if (paramName === "cutoffMinHz") {
-          entry.cutoffMinHz = value;
-          entry.cutoffCv.waveShaper.curve = buildRangeCurve(entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-          recomputeCutoff();
-        } else if (paramName === "cutoffMaxHz") {
-          entry.cutoffMaxHz = value;
-          entry.cutoffCv.waveShaper.curve = buildRangeCurve(entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-          recomputeCutoff();
-        } else if (paramName === "cutoffCurve") {
-          entry.cutoffCurve = value;
-          entry.cutoffCv.waveShaper.curve = buildRangeCurve(entry.cutoffMinHz, entry.cutoffMaxHz, entry.cutoffCurve);
-          recomputeCutoff();
-        } else if (paramName === "resonance") {
-          entry.resonance = value;
-          recomputeResonance();
-        } else if (paramName === "resonanceMinQ") {
-          entry.resonanceMinQ = value;
-          entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-          recomputeResonance();
-        } else if (paramName === "resonanceMaxQ") {
-          entry.resonanceMaxQ = value;
-          entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-          recomputeResonance();
-        } else if (paramName === "resonanceCurve") {
-          entry.resonanceCurve = value;
-          entry.resonanceCv.waveShaper.curve = buildRangeCurve(entry.resonanceMinQ, entry.resonanceMaxQ, entry.resonanceCurve);
-          recomputeResonance();
+        // Everything is read per block by the processor (see createFilterDsp/
+        // createCurtisFilterDsp); a change only has to mark the coefficients
+        // dirty, like the firmware's setParam().
+        const num = Number(value);
+        if (["cutoff", "cutoffMinHz", "cutoffMaxHz", "resonance", "resonanceMinQ", "resonanceMaxQ"].includes(paramName)) {
+          if (Number.isFinite(num)) entry[paramName] = num;
+        } else if (paramName === "cutoffCurve" || paramName === "resonanceCurve") {
+          entry[paramName] = value === "log" ? "log" : "linear";
         } else if (paramName === "filterType") {
-          entry.filterType = value;
-          applyRampValue(entry.dryGain.gain, value === "none" ? 1 : 0);
-          applyRampValue(entry.wetGain.gain, value === "none" ? 0 : 1);
-          const biquadType = value === "none" ? "lowpass" : value;
-          entry.sections.forEach((section) => { section.type = biquadType; });
-          recomputeResonance();
+          entry.filterType = normalizeFilterKind(value);
         } else if (paramName === "slope") {
-          entry.slope = Number(value) || 12;
-          const active = filterSectionCount(entry.slope);
-          entry.sectionTaps.forEach((tap, index) => {
-            applyRampValue(tap.gain, index === active - 1 ? 1 : 0);
-          });
-          recomputeResonance();
+          entry.slope = filterPolesFromSlope(num) * 6;
+          entry.dsp.resetUpperStages();
+          entry.dsp.audioCoeffsInitialized = false;
+        } else if (paramName === "coeffStride") {
+          entry.coeffStride = clampRange(Math.trunc(num) || 1, 1, 16);
+          break;
+        } else {
+          break;
         }
+        entry.coeffsDirty = true;
+        entry.dsp.audioCoeffsInitialized = false;
         break;
       }
       case "esp-eq":
-        if (paramName === "frequency") {
-          applyRamp(entry.inputL.frequency);
-          applyRamp(entry.inputR.frequency);
-        } else if (paramName === "q") {
-          applyRamp(entry.inputL.Q);
-          applyRamp(entry.inputR.Q);
-        } else if (paramName === "gainDb") {
-          applyRamp(entry.inputL.gain);
-          applyRamp(entry.inputR.gain);
-        } else if (paramName === "filterType") {
-          entry.inputL.type = eqFilterTypeToBiquad(value);
-          entry.inputR.type = eqFilterTypeToBiquad(value);
+        if (paramName === "bypass") {
+          entry.bypass = value === true || Number(value) >= 0.5;
+          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
+          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
+        } else if (paramName === "frequency" || paramName === "q" || paramName === "gainDb" || paramName === "filterType") {
+          entry[paramName] = value;
+          this._applyEspEqParams(entry, glideSeconds);
         }
         break;
       case "graphic-eq": {
         const bandGainMatch = /^gain(\d)$/.exec(paramName);
         const bandFreqMatch = /^freq(\d)$/.exec(paramName);
         if (paramName === "bypass") {
-          entry.bypass = value === true || value === 1;
-          entry.bandsL.forEach((band, i) => applyRampValue(band.gain, entry.bypass ? 0 : entry.gainDb[i]));
-          entry.bandsR.forEach((band, i) => applyRampValue(band.gain, entry.bypass ? 0 : entry.gainDb[i]));
+          entry.bypass = value === true || Number(value) >= 0.5;
+          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
+          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
         } else if (paramName === "gain") {
           const g = clampRange((Number(value) || 0) / CV_MAX_VOLTS, 0, 1);
           applyRampValue(entry.outputGainL.gain, g);
@@ -5179,15 +5637,15 @@ export class AudioEngine {
         } else if (bandGainMatch) {
           const i = Number(bandGainMatch[1]) - 1;
           entry.gainDb[i] = Number(value) || 0;
-          if (!entry.bypass) {
-            applyRampValue(entry.bandsL[i].gain, entry.gainDb[i]);
-            applyRampValue(entry.bandsR[i].gain, entry.gainDb[i]);
-          }
+          const gainDb = clampRange(entry.gainDb[i], -15, 15);
+          applyRampValue(entry.bandsL[i].gain, gainDb);
+          applyRampValue(entry.bandsR[i].gain, gainDb);
         } else if (bandFreqMatch) {
           const i = Number(bandFreqMatch[1]) - 1;
           entry.freqHz[i] = Number(value) || entry.freqHz[i];
-          applyRampValue(entry.bandsL[i].frequency, entry.freqHz[i]);
-          applyRampValue(entry.bandsR[i].frequency, entry.freqHz[i]);
+          const hz = clampRange(entry.freqHz[i], 20, this.ctx.sampleRate / 2 - 1);
+          applyRampValue(entry.bandsL[i].frequency, hz);
+          applyRampValue(entry.bandsR[i].frequency, hz);
         }
         break;
       }
@@ -5197,7 +5655,7 @@ export class AudioEngine {
         
         if (paramName === "divider") {
           const divider = clampRange(Number(value) || 1, 1, 128);
-          applyRampValue(entry.seedDen.offset, divider);
+          applyRampValue(entry.seedDen.offset, divider, 0);
         }
         break;
       case "value-mapper": {
@@ -5213,10 +5671,6 @@ export class AudioEngine {
         entry.constraintMin = paramName === "constraintMin" ? value : entry.constraintMin;
         entry.constraintMax = paramName === "constraintMax" ? value : entry.constraintMax;
         if (paramName === "listText") entry.list = parseValueList(value);
-        const domain = valueMapperDomain(entry);
-        entry.chain.prescale.gain.value = 2 / (domain.hi - domain.lo || 1);
-        entry.chain.shiftConst.offset.value = -1 - (2 * domain.lo) / (domain.hi - domain.lo || 1);
-        entry.chain.waveShaper.curve = buildValueMapperCurve(entry, domain.lo, domain.hi);
         break;
       }
       case "detune":
@@ -5275,7 +5729,7 @@ export class AudioEngine {
           const g = entry.envGain.gain;
           g.cancelScheduledValues(now);
           g.setValueAtTime(g.value, now);
-          if (value > GATE_THRESHOLD_VOLTS) {
+          if (value >= GATE_THRESHOLD_VOLTS) {
             entry.releaseEndsAt = null;
             g.linearRampToValueAtTime(1, now + entry.attack);
             g.linearRampToValueAtTime(entry.sustain, now + entry.attack + entry.decay);
@@ -5296,7 +5750,7 @@ export class AudioEngine {
           const gain = entry.envGain.gain;
           gain.cancelScheduledValues(now);
           gain.setValueAtTime(gain.value, now);
-          if (value > GATE_THRESHOLD_VOLTS) {
+          if (value >= GATE_THRESHOLD_VOLTS) {
             let segmentEnd = now + entry.time1;
             gain.linearRampToValueAtTime(entry.level1 / CV_MAX_VOLTS, segmentEnd);
             segmentEnd += entry.time2;
@@ -5317,7 +5771,7 @@ export class AudioEngine {
           applyRampValue(entry.lfoOsc.frequency, rate);
           this._syncLfoWavetableParams(entry);
         } else if (paramName === "maxRate") {
-          entry.lfoMaxRate = clampRange(Number(value) || 0, 0, 50);
+          entry.lfoMaxRate = clampRange(Number(value) || 0, 0, LFO_MAX_RATE_HZ);
           const rate = clampRange(Number(entry.lfoRate) || 0, 0, entry.lfoMaxRate);
           entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
@@ -5335,10 +5789,10 @@ export class AudioEngine {
         } else if (paramName === "amplitude") {
           entry.lfoAmplitude = value;
         } else if (paramName === "phase") {
-          
-          
-          
+          // Takes effect immediately, like LfoNode.h's read-time phase
+          // offset: swapping the wave keeps the oscillator's running phase.
           entry.lfoPhase = value;
+          setOscWaveType(this.ctx, entry.lfoOsc, entry.lfoWaveType, (Number(value) || 0) / 360);
           this._syncLfoWavetableParams(entry);
         } else if (paramName === "zeroPointFixed") {
           entry.lfoZeroPointFixed = value === true || value === 1;
@@ -5366,7 +5820,7 @@ export class AudioEngine {
             entry.centerOffset.offset.cancelScheduledValues(now);
             entry.lfoGain.gain.cancelScheduledValues(now);
           }
-          setOscWaveType(this.ctx, entry.lfoOsc, value);
+          setOscWaveType(this.ctx, entry.lfoOsc, value, (entry.lfoPhase ?? 0) / 360);
           entry.lfoWaveType = value;
           if (lfoLinearHold(entry)) {
             // Picking a linear wave in One Shot: held at its start until the next reset.
@@ -5426,10 +5880,7 @@ export class AudioEngine {
         }
         break;
       case "output-switch":
-        if (paramName === "selectOut2") {
-          applyRampValue(entry.gain1.gain, value ? 0 : 1);
-          applyRampValue(entry.gain2.gain, value ? 1 : 0);
-        }
+        if (paramName === "selectOut2") entry.selectOut2 = value === true || Number(value) >= 0.5;
         break;
       case "audio-input-link": {
         const match = /^gain([1-8])$/.exec(paramName);
@@ -5526,7 +5977,13 @@ export class AudioEngine {
         }
         break;
       case "chorus":
-        if (paramName === "rate") {
+        if (paramName === "bypass") {
+          entry.bypass = value === true || Number(value) >= 0.5;
+          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
+          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
+        } else if (paramName === "rate") {
           applyRamp(entry.lfo.frequency);
         } else if (paramName === "offset") {
           applyRamp(entry.delayL.delayTime);
@@ -5537,7 +5994,13 @@ export class AudioEngine {
         }
         break;
       case "delay":
-        if (paramName === "delayTimeMs") {
+        if (paramName === "bypass") {
+          entry.bypass = value === true || Number(value) >= 0.5;
+          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
+          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
+          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
+        } else if (paramName === "delayTimeMs") {
           applyRampValue(entry.delayL.delayTime, value / 1000);
           applyRampValue(entry.delayR.delayTime, value / 1000);
         } else if (paramName === "feedback") {
@@ -5582,26 +6045,26 @@ export class AudioEngine {
           if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         }
         break;
-      case "reverb-light":
+      case "reverb-light": {
+        // Read per block by the processor (see the "reverb-light" _buildNode
+        // case), exactly like setParamReverbLight() in ReverbNode.h.
+        const rv = entry.reverb;
+        const num = Number(value);
         if (paramName === "bypass") {
-          entry.bypass = value === true || Number(value) >= 5;
-          applyRampValue(entry.processedL.gain, entry.bypass ? 0 : 1);
-          applyRampValue(entry.processedR.gain, entry.bypass ? 0 : 1);
-          applyRampValue(entry.bypassL.gain, entry.bypass ? 1 : 0);
-          applyRampValue(entry.bypassR.gain, entry.bypass ? 1 : 0);
-        } else if (paramName === "roomSize") {
-          entry.roomSize = value;
-          entry.convolver.buffer = this._generateImpulseResponse(this.ctx, this._roomSizeToSeconds(value));
-        } else if (paramName === "damping") {
-          applyRampValue(entry.dampFilter.frequency, this._dampingToHz(value));
-        } else if (paramName === "wetLevelDb") {
-          applyRampValue(entry.wet.gain, 10 ** (value / 20));
-        } else if (paramName === "dryLevelDb") {
-          const gain = 10 ** (value / 20);
-          applyRampValue(entry.dryL.gain, gain);
-          applyRampValue(entry.dryR.gain, gain);
+          rv.bypass = value === true || num >= 0.5;
+        } else if (paramName === "roomSize" && Number.isFinite(num)) {
+          rv.roomSize = num;
+          rv.recomputeCombGains();
+        } else if (paramName === "damping" && Number.isFinite(num)) {
+          rv.damping = num;
+          rv.recomputeDamping();
+        } else if (paramName === "wetLevelDb" && Number.isFinite(num)) {
+          rv.wetGain = 10 ** (num / 20);
+        } else if (paramName === "dryLevelDb" && Number.isFinite(num)) {
+          rv.dryGain = 10 ** (num / 20);
         }
         break;
+      }
       default:
         break;
     }
@@ -5676,6 +6139,9 @@ export class AudioEngine {
           primary.resonanceCv.waveShaper.connect(entry.resonanceSharedGate);
           entry._sharedWired = true;
         }
+        entry.globalPrimary = isGlobal ? primary : null;
+        entry.coeffsDirty = true;
+        entry.dsp.audioCoeffsInitialized = false;
         entry.cutoffOwnGate.gain.setTargetAtTime(isGlobal ? 0 : 1, now, 0.005);
         entry.cutoffSharedGate.gain.setTargetAtTime(isGlobal ? 1 : 0, now, 0.005);
         entry.resonanceOwnGate.gain.setTargetAtTime(isGlobal ? 0 : 1, now, 0.005);
@@ -5760,13 +6226,13 @@ export class AudioEngine {
     if (entry.type === "multiplier" && port === "value") return entry.output;
     if (entry.type === "adder" && port === "value") return entry.sum;
     if (entry.type === "divide" && port === "value") return entry.output;
-    if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.outGain;
+    if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.output;
     if (entry.type === "abs" && port === "value") return entry.waveShaper;
     if (entry.type === "logic-and" && port === "value") return entry.output;
     if (entry.type === "logic-or" && port === "value") return entry.output;
     if (entry.type === "logic-xor" && port === "value") return entry.output;
     if (entry.type === "logic-not" && port === "value") return entry.waveShaper;
-    if (entry.type === "value-mapper" && port === "out") return entry.chain.waveShaper;
+    if (entry.type === "value-mapper" && port === "out") return entry.processor;
     if (entry.type === "detune" && port === "out") return entry.out;
     if (entry.type === "adsr" && port === "out") return entry.output;
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
@@ -5777,8 +6243,8 @@ export class AudioEngine {
     if (entry.type === "pan" && port === "out1") return entry.out1;
     if (entry.type === "pan" && port === "out2") return entry.out2;
     if (entry.type === "sample-hold" && port === "out") return entry.processor;
-    if (entry.type === "chorus" && port === "left") return entry.delayL;
-    if (entry.type === "chorus" && port === "right") return entry.delayR;
+    if (entry.type === "chorus" && port === "left") return entry.outputL;
+    if (entry.type === "chorus" && port === "right") return entry.outputR;
     if (entry.type === "delay" || entry.type === "reverb-light") {
       if (port === "outL") return entry.outputL;
       if (port === "outR") return entry.outputR;
@@ -5858,10 +6324,10 @@ export class AudioEngine {
       if (port === "pitchCv") return entry.pitchSum;
       if (port === "tune") return entry.tuneSum;
       if (port === "fmIn") return entry.fmInScale;
-      if (port === "fmIndex") return entry.fmIndexCv.prescale;
-      if (port === "feedback") return entry.feedbackCv.prescale;
-      if (port === "superSawDetune") return entry.superSawDetuneInput;
-      if (port === "superSawMix") return entry.superSawMixInput;
+      if (port === "fmIndex") return entry.fmIndexIn.input;
+      if (port === "feedback") return entry.feedbackIn.input;
+      if (port === "superSawDetune") return entry.superSawDetuneIn.input;
+      if (port === "superSawMix") return entry.superSawMixIn.input;
     }
     if (entry.type === "hammond") {
       if (port === "amplitude") return entry.ampCv.prescale;
@@ -5878,9 +6344,9 @@ export class AudioEngine {
       if (entry.type === "frequency-divider" && (port === "cv" || port === "hz")) return entry.outGain;
       if (entry.type === "frequency-divider" && port === "divider") return entry.prescale;
       if (entry.type === "abs" && port === "in") return entry.waveShaper;
-      if (entry.type === "value-mapper" && port === "in") return entry.chain.prescale;
+      if (entry.type === "value-mapper" && port === "in") return entry.input;
     }
-    if (entry.type === "logic-or" && /^in\d+$/.test(port)) return entry.sum;
+    if (entry.type === "logic-or" && /^in\d+$/.test(port)) return entry.perInputShapers[Number(port.slice(2)) - 1] || null;
     if (entry.type === "logic-not" && port === "in") return entry.waveShaper;
     if (entry.type === "detune" && port === "cv") return entry.cvIn;
     if (entry.type === "bitcrusher" && port === "in") return entry.processor;
@@ -5915,6 +6381,7 @@ export class AudioEngine {
     }
     if (entry.type === "spectrum" && port === "in") return entry.analyser;
     if (entry.type === "wave-player" && port === "amplitude") return entry.ampGain.gain;
+    if (entry.type === "soundfont-player" && port === "gain") return entry.gainCv.prescale;
     return null;
   }
 
@@ -6095,20 +6562,24 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "soundfont-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.connect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = true;
-          toEntry.outGain.gain.value = 0;
+          const now = this.ctx.currentTime;
+          (toEntry.outGain ? [toEntry.outGain] : [toEntry.leftOut, toEntry.rightOut]).forEach((node) => {
+            node.gain.cancelScheduledValues(now);
+            node.gain.value = 0;
+          });
         } catch (err) {
 
         }
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "fm-oscillator") && toPort === "feedback") {
+    if (toEntry && toEntry.type === "oscillator" && toPort === "feedback") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -6120,30 +6591,15 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "fm-oscillator" && toPort === "fmIndex") {
+    if (toEntry && toEntry.type === "fm-oscillator" && FM_CV_INPUT_PORTS.includes(toPort)) {
+      // A cable replaces the port's fallback constant (gate closed).
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
-      if (from) {
+      const cv = this._fmCvInput(toEntry, toPort);
+      if (from && cv) {
         try {
-          from.connect(toEntry.fmIndexCv.prescale);
-          toEntry.fmIndexCvActive = true;
-          toEntry.fmDepthGain.gain.value = 0;
-        } catch (err) {
-
-        }
-      }
-      return;
-    }
-    if (toEntry && toEntry.type === "fm-oscillator" &&
-        (toPort === "superSawDetune" || toPort === "superSawMix")) {
-      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
-      if (from) {
-        const input = toPort === "superSawDetune" ? toEntry.superSawDetuneInput : toEntry.superSawMixInput;
-        const gate = toPort === "superSawDetune" ? toEntry.superSawDetuneFallbackGate : toEntry.superSawMixFallbackGate;
-        try {
-          from.connect(input);
-          gate.gain.value = 0;
-          if (toPort === "superSawDetune") toEntry.superSawDetuneCvActive = true;
-          else toEntry.superSawMixCvActive = true;
+          from.connect(cv.input);
+          cv.gate.gain.value = 0;
+          toEntry[`${toPort}CvActive`] = true;
         } catch (err) {
         }
       }
@@ -6192,23 +6648,12 @@ export class AudioEngine {
     if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
-        const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;
         const sum = toPort === "pitchCv" ? toEntry.pitchSum : toEntry.tuneSum;
         try {
-          restGate.gain.value = 0;
           from.connect(sum);
           if (toPort === "pitchCv") toEntry.pitchCvActive = true;
           else toEntry.tuneCvActive = true;
-          // Hammond has nine oscillators (entry.oscs), the single-osc entry
-          // just entry.osc - zero whichever this entry actually has, so the
-          // CV chain (fanned through footageScale for Hammond) becomes the
-          // sole pitch source instead of adding on top of a stale direct-set
-          // value (see the pitchRestGate comment in _buildNode).
-          if (toEntry.oscs) toEntry.oscs.forEach((o) => { o.frequency.value = 0; });
-          else {
-            toEntry.osc.frequency.value = 0;
-            toEntry.sideOscs?.forEach((o) => { o.frequency.value = 0; });
-          }
+          this._refreshPitchChain(toEntry);
         } catch (err) {
 
         }
@@ -6226,10 +6671,7 @@ export class AudioEngine {
           from.connect(cv.prescale);
           if (toPort === "cutoff") toEntry.cutoffCvActive = true;
           else toEntry.resonanceCvActive = true;
-          toEntry.sections.forEach((section) => {
-            const target = toPort === "cutoff" ? section.frequency : section.Q;
-            target.value = 0;
-          });
+          toEntry.dsp.audioCoeffsInitialized = false;
         } catch (err) {
           
         }
@@ -6386,20 +6828,23 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "soundfont-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.disconnect(toEntry.gainCv.prescale);
           toEntry.gainCvActive = false;
-          toEntry.outGain.gain.value = ((toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+          const g = ((toEntry.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+          (toEntry.outGain ? [toEntry.outGain] : [toEntry.leftOut, toEntry.rightOut]).forEach((node) => {
+            node.gain.value = g;
+          });
         } catch (err) {
 
         }
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "fm-oscillator") && toPort === "feedback") {
+    if (toEntry && toEntry.type === "oscillator" && toPort === "feedback") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -6411,30 +6856,15 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && toEntry.type === "fm-oscillator" && toPort === "fmIndex") {
+    if (toEntry && toEntry.type === "fm-oscillator" && FM_CV_INPUT_PORTS.includes(toPort)) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
-      if (from) {
+      const cv = this._fmCvInput(toEntry, toPort);
+      if (from && cv) {
         try {
-          from.disconnect(toEntry.fmIndexCv.prescale);
-          toEntry.fmIndexCvActive = false;
-          toEntry.fmDepthGain.gain.value = ((toEntry.fmIndex ?? 0) / CV_MAX_VOLTS) * FM_INDEX_MAX_HZ_DEVIATION;
-        } catch (err) {
-
-        }
-      }
-      return;
-    }
-    if (toEntry && toEntry.type === "fm-oscillator" &&
-        (toPort === "superSawDetune" || toPort === "superSawMix")) {
-      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
-      if (from) {
-        const input = toPort === "superSawDetune" ? toEntry.superSawDetuneInput : toEntry.superSawMixInput;
-        const gate = toPort === "superSawDetune" ? toEntry.superSawDetuneFallbackGate : toEntry.superSawMixFallbackGate;
-        try {
-          from.disconnect(input);
-          gate.gain.value = 1;
-          if (toPort === "superSawDetune") toEntry.superSawDetuneCvActive = false;
-          else toEntry.superSawMixCvActive = false;
+          from.disconnect(cv.input);
+          cv.gate.gain.value = 1;
+          cv.fallback.offset.value = Number(toEntry[toPort]) || 0;
+          toEntry[`${toPort}CvActive`] = false;
         } catch (err) {
         }
       }
@@ -6483,13 +6913,12 @@ export class AudioEngine {
     if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && (toPort === "pitchCv" || toPort === "tune")) {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
-        const restGate = toPort === "pitchCv" ? toEntry.pitchRestGate : toEntry.tuneRestGate;
         const sum = toPort === "pitchCv" ? toEntry.pitchSum : toEntry.tuneSum;
         try {
           from.disconnect(sum);
-          restGate.gain.value = 0; // back to closed, see pitchRestGate comment in _buildNode
           if (toPort === "pitchCv") toEntry.pitchCvActive = false;
           else toEntry.tuneCvActive = false;
+          this._refreshPitchChain(toEntry);
         } catch (err) {
           
         }
@@ -6502,19 +6931,9 @@ export class AudioEngine {
         const cv = toPort === "cutoff" ? toEntry.cutoffCv : toEntry.resonanceCv;
         try {
           from.disconnect(cv.prescale);
-          if (toPort === "cutoff") {
-            toEntry.cutoffCvActive = false;
-            const frequency = cvToRange(
-              toEntry.cutoff, toEntry.cutoffMinHz, toEntry.cutoffMaxHz, toEntry.cutoffCurve
-            );
-            toEntry.sections.forEach((section) => { section.frequency.value = frequency; });
-          } else {
-            toEntry.resonanceCvActive = false;
-            const q = cvToRange(
-              toEntry.resonance, toEntry.resonanceMinQ, toEntry.resonanceMaxQ, toEntry.resonanceCurve
-            );
-            toEntry.sections.forEach((section) => { section.Q.value = q; });
-          }
+          if (toPort === "cutoff") toEntry.cutoffCvActive = false;
+          else toEntry.resonanceCvActive = false;
+          toEntry.coeffsDirty = true;
         } catch (err) {
           
         }
@@ -6625,6 +7044,35 @@ export class AudioEngine {
     });
   }
 
+  // Pitch source of oscillator/fm-oscillator/hammond, mirroring the
+  // firmware's hz = hzFromPitchCv(pitchCv + (tune - 5V)): with no pitch/tune
+  // cable the direct-set Hz (setParam "frequency") drives the oscillator(s);
+  // as soon as either port has a cable the CV chain is the sole source and
+  // the port WITHOUT a cable contributes its current value through its rest
+  // constant - the note's pitch volts (recovered from the last direct-set Hz)
+  // or the widget's tune volts.
+  _refreshPitchChain(entry) {
+    const cvDriven = entry.pitchCvActive || entry.tuneCvActive;
+    const tuneVolts = entry.tuneRestConst.offset.value;
+    const directHz = entry.directHz ?? 0;
+    const pitchVolts = directHz > 0
+      ? (12 * Math.log2(directHz / 440) + 69 - PITCH_CV_ANCHOR_NOTE) / 12 * PITCH_CV_VOLTS_PER_OCTAVE +
+        CV_MAX_VOLTS / 2 - (tuneVolts - CV_MAX_VOLTS / 2)
+      : CV_MAX_VOLTS / 2;
+    entry.pitchRestConst.offset.value = pitchVolts;
+    entry.pitchRestGate.gain.value = cvDriven && !entry.pitchCvActive ? 1 : 0;
+    entry.tuneRestGate.gain.value = cvDriven && !entry.tuneCvActive ? 1 : 0;
+    const hz = cvDriven ? 0 : directHz;
+    if (entry.oscs) entry.oscs.forEach((o, k) => { o.frequency.value = hz * entry.ratios[k]; });
+    else if (entry.freqConst) entry.freqConst.offset.value = hz;
+    else if (entry.osc) entry.osc.frequency.value = hz;
+  }
+
+  _fmCvInput(entry, port) {
+    return { fmIndex: entry.fmIndexIn, feedback: entry.feedbackIn,
+      superSawDetune: entry.superSawDetuneIn, superSawMix: entry.superSawMixIn }[port] || null;
+  }
+
   _wireAdderInput(entry, port, sourceNode, connecting) {
     if (!sourceNode) return;
     const idx = parseInt(String(port).replace("in", ""), 10) - 1;
@@ -6710,29 +7158,19 @@ export class AudioEngine {
 
   _wireDivideInput(entry, port, sourceNode, connecting) {
     if (!sourceNode) return;
+    const idx = port === "in1" ? 0 : port === "in2" ? 1 : -1;
+    if (idx < 0) return;
     const counts = entry.controlConnectionCounts;
+    const seed = idx === 0 ? entry.seedNum : entry.seedDen;
     try {
-      if (port === "in1") {
-        if (connecting) {
-          if (counts[0]++ === 0) entry.seedNum.disconnect(entry.outGain);
-          sourceNode.connect(entry.outGain);
-        } else {
-          sourceNode.disconnect(entry.outGain);
-          if (--counts[0] <= 0) {
-            counts[0] = 0;
-            entry.seedNum.connect(entry.outGain);
-          }
-        }
-      } else if (port === "in2") {
-        if (connecting) {
-          if (counts[1]++ === 0) entry.seedDen.disconnect(entry.reciprocal);
-          sourceNode.connect(entry.reciprocal);
-        } else {
-          sourceNode.disconnect(entry.reciprocal);
-          if (--counts[1] <= 0) {
-            counts[1] = 0;
-            entry.seedDen.connect(entry.reciprocal);
-          }
+      if (connecting) {
+        if (counts[idx]++ === 0) seed.disconnect(entry.inputMerger, 0, idx);
+        sourceNode.connect(entry.inputMerger, 0, idx);
+      } else {
+        sourceNode.disconnect(entry.inputMerger, 0, idx);
+        if (--counts[idx] <= 0) {
+          counts[idx] = 0;
+          seed.connect(entry.inputMerger, 0, idx);
         }
       }
     } catch (err) {
