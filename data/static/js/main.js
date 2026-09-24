@@ -1,4 +1,4 @@
-import { AudioEngine } from "./audio-engine.js?v=20260913-bitcrusher-1";
+import { AudioEngine } from "./audio-engine.js?v=20260924-firmware-parity-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 
 const GRID = 20;
@@ -6,6 +6,20 @@ const LINK_BUS_COUNT = 8;
 const SOUNDFONT_DEFAULT_MAX_BANK = 128;
 const audioEngine = new AudioEngine();
 window.audioEngine = audioEngine; // debug: inspect from DevTools console (module scope isn't global)
+
+// Browser-only setting (localStorage, never sent to the device): whether the
+// preview engine downloads samples (Wave Player / SoundFont Player / MDA
+// Piano) on page load. Off = faster start; the skipped downloads can be
+// fetched later with the blinking "Load Samples" button in the top bar.
+const LOAD_SAMPLES_KEY = "espressynth.loadSamples";
+function readLoadSamplesSetting() {
+  try {
+    return localStorage.getItem(LOAD_SAMPLES_KEY) !== "0";
+  } catch (err) {
+    return true;
+  }
+}
+audioEngine.setSampleLoadingEnabled(readLoadSamplesSetting());
 
 const menuItems = document.querySelectorAll(".menu-item:not(.menu-item-static)");
 
@@ -356,6 +370,18 @@ bleScanButton.addEventListener("click", async () => {
 
 
 
+const loadSamplesBtn = document.getElementById("loadSamplesBtn");
+function updateLoadSamplesButton(pendingCount = audioEngine.getDeferredSampleCount()) {
+  loadSamplesBtn.hidden = pendingCount === 0;
+  loadSamplesBtn.textContent = pendingCount > 1 ? `Load Samples (${pendingCount})` : "Load Samples";
+}
+audioEngine.onDeferredSamplesChange = updateLoadSamplesButton;
+loadSamplesBtn.addEventListener("click", () => {
+  audioEngine.loadDeferredSamples();
+  updateLoadSamplesButton();
+});
+updateLoadSamplesButton();
+
 const audioStartBtn = document.getElementById("audioStartBtn");
 audioStartBtn.addEventListener("click", () => {
 
@@ -591,6 +617,7 @@ function updateNetworkSummary() {
 
 async function openSettings() {
   settingsOverlay.classList.remove("hidden");
+  loadSamplesSetting.checked = audioEngine.isSampleLoadingEnabled();
   try {
     const res = await fetch("/api/settings/network");
     const data = await res.json();
@@ -636,6 +663,8 @@ async function openSettings() {
   }
   deviceNameInput.focus();
 }
+
+const loadSamplesSetting = document.getElementById("loadSamplesSetting");
 
 function closeSettings() {
   settingsOverlay.classList.add("hidden");
@@ -781,6 +810,15 @@ wifiScanButton.addEventListener("click", async () => {
 
 document.getElementById("settingsSave").addEventListener("click", () => {
   sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
+  const loadSamples = loadSamplesSetting.checked;
+  try {
+    localStorage.setItem(LOAD_SAMPLES_KEY, loadSamples ? "1" : "0");
+  } catch (err) {
+    // Private mode / blocked storage: the choice just lasts for this page.
+  }
+  audioEngine.setSampleLoadingEnabled(loadSamples);
+  // Switching it back on fetches whatever was skipped so far right away.
+  if (loadSamples) audioEngine.loadDeferredSamples();
   closeSettings();
   showToast("Saved");
 });
@@ -13494,6 +13532,7 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
     audioEngine.setParam(pendingFilterId, "resonanceMinQ", state.resonanceMinQ);
     audioEngine.setParam(pendingFilterId, "resonanceMaxQ", state.resonanceMaxQ);
     audioEngine.setParam(pendingFilterId, "resonanceCurve", state.resonanceCurve);
+    audioEngine.setParam(pendingFilterId, "coeffStride", state.coeffStride);
     updateFilterVisual(pendingFilterId);
     sendLiveParamUpdate(pendingFilterId, {
       cutoffMinHz: state.cutoffMinHz,

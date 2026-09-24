@@ -319,6 +319,42 @@ button:hover {
   opacity: 0.35;
 }
 
+/* Shown only while sample players wait for their files (sample loading off
+   in Settings) - blinks until clicked. */
+.load-samples-btn {
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--accent);
+  white-space: nowrap;
+  animation: load-samples-blink 1.2s ease-in-out infinite;
+}
+
+.load-samples-btn:hover {
+  animation: none;
+  background: var(--accent);
+  color: var(--bg, #0f172a);
+}
+
+.load-samples-btn[hidden] {
+  display: none;
+}
+
+@keyframes load-samples-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-samples-btn {
+    animation: none;
+  }
+}
+
 .midi-activity {
   width: 10px;
   height: 10px;
@@ -3954,6 +3990,14 @@ body.show-oscilloscopes .oscilloscope-only-body {
 .modal-field-readout {
   color: var(--text);
   font-size: 0.9rem;
+}
+
+.modal-field-hint {
+  margin: 0.25rem 0 0;
+  color: var(--muted, var(--text));
+  opacity: 0.75;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .modal-field input:disabled,
