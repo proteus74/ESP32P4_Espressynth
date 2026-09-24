@@ -2251,6 +2251,156 @@ body.show-oscilloscopes .oscilloscope-only-body {
   padding: 0.6rem 0.7rem;
 }
 
+/* LFO Wavetable mode: mini preview + Edit button (only while the WT wave
+   button is active), and the dimmed Morph row outside that mode. */
+
+.lfo-wavetable-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lfo-wavetable-panel.hidden {
+  display: none;
+}
+
+.lfo-wavetable-preview {
+  display: block;
+  width: 120px;
+  height: 33px;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.3rem;
+  cursor: pointer;
+}
+
+.lfo-wavetable-edit {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.lfo-morph-inactive {
+  opacity: 0.45;
+}
+
+/* Wavetable editor popup (wavetable-editor.js) */
+
+.wavetable-editor {
+  width: min(960px, 96vw);
+  max-width: 96vw;
+  max-height: 92vh;
+}
+
+.wavetable-slot-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.wavetable-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.2rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 0.35rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.wavetable-slot canvas {
+  display: block;
+  width: 56px;
+  height: 28px;
+}
+
+.wavetable-slot.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.45);
+}
+
+.wavetable-slot-action {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: none;
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 0.35rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.wavetable-slot-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.wavetable-slot-count {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.wavetable-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.wavetable-preset-buttons {
+  margin-bottom: 0;
+}
+
+.wavetable-mode-toggle {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.wavetable-mode-toggle button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wavetable-snap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.wavetable-canvas,
+.wavetable-harmonics-canvas {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: 0.4rem;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.wavetable-canvas {
+  aspect-ratio: 1024 / 320;
+}
+
+.wavetable-harmonics-canvas {
+  aspect-ratio: 1024 / 160;
+  margin-top: 0.5rem;
+  cursor: ns-resize;
+}
+
+.wavetable-harmonics-canvas.hidden {
+  display: none;
+}
+
 /* VU-Meter-Widget */
 
 .vu-meter-body {
