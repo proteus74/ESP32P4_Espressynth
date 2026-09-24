@@ -13494,6 +13494,7 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
     audioEngine.setParam(pendingFilterId, "resonanceMinQ", state.resonanceMinQ);
     audioEngine.setParam(pendingFilterId, "resonanceMaxQ", state.resonanceMaxQ);
     audioEngine.setParam(pendingFilterId, "resonanceCurve", state.resonanceCurve);
+    audioEngine.setParam(pendingFilterId, "coeffStride", state.coeffStride);
     updateFilterVisual(pendingFilterId);
     sendLiveParamUpdate(pendingFilterId, {
       cutoffMinHz: state.cutoffMinHz,
