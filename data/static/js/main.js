@@ -1,7 +1,7 @@
 import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-2";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
-import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-3";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-4";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -11882,15 +11882,17 @@ function postLfoWavetableLive(widgetId, tables) {
 function setLfoWavetableMode(widgetId, on) {
   const state = lfoStates.get(widgetId);
   if (!state || state.wavetable === on) return;
-  const firstUse = on && !state.wavetables;
   state.wavetable = on;
   if (on) audioEngine.setParam(widgetId, "wavetables", lfoWavetableBank(state));
   audioEngine.setParam(widgetId, "wavetable", on);
   updateLfoWaveButtons(widgetId);
   sendLiveParamUpdate(widgetId, { wavetable: on });
-  // The firmware only gets the table bank itself with the preset (far too
-  // large for a live param frame) - the first switch-on has to ship it.
-  if (firstUse) savePresetNow();
+  // The device may not have this LFO's bank yet (preset saved without
+  // Wavetable mode) - hand it over live via /api/wavetable instead of
+  // saving the preset, which would rebuild the whole graph. Until it lands
+  // (a few ms) the device keeps playing the classic waveform. The bank
+  // becomes permanent with the next regular preset save.
+  if (on) postLfoWavetableLive(widgetId, lfoWavetableBank(state));
 }
 
 function setLfoMorph(widgetId, volts) {
@@ -11928,8 +11930,12 @@ function openLfoWavetableEditor(widgetId) {
       // replaced it in state).
       preview(original, false);
       pushHistorySnapshot();
-      preview(tables, false);
-      savePresetNow();
+      // No preset save here (a save rebuilds the whole graph on the device
+      // and takes too long): the device already plays the edited bank via
+      // the live path - this final post just makes sure it has the very
+      // last state. It is written to flash with the next regular preset
+      // save (serializePreset() includes state.wavetables).
+      preview(tables, true);
     },
   });
 }

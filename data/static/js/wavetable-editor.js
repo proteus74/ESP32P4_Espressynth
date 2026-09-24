@@ -5,9 +5,8 @@
 //   onPreview(tables) - after every edit and, throttled, while a stroke is
 //                       still being drawn (live audition: browser engine and
 //                       the device's running graph, no preset save),
-//   onApply(tables)   - "Apply": the caller persists it (preset save ->
-//                       firmware rebuild, the bank is too large for a live
-//                       WebSocket param frame),
+//   onApply(tables)   - "Apply": the caller keeps the bank (it is written
+//                       to flash with the next regular preset save),
 //   onCancel()        - "Cancel"/Escape: the caller restores its own bank.
 import {
   WAVETABLE_SIZE,
