@@ -1,0 +1,14 @@
+<h2>What it's for</h2>
+<p>Tracks the volume/loudness of an audio signal over time and turns it into a CV — roughly the
+opposite direction of an ADSR (which shapes a sound): this instead reads a sound's natural dynamics
+and turns them into a controllable modulation source. Classic use: follow a drum loop or vocal and
+use the result to drive a filter for an auto-wah, or to duck another sound.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to follow.</li>
+<li><span class="port-label">Attack</span> — how quickly it reacts when the signal gets louder.</li>
+<li><span class="port-label">Release</span> — how quickly it falls back down when the signal gets quieter.</li>
+<li><span class="port-label">PreGain</span> — boosts the input before tracking, for quiet sources.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the tracked loudness as CV, patch it into a filter cutoff, gain, or anywhere else you want it to react to the input's dynamics.</p>

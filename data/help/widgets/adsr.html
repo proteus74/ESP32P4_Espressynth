@@ -1,0 +1,15 @@
+<h2>What it's for</h2>
+<p>The classic Attack/Decay/Sustain/Release envelope generator. It turns a simple on/off Gate (a
+held key) into a shaped rise-and-fall CV curve, which is what actually gives a note its shape — a
+pluck, a swell, a pad, a stab.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Gate</span> — high while the note is held, low when released. Patch this from Midi-In's Gate.</li>
+<li><span class="port-label">Velocity</span> — can scale how strongly the envelope responds to how hard the note was played.</li>
+<li><span class="port-label">Attack</span> — how long it takes to rise to full level when the gate turns on.</li>
+<li><span class="port-label">Decay</span> — how long it takes to fall from the peak down to the sustain level.</li>
+<li><span class="port-label">Sustain</span> — the level it holds at while the key stays down.</li>
+<li><span class="port-label">Release</span> — how long it takes to fade to zero after the key is let go.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the shaped envelope CV. Patch it into an oscillator's Amplitude, a filter's Cutoff, a Gain/VCA, or anywhere you want a note-shaped rise and fall.</p>

@@ -1,0 +1,14 @@
+<h2>What it's for</h2>
+<p>An 8-track step sequencer for rhythm — a classic drum-machine-style grid where each of the eight
+tracks fires its own trigger, so you can pattern out kick, snare, hats, and more, each driving its
+own drum or percussion sound.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Clock</span> — advances the pattern one step per pulse (patch from a Clock widget, or fall back to Rate).</li>
+<li><span class="port-label">Gate</span> — starts/stops the whole sequencer.</li>
+<li><span class="port-label">Pattern</span> — selects which saved pattern is currently playing.</li>
+<li><span class="port-label">Rate</span> — the built-in fallback clock speed when Clock is unpatched.</li>
+<li><span class="port-label">Switch @ End</span> — automatically jumps to another pattern once the current one finishes, for building song-style arrangements.</li>
+</ul>
+<h2>Outputs</h2>
+<p>For each of the eight tracks: <span class="port-label">T1–T8</span> (a trigger pulse when that track's step fires — patch into a drum voice's Gate) and <span class="port-label">V1–V8</span> (that step's velocity as CV, for hit-to-hit dynamics).</p>

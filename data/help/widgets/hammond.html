@@ -1,0 +1,16 @@
+<h2>What it's for</h2>
+<p>A tonewheel organ voice, modeled after the classic Hammond drawbar organ. Instead of one
+waveform, nine "drawbars" each add a different harmonic (like the nine drawbars on a real
+Hammond), so you can dial in your own organ registration by ear.</p>
+<h2>Key inputs</h2>
+<ul>
+<li><span class="port-label">Pitch / Tune</span> — the note to play and a tuning offset.</li>
+<li><span class="port-label">Amplitude</span> — overall loudness, typically patched from Velocity.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+<li><span class="port-label">16′, 5⅓′, 8′, 4′, 2⅔′, 2′, 1⅗′, 1⅓′, 1′</span> — the nine drawbars, named by the pipe-organ foot-length convention. Each is its own CV input, so you can patch an LFO or envelope to one drawbar to make the tone evolve, or just set them by hand for a classic registration (e.g. 888000000 is a popular starting point).</li>
+</ul>
+<p>Unlike most instrument widgets, Hammond has no Gate or Waveform input — the tonewheels spin
+continuously, and note on/off is shaped entirely by the Amplitude CV and whatever ADSR/Gain you
+patch downstream.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the organ's audio signal.</p>
