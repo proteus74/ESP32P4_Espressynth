@@ -1,6 +1,7 @@
 
 
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
+import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
 
 function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
@@ -84,9 +85,20 @@ function setOscWaveType(ctx, osc, waveType, phaseCycles = 0) {
 }
 
 // True while an LFO is a linear wave in One Shot: then it is not an
-// oscillator waveform but a held/one-time ramp (applyLfoLinear).
+// oscillator waveform but a held/one-time ramp (applyLfoLinear). Wavetable
+// mode replaces the waveform entirely, so it never counts as linear.
 function lfoLinearHold(entry) {
-  return isLinearWave(entry.lfoWaveType) && entry.lfoOneShot === true;
+  return !entry.lfoWavetable && isLinearWave(entry.lfoWaveType) && entry.lfoOneShot === true;
+}
+
+// Raw -1..+1 value an LFO rests at while One Shot is holding (the cycle
+// start, shifted by the phase offset) - the wavetable bank at the current
+// morph position in Wavetable mode, the classic waveform otherwise.
+function lfoHeldRaw(entry) {
+  if (entry.lfoWavetable) {
+    return sampleBank(entry.wtTables, (entry.lfoPhase ?? 0) / 360, (entry.wtMorph ?? 0) / 10);
+  }
+  return lfoWaveValueAtPhase(entry.lfoWaveType, entry.lfoPhase ?? 0);
 }
 
 // Oscillator "linear-up"/"linear-down": one ramp per note (gate), then hold.
@@ -2898,6 +2910,11 @@ export class AudioEngine {
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
         const oneShot = params.oneShot === true;
+        const wavetable = params.wavetable === true;
+        const wtTables = Array.isArray(params.wavetables) && params.wavetables.length > 0
+          ? params.wavetables.map((t) => Float32Array.from(t))
+          : createDefaultBank();
+        const wtMorph = clampRange(Number(params.morph ?? 0) || 0, 0, CV_MAX_VOLTS);
         const lfoOsc = ctx.createOscillator();
         setOscWaveType(ctx, lfoOsc, waveType, phase / 360);
         lfoOsc.frequency.value = rate;
@@ -2905,7 +2922,9 @@ export class AudioEngine {
         lfoGain.gain.value = oneShot ? 0 : halfSwing;
         const centerOffset = ctx.createConstantSource();
         centerOffset.offset.value = oneShot
-          ? center + lfoWaveValueAtPhase(waveType, phase) * halfSwing
+          ? center + (wavetable
+            ? sampleBank(wtTables, phase / 360, wtMorph / 10)
+            : lfoWaveValueAtPhase(waveType, phase)) * halfSwing
           : center;
         centerOffset.start();
         
@@ -2975,7 +2994,17 @@ export class AudioEngine {
           lfoOneShot: oneShot,
           lfoOneShotRunning: false,
           lfoOneShotTimer: null,
+          // Wavetable mode (see _setLfoWavetable): wtSource replaces lfoOsc
+          // as the raw signal feeding lfoGain.
+          lfoWavetable: false,
+          wtTables,
+          wtMorph,
+          wtSource: null,
+          wtSink: null,
+          wtCore: null,
+          wtPending: false,
         };
+        if (wavetable) this._setLfoWavetable(lfoEntry, true);
         if (lfoLinearHold(lfoEntry)) {
           // One-shot starts held at the ramp start until the first reset.
           lfoEntry.lfoLinearRunning = false;
@@ -4888,6 +4917,7 @@ export class AudioEngine {
         entry.lfoOsc.disconnect();
       }
       if (entry.lfoOneShotTimer) clearTimeout(entry.lfoOneShotTimer);
+      if (entry.type === "lfo") this._destroyLfoWavetableSource(entry);
       if (entry.lfoGain) entry.lfoGain.disconnect();
       if (entry.centerOffset) {
         entry.centerOffset.stop();
@@ -5159,13 +5189,144 @@ export class AudioEngine {
     }
     const halfSwing = entry.lfoAmplitude / 2;
     const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
-    const heldValue = center + lfoWaveValueAtPhase(entry.lfoWaveType, entry.lfoPhase ?? 0) * halfSwing;
+    const heldValue = center + lfoHeldRaw(entry) * halfSwing;
     const now = this.ctx.currentTime;
     entry.lfoGain.gain.cancelScheduledValues(now);
     entry.centerOffset.offset.cancelScheduledValues(now);
     entry.lfoGain.gain.setValueAtTime(running ? halfSwing : 0, now);
     entry.centerOffset.offset.setValueAtTime(running ? center : heldValue, now);
     entry.lfoOneShotRunning = running;
+  }
+
+  // --- LFO Wavetable mode ------------------------------------------------
+  //
+  // The wavetable source replaces lfoOsc as the raw -1..+1 signal into
+  // lfoGain; everything downstream (amplitude/offset, One Shot hold via
+  // _setLfoRunning, Global via rawOut/sharedGate) is untouched. Preferred
+  // source is the "wavetable-lfo" AudioWorklet (morph is a real AudioParam
+  // there). AudioWorklet only exists in secure contexts - the device UI is
+  // normally served over plain http:// from a LAN address - so a
+  // ScriptProcessor running the same WavetableLfoCore is the fallback.
+
+  _loadWavetableWorklet() {
+    const ctx = this.ensureContext();
+    if (!ctx.audioWorklet || typeof AudioWorkletNode === "undefined") return null;
+    if (!this._wavetableWorkletPromise) {
+      this._wavetableWorkletPromise = ctx.audioWorklet
+        .addModule(new URL("./wavetable-worklet.js", import.meta.url))
+        .then(() => true)
+        .catch(() => false);
+    }
+    return this._wavetableWorkletPromise;
+  }
+
+  _setLfoWavetable(entry, enabled) {
+    if (!entry || entry.type !== "lfo" || entry.lfoWavetable === enabled) return;
+    entry.lfoWavetable = enabled;
+    if (enabled) {
+      try {
+        entry.lfoOsc.disconnect(entry.lfoGain);
+      } catch (err) {
+      }
+      if (entry.wtSource) entry.wtSource.connect(entry.lfoGain);
+      else this._createLfoWavetableSource(entry);
+    } else {
+      if (entry.wtSource) {
+        try {
+          entry.wtSource.disconnect(entry.lfoGain);
+        } catch (err) {
+        }
+      }
+      entry.lfoOsc.connect(entry.lfoGain);
+    }
+  }
+
+  _createLfoWavetableSource(entry) {
+    const ctx = this.ensureContext();
+    if (entry.wtSource || entry.wtPending) return;
+    const attach = (source) => {
+      entry.wtSource = source;
+      this._syncLfoWavetableParams(entry);
+      this._sendLfoWavetableTables(entry);
+      if (entry.lfoWavetable) source.connect(entry.lfoGain);
+    };
+    const buildFallback = () => {
+      const core = new WavetableLfoCore(ctx.sampleRate);
+      core.setTables(entry.wtTables);
+      const processor = ctx.createScriptProcessor(256, 1, 1);
+      processor.onaudioprocess = (event) => {
+        core.process(event.outputBuffer.getChannelData(0), entry.lfoRate ?? 0, entry.wtMorph ?? 0, (entry.lfoPhase ?? 0) / 360);
+      };
+      // A ScriptProcessor only runs while pulled towards the destination -
+      // an LFO feeding nothing but AudioParams would otherwise stall.
+      const sink = ctx.createGain();
+      sink.gain.value = 0;
+      processor.connect(sink);
+      sink.connect(ctx.destination);
+      entry.wtCore = core;
+      entry.wtSink = sink;
+      attach(processor);
+    };
+    const workletReady = this._loadWavetableWorklet();
+    if (!workletReady) {
+      buildFallback();
+      return;
+    }
+    entry.wtPending = true;
+    workletReady.then((ok) => {
+      entry.wtPending = false;
+      if (entry.wtSource || entry.removed) return;
+      if (!ok) {
+        buildFallback();
+        return;
+      }
+      try {
+        attach(new AudioWorkletNode(ctx, "wavetable-lfo", {
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        }));
+      } catch (err) {
+        buildFallback();
+      }
+    });
+  }
+
+  _destroyLfoWavetableSource(entry) {
+    entry.removed = true;
+    if (entry.wtSource) {
+      if (entry.wtSource.port) entry.wtSource.port.onmessage = null;
+      if ("onaudioprocess" in entry.wtSource) entry.wtSource.onaudioprocess = null;
+      try {
+        entry.wtSource.disconnect();
+      } catch (err) {
+      }
+    }
+    if (entry.wtSink) entry.wtSink.disconnect();
+    entry.wtSource = null;
+    entry.wtSink = null;
+    entry.wtCore = null;
+  }
+
+  _syncLfoWavetableParams(entry) {
+    const source = entry && entry.wtSource;
+    if (!source || !source.parameters || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    source.parameters.get("frequency").setTargetAtTime(entry.lfoRate ?? 0, now, 0.01);
+    source.parameters.get("morph").setTargetAtTime(entry.wtMorph ?? 0, now, 0.01);
+    const phase = source.parameters.get("phaseOffset");
+    phase.cancelScheduledValues(now);
+    phase.setValueAtTime((entry.lfoPhase ?? 0) / 360, now);
+  }
+
+  _sendLfoWavetableTables(entry) {
+    if (entry.wtCore) entry.wtCore.setTables(entry.wtTables);
+    else if (entry.wtSource && entry.wtSource.port) entry.wtSource.port.postMessage({ type: "tables", tables: entry.wtTables });
+  }
+
+  _resetLfoWavetablePhase(entry) {
+    if (entry.wtCore) entry.wtCore.reset();
+    else if (entry.wtSource && entry.wtSource.port) entry.wtSource.port.postMessage({ type: "reset" });
   }
 
   _scheduleLfoOneShotStop(entry) {
@@ -5199,7 +5360,10 @@ export class AudioEngine {
       const newOsc = this.ctx.createOscillator();
       setOscWaveType(this.ctx, newOsc, entry.lfoWaveType, (entry.lfoPhase ?? 0) / 360);
       newOsc.frequency.value = oldOsc.frequency.value;
-      newOsc.connect(entry.lfoGain);
+      // In Wavetable mode the wavetable source (not the oscillator) drives
+      // lfoGain - restart its phase instead.
+      if (!entry.lfoWavetable) newOsc.connect(entry.lfoGain);
+      this._resetLfoWavetablePhase(entry);
       newOsc.start();
       try {
         oldOsc.disconnect();
@@ -5605,11 +5769,23 @@ export class AudioEngine {
           const rate = clampRange(Number(value) || 0, 0, entry.lfoMaxRate ?? 50);
           entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
+          this._syncLfoWavetableParams(entry);
         } else if (paramName === "maxRate") {
           entry.lfoMaxRate = clampRange(Number(value) || 0, 0, LFO_MAX_RATE_HZ);
           const rate = clampRange(Number(entry.lfoRate) || 0, 0, entry.lfoMaxRate);
           entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
+          this._syncLfoWavetableParams(entry);
+        } else if (paramName === "wavetable") {
+          this._setLfoWavetable(entry, value === true || value === 1);
+        } else if (paramName === "wavetables") {
+          if (Array.isArray(value) && value.length > 0) {
+            entry.wtTables = value.map((t) => Float32Array.from(t));
+            this._sendLfoWavetableTables(entry);
+          }
+        } else if (paramName === "morph") {
+          entry.wtMorph = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          if (entry.wtSource && entry.wtSource.parameters) applyRampValue(entry.wtSource.parameters.get("morph"), entry.wtMorph);
         } else if (paramName === "amplitude") {
           entry.lfoAmplitude = value;
         } else if (paramName === "phase") {
@@ -5617,6 +5793,7 @@ export class AudioEngine {
           // offset: swapping the wave keeps the oscillator's running phase.
           entry.lfoPhase = value;
           setOscWaveType(this.ctx, entry.lfoOsc, entry.lfoWaveType, (Number(value) || 0) / 360);
+          this._syncLfoWavetableParams(entry);
         } else if (paramName === "zeroPointFixed") {
           entry.lfoZeroPointFixed = value === true || value === 1;
         } else if (paramName === "zeroPoint") {
@@ -5652,12 +5829,13 @@ export class AudioEngine {
             entry.lfoLinearRunning = false;
           }
         }
-        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType") {
+        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType" ||
+            paramName === "wavetable" || paramName === "wavetables" || paramName === "morph") {
           const halfSwing = entry.lfoAmplitude / 2;
           const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
           if (entry.lfoOneShot && !entry.lfoOneShotRunning) {
             applyRampValue(entry.lfoGain.gain, 0);
-            applyRampValue(entry.centerOffset.offset, center + lfoWaveValueAtPhase(entry.lfoWaveType, entry.lfoPhase ?? 0) * halfSwing);
+            applyRampValue(entry.centerOffset.offset, center + lfoHeldRaw(entry) * halfSwing);
           } else {
             applyRampValue(entry.lfoGain.gain, halfSwing);
             applyRampValue(entry.centerOffset.offset, center);

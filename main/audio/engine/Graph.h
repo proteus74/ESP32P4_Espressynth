@@ -2058,6 +2058,17 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].lfo.oneShot = oneShot;
             }
         }
+        else if (slot.type == NodeType::Lfo && strcmp(key, "wavetable") == 0 && cJSON_IsBool(item))
+        {
+            // Only switches the mode - the table bank itself arrives with the
+            // preset (too large for a live WS frame). Without a bank the LFO
+            // keeps rendering its classic waveform (see nodes/LfoNode.h).
+            const bool on = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                instances[slot.instanceBase + v].lfo.wavetable = on;
+            }
+        }
         else if (slot.type == NodeType::Lfo && strcmp(key, "global") == 0 && cJSON_IsBool(item))
         {
             const bool global = cJSON_IsTrue(item);
@@ -2326,6 +2337,9 @@ inline void Graph::destroy()
             break;
         case NodeType::DxEnvelope:
             nodes::dxenvelope::destroy(inst);
+            break;
+        case NodeType::Lfo:
+            nodes::lfo::destroy(inst);
             break;
         case NodeType::StepArpeggiator:
             nodes::steparp::destroy(inst);

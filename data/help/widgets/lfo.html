@@ -12,6 +12,22 @@ movement.</p>
 <li><span class="port-label">One Shot</span> — makes the LFO run through its shape once instead of looping.</li>
 <li><span class="port-label">Global</span> — lets several LFO widgets share one free-running clock instead of each running independently.</li>
 <li><span class="port-label">Offset</span> — shifts the wave up or down so it isn't centered on zero.</li>
+<li><span class="port-label">Morph</span> — only in Wavetable mode: picks the position in the wavetable (0&nbsp;V = first slot, 10&nbsp;V = last slot, in between the neighbouring slots are crossfaded). Patch another LFO or an envelope in to sweep through the table automatically.</li>
 </ul>
+<h2>Wavetable mode</h2>
+<p>The last waveform button (<strong>WT</strong>) switches the LFO from its fixed shapes to a
+wavetable: a row of up to 16 self-drawn single-cycle waveforms that the <span class="port-label">Morph</span>
+control blends between. Rate, Amplitude, Phase, Offset, Reset, One&nbsp;Shot and Global keep working
+exactly as with the other shapes. The small preview shows the waveform at the current morph
+position; click it or <strong>Edit</strong> to open the editor:</p>
+<ul>
+<li><strong>Slots</strong> — the bar at the top holds the waveforms in morph order. <strong>+</strong> adds a copy of the selected slot, <strong>−</strong> removes it.</li>
+<li><strong>Presets</strong> — Sine, Saw, Square and Triangle fill the selected slot as a starting point.</li>
+<li><strong>Freehand</strong> — draw the waveform directly with the mouse, pen or finger.</li>
+<li><strong>Harmonics</strong> — build the slot additively: each bar is the level of one harmonic (above the line positive, below inverted).</li>
+<li><strong>Snap to Zero</strong> — cuts the waveform at the zero crossings nearest to its start and end and stretches it back to full length, so the loop point doesn't click. While switched on it is re-applied after every edit.</li>
+</ul>
+<p>Edits are audible right away in the browser preview; <strong>Apply</strong> saves the preset so the
+device picks up the new table (the table is sent with the preset, not as a live parameter).</p>
 <h2>Output</h2>
 <p><span class="port-label">Out</span> — the wobbling CV signal. Patch it wherever you want that slow movement.</p>
