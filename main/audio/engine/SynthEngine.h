@@ -435,7 +435,7 @@ private:
                         LfoState &lfo = graph->instances[slot.instanceBase + v].lfo;
                         wavetable::Bank *old = lfo.wavetableBank;
                         lfo.wavetableBank = wavetable::acquire(msg.bank);
-                        // Last reference to a replaced bank frees ~64KB of
+                        // Last reference to a replaced bank frees ~8KB of
                         // PSRAM right here on the render task - a single
                         // heap_caps_free(), and only at editor-stroke rate.
                         wavetable::release(old);

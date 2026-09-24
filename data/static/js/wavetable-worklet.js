@@ -11,7 +11,7 @@
 // Messages (port.postMessage):
 //   { type: "tables", tables: Float32Array[] }  - replace the bank
 //   { type: "reset" }                           - restart at phase 0
-import { WavetableLfoCore } from "./wavetable-core.js";
+import { WavetableLfoCore } from "./wavetable-core.js?v=20260924-wavetable-7";
 
 class WavetableLfoProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {

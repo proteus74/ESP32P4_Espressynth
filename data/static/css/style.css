@@ -2408,6 +2408,17 @@ body.show-oscilloscopes .oscilloscope-only-body {
   cursor: pointer;
 }
 
+.wavetable-duration {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.wavetable-duration input {
+  width: 5.5rem;
+}
+
 .wavetable-canvas,
 .wavetable-harmonics-canvas {
   display: block;

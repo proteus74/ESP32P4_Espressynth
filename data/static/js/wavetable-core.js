@@ -9,7 +9,9 @@
 // morph/sample interpolation, preset shapes and the base64 int16 storage
 // format) so the preview and the hardware sound the same.
 
-export const WAVETABLE_SIZE = 1024;
+// 128 steps per table (same as Wavetable.h's kTableSize): read with linear
+// interpolation between neighbouring steps, so slow cycles glide smoothly.
+export const WAVETABLE_SIZE = 128;
 export const WAVETABLE_MAX_TABLES = 16;
 export const WAVETABLE_MIN_TABLES = 1;
 export const WAVETABLE_DEFAULT_TABLES = 4;

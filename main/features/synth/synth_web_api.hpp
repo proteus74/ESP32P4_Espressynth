@@ -878,8 +878,8 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
 // SynthEngine::postLiveWavetable), nothing is written to flash - the preset
 // save on "Apply" makes it permanent, "Cancel" posts the original bank back.
 esp_err_t wavetable_live_handler(httpd_req_t *req) {
-    // 16 tables x ~2.7KB base64 + JSON overhead.
-    constexpr size_t kMaxWavetableBodyLen = 64 * 1024;
+    // 16 tables x ~350 chars base64 + JSON overhead - generous headroom.
+    constexpr size_t kMaxWavetableBodyLen = 16 * 1024;
     if (req->content_len == 0 || req->content_len > kMaxWavetableBodyLen) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid wavetable size");
         return ESP_FAIL;

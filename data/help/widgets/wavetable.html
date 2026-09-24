@@ -1,6 +1,8 @@
 <h2>What it's for</h2>
 <p>A modulator like the LFO, but its waveform is a <strong>wavetable</strong>: a row of up to 16
-self-drawn single-cycle shapes that the <span class="port-label">Morph</span> control blends between.
+self-drawn single-cycle shapes of 128 steps each that the <span class="port-label">Morph</span> control
+blends between. Between the steps the value is interpolated, so even a very slow cycle glides smoothly
+instead of stepping.
 Use it for movements no fixed LFO shape can give you — stepped patterns, lopsided swells, or shapes
 that slowly change character while they play.</p>
 <h2>Inputs</h2>
@@ -20,6 +22,7 @@ the cycle it currently is. Click it or <strong>Edit</strong> to open the editor:
 <li><strong>Presets</strong> — Sine, Saw, Square and Triangle fill the selected slot as a starting point.</li>
 <li><strong>Freehand</strong> — draw the waveform directly with the mouse, pen or finger.</li>
 <li><strong>Harmonics</strong> — build the slot additively: each bar is the level of one harmonic (above the line positive, below inverted).</li>
+<li><strong>Cycle</strong> — how long one pass through the 128 steps takes, in seconds (the time axis under the drawing shows it). This sets the widget's Rate (Rate = 1 / Cycle); turning Rate down later simply stretches the same shape and interpolates between the steps.</li>
 <li><strong>Snap to Zero</strong> — cuts the waveform at the zero crossings nearest to its start and end and stretches it back to full length, so the loop point doesn't click. While switched on it is re-applied after every edit.</li>
 </ul>
 <p>Everything you draw is audible right away — in the browser preview and on the device — even

@@ -1,7 +1,7 @@
 
 
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
-import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
+import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
 
 function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
@@ -5218,7 +5218,7 @@ export class AudioEngine {
     if (!ctx.audioWorklet || typeof AudioWorkletNode === "undefined") return null;
     if (!this._wavetableWorkletPromise) {
       this._wavetableWorkletPromise = ctx.audioWorklet
-        .addModule(new URL("./wavetable-worklet.js", import.meta.url))
+        .addModule(new URL("./wavetable-worklet.js?v=20260924-wavetable-7", import.meta.url))
         .then(() => true)
         .catch(() => false);
     }

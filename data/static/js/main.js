@@ -1,7 +1,7 @@
-import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-6";
+import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-7";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
-import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
-import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-6";
+import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-7";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -11953,6 +11953,16 @@ function openLfoWavetableEditor(widgetId) {
   openWavetableEditor({
     title: `Wavetable Editor – ${label}`,
     tables: original,
+    // One pass through the table <-> the widget's Rate (Hz = 1 / seconds).
+    cycleSeconds: state.rate > 0 ? 1 / state.rate : 1,
+    onCycleSeconds: (seconds) => {
+      const hz = 1 / seconds;
+      // A duration shorter than the current max rate allows raises the max
+      // rate (up to the widget's hard limit) instead of silently clamping.
+      if (hz > state.maxRate) setLfoMaxRate(widgetId, Math.min(LFO_MAX_RATE_HZ, hz));
+      setLfoManualRate(widgetId, hz);
+      return state.rate > 0 ? 1 / state.rate : seconds;
+    },
     onPreview: preview,
     onCancel: () => preview(original),
     onApply: (tables) => {
