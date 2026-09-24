@@ -64,21 +64,6 @@
     font-size: 0.95rem;
     line-height: 1.5;
   }
-  /* Short, always-visible primer so "CV in"/"CV out" makes sense before
-     reading the widget-specific text below it. */
-  .help-cv-primer {
-    border: 1px solid var(--card-border);
-    border-left: 3px solid var(--accent);
-    border-radius: 0.5rem;
-    padding: 0.9rem 1.1rem;
-    margin: 0 0 1.5rem;
-    font-size: 0.88rem;
-    line-height: 1.55;
-    color: #cbd5e1;
-  }
-  .help-cv-primer strong {
-    color: var(--text);
-  }
   /* Styling for the injected per-widget fragment (data/help/widgets/<type>.html) */
   .help-body {
     font-size: 0.98rem;
@@ -124,15 +109,6 @@
   <div class="help-card">
     <h1 id="helpTitle">Widget Help</h1>
     <p class="help-type" id="helpType"></p>
-    <div class="help-cv-primer">
-      <strong>What's a CV in / CV out?</strong> CV stands for "control voltage" — the same idea as
-      the patch cables on a modular synth. A <strong>CV output</strong> is a plug that sends out a
-      changing signal (a pitch, a level, an on/off gate, an LFO wave, whatever the widget makes). A
-      <strong>CV input</strong> is a plug that lets an incoming signal control something on the
-      widget instead of you turning a knob by hand. On this ESPRESSYNTH canvas you "patch" these by
-      dragging a line from one widget's output dot to another widget's input dot, just like a cable
-      between two modules on a Eurorack case.
-    </div>
     <div class="help-body" id="helpBody">
       <div class="help-placeholder" id="helpPlaceholder">
         Help content for this widget is not written yet. This page will explain what the

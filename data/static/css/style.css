@@ -3826,21 +3826,6 @@ body.show-oscilloscopes .oscilloscope-only-body {
   overflow-y: auto;
 }
 
-.help-cv-primer {
-  border: 1px solid var(--card-border);
-  border-left: 3px solid var(--accent);
-  border-radius: 0.5rem;
-  padding: 0.85rem 1rem;
-  margin: 0 0 1.25rem;
-  font-size: 0.85rem;
-  line-height: 1.55;
-  color: #cbd5e1;
-}
-
-.help-cv-primer strong {
-  color: var(--text);
-}
-
 .help-placeholder {
   border: 1px dashed var(--card-border);
   border-radius: 0.5rem;
