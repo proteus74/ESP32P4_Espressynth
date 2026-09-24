@@ -1,7 +1,7 @@
 import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-2";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
-import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-1";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-3";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -11792,6 +11792,8 @@ function tickLfo(widgetId) {
     }
   }
 
+  if (state.wavetable) updateLfoWavetablePreview(widgetId);
+
   const value = clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
   propagate(widgetId, "value", roundFloat(value, 4));
 }
@@ -11839,7 +11841,42 @@ function updateLfoWavetablePreview(widgetId) {
   const state = lfoStates.get(widgetId);
   const canvas = document.getElementById(widgetId)?.querySelector('[data-role="lfo-wavetable-preview"]');
   if (!state || !canvas || !state.wavetable) return;
-  drawWavetablePreview(canvas, lfoWavetableBank(state), state.morph);
+  // Playhead: the table read position (cycle position + phase offset), same
+  // value tickLfo() feeds into sampleBank().
+  drawWavetablePreview(canvas, lfoWavetableBank(state), state.morph, wrapPhase(state.cyclePos + state.phase / 360));
+}
+
+// Live audition of editor changes on the device: POST the whole bank to
+// /api/wavetable (swapped into the running graph, no preset save / graph
+// rebuild). At most one request in flight; edits arriving meanwhile only
+// keep the newest bank, sent as soon as the previous request returns.
+const lfoWavetableLiveSend = new Map(); // widgetId -> { inFlight, pending }
+
+function postLfoWavetableLive(widgetId, tables) {
+  let entry = lfoWavetableLiveSend.get(widgetId);
+  if (!entry) {
+    entry = { inFlight: false, pending: null };
+    lfoWavetableLiveSend.set(widgetId, entry);
+  }
+  entry.pending = tables;
+  if (entry.inFlight) return;
+  const sendNext = () => {
+    const next = entry.pending;
+    entry.pending = null;
+    if (!next) {
+      entry.inFlight = false;
+      return;
+    }
+    entry.inFlight = true;
+    fetch(`/api/wavetable?widget=${encodeURIComponent(widgetId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wavetables: encodeBank(next) }),
+    })
+      .catch(() => {}) // no device (offline editing) - the browser preview still plays
+      .finally(sendNext);
+  };
+  sendNext();
 }
 
 function setLfoWavetableMode(widgetId, on) {
@@ -11875,10 +11912,11 @@ function openLfoWavetableEditor(widgetId) {
   if (!state) return;
   const original = lfoWavetableBank(state).map((t) => Float32Array.from(t));
   const label = document.getElementById(widgetId)?.querySelector(".widget-instance-label")?.textContent || "LFO";
-  const preview = (tables) => {
+  const preview = (tables, live = true) => {
     state.wavetables = tables;
     audioEngine.setParam(widgetId, "wavetables", tables);
     updateLfoWavetablePreview(widgetId);
+    if (live && state.wavetable) postLfoWavetableLive(widgetId, tables);
   };
   openWavetableEditor({
     title: `Wavetable Editor – ${label}`,
@@ -11888,9 +11926,9 @@ function openLfoWavetableEditor(widgetId) {
     onApply: (tables) => {
       // Undo snapshot of the pre-edit bank (the live previews already
       // replaced it in state).
-      preview(original);
+      preview(original, false);
       pushHistorySnapshot();
-      preview(tables);
+      preview(tables, false);
       savePresetNow();
     },
   });

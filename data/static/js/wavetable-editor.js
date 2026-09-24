@@ -2,8 +2,9 @@
 //
 // openWavetableEditor() works on a private copy of the bank and only hands
 // it back through the callbacks:
-//   onPreview(tables) - after every edit (live audition in the browser
-//                       engine, no firmware round trip),
+//   onPreview(tables) - after every edit and, throttled, while a stroke is
+//                       still being drawn (live audition: browser engine and
+//                       the device's running graph, no preset save),
 //   onApply(tables)   - "Apply": the caller persists it (preset save ->
 //                       firmware rebuild, the bank is too large for a live
 //                       WebSocket param frame),
@@ -46,8 +47,10 @@ function drawTablePath(ctx, w, h, valueAt, steps = WAVETABLE_SIZE) {
   ctx.stroke();
 }
 
-// Mini preview used inside the LFO widget: the currently morphed waveform.
-export function drawWavetablePreview(canvas, tables, morphVolts) {
+// Mini preview used inside the LFO widget: the currently morphed waveform,
+// plus (when cursorPhase is a number, 0..1) a playhead line with a dot on the
+// curve marking where in the cycle the LFO is right now.
+export function drawWavetablePreview(canvas, tables, morphVolts, cursorPhase) {
   if (!canvas || !tables || tables.length === 0) return;
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
@@ -63,6 +66,22 @@ export function drawWavetablePreview(canvas, tables, morphVolts) {
   ctx.lineWidth = 1.5;
   const morph = clamp(Number(morphVolts) || 0, 0, 10) / 10;
   drawTablePath(ctx, w, h, (p) => sampleBank(tables, p, morph), Math.max(64, w));
+  if (typeof cursorPhase === "number" && Number.isFinite(cursorPhase)) {
+    const phase = cursorPhase - Math.floor(cursorPhase);
+    const x = phase * w;
+    const y = h / 2 - sampleBank(tables, phase, morph) * (h / 2 - 2);
+    const cursorColor = cssVar("--cursor-color", "#f472b6");
+    ctx.strokeStyle = cursorColor;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+    ctx.fillStyle = cursorColor;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 // Sine-partial amplitudes of a table (first WAVETABLE_MAX_HARMONICS), used
@@ -283,7 +302,28 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
   function commitEdit(snap = true) {
     if (snap && snapZero) snapTableToZero(bank[slot]);
     render();
+    livePreviewTimer = cancelLivePreview();
     if (onPreview) onPreview(bank.map((t) => Float32Array.from(t)));
+  }
+
+  // While a stroke/bar drag is still in progress the sound follows along too
+  // (throttled, trailing call guaranteed) - Snap to Zero only runs once the
+  // stroke ends (commitEdit), it would otherwise fight the pen.
+  const LIVE_PREVIEW_MS = 60;
+  let livePreviewTimer = null;
+  let livePreviewLast = 0;
+  function cancelLivePreview() {
+    if (livePreviewTimer) clearTimeout(livePreviewTimer);
+    return null;
+  }
+  function livePreview() {
+    if (!onPreview || livePreviewTimer) return;
+    const wait = Math.max(0, LIVE_PREVIEW_MS - (performance.now() - livePreviewLast));
+    livePreviewTimer = setTimeout(() => {
+      livePreviewTimer = null;
+      livePreviewLast = performance.now();
+      onPreview(bank.map((t) => Float32Array.from(t)));
+    }, wait);
   }
 
   function setMode(next) {
@@ -322,6 +362,7 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
     lastValue = value;
     harmonics[slot] = null;
     renderCanvas();
+    livePreview();
   }
   canvas.addEventListener("pointerdown", (event) => {
     if (mode !== "draw") return;
@@ -355,6 +396,7 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
     bank[slot] = createAdditiveTable(amps);
     renderCanvas();
     renderHarmonics();
+    livePreview();
   }
   harmCanvas.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -379,6 +421,7 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
   };
 
   function close(apply) {
+    livePreviewTimer = cancelLivePreview();
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
     activeEditor = null;

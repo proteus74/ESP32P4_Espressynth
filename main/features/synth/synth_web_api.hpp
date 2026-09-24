@@ -872,6 +872,60 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// POST /api/wavetable?widget=<LFO widget id>, body {"wavetables":[...]} (same
+// base64 int16 format as the preset, see Wavetable.h). Live audition for the
+// web wavetable editor: the bank is swapped into the running graph (see
+// SynthEngine::postLiveWavetable), nothing is written to flash - the preset
+// save on "Apply" makes it permanent, "Cancel" posts the original bank back.
+esp_err_t wavetable_live_handler(httpd_req_t *req) {
+    // 16 tables x ~2.7KB base64 + JSON overhead.
+    constexpr size_t kMaxWavetableBodyLen = 64 * 1024;
+    if (req->content_len == 0 || req->content_len > kMaxWavetableBodyLen) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid wavetable size");
+        return ESP_FAIL;
+    }
+    char widget_id[24] = {};
+    if (!extract_query_param(req, "widget", widget_id, sizeof(widget_id)) || widget_id[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing widget");
+        return ESP_FAIL;
+    }
+
+    auto *body = static_cast<char *>(heap_caps_malloc(req->content_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (body == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    size_t received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
+            heap_caps_free(body);
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_ParseWithLength(body, received);
+    heap_caps_free(body);
+    wavetable::Bank *bank =
+        root != nullptr ? wavetable::parse(cJSON_GetObjectItemCaseSensitive(root, "wavetables"), false) : nullptr;
+    cJSON_Delete(root);
+    if (bank == nullptr) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid wavetables");
+        return ESP_FAIL;
+    }
+    // postLiveWavetable() owns the bank reference from here on, even on failure.
+    if (!engine().postLiveWavetable(widget_id, bank)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "wavetable queue full");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"applied\":true}");
+    return ESP_OK;
+}
+
 esp_err_t presets_list_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
 
@@ -1734,6 +1788,11 @@ inline void register_web_routes() {
         .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
         .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &memory_diagnostics_uri);
+
+    static const httpd_uri_t wavetable_live_uri = {
+        .uri = "/api/wavetable", .method = HTTP_POST, .handler = &wavetable_live_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &wavetable_live_uri);
 
     ESP_LOGI(WEB_API_TAG, "Synth web API routes registered");
 }
