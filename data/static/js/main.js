@@ -2062,6 +2062,9 @@ const WAVE_TYPE_LABELS = {
   square: "Square",
   triangle: "Triangle",
   sawtooth: "Sawtooth",
+  "sawtooth-down": "Sawtooth Down",
+  "linear-up": "Linear Up",
+  "linear-down": "Linear Down",
   noise: "Noise",
   "pink-noise": "Pink Noise",
   supersaw: "SuperSaw",
@@ -2078,10 +2081,28 @@ const WAVE_TYPE_BUTTONS = [
     icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 6,50 Q 28,8 50,50 T 94,50"/></svg>`,
   },
   {
+    id: "linear-up",
+    color: "#22c55e",
+    glow: "rgba(34, 197, 94, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 90,16"/></svg>`,
+  },
+  {
+    id: "linear-down",
+    color: "#f59e0b",
+    glow: "rgba(245, 158, 11, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,16 L 90,84"/></svg>`,
+  },
+  {
     id: "sawtooth",
     color: "#3b82f6",
     glow: "rgba(59, 130, 246, 0.55)",
     icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 90,16 L 90,84"/></svg>`,
+  },
+  {
+    id: "sawtooth-down",
+    color: "#0ea5e9",
+    glow: "rgba(14, 165, 233, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,16 L 90,84 L 90,16"/></svg>`,
   },
   {
     id: "square",
@@ -3936,6 +3957,7 @@ function createWidget(type, label, x, y, forcedId) {
       oneShotAccum: 0,
       global: false,
       cyclePos: 0,
+      linearPos: 0,
       lastTick: null,
       timer: null,
       resetPrevByVoice: new Map(),
@@ -11583,6 +11605,8 @@ function lfoWaveValue(waveType, phase) {
       return 4 * Math.abs(phase - Math.floor(phase + 0.5)) - 1;
     case "sawtooth":
       return 2 * (phase - Math.floor(phase)) - 1;
+    case "sawtooth-down":
+      return 1 - 2 * (phase - Math.floor(phase));
     default:
       return Math.sin(phase * Math.PI * 2);
   }
@@ -11610,7 +11634,25 @@ function tickLfo(widgetId) {
   const phaseOffset = state.phase / 360;
 
   let raw;
-  if (state.oneShot && state.oneShotDone) {
+  if (state.waveType === "linear-up" || state.waveType === "linear-down") {
+    // Free-running: repeats like a sawtooth. One Shot: one non-wrapping ramp
+    // from the last reset, then hold at the end value.
+    if (!(state.oneShot && state.oneShotDone)) {
+      state.linearPos += state.rate * dt;
+      if (state.oneShot) {
+        state.linearPos = Math.min(1, state.linearPos);
+        state.oneShotAccum += state.rate * dt;
+        if (state.oneShotAccum >= 1) {
+          state.oneShotDone = true;
+          state.oneShotAccum = 0;
+        }
+      } else {
+        state.linearPos = wrapPhase(state.linearPos);
+      }
+    }
+    const pos = state.oneShot ? clamp(state.linearPos + phaseOffset, 0, 1) : wrapPhase(state.linearPos + phaseOffset);
+    raw = state.waveType === "linear-up" ? 2 * pos - 1 : 1 - 2 * pos;
+  } else if (state.oneShot && state.oneShotDone) {
     
     
     raw = lfoWaveValue(state.waveType, wrapPhase(state.cyclePos + phaseOffset));
@@ -11660,6 +11702,7 @@ function setLfoWaveType(widgetId, waveType) {
   const state = lfoStates.get(widgetId);
   if (!state) return;
   state.waveType = waveType;
+  state.linearPos = 0;
   audioEngine.setParam(widgetId, "waveType", waveType);
   updateLfoWaveButtons(widgetId);
   sendLiveParamUpdate(widgetId, { waveType });
@@ -18509,9 +18552,15 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       if (!state.resetPrevByVoice) state.resetPrevByVoice = new Map();
       const voiceKey = voiceIndex ?? "global";
       const wasAbove = state.resetPrevByVoice.get(voiceKey) === true;
-      if (above && !wasAbove) {
-        audioEngine.resetLfoPhase(widgetId, voiceIndex);
+      // Global: the shared LFO belongs to the whole chord - only the first
+      // note (no other voice's reset already high) restarts it, later notes
+      // just join; matches the firmware's OR-over-all-voices reset edge.
+      const othersAbove = state.global === true &&
+        [...state.resetPrevByVoice].some(([key, high]) => key !== voiceKey && high === true);
+      if (above && !wasAbove && !othersAbove) {
+        audioEngine.resetLfoPhase(widgetId, state.global === true ? 0 : voiceIndex);
         state.cyclePos = 0;
+        state.linearPos = 0;
         state.lastTick = performance.now();
         if (state.oneShot) {
 

@@ -114,6 +114,20 @@ struct LfoState
     bool oneShot = false;
     bool oneShotDone = true;
     float oneShotAccum = 0.0f; // unwrapped phase accumulated since the last reset edge
+    // LinearUp/LinearDown position 0..1: wraps while free-running, runs once
+    // from the last reset edge and holds at 1 in One Shot (phaseGen wraps, so
+    // it can't carry the "finished" state).
+    float linearPos = 0.0f;
+    // Global mode bookkeeping, only meaningful on voice 0 of a multi-voice
+    // widget and written by nodes::lfo::globalUpdate() (Graph::renderBlock):
+    // globalManaged = Graph currently drives this LFO as the shared master
+    // (its own reset input is then ignored, the OR over all voices is used);
+    // globalRunning = at least one voice sounded last block (its rising edge
+    // is the "first note" that (re)starts the shared LFO); globalResetPrev =
+    // previous block's OR of all voices' reset inputs.
+    bool globalManaged = false;
+    bool globalRunning = false;
+    bool globalResetPrev = false;
     // Global/per-voice switch: false (default, old behavior) = each voice
     // renders its own independent phase. true = voice 0 is authoritative, all
     // other voices of this widget simply mirror its already rendered output

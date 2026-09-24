@@ -877,21 +877,20 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
             }
             continue;
         }
-        // A widget-global Lfo (see LfoState::global / NodeRender.h's Lfo
-        // case) must keep its phase advancing even while voice 0 itself has
-        // no active note - every other voice just mirrors voice 0's output,
-        // so letting the usual voice-skip freeze voice 0 on note-off would
-        // silently freeze the shared signal for every still-held voice too.
-        // Mirrors the exact same "is global active" check NodeRender.h's Lfo
-        // case makes for itself.
+        // A widget-global Lfo (see LfoState::global / nodes::lfo::globalUpdate)
+        // is shared by the whole chord: voice 0 is only the technical master
+        // every other voice mirrors, so it must render whenever ANY voice
+        // sounds (not only while its own note is active), and it is
+        // (re)started by the first note - later notes just join.
         bool forceLfoPrimaryActive = false;
         if (w.type == NodeType::Lfo && w.voiced && w.instanceCount > 1)
         {
-            const NodeInstance &primaryInst = instances[w.instanceBase];
-            const bool modeFed = (primaryInst.controlConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0 ||
-                                  (primaryInst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
-            forceLfoPrimaryActive =
-                modeFed ? (noderender::portSample(primaryInst, 2, 0) >= cv::kGateThresholdVolts) : primaryInst.lfo.global;
+            bool anySounding = false;
+            for (uint16_t v = 0; v < w.instanceCount && !anySounding; ++v)
+            {
+                anySounding = voiceStillSounding[v];
+            }
+            forceLfoPrimaryActive = nodes::lfo::globalUpdate(&instances[w.instanceBase], w.instanceCount, anySounding);
         }
         const int64_t widgetRenderStartUs = profileWidget ? esp_timer_get_time() : 0;
         for (uint16_t v = 0; v < w.instanceCount; ++v)
@@ -1641,17 +1640,23 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 NodeInstance &inst = instances[slot.instanceBase + v];
+                // Picking a linear wave starts a fresh ramp (phase 0 / linearPos 0).
                 if (slot.type == NodeType::Oscillator)
                 {
                     inst.osc.wave = wave;
+                    if (isLinearWave(wave))
+                        inst.osc.phaseGen.resetPhase();
                 }
                 else if (slot.type == NodeType::FmOscillator)
                 {
                     inst.fmOsc.wave = wave;
+                    if (isLinearWave(wave))
+                        inst.fmOsc.phaseGen.resetPhase();
                 }
                 else
                 {
                     inst.lfo.wave = wave;
+                    inst.lfo.linearPos = 0.0f;
                 }
             }
         }

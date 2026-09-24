@@ -21,24 +21,28 @@ namespace nodes::oscillator
 
 namespace
 {
-// Oscillator's "waveform" CV port (see PortTables.h): 0-10V split into 5
-// equal bands, in WaveType enum order (Sine/Square/Triangle/Sawtooth/white
-// noise/pink noise) - matches main.js's mapWaveformValue() 1:1. 10V itself
-// must still resolve to pink noise (last band), not fall off the end.
+// Oscillator's "waveform" CV port (see PortTables.h): 0-10V split into 9
+// equal bands, in WaveType enum order (Sine/Linear Up/Linear Down/Square/
+// Triangle/Sawtooth/falling Sawtooth/white noise/pink noise) - matches
+// main.js's mapWaveformValue() 1:1. 10V itself must still resolve to pink
+// noise (last band), not fall off the end.
 inline WaveType waveTypeFromCv(float volts)
 {
-    int idx = static_cast<int>(volts / (cv::kMaxVolts / 6.0f));
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 9.0f));
     if (idx < 0)
         idx = 0;
-    if (idx > 5)
-        idx = 5;
+    if (idx > 8)
+        idx = 8;
     switch (idx)
     {
     case 0: return WaveType::Sine;
-    case 1: return WaveType::Square;
-    case 2: return WaveType::Triangle;
-    case 3: return WaveType::Sawtooth;
-    case 4: return WaveType::Noise;
+    case 1: return WaveType::LinearUp;
+    case 2: return WaveType::LinearDown;
+    case 3: return WaveType::Square;
+    case 4: return WaveType::Triangle;
+    case 5: return WaveType::Sawtooth;
+    case 6: return WaveType::SawtoothDown;
+    case 7: return WaveType::Noise;
     default: return WaveType::PinkNoise;
     }
 }
@@ -389,11 +393,20 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     case WaveType::Sawtooth:
         renderSelectedFastLoop<WaveType::Sawtooth>(ctx, frames, feedbackActive);
         break;
+    case WaveType::SawtoothDown:
+        renderSelectedFastLoop<WaveType::SawtoothDown>(ctx, frames, feedbackActive);
+        break;
     case WaveType::Noise:
         renderSelectedFastLoop<WaveType::Noise>(ctx, frames, feedbackActive);
         break;
     case WaveType::PinkNoise:
         renderSelectedFastLoop<WaveType::PinkNoise>(ctx, frames, feedbackActive);
+        break;
+    case WaveType::LinearUp:
+        renderSelectedFastLoop<WaveType::LinearUp>(ctx, frames, feedbackActive);
+        break;
+    case WaveType::LinearDown:
+        renderSelectedFastLoop<WaveType::LinearDown>(ctx, frames, feedbackActive);
         break;
     case WaveType::SuperSaw:
         // Defensive only: parsing/live updates reject SuperSaw for WaveGen.

@@ -101,9 +101,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "tune"))
             return 2;
         // "waveform" is a real, but control-only audio-rate port (see
-        // isControlOnlyInput) - 0-10V CV, six equal bands in WaveType order
-        // (Sine, Square, Triangle, Sawtooth, white Noise, Pink Noise; see
-        // nodes/OscillatorNode.h's waveTypeFromCv()). Not wired: falls back
+        // isControlOnlyInput) - 0-10V CV, nine equal bands in WaveType order
+        // (Sine, Linear Up, Linear Down, Square, Triangle, Sawtooth, falling
+        // Sawtooth, white Noise, Pink Noise; see nodes/OscillatorNode.h's
+        // waveTypeFromCv()). Not wired: falls back
         // to the waveform dropdown value (OscillatorState::wave), as before.
         if (is(portName, "waveform"))
             return 3;

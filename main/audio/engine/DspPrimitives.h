@@ -543,7 +543,7 @@ public:
             return nextPinkNoise();
         }
         const float sample = currentSample(wave, phaseOffset, dutyThresholdInt);
-        advance(freqHz, sampleRate);
+        advance(freqHz, sampleRate, 1, isLinearWave(wave));
         return sample;
     }
 
@@ -581,7 +581,8 @@ public:
             return nextPinkNoise();
         }
         const float sample = currentSample(wave, phaseOffset, dutyThresholdInt);
-        phase_ += toPhaseInt(phaseIncrement);
+        const uint32_t inc = toPhaseInt(phaseIncrement);
+        phase_ = isLinearWave(wave) ? saturatingAdd(phase_, inc) : phase_ + inc;
         return sample;
     }
 
@@ -626,7 +627,10 @@ public:
                 p += toPhaseOffsetInt(phaseOffset);
             }
             const float sample = sampleAtT<W>(p, dutyThresholdInt);
-            phase_ += phaseIncrementInt;
+            if constexpr (W == WaveType::LinearUp || W == WaveType::LinearDown)
+                phase_ = saturatingAdd(phase_, phaseIncrementInt);
+            else
+                phase_ += phaseIncrementInt;
             return sample;
         }
     }
@@ -644,9 +648,12 @@ public:
     // needs phase_ to land exactly where the normal per-sample loop would,
     // so the next audible block (e.g. right after a gate-on attack) picks
     // up mid-cycle instead of glitching/restarting.
-    IRAM_ATTR inline void advancePhaseOnly(uint32_t phaseIncrementInt, size_t frames)
+    IRAM_ATTR inline void advancePhaseOnly(uint32_t phaseIncrementInt, size_t frames, bool saturate = false)
     {
-        phase_ += phaseIncrementInt * static_cast<uint32_t>(frames);
+        if (saturate)
+            phase_ = saturatingAdd64(phase_, static_cast<uint64_t>(phaseIncrementInt) * frames);
+        else
+            phase_ += phaseIncrementInt * static_cast<uint32_t>(frames);
     }
 
     IRAM_ATTR uint32_t phaseInt() const { return phase_; }
@@ -657,19 +664,31 @@ public:
         return 2.0f * (static_cast<float>(phase) * kInvUint32Max) - 1.0f;
     }
 
+    // Falling sawtooth: starts at +1 and ramps down to -1 over the cycle -
+    // the vertical mirror of sawSampleAt() above, same phase reference.
+    IRAM_ATTR static float sawDownSampleAt(uint32_t phase)
+    {
+        return -sawSampleAt(phase);
+    }
+
     // sampleRate is in practice ALWAYS the same value (kSampleRate, fixed
     // 48000 - see all callers in NodeInstance.cpp) - cache the reciprocal
     // instead of dividing anew each time. The comparison is always false
     // after the first call (well-predictable branch), the public signature
     // stays unchanged.
-    IRAM_ATTR void advance(float freqHz, float sampleRate, size_t samples = 1)
+    // saturate (linear waves): stop at the end of the cycle instead of wrapping.
+    IRAM_ATTR void advance(float freqHz, float sampleRate, size_t samples = 1, bool saturate = false)
     {
         if (sampleRate != lastSampleRate_)
         {
             lastSampleRate_ = sampleRate;
             invSampleRate_ = 1.0f / sampleRate;
         }
-        phase_ += toPhaseInt(freqHz * invSampleRate_) * static_cast<uint32_t>(samples);
+        const uint32_t inc = toPhaseInt(freqHz * invSampleRate_);
+        if (saturate)
+            phase_ = saturatingAdd64(phase_, static_cast<uint64_t>(inc) * samples);
+        else
+            phase_ += inc * static_cast<uint32_t>(samples);
     }
 
     void resetPhase() { phase_ = 0u; }
@@ -725,6 +744,19 @@ public:
     }
 
 private:
+    // Linear waves: reaching 0xFFFFFFFF (value exactly +/-1 at the end of the
+    // ramp) and staying there until resetPhase().
+    IRAM_ATTR static uint32_t saturatingAdd(uint32_t a, uint32_t b)
+    {
+        const uint32_t n = a + b;
+        return n < a ? 0xFFFFFFFFu : n;
+    }
+    IRAM_ATTR static uint32_t saturatingAdd64(uint32_t a, uint64_t b)
+    {
+        const uint64_t n = static_cast<uint64_t>(a) + b;
+        return n > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(n);
+    }
+
     // 2^32, exact in float (kPhaseIntScale) - the forward (cycles->int)
     // scale for toPhaseInt() above. Deliberately NOT the same constant as
     // kInvUint32Max below (1/(2^32-1)) - that one is the REVERSE (int-
@@ -763,7 +795,11 @@ private:
             return 4.0f * fabsf(pf - nearest) - 1.0f;
         }
         case WaveType::Sawtooth:
+        case WaveType::LinearUp: // same shape as Sawtooth; the difference is saturating advance, not the sample
             return sawSampleAt(p);
+        case WaveType::SawtoothDown:
+        case WaveType::LinearDown:
+            return sawDownSampleAt(p);
         case WaveType::Noise:
         case WaveType::PinkNoise:
         case WaveType::SuperSaw:
@@ -789,9 +825,13 @@ private:
             const float nearest = pf < 0.5f ? 0.0f : 1.0f;
             return 4.0f * fabsf(pf - nearest) - 1.0f;
         }
-        else // Sawtooth
+        else if constexpr (W == WaveType::Sawtooth || W == WaveType::LinearUp)
         {
             return sawSampleAt(p);
+        }
+        else // SawtoothDown, LinearDown
+        {
+            return sawDownSampleAt(p);
         }
     }
 

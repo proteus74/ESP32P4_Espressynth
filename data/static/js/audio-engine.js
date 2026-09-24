@@ -10,6 +10,102 @@ function isNoiseWave(waveType) {
   return waveType === "noise" || waveType === "pink-noise";
 }
 
+// Web Audio has no falling-sawtooth OscillatorType, so "sawtooth-down" is a
+// custom PeriodicWave: the native sawtooth's Fourier series negated
+// (2/(pi*n) * (-1)^(n+1) -> 2/(pi*n) * (-1)^n). Bandlimiting is done by the
+// browser, same as for the built-in types. PeriodicWaves belong to one
+// AudioContext, hence the per-context cache.
+const SAWTOOTH_DOWN_HARMONICS = 64;
+const sawtoothDownWaves = new WeakMap();
+
+function getSawtoothDownWave(ctx) {
+  let wave = sawtoothDownWaves.get(ctx);
+  if (!wave) {
+    const real = new Float32Array(SAWTOOTH_DOWN_HARMONICS + 1);
+    const imag = new Float32Array(SAWTOOTH_DOWN_HARMONICS + 1);
+    for (let n = 1; n <= SAWTOOTH_DOWN_HARMONICS; n += 1) {
+      imag[n] = (2 / (Math.PI * n)) * (n % 2 === 0 ? 1 : -1);
+    }
+    wave = ctx.createPeriodicWave(real, imag);
+    sawtoothDownWaves.set(ctx, wave);
+  }
+  return wave;
+}
+
+function isLinearWave(waveType) {
+  return waveType === "linear-up" || waveType === "linear-down";
+}
+
+// Free-running, "linear-up"/"linear-down" repeat exactly like the sawtooth
+// shapes - they only differ when one-shot / per-note (see applyLfoLinear and
+// applyOscLinear), where they hold their end value instead of falling back.
+function setOscWaveType(ctx, osc, waveType) {
+  if (waveType === "sawtooth-down" || waveType === "linear-down") osc.setPeriodicWave(getSawtoothDownWave(ctx));
+  else osc.type = waveType === "linear-up" ? "sawtooth" : waveType;
+}
+
+// True while an LFO is a linear wave in One Shot: then it is not an
+// oscillator waveform but a held/one-time ramp (applyLfoLinear).
+function lfoLinearHold(entry) {
+  return isLinearWave(entry.lfoWaveType) && entry.lfoOneShot === true;
+}
+
+// Oscillator "linear-up"/"linear-down": one ramp per note (gate), then hold.
+// A ConstantSource (entry.linearSource) replaces the oscillator in the signal
+// path (like the noise sources); the ramp lasts one cycle of the last direct-
+// set frequency (pitch arriving over an audio-rate cable is not readable here,
+// so that case falls back to middle C).
+function oscExtraSource(entry, waveType) {
+  if (waveType === "noise") return entry.noiseSource;
+  if (waveType === "pink-noise") return entry.pinkNoiseSource;
+  return isLinearWave(waveType) ? entry.linearSource : null;
+}
+
+function applyOscLinear(ctx, entry) {
+  const now = ctx.currentTime;
+  const hz = entry.osc.frequency.value > 0 ? entry.osc.frequency.value : 261.63;
+  const up = entry.waveType === "linear-up";
+  const offset = entry.linearSource.offset;
+  offset.cancelScheduledValues(now);
+  offset.setValueAtTime(up ? -1 : 1, now);
+  offset.linearRampToValueAtTime(up ? 1 : -1, now + 1 / hz);
+}
+
+// LFO "linear-up"/"linear-down" in One Shot: one non-wrapping ramp from the
+// last restart, then hold at the end value. lfoGain is muted
+// and centerOffset.offset is automated instead. Position is tracked
+// (lfoLinearPos0 at lfoLinearT0, running flag) so a parameter change mid-ramp
+// re-anchors instead of restarting. Phase offset shifts the mapped position
+// (clamped), same as the firmware.
+function applyLfoLinear(ctx, entry, restart) {
+  const now = ctx.currentTime;
+  if (restart) {
+    entry.lfoLinearPos0 = 0;
+    entry.lfoLinearRunning = true;
+  } else if (entry.lfoLinearRunning) {
+    entry.lfoLinearPos0 = Math.min(1, entry.lfoLinearPos0 + (now - entry.lfoLinearT0) * entry.lfoLinearRate);
+  }
+  entry.lfoLinearT0 = now;
+  entry.lfoLinearRate = entry.lfoRate;
+  const halfSwing = entry.lfoAmplitude / 2;
+  const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
+  const offset = (entry.lfoPhase ?? 0) / 360;
+  const up = entry.lfoWaveType === "linear-up";
+  const valueAt = (pos) => {
+    const p = clampRange(pos + offset, 0, 1);
+    return clampRange(center + (up ? 2 * p - 1 : 1 - 2 * p) * halfSwing, 0, CV_MAX_VOLTS);
+  };
+  const cur = entry.lfoLinearPos0;
+  const target = entry.centerOffset.offset;
+  target.cancelScheduledValues(now);
+  target.setValueAtTime(valueAt(cur), now);
+  entry.lfoGain.gain.cancelScheduledValues(now);
+  entry.lfoGain.gain.setValueAtTime(0, now);
+  if (entry.lfoLinearRunning && entry.lfoLinearRate > 0 && cur < 1) {
+    target.linearRampToValueAtTime(valueAt(1), now + (1 - cur) / entry.lfoLinearRate);
+  }
+}
+
 function fillPinkNoise(data) {
   let b0 = 0;
   let b1 = 0;
@@ -768,6 +864,7 @@ function lfoWaveValueAtPhase(waveType, phaseDeg) {
   if (waveType === "square") return phase < 0.5 ? 1 : -1;
   if (waveType === "triangle") return 4 * Math.abs(phase - Math.floor(phase + 0.5)) - 1;
   if (waveType === "sawtooth") return 2 * phase - 1;
+  if (waveType === "sawtooth-down") return 1 - 2 * phase;
   return Math.sin(phase * Math.PI * 2);
 }
 
@@ -985,7 +1082,8 @@ export class AudioEngine {
     if (entry.type === "fm-oscillator") {
       const oldOscs = [entry.osc, ...entry.sideOscs];
       const newCenter = this.ctx.createOscillator();
-      newCenter.type = entry.osc.type;
+      if (entry.waveType === "sawtooth-down" || entry.waveType === "linear-down") setOscWaveType(this.ctx, newCenter, entry.waveType);
+      else newCenter.type = entry.osc.type;
       newCenter.frequency.value = entry.osc.frequency.value;
       newCenter.connect(entry.normalCarrierGain);
       newCenter.connect(entry.superSawCenterGain);
@@ -1026,11 +1124,13 @@ export class AudioEngine {
       });
       entry.osc = newCenter;
       entry.sideOscs = newSides;
+      if (isLinearWave(entry.waveType)) applyOscLinear(this.ctx, entry);
       return;
     }
 
     const newOsc = this.ctx.createOscillator();
-    newOsc.type = entry.osc.type;
+    if (entry.waveType === "sawtooth-down" || entry.waveType === "linear-down") setOscWaveType(this.ctx, newOsc, entry.waveType);
+    else newOsc.type = entry.osc.type;
     newOsc.frequency.value = entry.osc.frequency.value;
     newOsc.detune.value = entry.osc.detune.value;
     try {
@@ -1045,7 +1145,7 @@ export class AudioEngine {
     } catch (err) {
     }
     newOsc.connect(entry.feedbackDelay);
-    if (!isNoiseWave(entry.waveType)) {
+    if (!isNoiseWave(entry.waveType) && !isLinearWave(entry.waveType)) {
       newOsc.connect(entry.ampGain);
     }
     newOsc.start(now);
@@ -1058,6 +1158,7 @@ export class AudioEngine {
     }
 
     entry.osc = newOsc;
+    if (isLinearWave(entry.waveType)) applyOscLinear(this.ctx, entry);
   }
 
   
@@ -1819,7 +1920,7 @@ export class AudioEngine {
       case "oscillator": {
         const waveType = params.waveType || "sine";
         const osc = ctx.createOscillator();
-        osc.type = isNoiseWave(waveType) ? "sine" : waveType;
+        setOscWaveType(ctx, osc, isNoiseWave(waveType) ? "sine" : waveType);
         osc.frequency.value = params.frequency ?? 0;
 
         const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -1940,6 +2041,11 @@ export class AudioEngine {
         feedbackCv.waveShaper.connect(feedbackCvScale);
         feedbackCvScale.connect(feedbackGain.gain);
 
+        // Linear waves: per-note ramp source, see applyOscLinear. Rests at the
+        // ramp's end value until the first gate.
+        const linearSource = ctx.createConstantSource();
+        linearSource.offset.value = waveType === "linear-down" ? -1 : 1;
+        linearSource.start();
         osc.start();
         noiseSource.start();
         pinkNoiseSource.start();
@@ -1947,6 +2053,8 @@ export class AudioEngine {
           noiseSource.connect(ampGain);
         } else if (waveType === "pink-noise") {
           pinkNoiseSource.connect(ampGain);
+        } else if (isLinearWave(waveType)) {
+          linearSource.connect(ampGain);
         } else {
           osc.connect(ampGain);
         }
@@ -1956,6 +2064,7 @@ export class AudioEngine {
           osc,
           noiseSource,
           pinkNoiseSource,
+          linearSource,
           ampGain,
           ampCv,
           waveType,
@@ -1990,7 +2099,7 @@ export class AudioEngine {
         // firmware.
         const waveType = params.waveType || "sine";
         const osc = ctx.createOscillator();
-        osc.type = waveType === "supersaw" ? "sawtooth" : (isNoiseWave(waveType) ? "sine" : waveType);
+        setOscWaveType(ctx, osc, waveType === "supersaw" ? "sawtooth" : (isNoiseWave(waveType) ? "sine" : waveType));
         osc.frequency.value = params.frequency ?? 0;
         const sideOscs = SUPER_SAW_CENTS.map(() => {
           const side = ctx.createOscillator();
@@ -2025,7 +2134,7 @@ export class AudioEngine {
         const superSawEnable = ctx.createGain();
         const superSawCenterGain = ctx.createGain();
         const superSawSideGains = sideOscs.map(() => ctx.createGain());
-        normalCarrierGain.gain.value = waveType === "supersaw" || isNoiseWave(waveType) ? 0 : 1;
+        normalCarrierGain.gain.value = waveType === "supersaw" || isNoiseWave(waveType) || isLinearWave(waveType) ? 0 : 1;
         superSawEnable.gain.value = waveType === "supersaw" ? 1 : 0;
         osc.connect(normalCarrierGain);
         normalCarrierGain.connect(periodicSum);
@@ -2162,6 +2271,10 @@ export class AudioEngine {
         feedbackCv.waveShaper.connect(feedbackCvScale);
         feedbackCvScale.connect(feedbackGain.gain);
 
+        // Linear waves: per-note ramp source, see applyOscLinear.
+        const linearSource = ctx.createConstantSource();
+        linearSource.offset.value = waveType === "linear-down" ? -1 : 1;
+        linearSource.start();
         osc.start();
         sideOscs.forEach((side) => side.start());
         noiseSource.start();
@@ -2170,6 +2283,8 @@ export class AudioEngine {
           noiseSource.connect(ampGain);
         } else if (waveType === "pink-noise") {
           pinkNoiseSource.connect(ampGain);
+        } else if (isLinearWave(waveType)) {
+          linearSource.connect(ampGain);
         }
 
         return {
@@ -2178,6 +2293,7 @@ export class AudioEngine {
           sideOscs,
           noiseSource,
           pinkNoiseSource,
+          linearSource,
           ampGain,
           ampCv,
           periodicSum,
@@ -2378,7 +2494,7 @@ export class AudioEngine {
         const waveType = params.waveType || "sine";
         const oneShot = params.oneShot === true;
         const lfoOsc = ctx.createOscillator();
-        lfoOsc.type = waveType;
+        setOscWaveType(ctx, lfoOsc, waveType);
         lfoOsc.frequency.value = rate;
         const lfoGain = ctx.createGain();
         lfoGain.gain.value = oneShot ? 0 : halfSwing;
@@ -2418,7 +2534,7 @@ export class AudioEngine {
         
         
         lfoOsc.start(Math.max(ctx.currentTime, ctx.currentTime - lfoStartOffsetSeconds(waveType, phase, rate)));
-        return {
+        const lfoEntry = {
           type,
           lfoOsc,
           lfoGain,
@@ -2428,6 +2544,12 @@ export class AudioEngine {
           sharedGate,
           output,
           _sharedWired: false,
+          lfoWaveType: waveType,
+          lfoRate: rate,
+          lfoLinearPos0: 0,
+          lfoLinearT0: 0,
+          lfoLinearRate: rate,
+          lfoLinearRunning: !oneShot,
           lfoAmplitude: amplitude,
           lfoMaxRate: maxRate,
           lfoPhase: phase,
@@ -2437,6 +2559,12 @@ export class AudioEngine {
           lfoOneShotRunning: false,
           lfoOneShotTimer: null,
         };
+        if (lfoLinearHold(lfoEntry)) {
+          // One-shot starts held at the ramp start until the first reset.
+          lfoEntry.lfoLinearRunning = false;
+          applyLfoLinear(ctx, lfoEntry, false);
+        }
+        return lfoEntry;
       }
       case "const":
       case "up-down-button": {
@@ -4487,9 +4615,17 @@ export class AudioEngine {
 
   _setLfoRunning(entry, running) {
     if (!entry || !this.ctx) return;
+    if (lfoLinearHold(entry)) {
+      // Linear ramps hold on their own at the end - just (un)pause the ramp.
+      applyLfoLinear(this.ctx, entry, false);
+      entry.lfoLinearRunning = running;
+      applyLfoLinear(this.ctx, entry, false);
+      entry.lfoOneShotRunning = running;
+      return;
+    }
     const halfSwing = entry.lfoAmplitude / 2;
     const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
-    const heldValue = center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing;
+    const heldValue = center + lfoWaveValueAtPhase(entry.lfoWaveType ?? entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing;
     const now = this.ctx.currentTime;
     entry.lfoGain.gain.cancelScheduledValues(now);
     entry.centerOffset.offset.cancelScheduledValues(now);
@@ -4527,7 +4663,7 @@ export class AudioEngine {
       if (!entry || entry.type !== "lfo") return;
       const oldOsc = entry.lfoOsc;
       const newOsc = this.ctx.createOscillator();
-      newOsc.type = oldOsc.type;
+      setOscWaveType(this.ctx, newOsc, entry.lfoWaveType ?? oldOsc.type);
       newOsc.frequency.value = oldOsc.frequency.value;
       newOsc.connect(entry.lfoGain);
       
@@ -4535,7 +4671,7 @@ export class AudioEngine {
       
       const phase = entry.lfoPhase ?? 0;
       const rate = newOsc.frequency.value || 2;
-      newOsc.start(Math.max(this.ctx.currentTime, this.ctx.currentTime - lfoStartOffsetSeconds(newOsc.type, phase, rate)));
+      newOsc.start(Math.max(this.ctx.currentTime, this.ctx.currentTime - lfoStartOffsetSeconds(entry.lfoWaveType ?? newOsc.type, phase, rate)));
       try {
         oldOsc.disconnect();
         oldOsc.stop();
@@ -4543,7 +4679,11 @@ export class AudioEngine {
         
       }
       entry.lfoOsc = newOsc;
-      if (entry.lfoOneShot) this._scheduleLfoOneShotStop(entry);
+      if (lfoLinearHold(entry)) {
+        // Re-arm: ramp restarts from its start and holds at the end (no timer needed).
+        applyLfoLinear(this.ctx, entry, true);
+        entry.lfoOneShotRunning = true;
+      } else if (entry.lfoOneShot) this._scheduleLfoOneShotStop(entry);
       else this._setLfoRunning(entry, true);
     };
     if (wrapper.voiced) {
@@ -4627,29 +4767,28 @@ export class AudioEngine {
           
           applyRampValue(entry.tuneRestConst.offset, value);
         } else if (paramName === "waveType") {
+          // Noise / linear ramps are separate sources wired straight into
+          // ampGain; every other wave plays through the oscillator itself
+          // (fm-oscillator: via normalCarrierGain, so nothing to rewire).
+          const fromExtra = oscExtraSource(entry, entry.waveType);
+          const toExtra = oscExtraSource(entry, value);
           if (entry.type === "fm-oscillator") {
-            if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
-            if (entry.waveType === "pink-noise") entry.pinkNoiseSource.disconnect(entry.ampGain);
-            entry.normalCarrierGain.gain.value = value === "supersaw" || isNoiseWave(value) ? 0 : 1;
+            entry.normalCarrierGain.gain.value = value === "supersaw" || toExtra ? 0 : 1;
             entry.superSawEnable.gain.value = value === "supersaw" ? 1 : 0;
-            if (value === "noise") entry.noiseSource.connect(entry.ampGain);
-            else if (value === "pink-noise") entry.pinkNoiseSource.connect(entry.ampGain);
-            else entry.osc.type = value === "supersaw" ? "sawtooth" : value;
-          } else if (isNoiseWave(value)) {
-            if (!isNoiseWave(entry.waveType)) entry.osc.disconnect(entry.ampGain);
-            if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
-            if (entry.waveType === "pink-noise") entry.pinkNoiseSource.disconnect(entry.ampGain);
-            if (value === "noise") entry.noiseSource.connect(entry.ampGain);
-            else entry.pinkNoiseSource.connect(entry.ampGain);
+            if (fromExtra !== toExtra) {
+              fromExtra?.disconnect(entry.ampGain);
+              toExtra?.connect(entry.ampGain);
+            }
+            if (!isNoiseWave(value)) setOscWaveType(this.ctx, entry.osc, value === "supersaw" ? "sawtooth" : value);
           } else {
-            entry.osc.type = value;
-            if (isNoiseWave(entry.waveType)) {
-              if (entry.waveType === "noise") entry.noiseSource.disconnect(entry.ampGain);
-              else entry.pinkNoiseSource.disconnect(entry.ampGain);
-              entry.osc.connect(entry.ampGain);
+            if (!isNoiseWave(value)) setOscWaveType(this.ctx, entry.osc, value);
+            if (fromExtra !== toExtra) {
+              (fromExtra ?? entry.osc).disconnect(entry.ampGain);
+              (toExtra ?? entry.osc).connect(entry.ampGain);
             }
           }
           entry.waveType = value;
+          if (isLinearWave(value)) applyOscLinear(this.ctx, entry);
         } else if (paramName === "detune") {
           applyRamp(entry.osc.detune);
         } else if (paramName === "amplitude") {
@@ -5010,10 +5149,12 @@ export class AudioEngine {
       case "lfo": {
         if (paramName === "rate") {
           const rate = clampRange(Number(value) || 0, 0, entry.lfoMaxRate ?? 50);
+          entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
         } else if (paramName === "maxRate") {
           entry.lfoMaxRate = clampRange(Number(value) || 0, 0, 50);
-          const rate = clampRange(Number(entry.lfoOsc.frequency.value) || 0, 0, entry.lfoMaxRate);
+          const rate = clampRange(Number(entry.lfoRate) || 0, 0, entry.lfoMaxRate);
+          entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
         } else if (paramName === "amplitude") {
           entry.lfoAmplitude = value;
@@ -5034,21 +5175,43 @@ export class AudioEngine {
               clearTimeout(entry.lfoOneShotTimer);
               entry.lfoOneShotTimer = null;
             }
+            if (enabled && isLinearWave(entry.lfoWaveType)) {
+              // Entering One Shot with a linear wave: held at the ramp start until the next reset.
+              entry.lfoLinearPos0 = 0;
+              entry.lfoLinearT0 = now;
+              entry.lfoLinearRunning = false;
+            }
             this._setLfoRunning(entry, !enabled);
           }
         } else if (paramName === "waveType") {
-          entry.lfoOsc.type = value;
+          if (lfoLinearHold(entry)) {
+            // Leaving the held ramp: drop it before normal LFO automation resumes.
+            entry.centerOffset.offset.cancelScheduledValues(now);
+            entry.lfoGain.gain.cancelScheduledValues(now);
+          }
+          setOscWaveType(this.ctx, entry.lfoOsc, value);
+          entry.lfoWaveType = value;
+          if (lfoLinearHold(entry)) {
+            // Picking a linear wave in One Shot: held at its start until the next reset.
+            entry.lfoLinearPos0 = 0;
+            entry.lfoLinearT0 = now;
+            entry.lfoLinearRunning = false;
+          }
         }
         if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType") {
           const halfSwing = entry.lfoAmplitude / 2;
           const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
           if (entry.lfoOneShot && !entry.lfoOneShotRunning) {
             applyRampValue(entry.lfoGain.gain, 0);
-            applyRampValue(entry.centerOffset.offset, center + lfoWaveValueAtPhase(entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing);
+            applyRampValue(entry.centerOffset.offset, center + lfoWaveValueAtPhase(entry.lfoWaveType ?? entry.lfoOsc.type, entry.lfoPhase ?? 0) * halfSwing);
           } else {
             applyRampValue(entry.lfoGain.gain, halfSwing);
             applyRampValue(entry.centerOffset.offset, center);
           }
+        }
+        if (lfoLinearHold(entry) &&
+            ["rate", "maxRate", "amplitude", "phase", "zeroPointFixed", "zeroPoint", "waveType"].includes(paramName)) {
+          applyLfoLinear(this.ctx, entry, false);
         }
         break;
       }

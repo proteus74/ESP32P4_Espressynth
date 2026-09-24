@@ -33,22 +33,25 @@ namespace nodes::fmoscillator
 
 namespace
 {
-// FM alone has seven equal CV bands; WaveGen/LFO retain their six-band map.
+// FM alone has ten equal CV bands; WaveGen retains its nine-band map.
 inline WaveType waveTypeFromCv(float volts)
 {
-    int idx = static_cast<int>(volts / (cv::kMaxVolts / 7.0f));
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 10.0f));
     if (idx < 0)
         idx = 0;
-    if (idx > 6)
-        idx = 6;
+    if (idx > 9)
+        idx = 9;
     switch (idx)
     {
     case 0: return WaveType::Sine;
-    case 1: return WaveType::Square;
-    case 2: return WaveType::Triangle;
-    case 3: return WaveType::Sawtooth;
-    case 4: return WaveType::Noise;
-    case 5: return WaveType::PinkNoise;
+    case 1: return WaveType::LinearUp;
+    case 2: return WaveType::LinearDown;
+    case 3: return WaveType::Square;
+    case 4: return WaveType::Triangle;
+    case 5: return WaveType::Sawtooth;
+    case 6: return WaveType::SawtoothDown;
+    case 7: return WaveType::Noise;
+    case 8: return WaveType::PinkNoise;
     default: return WaveType::SuperSaw;
     }
 }
@@ -677,7 +680,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // advance meaningfully for them, see plan section 2 point 7).
     if (phaseModulatable && !feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f)
     {
-        s.phaseGen.advancePhaseOnly(phaseIncrementInt, frames);
+        s.phaseGen.advancePhaseOnly(phaseIncrementInt, frames, isLinearWave(wave));
         if (!gainFed && !gainConverged)
         {
             for (size_t i = 0; i < frames; ++i)
@@ -721,11 +724,20 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     case WaveType::Sawtooth:
         renderSelectedFastLoop<WaveType::Sawtooth>(ctx, frames, fmActive, feedbackActive);
         break;
+    case WaveType::SawtoothDown:
+        renderSelectedFastLoop<WaveType::SawtoothDown>(ctx, frames, fmActive, feedbackActive);
+        break;
     case WaveType::Noise:
         renderSelectedFastLoop<WaveType::Noise>(ctx, frames, fmActive, feedbackActive);
         break;
     case WaveType::PinkNoise:
         renderSelectedFastLoop<WaveType::PinkNoise>(ctx, frames, fmActive, feedbackActive);
+        break;
+    case WaveType::LinearUp:
+        renderSelectedFastLoop<WaveType::LinearUp>(ctx, frames, fmActive, feedbackActive);
+        break;
+    case WaveType::LinearDown:
+        renderSelectedFastLoop<WaveType::LinearDown>(ctx, frames, fmActive, feedbackActive);
         break;
     case WaveType::SuperSaw:
         break;
