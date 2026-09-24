@@ -1,0 +1,11 @@
+<h2>What it's for</h2>
+<p>Sends out a steady stream of timing pulses, synced to ESPRESSYNTH's single master tempo (set from
+the tab bar's Master Clock). Use it to drive sequencers, arpeggiators, clocked LFOs, or anything
+else that needs to stay in time with your song.</p>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">Pulse</span> — a trigger that fires on every clock step, patch into a Step Arpeggiator's or Drum Sequencer's Clock input.</li>
+<li><span class="port-label">Frequency</span> — the clock's current tempo expressed as a CV, in case you want to react to tempo elsewhere in the patch.</li>
+</ul>
+<p>This widget owns only its own pulse width — the tempo itself comes from the shared Master Clock,
+so every Clock widget in your patch stays in sync.</p>

@@ -1,0 +1,21 @@
+<h2>What it's for</h2>
+<p>Midi-In is the door where a MIDI keyboard, DAW, or other MIDI gear enters your patch. It listens
+to incoming MIDI notes and converts them into CV signals that the rest of ESPRESSYNTH's
+modular-style widgets understand — a pitch voltage for an oscillator, a gate for an envelope, and
+so on.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Voices</span> — how many notes can sound at once (polyphony). Patch a CV or set it directly to control voice stealing.</li>
+<li><span class="port-label">Glide</span> — turns portamento (pitch sliding between notes) on or off.</li>
+<li><span class="port-label">Glide Time</span> — how long the pitch takes to slide from one note to the next.</li>
+</ul>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">MIDI</span> — the raw MIDI stream, for feeding into other MIDI-aware widgets like Midi-Split.</li>
+<li><span class="port-label">Pitch</span> — the played note as a pitch CV. Patch this into an oscillator's Pitch input to play it.</li>
+<li><span class="port-label">Aftertouch</span> — how hard you're pressing a held key, as CV.</li>
+<li><span class="port-label">Pitch Bend</span> — your pitch-bend wheel position, as CV.</li>
+<li><span class="port-label">Note (0–127)</span> — the raw MIDI note number, handy for driving a Value Mapper or sequencer logic.</li>
+<li><span class="port-label">Velocity</span> — how hard the key was struck, as CV. Patch into an amplifier or filter for expressive playing.</li>
+<li><span class="port-label">Gate</span> — goes high while a key is held and low when released. Feed this into an ADSR or envelope to shape each note.</li>
+</ul>

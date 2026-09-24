@@ -1,0 +1,13 @@
+<h2>What it's for</h2>
+<p>Sample &amp; Hold "freezes" whatever value is at its input the instant it receives a trigger, and
+holds that frozen value steady until the next trigger. Classic use: feed it random noise or a fast
+LFO and trigger it from a clock for stepped random-CV sequences (bloopy sci-fi arpeggios, random
+filter sweeps).</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the signal to sample.</li>
+<li><span class="port-label">Trigger</span> — grabs a fresh sample of In the moment this crosses the threshold. Patch a Clock's Pulse here for evenly-spaced steps.</li>
+<li><span class="port-label">Threshold</span> — the trigger level that counts as "fire".</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the held (frozen) CV value, steady until the next trigger.</p>

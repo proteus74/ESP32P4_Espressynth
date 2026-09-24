@@ -1,0 +1,20 @@
+<h2>What it's for</h2>
+<p>This is ESPRESSYNTH's main sound source — a voltage-controlled oscillator (VCO), just like the
+core oscillator in a subtractive or FM synth voice. It generates a tone at a pitch you control, and
+can also be frequency-modulated by another oscillator for FM/bell-like and metallic sounds.</p>
+<h2>Key inputs</h2>
+<ul>
+<li><span class="port-label">Pitch</span> — the 1V/oct-style pitch CV, normally patched from Midi-In's Pitch output.</li>
+<li><span class="port-label">Tune</span> — fine/coarse tuning offset, for detuning against other oscillators.</li>
+<li><span class="port-label">Amplitude</span> — overall loudness of the oscillator, often patched from Velocity or an envelope.</li>
+<li><span class="port-label">Waveform</span> — picks the wave shape (sine, saw, square, etc.).</li>
+<li><span class="port-label">Gate</span> — retriggers the oscillator's phase/feedback state when a new note starts.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+<li><span class="port-label">Feedback (Self)</span> — feeds the oscillator's own output back into itself for extra harmonic edge/distortion.</li>
+<li><span class="port-label">FM In</span> — patch another oscillator's output here to frequency-modulate this one (classic FM synthesis).</li>
+<li><span class="port-label">FM Ratio</span> — sets the modulator-to-carrier frequency ratio for FM.</li>
+<li><span class="port-label">Duty Cycle</span> — pulse width for the square wave (thin, nasal square vs. fat 50% square).</li>
+<li><span class="port-label">SuperSaw Detune / SuperSaw Mix</span> — stacks and detunes multiple saws under the hood for a thick "supersaw" trance-style sound, and blends how much of that stacking is mixed in.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the resulting audio signal. Patch it into a Filter, Gain/VCA, Mixer, or straight to an output widget.</p>

@@ -1,0 +1,19 @@
+<h2>What it's for</h2>
+<p>A monophonic step sequencer/arpeggiator — sixteen knobs, each defining a pitch step, played back
+one after another as a clock pulses it forward. Great for classic arpeggio and sequenced-bassline
+patterns without needing a DAW.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Clock</span> — advances to the next step on each pulse (patch from a Clock widget, or leave unpatched to use the internal Rate).</li>
+<li><span class="port-label">Gate</span> — gates the sequencer on/off, e.g. from a held key.</li>
+<li><span class="port-label">Pitch</span> — an optional pitch CV added on top of the steps, useful for transposing the whole pattern by playing a key.</li>
+<li><span class="port-label">Direction</span> — picks Forward, Backward, Ping-Pong, or Random playback order.</li>
+<li><span class="port-label">Gate Out Time</span> — how long each step's gate output stays high.</li>
+<li><span class="port-label">Rate</span> — the built-in fallback clock speed, used only when nothing is patched into Clock.</li>
+<li><span class="port-label">Step 1–16</span> — the pitch value for each of the sixteen steps.</li>
+</ul>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">CV</span> — the current step's pitch, patch into an oscillator's Pitch.</li>
+<li><span class="port-label">Gate Out</span> — a gate pulse for each step, patch into an ADSR's Gate to re-shape each note.</li>
+</ul>

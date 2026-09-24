@@ -724,8 +724,11 @@ body.show-node-cpu .widget-cpu-badge {
   background: var(--bg);
   border: 1px solid var(--card-border);
   border-radius: 0.5rem;
-  padding: 0.35rem 0.35rem 0.35rem 0.6rem;
-  font-size: 0.8rem;
+  padding: 0.3rem 0.3rem 0.3rem 0.55rem;
+  /* Shrinks a little on narrow viewports instead of forcing horizontal
+     scroll or clipping labels - see #widgetPickerOverlay .widget-picker
+     for the matching width/column adaptation. */
+  font-size: clamp(0.7rem, 0.55rem + 0.6vw, 0.8rem);
   cursor: pointer;
 }
 
@@ -777,19 +780,22 @@ body.show-node-cpu .widget-cpu-badge {
   flex-direction: row;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 0 1rem;
+  gap: 0 clamp(0.5rem, 2vw, 1rem);
 }
 
 .widget-picker-column {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  width: 220px;
+  /* Fluid column width: columns narrow together as the viewport shrinks so
+     more of them still fit per row (reordering the picker's rows/columns
+     automatically) instead of collapsing to one narrow column per row. */
+  width: clamp(140px, 26vw, 220px);
   flex: 0 0 auto;
 }
 
 .widget-picker-category {
-  font-size: 0.75rem;
+  font-size: clamp(0.68rem, 0.58rem + 0.4vw, 0.75rem);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--accent);
@@ -3779,12 +3785,19 @@ body.show-oscilloscopes .oscilloscope-only-body {
   overflow: hidden;
 }
 
+/* Header text/close button shrink slightly with the dialog itself, so the
+   title never wraps or forces the header taller on small screens. */
 #widgetPickerOverlay .widget-instance-header {
   border-radius: 0.2rem 0.2rem 0 0;
+  font-size: clamp(0.8rem, 0.7rem + 0.4vw, 0.9rem);
+}
+
+#widgetPickerOverlay .widget-instance-close {
+  font-size: clamp(1rem, 0.9rem + 0.4vw, 1.2rem);
 }
 
 .widget-picker-body {
-  padding: 0.75rem;
+  padding: clamp(0.5rem, 1vw + 0.35rem, 0.75rem);
   overflow-y: auto;
 }
 

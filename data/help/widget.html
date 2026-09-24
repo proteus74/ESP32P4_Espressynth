@@ -64,6 +64,57 @@
     font-size: 0.95rem;
     line-height: 1.5;
   }
+  /* Short, always-visible primer so "CV in"/"CV out" makes sense before
+     reading the widget-specific text below it. */
+  .help-cv-primer {
+    border: 1px solid var(--card-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0.5rem;
+    padding: 0.9rem 1.1rem;
+    margin: 0 0 1.5rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: #cbd5e1;
+  }
+  .help-cv-primer strong {
+    color: var(--text);
+  }
+  /* Styling for the injected per-widget fragment (data/help/widgets/<type>.html) */
+  .help-body {
+    font-size: 0.98rem;
+    line-height: 1.6;
+  }
+  .help-body h2 {
+    font-size: 1.05rem;
+    margin: 1.4rem 0 0.5rem;
+    color: var(--text);
+  }
+  .help-body h2:first-child {
+    margin-top: 0;
+  }
+  .help-body p {
+    margin: 0 0 0.9rem;
+  }
+  .help-body ul {
+    margin: 0 0 0.9rem;
+    padding-left: 1.3rem;
+  }
+  .help-body li {
+    margin: 0 0 0.4rem;
+  }
+  .help-body li:last-child {
+    margin-bottom: 0;
+  }
+  .help-body code {
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 0.25rem;
+    padding: 0.1rem 0.35rem;
+    font-size: 0.9em;
+  }
+  .help-body .port-label {
+    color: var(--accent);
+    font-weight: 600;
+  }
 </style>
 </head>
 <body>
@@ -73,19 +124,75 @@
   <div class="help-card">
     <h1 id="helpTitle">Widget Help</h1>
     <p class="help-type" id="helpType"></p>
-    <div class="help-placeholder">
-      Help content for this widget is not written yet. This page will explain what the
-      widget does, its inputs/outputs, and how to use it.
+    <div class="help-cv-primer">
+      <strong>What's a CV in / CV out?</strong> CV stands for "control voltage" — the same idea as
+      the patch cables on a modular synth. A <strong>CV output</strong> is a plug that sends out a
+      changing signal (a pitch, a level, an on/off gate, an LFO wave, whatever the widget makes). A
+      <strong>CV input</strong> is a plug that lets an incoming signal control something on the
+      widget instead of you turning a knob by hand. On this ESPRESSYNTH canvas you "patch" these by
+      dragging a line from one widget's output dot to another widget's input dot, just like a cable
+      between two modules on a Eurorack case.
+    </div>
+    <div class="help-body" id="helpBody">
+      <div class="help-placeholder" id="helpPlaceholder">
+        Help content for this widget is not written yet. This page will explain what the
+        widget does, its inputs/outputs, and how to use it.
+      </div>
     </div>
   </div>
 </div>
 
 <script>
+  // Mirrors the "label" field of WIDGET_TYPES in static/js/main.js - kept as a
+  // small standalone copy so this help page never needs to load the (huge)
+  // main app script just to show a friendly title.
+  const WIDGET_LABELS = {
+    "midi-in": "Midi-In", "midi-split": "Midi-Split",
+    "fm-oscillator": "Oscillator", "hammond": "Hammond", "wave-player": "Wave Player",
+    "soundfont-player": "SoundFont Player", "mda-piano": "MDA Piano",
+    "lfo": "LFO", "adsr": "ADSR", "dx-envelope": "DX Envelope", "detune": "DeTune",
+    "clock": "Clock", "step-arpeggiator": "Step Arpeggiator", "drum-sequencer": "Drum Sequencer",
+    "sample-hold": "S&H - Sample and Hold", "burst-generator": "Burst Generator / Trigger Delay",
+    "knob": "Knob", "button": "Button", "up-down-button": "Up/Down Button",
+    "switch": "Input-Switch", "multiplexer": "Input-Multiplexer",
+    "output-switch": "Output Switch", "output-multiplexer": "Output Multiplexer", "const": "Const",
+    "adder": "Adder", "divide": "Divide", "frequency-divider": "Frequency Divider",
+    "multiplier": "Multiplier", "abs": "Abs", "value-mapper": "Value Mapper",
+    "logic-and": "AND", "logic-or": "OR", "logic-xor": "XOR", "logic-not": "NOT",
+    "filter": "Filter", "curtis-filter": "CEM3320 Filter", "esp-eq": "EQ", "graphic-eq": "8-Band EQ",
+    "bitcrusher": "Bitcrusher", "wave-folder": "Wave Folder", "envelope-follower": "Envelope Follower",
+    "pan": "Pan", "chorus": "Chorus", "delay": "Delay", "reverb-light": "Reverb Light",
+    "gain": "Gain/VCA", "mixer": "Mixer", "audio-out": "JS Audio-Out",
+    "linked-input": "Link In", "linked-output": "Link Out",
+    "linked-input-4": "Link In 4×", "linked-output-4": "Link Out 4×",
+    "linked-input-8": "Link In 8×", "linked-output-8": "Link Out 8×",
+    "usb-out": "USB-Out", "es8311-out": "ES8311-Out", "wm8960-out": "WM8960-Out",
+    "annotation": "Annotation", "debug": "Debug", "voltmeter": "Voltmeter",
+    "vu-meter": "VU-Meter", "vu-meter-horizontal": "VU-Meter Horizontal",
+    "oscilloscope": "Oscilloscope", "spectrum": "Spectrum Analyzer",
+    "cv-in": "CV In", "cv-out": "CV Out", "digital-in": "Digital In", "digital-out": "Digital Out",
+  };
+
   const params = new URLSearchParams(window.location.search);
   const type = params.get("type");
+  const helpBody = document.getElementById("helpBody");
+
   if (type) {
-    document.getElementById("helpTitle").textContent = `${type} Help`;
+    const label = WIDGET_LABELS[type] || type;
+    document.getElementById("helpTitle").textContent = `${label} Help`;
     document.getElementById("helpType").textContent = `Widget type: ${type}`;
+
+    fetch(`/help/widgets/${encodeURIComponent(type)}.html`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then((html) => {
+        helpBody.innerHTML = html;
+      })
+      .catch(() => {
+        // Leave the placeholder in place - this widget's help file doesn't exist yet.
+      });
   }
 </script>
 
