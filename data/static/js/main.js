@@ -11851,6 +11851,7 @@ function updateLfoWavetablePreview(widgetId) {
 // rebuild). At most one request in flight; edits arriving meanwhile only
 // keep the newest bank, sent as soon as the previous request returns.
 const lfoWavetableLiveSend = new Map(); // widgetId -> { inFlight, pending }
+const WAVETABLE_LIVE_MIN_GAP_MS = 80;
 
 function postLfoWavetableLive(widgetId, tables) {
   let entry = lfoWavetableLiveSend.get(widgetId);
@@ -11868,13 +11869,23 @@ function postLfoWavetableLive(widgetId, tables) {
       return;
     }
     entry.inFlight = true;
+    // While the device's web server is busy receiving/parsing the bank, its
+    // periodic WS status broadcasts arrive late - keep the connection
+    // watchdog from mistaking that for a lost device (see
+    // suspendWsWatchdog()), for the whole stroke plus a grace period.
+    suspendWsWatchdog(WS_WATCHDOG_BUSY_GRACE_MS);
     fetch(`/api/wavetable?widget=${encodeURIComponent(widgetId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wavetables: encodeBank(next) }),
     })
       .catch(() => {}) // no device (offline editing) - the browser preview still plays
-      .finally(sendNext);
+      .finally(() => {
+        suspendWsWatchdog(WS_WATCHDOG_BUSY_GRACE_MS);
+        // Short breather between requests so the device's single httpd
+        // task also gets to its WS traffic in between.
+        setTimeout(sendNext, WAVETABLE_LIVE_MIN_GAP_MS);
+      });
   };
   sendNext();
 }
@@ -22427,6 +22438,19 @@ const WS_WATCHDOG_INTERVAL_MS = 500;
 let lastWsMessageAt = 0;
 let wsWatchdogTimer = null;
 
+// Heavy HTTP transfers to the device (e.g. the wavetable editor's live
+// uploads, see postLfoWavetableLive()) occupy its web server task, so WS
+// broadcasts pile up behind them and arrive late although the device is
+// fine. Such callers suspend the silence check until `ms` from now; the
+// stale timeout then counts from the end of the suspension, not from the
+// last (delayed) message. A real socket "close" is still handled at once.
+const WS_WATCHDOG_BUSY_GRACE_MS = 5000;
+let wsWatchdogSuspendedUntil = 0;
+
+function suspendWsWatchdog(ms) {
+  wsWatchdogSuspendedUntil = Math.max(wsWatchdogSuspendedUntil, Date.now() + ms);
+}
+
 // Shared by the "close" handler and the watchdog below: flips the UI to
 // "lost" exactly once per socket and hands the socket off. Returns false if
 // this socket has already been superseded (e.g. the watchdog already
@@ -22446,7 +22470,9 @@ function startWsWatchdog(socket) {
   wsWatchdogTimer = setInterval(() => {
     if (currentSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
     if (lastWsMessageAt === 0) return;
-    if (Date.now() - lastWsMessageAt > WS_STALE_TIMEOUT_MS) {
+    const now = Date.now();
+    if (now < wsWatchdogSuspendedUntil) return;
+    if (now - Math.max(lastWsMessageAt, wsWatchdogSuspendedUntil) > WS_STALE_TIMEOUT_MS) {
       if (markWsLost(socket)) {
         clearTimeout(reconnectTimer);
         connectWs();
