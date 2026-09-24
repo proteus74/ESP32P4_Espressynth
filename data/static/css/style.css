@@ -3801,6 +3801,92 @@ body.show-oscilloscopes .oscilloscope-only-body {
   overflow-y: auto;
 }
 
+/* Widget help popup - opened from the "?" button in the Add Widget picker.
+   Stays on the page (no new tab), has a fixed header and a scrollable body,
+   and closes on a click outside it via #widgetHelpOverlay's own listener
+   (base .modal-overlay already supplies the click-catching backdrop). */
+.widget-help-popup {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.widget-help-popup .widget-instance-header {
+  border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.widget-help-body {
+  padding: 1rem 1.25rem 1.25rem;
+  overflow-y: auto;
+}
+
+.help-cv-primer {
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: #cbd5e1;
+}
+
+.help-cv-primer strong {
+  color: var(--text);
+}
+
+.help-placeholder {
+  border: 1px dashed var(--card-border);
+  border-radius: 0.5rem;
+  padding: 1.1rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+#widgetHelpContent {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+#widgetHelpContent h2 {
+  font-size: 1rem;
+  margin: 1.2rem 0 0.5rem;
+  color: var(--text);
+}
+
+#widgetHelpContent h2:first-child {
+  margin-top: 0;
+}
+
+#widgetHelpContent p {
+  margin: 0 0 0.85rem;
+}
+
+#widgetHelpContent ul {
+  margin: 0 0 0.85rem;
+  padding-left: 1.25rem;
+}
+
+#widgetHelpContent li {
+  margin: 0 0 0.35rem;
+}
+
+#widgetHelpContent li:last-child {
+  margin-bottom: 0;
+}
+
+#widgetHelpContent .port-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .modal {
   background: var(--card);
   border: 1px solid var(--card-border);

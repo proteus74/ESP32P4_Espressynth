@@ -16954,7 +16954,7 @@ function openWidgetPicker(x, y, clientX, clientY) {
       helpBtn.setAttribute("aria-label", `${def.label} help`);
       helpBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        window.open(`/help/widget.html?type=${encodeURIComponent(type)}`, "_blank");
+        openWidgetHelp(type, def.label);
       });
       item.appendChild(helpBtn);
 
@@ -16995,6 +16995,44 @@ function closeWidgetPicker() {
 document.getElementById("widgetPickerClose").addEventListener("click", closeWidgetPicker);
 widgetPickerOverlay.addEventListener("click", (e) => {
   if (!e.target.closest(".widget-picker")) closeWidgetPicker();
+});
+
+// Widget help popup: shown in-page (no new tab) from the "?" button next to
+// each widget in the Add Widget picker. Content is fetched from the same
+// per-widget fragment files the standalone /help/widget.html page uses.
+const widgetHelpOverlay = document.getElementById("widgetHelpOverlay");
+const widgetHelpTitle = document.getElementById("widgetHelpTitle");
+const widgetHelpContent = document.getElementById("widgetHelpContent");
+let widgetHelpFetchToken = 0;
+
+function openWidgetHelp(type, label) {
+  widgetHelpTitle.textContent = `${label} Help`;
+  widgetHelpContent.innerHTML = `<div class="help-placeholder">Loading…</div>`;
+  widgetHelpOverlay.classList.remove("hidden");
+
+  const token = ++widgetHelpFetchToken;
+  fetch(`/help/widgets/${encodeURIComponent(type)}.html`)
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    })
+    .then((html) => {
+      if (token !== widgetHelpFetchToken) return;
+      widgetHelpContent.innerHTML = html;
+    })
+    .catch(() => {
+      if (token !== widgetHelpFetchToken) return;
+      widgetHelpContent.innerHTML = `<div class="help-placeholder">Help content for this widget is not written yet. This page will explain what the widget does, its inputs/outputs, and how to use it.</div>`;
+    });
+}
+
+function closeWidgetHelp() {
+  widgetHelpOverlay.classList.add("hidden");
+}
+
+document.getElementById("widgetHelpClose").addEventListener("click", closeWidgetHelp);
+widgetHelpOverlay.addEventListener("click", (e) => {
+  if (!e.target.closest(".widget-help-popup")) closeWidgetHelp();
 });
 
 function startWidgetPickerDrag(e) {
