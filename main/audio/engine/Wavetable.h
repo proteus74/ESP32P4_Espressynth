@@ -10,14 +10,14 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 
-// Wavetable bank for the LFO's Wavetable mode (see nodes/LfoNode.h). One
+// Wavetable bank for the Wavetable widget (see nodes/WavetableNode.h). One
 // bank = up to kMaxTables single-cycle waveforms of kTableSize samples each
 // (-1..+1). The LFO morphs linearly between neighbouring tables (morph
 // 0-10V spans table 0 .. table count-1) and interpolates linearly between
 // neighbouring samples inside a table.
 //
-// Ownership: parsed once per preset into WidgetParams::lfoWavetable (see
-// LfoNode.h's parsePreset), then shared read-only by every voice instance of
+// Ownership: parsed once per preset into WidgetParams::wavetableBank (see
+// WavetableNode.h's parsePreset), then shared read-only by every voice instance of
 // that LFO widget. Reference counted, because the PresetDoc and the Graph
 // built from it have independent lifetimes (GraphBuilder may even build
 // several graphs from one doc while it searches a fitting voice count).
@@ -132,7 +132,7 @@ inline bool readNumberTable(cJSON *arr, float *out)
 }
 } // namespace detail
 
-// Default bank used when a preset turns Wavetable mode on without any
+// Default bank used when a Wavetable widget's preset has no
 // stored tables: sine -> triangle -> sawtooth -> square, the same four
 // presets the web editor offers (wavetable-core.js's fillPreset()).
 inline void fillDefault(Bank &bank)
@@ -150,8 +150,8 @@ inline void fillDefault(Bank &bank)
 }
 
 // Builds a bank from the preset's "wavetables" array. Returns nullptr when
-// the key is absent/empty and `wanted` is false (LFO not in wavetable mode -
-// no need to spend 64KB), a default bank when wanted but absent/unreadable.
+// the key is absent/empty and `wanted` is false (e.g. a live upload that
+// carried no tables), a default bank when wanted but absent/unreadable.
 inline Bank *parse(cJSON *arr, bool wanted)
 {
     const bool present = cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0;

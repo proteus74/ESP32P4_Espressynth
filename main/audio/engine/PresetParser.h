@@ -52,17 +52,17 @@ struct WidgetParams
     // ControlRoute wired.
     float lfoRate = 2.0f;
     float lfoMaxRate = 50.0f;
-    float lfoAmplitude = 10.0f;
+    float lfoGain = 10.0f;
     float lfoPhaseDeg = 0.0f;
     bool lfoZeroPointFixed = false;
     float lfoZeroPoint = 5.0f;
     bool lfoOneShot = false;
     bool lfoGlobal = false;
-    // Wavetable mode (see LfoState::wavetable). lfoWavetable is a counted
-    // reference owned by this WidgetParams - released by ~PresetDoc().
-    bool lfoWavetableMode = false;
-    float lfoMorph = 0.0f;
-    wavetable::Bank *lfoWavetable = nullptr;
+    // wavetable widget (shares lfoRate/lfoMaxRate/lfoGain/lfoOneShot/
+    // lfoGlobal above). wavetableBank is a counted reference owned by this
+    // WidgetParams - released by ~PresetDoc().
+    float wavetableMorph = 0.0f;
+    wavetable::Bank *wavetableBank = nullptr;
     // detune - amount is 0-10V, 5V = 0 offset (see DetuneState in
     // NodeState.h). maxOffsetCents is the settings-dialog range; stepCents
     // is the rounding grid (100 = semitone steps, 1 = cent steps).
@@ -412,8 +412,8 @@ struct PresetDoc
     {
         for (WidgetDesc &w : widgets)
         {
-            wavetable::release(w.params.lfoWavetable);
-            w.params.lfoWavetable = nullptr;
+            wavetable::release(w.params.wavetableBank);
+            w.params.wavetableBank = nullptr;
         }
     }
 };

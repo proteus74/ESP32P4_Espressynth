@@ -45,6 +45,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
@@ -558,6 +559,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::Lfo:
         nodes::lfo::build(inst, p);
+        break;
+    case NodeType::Wavetable:
+        nodes::wavetable::build(inst, p);
         break;
     case NodeType::Detune:
         nodes::detune::build(inst, p);
@@ -1450,8 +1454,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             NodeInstance &target = g->instances[targetWidget.instanceBase + v];
             float targetValue = initial;
-            if (target.type == NodeType::Lfo && strcmp(route.paramName, "rate") == 0 &&
-                route.kind != ControlRoute::Kind::KnobCc)
+            if ((target.type == NodeType::Lfo || target.type == NodeType::Wavetable) &&
+                strcmp(route.paramName, "rate") == 0 && route.kind != ControlRoute::Kind::KnobCc)
             {
                 targetValue = std::fmax(0.0f, std::fmin(cv::kMaxVolts, targetValue)) *
                               target.lfo.maxRateHz / cv::kMaxVolts;

@@ -38,6 +38,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MdaPianoNode.h"
@@ -80,6 +81,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::Lfo:
         nodes::lfo::render(inst, frames);
+        break;
+    case NodeType::Wavetable:
+        nodes::wavetable::render(inst, frames);
         break;
     case NodeType::Clock:
         nodes::clock::render(inst, frames);

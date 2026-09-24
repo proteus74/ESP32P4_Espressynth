@@ -345,8 +345,8 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
             // 0-10 V. Map that voltage to the LFO's 0-50 Hz range. A raw
             // Knob CC route intentionally stays raw and is clamped by the
             // LFO parameter setter itself.
-            if (target.type == NodeType::Lfo && strcmp(route.paramName, "rate") == 0 &&
-                kind != ControlRoute::Kind::KnobCc)
+            if ((target.type == NodeType::Lfo || target.type == NodeType::Wavetable) &&
+                strcmp(route.paramName, "rate") == 0 && kind != ControlRoute::Kind::KnobCc)
             {
                 if (targetValue < 0.0f) targetValue = 0.0f;
                 if (targetValue > cv::kMaxVolts) targetValue = cv::kMaxVolts;
@@ -851,7 +851,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     {
         const WidgetSlot &w = widgets[renderOrder[r]];
         const bool profileWidget = r == widgetProfileCursor;
-        if (w.type == NodeType::Lfo && w.outgoingEdgeCount == 0)
+        if ((w.type == NodeType::Lfo || w.type == NodeType::Wavetable) && w.outgoingEdgeCount == 0)
         {
             if (profileWidget)
             {
@@ -883,7 +883,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
         // sounds (not only while its own note is active), and it is
         // (re)started by the first note - later notes just join.
         bool forceLfoPrimaryActive = false;
-        if (w.type == NodeType::Lfo && w.voiced && w.instanceCount > 1)
+        if ((w.type == NodeType::Lfo || w.type == NodeType::Wavetable) && w.voiced && w.instanceCount > 1)
         {
             bool anySounding = false;
             for (uint16_t v = 0; v < w.instanceCount && !anySounding; ++v)
@@ -2050,7 +2050,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].lfo.zeroPointFixed = fixed;
             }
         }
-        else if (slot.type == NodeType::Lfo && strcmp(key, "oneShot") == 0 && cJSON_IsBool(item))
+        else if ((slot.type == NodeType::Lfo || slot.type == NodeType::Wavetable) && strcmp(key, "oneShot") == 0 &&
+                 cJSON_IsBool(item))
         {
             const bool oneShot = cJSON_IsTrue(item);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
@@ -2058,18 +2059,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].lfo.oneShot = oneShot;
             }
         }
-        else if (slot.type == NodeType::Lfo && strcmp(key, "wavetable") == 0 && cJSON_IsBool(item))
-        {
-            // Only switches the mode - the table bank itself arrives with the
-            // preset (too large for a live WS frame). Without a bank the LFO
-            // keeps rendering its classic waveform (see nodes/LfoNode.h).
-            const bool on = cJSON_IsTrue(item);
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-            {
-                instances[slot.instanceBase + v].lfo.wavetable = on;
-            }
-        }
-        else if (slot.type == NodeType::Lfo && strcmp(key, "global") == 0 && cJSON_IsBool(item))
+        else if ((slot.type == NodeType::Lfo || slot.type == NodeType::Wavetable) && strcmp(key, "global") == 0 &&
+                 cJSON_IsBool(item))
         {
             const bool global = cJSON_IsTrue(item);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
@@ -2338,8 +2329,8 @@ inline void Graph::destroy()
         case NodeType::DxEnvelope:
             nodes::dxenvelope::destroy(inst);
             break;
-        case NodeType::Lfo:
-            nodes::lfo::destroy(inst);
+        case NodeType::Wavetable:
+            nodes::wavetable::destroy(inst);
             break;
         case NodeType::StepArpeggiator:
             nodes::steparp::destroy(inst);

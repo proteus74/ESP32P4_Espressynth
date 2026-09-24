@@ -1,4 +1,4 @@
-// Wavetable editor popup + mini preview for the LFO's Wavetable mode.
+// Wavetable editor popup + mini preview for the Wavetable widget.
 //
 // openWavetableEditor() works on a private copy of the bank and only hands
 // it back through the callbacks:
@@ -46,9 +46,9 @@ function drawTablePath(ctx, w, h, valueAt, steps = WAVETABLE_SIZE) {
   ctx.stroke();
 }
 
-// Mini preview used inside the LFO widget: the currently morphed waveform,
+// Mini preview used inside the Wavetable widget: the currently morphed waveform,
 // plus (when cursorPhase is a number, 0..1) a playhead line with a dot on the
-// curve marking where in the cycle the LFO is right now.
+// curve marking where in the cycle it is right now.
 export function drawWavetablePreview(canvas, tables, morphVolts, cursorPhase) {
   if (!canvas || !tables || tables.length === 0) return;
   const ctx = canvas.getContext("2d");

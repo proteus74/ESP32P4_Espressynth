@@ -872,7 +872,7 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// POST /api/wavetable?widget=<LFO widget id>, body {"wavetables":[...]} (same
+// POST /api/wavetable?widget=<Wavetable widget id>, body {"wavetables":[...]} (same
 // base64 int16 format as the preset, see Wavetable.h). Live audition for the
 // web wavetable editor: the bank is swapped into the running graph (see
 // SynthEngine::postLiveWavetable), nothing is written to flash - the preset

@@ -196,26 +196,26 @@ export async function runAll() {
   });
   await test("lfo triangle phase 0 starts at 0V, phase 90 starts at 5V", async () => {
     const r0 = await render(0.2, (e) => {
-      e.createNode("l", "lfo", { waveType: "triangle", rate: 1, amplitude: 10, phase: 0 });
+      e.createNode("l", "lfo", { waveType: "triangle", rate: 1, gain: 10, phase: 0 });
       return out(e, "l", "value");
     });
     expectClose(r0.data[1], 0, 0.05, "phase0 ");
     const r90 = await render(0.2, (e) => {
-      e.createNode("l", "lfo", { waveType: "triangle", rate: 1, amplitude: 10, phase: 90 });
+      e.createNode("l", "lfo", { waveType: "triangle", rate: 1, gain: 10, phase: 90 });
       return out(e, "l", "value");
     });
     return expectClose(r90.data[1], 5, 0.05, "phase90 ");
   });
   await test("lfo rate above 50 Hz (max 500)", async () => {
     const { data } = await render(1.1, (e) => {
-      e.createNode("l", "lfo", { waveType: "sine", rate: 200, maxRate: 500, amplitude: 10 });
+      e.createNode("l", "lfo", { waveType: "sine", rate: 200, maxRate: 500, gain: 10 });
       return out(e, "l", "value");
     });
     return expectClose(risingCrossings(data, 0.1, 1.1, 5), 200, 2, "Hz ");
   });
   await test("lfo output clamped to 0..10V", async () => {
     const { data } = await render(1.1, (e) => {
-      e.createNode("l", "lfo", { waveType: "sine", rate: 5, amplitude: 10, zeroPointFixed: true, zeroPoint: 8 });
+      e.createNode("l", "lfo", { waveType: "sine", rate: 5, gain: 10, zeroPointFixed: true, zeroPoint: 8 });
       return out(e, "l", "value");
     });
     let mx = -1e9;
@@ -384,8 +384,26 @@ export async function runAll() {
     expectClose(at(data, 0.3), 7, 1e-4, "before ");
     return expectClose(at(data, 0.75), 7, 1e-4, "held ");
   });
+  await test("wavetable: default bank, morph 0 = sine, morph 10 = square, gain scales", async () => {
+    const wt = (morph, gain) => render(0.6, async (e) => {
+      e.createNode("w", "wavetable", { rate: 2, gain, morph });
+      // Worklet (secure context here) or ScriptProcessor fallback - wait
+      // until the source is attached before rendering starts.
+      await e._loadWavetableWorklet();
+      await Promise.resolve();
+      return out(e, "w", "value");
+    });
+    const sine = (await wt(0, 10)).data;
+    expectClose(at(sine, 0.125), 10, 0.05, "sine peak ");
+    expectClose(at(sine, 0.375), 0, 0.05, "sine trough ");
+    const square = (await wt(10, 10)).data;
+    expectClose(at(square, 0.1), 10, 0.05, "square high ");
+    expectClose(at(square, 0.35), 0, 0.05, "square low ");
+    const half = (await wt(0, 4)).data;
+    return expectClose(at(half, 0.125), 4, 0.05, "gain 4 peak ");
+  });
   await test("smoke: build, wire and remove every node type", async () => {
-    const types = ["oscillator", "fm-oscillator", "hammond", "lfo", "const", "up-down-button", "button", "knob",
+    const types = ["oscillator", "fm-oscillator", "hammond", "lfo", "wavetable", "const", "up-down-button", "button", "knob",
       "switch", "output-switch", "audio-out", "usb-out", "gain", "linked-input", "linked-output", "filter",
       "curtis-filter", "esp-eq", "graphic-eq", "mixer", "multiplexer", "output-multiplexer", "multiplier", "adder",
       "divide", "frequency-divider", "abs", "logic-and", "logic-or", "logic-xor", "logic-not", "value-mapper",

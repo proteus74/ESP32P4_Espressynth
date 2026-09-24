@@ -8,10 +8,10 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
-#include "../Wavetable.h"
 
-// Free-running LFO (sine/square/triangle/sawtooth/noise, or a morphable
-// wavetable - see Wavetable.h) with reset/one-shot/global modes. LfoState (value member) stays in NodeState.h.
+// Free-running LFO (sine/square/triangle/sawtooth/noise) with reset/one-shot/
+// global modes. The Wavetable widget (nodes/WavetableNode.h) shares LfoState,
+// globalUpdate() and the reset/one-shot semantics. LfoState (value member) stays in NodeState.h.
 namespace nodes::lfo
 {
 
@@ -117,13 +117,13 @@ inline void render(NodeInstance &inst, size_t frames)
     }
     // The LFO's "value" output always swings within the project's 0-10V CV
     // window (matches every other CV-carrying port, see CvConventions.h).
-    // amplitude (0-10V) is the peak-to-peak-ish swing: in "auto" zero-point
-    // mode the output ranges [0, amplitude] (halfSwing = amplitude/2,
+    // gain (0-10V) is the peak-to-peak-ish swing: in "auto" zero-point
+    // mode the output ranges [0, gain] (halfSwing = gain/2,
     // center = halfSwing); in "fixed" mode the same +/-halfSwing excursion
-    // is centered on the user-set zeroPoint instead. Default amplitude=10V
+    // is centered on the user-set zeroPoint instead. Default gain=10V
     // + auto mode reproduces the old fixed-5V-center/full-swing behavior
     // exactly.
-    const float halfSwing = s.amplitude * 0.5f;
+    const float halfSwing = s.gain * 0.5f;
     const float clampLo = 0.0f;
     const float clampHi = cv::kMaxVolts;
     // "zeroPoint" (port 3, control-only - see isControlOnlyInput): same
@@ -171,48 +171,6 @@ inline void render(NodeInstance &inst, size_t frames)
             s.oneShotDone = false;
             s.oneShotAccum = 0.0f;
         }
-    }
-    // Wavetable mode: same phase accumulator (so reset/global restarts and
-    // the phase offset behave exactly like the classic shapes), but the raw
-    // -1..+1 value comes from the widget's table bank, crossfaded by
-    // "morph". Morph (port 4) is a real audio-rate input: a connected LFO/
-    // envelope sweeps through the bank per sample; unconnected, the manual
-    // Morph slider (s.morph) is used. One Shot plays exactly one cycle per
-    // reset edge and then holds the phase - morph keeps acting on the held
-    // position, so a frozen One-Shot LFO can still be scanned through the
-    // bank.
-    if (s.wavetable && s.wavetableBank != nullptr)
-    {
-        const wavetable::Bank &bank = *s.wavetableBank;
-        const bool morphFed = controlPortConnected(inst, 4) ||
-                              (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
-        const uint32_t offsetInt = PhaseOsc::toPhaseInt(phaseOffset);
-        const float step = s.rate / kSampleRate;
-        const uint32_t inc = PhaseOsc::toPhaseInt(step);
-        const float manualMorph = s.morph * cv::kInvMaxVolts;
-        for (size_t i = 0; i < frames; ++i)
-        {
-            const float morph = morphFed ? portSample(inst, 4, i) * cv::kInvMaxVolts : manualMorph;
-            const float raw = wavetable::sample(bank, s.phaseGen.phaseInt() + offsetInt, morph);
-            inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);
-            if (oneShotOn && s.oneShotDone)
-                continue;
-            if (oneShotOn)
-            {
-                s.oneShotAccum += step;
-                if (s.oneShotAccum >= 1.0f)
-                {
-                    // Land exactly on the cycle start (the reset position)
-                    // instead of one increment past it.
-                    s.phaseGen.resetPhase();
-                    s.oneShotDone = true;
-                    s.oneShotAccum = 0.0f;
-                    continue;
-                }
-            }
-            s.phaseGen.advancePhaseOnly(inc, 1);
-        }
-        return;
     }
     // LinearUp/LinearDown: free-running they repeat like a sawtooth (wrapping
     // ramp); with One Shot they run exactly one non-wrapping ramp from the
@@ -303,7 +261,7 @@ inline void render(NodeInstance &inst, size_t frames)
     }
 }
 
-inline float clampf01Volts(float volts)
+inline float clampVolts(float volts)
 {
     if (!(volts >= 0.0f)) return 0.0f;
     return volts > cv::kMaxVolts ? cv::kMaxVolts : volts;
@@ -314,22 +272,12 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.lfo.wave = p.waveType;
     inst.lfo.maxRateHz = clampRate(p.lfoMaxRate);
     inst.lfo.rate = clampRate(p.lfoRate, inst.lfo.maxRateHz);
-    inst.lfo.amplitude = p.lfoAmplitude;
+    inst.lfo.gain = p.lfoGain;
     inst.lfo.phaseOffsetDeg = p.lfoPhaseDeg;
     inst.lfo.zeroPointFixed = p.lfoZeroPointFixed;
     inst.lfo.zeroPoint = p.lfoZeroPoint;
     inst.lfo.oneShot = p.lfoOneShot;
     inst.lfo.global = p.lfoGlobal;
-    inst.lfo.wavetable = p.lfoWavetableMode;
-    inst.lfo.morph = clampf01Volts(p.lfoMorph);
-    // Every voice instance holds its own reference to the one shared bank.
-    inst.lfo.wavetableBank = wavetable::acquire(p.lfoWavetable);
-}
-
-inline void destroy(NodeInstance &inst)
-{
-    wavetable::release(inst.lfo.wavetableBank);
-    inst.lfo.wavetableBank = nullptr;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -349,9 +297,9 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.rate = clampRate(inst.lfo.rate, inst.lfo.maxRateHz);
         return true;
     }
-    if (strcmp(name, "amplitude") == 0)
+    if (strcmp(name, "gain") == 0)
     {
-        inst.lfo.amplitude = value;
+        inst.lfo.gain = clampVolts(value);
         return true;
     }
     if (strcmp(name, "phase") == 0)
@@ -364,11 +312,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.zeroPoint = value;
         return true;
     }
-    if (strcmp(name, "morph") == 0)
-    {
-        inst.lfo.morph = clampf01Volts(value);
-        return true;
-    }
     return false;
 }
 
@@ -377,18 +320,12 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"));
     out.lfoMaxRate = clampRate(presetparser::getFloat(p, "maxRate", 50.0f));
     out.lfoRate = clampRate(presetparser::getFloat(p, "rate", 2.0f), out.lfoMaxRate);
-    out.lfoAmplitude = presetparser::getFloat(p, "amplitude", 10.0f);
+    out.lfoGain = clampVolts(presetparser::getFloat(p, "gain", 10.0f));
     out.lfoPhaseDeg = presetparser::getFloat(p, "phase", 0.0f);
     out.lfoZeroPointFixed = presetparser::getBool(p, "zeroPointFixed", false);
     out.lfoZeroPoint = presetparser::getFloat(p, "zeroPoint", 5.0f);
     out.lfoOneShot = presetparser::getBool(p, "oneShot", false);
     out.lfoGlobal = presetparser::getBool(p, "global", false);
-    out.lfoWavetableMode = presetparser::getBool(p, "wavetable", false);
-    out.lfoMorph = clampf01Volts(presetparser::getFloat(p, "morph", 0.0f));
-    // Bank is parsed whenever tables are stored, even with the mode off, so
-    // a live "wavetable": true toggle (Graph::applyLiveParams) finds it.
-    out.lfoWavetable = wavetable::parse(p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "wavetables") : nullptr,
-                                        out.lfoWavetableMode);
 }
 
 } // namespace nodes::lfo

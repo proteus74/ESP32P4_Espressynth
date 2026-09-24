@@ -1,4 +1,4 @@
-// Wavetable core shared by the LFO's Wavetable mode:
+// Wavetable core shared by the Wavetable widget:
 //  - main.js (editor popup, mini preview, control-rate LFO tick),
 //  - audio-engine.js (ScriptProcessor fallback when AudioWorklet is not
 //    available - e.g. the device UI served over plain http:// from a LAN IP,

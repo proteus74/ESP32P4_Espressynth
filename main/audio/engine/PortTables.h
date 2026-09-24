@@ -190,11 +190,20 @@ inline int audioInIndex(NodeType type, const char *portName)
         // NodeInstance.cpp/LfoState::zeroPointFixed).
         if (is(portName, "zeroPoint"))
             return 3;
-        // "morph" - Wavetable mode's table position (0-10V). Deliberately a
-        // genuine audio-rate port (not control-only): a second LFO or an
-        // envelope patched here sweeps the bank per sample.
+        return -1;
+    case NodeType::Wavetable:
+        // reset/oneShot/global: same indices and semantics as the LFO's
+        // (nodes::lfo::globalUpdate drives both). "morph" - table position
+        // 0-10V - is deliberately a genuine audio-rate port: a second LFO or
+        // an envelope patched here sweeps the bank per sample.
+        if (is(portName, "reset"))
+            return 0;
+        if (is(portName, "oneShot"))
+            return 1;
+        if (is(portName, "global"))
+            return 2;
         if (is(portName, "morph"))
-            return 4;
+            return 3;
         return -1;
     case NodeType::Detune:
         // cv only - amount isn't a real port (Knob-mappable by name via
@@ -570,6 +579,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Hammond:
         return is(portName, "value") ? 0 : -1; // mono, like Oscillator - only outL is ever written
     case NodeType::Lfo:
+    case NodeType::Wavetable:
         // "value" here - unlike Knob below - is ALWAYS a real audio port: an
         // LFO is by nature a continuous signal, not an occasionally changed
         // value.
@@ -755,7 +765,9 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 5; // "reset" + "oneShot" + "global" + "zeroPoint" + "morph" (CV)
+        return 4; // "reset" + "oneShot" + "global" + "zeroPoint" (CV)
+    case NodeType::Wavetable:
+        return 4; // "reset" + "oneShot" + "global" + "morph" (CV)
     case NodeType::Detune:
         return 1;
     case NodeType::Switch:
@@ -992,6 +1004,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:
         return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "reset"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
+    case NodeType::Wavetable:
+        return portIdx <= 2; // "reset"+"oneShot"+"global" like the LFO - "morph"(3) stays audio-rate
     case NodeType::WavePlayer:
         return portIdx == 1 || portIdx == 2; // "note"+"gate" - "amplitude" (index 0) stays audio-rate
     case NodeType::SoundFontPlayer:
