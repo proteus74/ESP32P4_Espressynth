@@ -1370,6 +1370,13 @@ export class AudioEngine {
 
 
     this._mdaPianoBankPromise = null;
+    // Browser-only switch (see setSampleLoadingEnabled): while off, sample
+    // players (wave-player, soundfont-player, mda-piano) don't download their
+    // files; the loads are parked here (entry -> loader) until
+    // loadDeferredSamples() runs them.
+    this._sampleLoadingEnabled = true;
+    this._deferredSampleLoads = new Map();
+    this.onDeferredSamplesChange = null;
 
     this._assetLoadTotal = 0;
     this._assetLoadDone = 0;
@@ -1653,7 +1660,62 @@ export class AudioEngine {
     return this._mdaPianoBankPromise;
   }
 
+  setSampleLoadingEnabled(enabled) {
+    this._sampleLoadingEnabled = enabled !== false;
+  }
+
+  isSampleLoadingEnabled() {
+    return this._sampleLoadingEnabled;
+  }
+
+  // Number of sample players currently waiting for their files.
+  getDeferredSampleCount() {
+    return this._deferredSampleLoads.size;
+  }
+
+  // Downloads everything that was skipped while sample loading was off.
+  loadDeferredSamples() {
+    const pending = [...this._deferredSampleLoads.values()];
+    this._deferredSampleLoads.clear();
+    pending.forEach((load) => load());
+    this._notifyDeferredSamples();
+  }
+
+  _notifyDeferredSamples() {
+    if (typeof this.onDeferredSamplesChange === "function") {
+      this.onDeferredSamplesChange(this._deferredSampleLoads.size);
+    }
+  }
+
+  // Runs `load` now, or parks it per entry while sample loading is off (a
+  // later request for the same entry, e.g. a new file, replaces it).
+  _requestSampleLoad(entry, load) {
+    if (this._sampleLoadingEnabled) {
+      load();
+      return;
+    }
+    this._deferredSampleLoads.set(entry, load);
+    this._notifyDeferredSamples();
+  }
+
+  _loadMdaPianoEntry(entry) {
+    this._requestSampleLoad(entry, () => {
+      this._loadMdaPianoBank().then((instruments) => {
+        entry.instruments = instruments;
+      });
+    });
+  }
+
   _loadWavePlayerBuffer(entry) {
+    entry.buffer = null;
+    if (!entry.sampleFile) {
+      if (this._deferredSampleLoads.delete(entry)) this._notifyDeferredSamples();
+      return;
+    }
+    this._requestSampleLoad(entry, () => this._fetchWavePlayerBuffer(entry));
+  }
+
+  _fetchWavePlayerBuffer(entry) {
     entry.buffer = null;
     if (!entry.sampleFile || !this.ctx) return;
 
@@ -1738,6 +1800,10 @@ export class AudioEngine {
   _loadSf2Entry(entry) {
     entry.parsed = null;
     if (!entry.path) return;
+    this._requestSampleLoad(entry, () => this._fetchSf2Entry(entry));
+  }
+
+  _fetchSf2Entry(entry) {
     this._assetLoadTotal += 1;
     this.getSf2Info(entry.volume, entry.path).then((parsed) => {
       entry.parsed = parsed;
@@ -4488,9 +4554,7 @@ export class AudioEngine {
           currentInstrumentIndex: -1,
           modWheel: 1,
         };
-        this._loadMdaPianoBank().then((instruments) => {
-          entry.instruments = instruments;
-        });
+        this._loadMdaPianoEntry(entry);
 
         processor.onaudioprocess = (event) => {
           const outL = event.outputBuffer.getChannelData(0);
@@ -4794,6 +4858,7 @@ export class AudioEngine {
 
   _removeEntry(entry) {
     if (!entry) return;
+    if (this._deferredSampleLoads.delete(entry)) this._notifyDeferredSamples();
     // Generic cleanup lists (each node on its own, so one already-stopped
     // source can't abort the rest): extraSources get stop()+disconnect(),
     // extraNodes just disconnect().

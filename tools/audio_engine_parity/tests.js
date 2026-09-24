@@ -423,5 +423,33 @@ export async function runAll() {
     if (w.instances[2].globalPrimary !== null) throw new Error("globalPrimary not cleared");
     return "ok";
   });
+  await test("sample loading off: downloads deferred until loadDeferredSamples()", async () => {
+    const { engine } = await newEngine(0.1);
+    const fetched = [];
+    const realFetch = window.fetch;
+    window.fetch = (url) => { fetched.push(String(url)); return Promise.reject(new Error("offline test")); };
+    try {
+      engine.setSampleLoadingEnabled(false);
+      let notified = -1;
+      engine.onDeferredSamplesChange = (count) => { notified = count; };
+      engine.createNode("w", "wave-player", { sampleFile: "a.wav" });
+      engine.createNode("w0", "wave-player", { sampleFile: "" });
+      engine.createNode("p", "mda-piano", {});
+      engine.createNode("s", "soundfont-player", { path: "soundfonts/x.sf2" });
+      if (fetched.length !== 0) throw new Error(`fetched while off: ${fetched}`);
+      if (engine.getDeferredSampleCount() !== 3 || notified !== 3) {
+        throw new Error(`deferred ${engine.getDeferredSampleCount()} notified ${notified}`);
+      }
+      engine.removeNode("s");
+      if (engine.getDeferredSampleCount() !== 2) throw new Error("removed node still deferred");
+      engine.loadDeferredSamples();
+      if (fetched.length !== 2 || engine.getDeferredSampleCount() !== 0 || notified !== 0) {
+        throw new Error(`after load: fetched ${fetched.length}, deferred ${engine.getDeferredSampleCount()}`);
+      }
+      return "ok";
+    } finally {
+      window.fetch = realFetch;
+    }
+  });
   return results;
 }

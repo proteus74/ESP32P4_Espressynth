@@ -14,6 +14,7 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
   - Divide, Frequency Divider, Logic OR, Value Mapper, Bitcrusher und Output Switch rechnen wie die Firmware.
   - SoundFont-Filter-Resonanz korrigiert, Gain-Eingang per Kabel möglich.
 - Neuer Paritätstest `tools/audio_engine_parity` (Playwright, offline gerendert).
+- Neue Browser-Einstellung „Load samples in the browser“ (Settings, nur lokal gespeichert): ist sie aus, laden Wave Player, SoundFont Player und MDA Piano beim Seitenaufruf keine Samples – ein blinkender „Load Samples“-Button neben dem Lautsprecher lädt sie bei Bedarf nach.
 
 ## [0.31]
 
