@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features · ESPRESSYNTH</title>
+<meta name="description" content="Alle Features der ESPRESSYNTH-Firmware: Audio-Engine, USB Host/Device, Wi-Fi/Ethernet/BLE, Display, Web-UI, CLI und mehr.">
+<link rel="icon" type="image/png" href="../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="index.html">
+      <img src="../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="index.html">Start</a>
+      <a href="features.html" class="active">Features</a>
+      <a href="connect.html">Verbinden</a>
+      <a href="widgets/index.html">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+
+<div class="breadcrumb"><a href="index.html">Start</a> &rsaquo; Features</div>
+<h1>Features</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">
+ESPRESSYNTH ist die Synth-Anwendung auf einem größeren, modularen ESP32-P4-Firmware-Template.
+Die Firmware verbindet Audio, USB, Netzwerk, Display und Web-Server-Funktionalität in einer
+Codebasis. Diese Seite fasst zusammen, was das Gesamtsystem kann &ndash; für die vollständigen
+Details siehe das <a href="../../README.md">README.md</a> im Projekt-Root.
+</p>
+
+<h2>Unterstützte Boards</h2>
+<ul>
+  <li><strong>JC8012P4A1</strong></li>
+  <li><strong>JC1060P470C</strong> &ndash; 7"-Display-Board</li>
+  <li><strong>Waveshare ESP32-P4 Wi-Fi&nbsp;6 Dev Kit</strong></li>
+  <li><strong>Custom-Board-Definition</strong> für eigene ESP32-P4-Hardware</li>
+</ul>
+<p>
+Board-spezifische Pin-Belegungen, Display-, Touch- und Peripherie-Anbindung liegen zentral in
+<code>main/boards</code> und werden über <code>Kconfig.projbuild</code> beim Bauen ausgewählt
+&ndash; die eigentliche Anwendungslogik bleibt davon unabhängig.
+</p>
+
+<h2>Audio-Subsystem</h2>
+<p>
+Audio ist der zentrale Baustein von ESPRESSYNTH. Unterstützt werden:
+</p>
+<ul>
+  <li>Der Onboard-Codec <strong>ES8311</strong></li>
+  <li>Der Onboard-Codec <strong>WM8960</strong> (mit eigener Laufzeit-Kontroll-API für Kopfhörer-/Lautsprecher-Lautstärke, Mikrofon-Gain, Mic-Bias u.&nbsp;a.)</li>
+  <li><strong>USB Audio Class&nbsp;2.0</strong> (UAC2) als Device &ndash; das Board meldet sich am Rechner als USB-Soundkarte an</li>
+  <li>Feste 44,1&nbsp;kHz-Audiokonfiguration im gesamten Projekt</li>
+</ul>
+<p>
+Die Gesamt-Ausgangslatenz setzt sich aus zwei Stufen zusammen, beide über <code>idf.py
+menuconfig</code> unter <em>Application Features &rarr; Audio Subsystem</em> einstellbar:
+</p>
+<table>
+  <tr><th>Stufe</th><th>Parameter</th><th>Standard</th></tr>
+  <tr><td>I2S-DMA-Ringpuffer</td><td><code>AUDIO_I2S_DMA_DESC_NUM</code> &times; <code>AUDIO_I2S_DMA_FRAME_NUM</code></td><td>6 &times; 240 Frames &asymp; 32,6&nbsp;ms</td></tr>
+  <tr><td>Synth-Engine-Renderblock</td><td><code>AUDIO_SYNTH_BLOCK_SIZE</code></td><td>128 Samples &asymp; 2,9&nbsp;ms</td></tr>
+</table>
+<p>
+Macht in Summe rund <strong>35&nbsp;ms</strong> vom gerenderten Sample bis zum hörbaren Ton bei
+Standardeinstellungen &ndash; ein größerer Ringpuffer kauft mehr Sicherheitsabstand gegen
+Aussetzer, ein kleinerer senkt die Latenz.
+</p>
+
+<h2>USB Host &amp; Device</h2>
+<p>Die Firmware nutzt TinyUSB und unterstützt beide Richtungen gleichzeitig:</p>
+<h3>USB-Device-Modus</h3>
+<ul>
+  <li>CDC-Seriell-Device</li>
+  <li>USB-MIDI-Device</li>
+  <li>USB Audio Class&nbsp;2.0 (UAC2)</li>
+  <li>HID: Tastatur, Maus, Gamepad</li>
+  <li>MSC/DFU und weitere optionale TinyUSB-Klassen</li>
+</ul>
+<h3>USB-Host-Modus</h3>
+<ul>
+  <li>Eingaben von USB-Tastaturen und -Mäusen</li>
+  <li>USB-MIDI-Eingabegeräte (Keyboards, Controller)</li>
+  <li>Hub-fähige Geräteerkennung</li>
+</ul>
+
+<h2>Netzwerk: Wi-Fi, Ethernet, BLE</h2>
+<ul>
+  <li>Wi-Fi-Station-Modus mit automatischer Wiederverbindung</li>
+  <li>Optionaler Captive-Portal-Fallback im AP+STA-Modus</li>
+  <li>Ethernet-Unterstützung</li>
+  <li>Bluetooth&nbsp;LE über NimBLE (Scanning, Geräteverwaltung, HID- und MIDI-Host-Funktionen)</li>
+  <li>Ein <strong>ESP32-C6 Co-Prozessor</strong> übernimmt Wi-Fi/BLE per ESP-Hosted über SDIO,
+      damit die Hauptanwendung auf dem P4-Kern ungestört läuft &ndash; inklusive OTA-Update-Flow
+      für die Co-Prozessor-Firmware</li>
+</ul>
+
+<h2>Display &amp; Touch (LVGL)</h2>
+<ul>
+  <li>MIPI-DSI-Display-Initialisierung</li>
+  <li>Touch-Eingabe-Anbindung</li>
+  <li>Optimierte Frame-Flushing-Pfade</li>
+  <li>Tastatur-/Maus-Eingaben werden direkt in LVGL eingespeist</li>
+  <li>Board-spezifische Display-Kalibrierung</li>
+</ul>
+
+<h2>Web-Oberfläche &amp; Dateisystem</h2>
+<p>
+Die ESPRESSYNTH-Bedienoberfläche (<code>data/index.html</code> + <code>static/js/main.js</code>)
+wird direkt vom Gerät als statischer HTTP-Server ausgeliefert &ndash; aus einer eigenen,
+separaten <code>www</code>-LittleFS-Partition, getrennt vom restlichen Dateisystem. Das hält
+UI-Updates unabhängig von der Firmware selbst. Dazu kommen:
+</p>
+<ul>
+  <li>LittleFS-Datenpartition</li>
+  <li>SD-Karten-Unterstützung</li>
+  <li>Eine WebSocket-Verbindung (<code>/ws</code>) für Echtzeit-Status (CPU-Last, MIDI-Aktivität,
+      Node-Auslastung, ...) und ein REST-artiges <code>/api/*</code> für Presets, Dateien,
+      Wi-Fi-Konfiguration, Backups u.&nbsp;a.</li>
+</ul>
+
+<h2>CLI &amp; Debug</h2>
+<p>Eine interaktive Kommandozeile (<code>esp_console</code>) ist über UART, USB-Serial/JTAG oder
+USB-CDC erreichbar, mit u.&nbsp;a.:</p>
+<ul>
+  <li>Speicher-, Uptime- und Chip-Infos, <code>top</code>-artige Task-Übersicht</li>
+  <li>Wi-Fi-, Ethernet- und BLE-Kommandos, <code>ping</code></li>
+  <li>Audio-Kommandos (Lautstärke/Mute, <code>tone</code>-Testgenerator über Codec, I2S oder
+      USB-Audio-Mikrofonstream)</li>
+  <li>Kontinuierlicher I2C-Bus-Scan (<code>i2c-scan &lt;port&gt;</code>) plus automatischer
+      Boot-Scan</li>
+  <li>USB-, Dateisystem- und Speicherplatz-Kommandos</li>
+</ul>
+
+<h2>Architektur</h2>
+<p>Der Code ist in Feature-Module statt eines Monolithen gegliedert:</p>
+<ul>
+  <li><code>main/boards</code> &ndash; Board-spezifische Konfiguration</li>
+  <li><code>main/features</code> &ndash; Audio, USB, Web, Wi-Fi, BLE, Dateisystem usw.</li>
+  <li><code>main/cli</code> &ndash; Konsole/REPL</li>
+  <li><code>main/app_startup.hpp</code> &ndash; Start-Orchestrierung der aktivierten Subsysteme</li>
+  <li><code>main/Kconfig.projbuild</code> &ndash; modulares Ein-/Ausschalten von Features</li>
+</ul>
+<p>
+Zeitkritische Aufgaben laufen bewusst auf getrennten CPU-Kernen: <code>MAIN_CORE</code> für
+allgemeine App-Logik, Netzwerk, HID-Eingabe, Display und CLI; <code>AUDIO_CORE</code> für die
+audio- und USB-Audio-intensiven Pfade. Das reduziert Aussetzer und USB-Timing-Probleme.
+</p>
+
+<div class="note">
+<strong>Firmware bauen &amp; flashen:</strong> Diese Seite beschreibt, <em>was</em> die Firmware
+kann. Die Schritt-für-Schritt-Anleitung zum Bauen, Konfigurieren und Flashen mit ESP-IDF steht im
+<a href="../../README.md">README.md</a> im Projekt-Wurzelverzeichnis.
+</div>
+
+<p><a href="connect.html">Weiter zu: Verbinden &amp; erste Schritte &rarr;</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

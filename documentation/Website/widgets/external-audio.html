@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>External Audio Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Die tatsächlichen Audioausgänge der Hardware: USB-Audio zum Rechner, sowie die beiden unterstützten Onboard-Codecs ES8311 und WM8960.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; External Audio</div>
+<h1>External Audio</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Die tatsächlichen Audioausgänge der Hardware: USB-Audio zum Rechner, sowie die beiden unterstützten Onboard-Codecs ES8311 und WM8960.</p>
+<div class="widget-index">
+  <a href="#usb-out">🖥️ USB-Out</a>
+  <a href="#es8311-out">🔊 ES8311-Out</a>
+  <a href="#wm8960-out">🔊 WM8960-Out</a>
+</div>
+<article class="widget-entry" id="usb-out">
+  <h3 class="widget-entry-title">🖥️ USB-Out <span class="type">(usb-out)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sends the final stereo mix out over USB audio, so ESPRESSYNTH can act as a USB audio interface
+into a computer, DAW, or USB audio device.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to send.</li>
+<li><span class="port-label">Volume</span> — the output level.</li>
+<li><span class="port-label">Mute (Gate)</span> — silences the output without unpatching it.</li>
+</ul>
+  </div>
+</article>
+<article class="widget-entry" id="es8311-out">
+  <h3 class="widget-entry-title">🔊 ES8311-Out <span class="type">(es8311-out)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sends the final stereo mix to the board's onboard ES8311 audio codec — this is the widget you use
+to actually hear your patch through ESPRESSYNTH's real hardware audio output (speaker/line out),
+rather than through the browser.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to send.</li>
+<li><span class="port-label">Volume</span> — the output level.</li>
+<li><span class="port-label">Mute (Gate)</span> — silences the output without unpatching it.</li>
+</ul>
+  </div>
+</article>
+<article class="widget-entry" id="wm8960-out">
+  <h3 class="widget-entry-title">🔊 WM8960-Out <span class="type">(wm8960-out)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sends the final stereo mix to a WM8960 audio codec, on boards that use that chip for their audio
+output instead of an ES8311. Same job as ES8311-Out — the real hardware audio out for your patch —
+just for a different codec.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to send.</li>
+<li><span class="port-label">Volume</span> — the output level.</li>
+<li><span class="port-label">Mute (Gate)</span> — silences the output without unpatching it.</li>
+</ul>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Misc Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Werkzeuge zum Beobachten, Debuggen und Dokumentieren des Patches: Kommentar-Widget, Debug-Ausgabe, Voltmeter, VU-Meter, Oszilloskop und Spektrumanalyzer.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Misc</div>
+<h1>Misc</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Werkzeuge zum Beobachten, Debuggen und Dokumentieren des Patches: Kommentar-Widget, Debug-Ausgabe, Voltmeter, VU-Meter, Oszilloskop und Spektrumanalyzer.</p>
+<div class="widget-index">
+  <a href="#annotation">📝 Annotation</a>
+  <a href="#debug">🐞 Debug</a>
+  <a href="#voltmeter">🌡️ Voltmeter</a>
+  <a href="#vu-meter">📊 VU-Meter</a>
+  <a href="#vu-meter-horizontal">📶 VU-Meter Horizontal</a>
+  <a href="#oscilloscope">🖥️ Oscilloscope</a>
+  <a href="#spectrum">📈 Spectrum Analyzer</a>
+</div>
+<article class="widget-entry" id="annotation">
+  <h3 class="widget-entry-title">📝 Annotation <span class="type">(annotation)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A text note you place on the canvas — it doesn't process audio or CV at all. Use it to label
+sections of a big patch, leave yourself reminders, or document what a group of widgets is doing.</p>
+<p>No inputs or outputs — it's purely a visual note.</p>
+  </div>
+</article>
+<article class="widget-entry" id="debug">
+  <h3 class="widget-entry-title">🐞 Debug <span class="type">(debug)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A diagnostic probe — shows you the live value of whatever CV or audio signal you patch into it,
+so you can check what a signal is actually doing while you're building or troubleshooting a patch.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to inspect.</p>
+  </div>
+</article>
+<article class="widget-entry" id="voltmeter">
+  <h3 class="widget-entry-title">🌡️ Voltmeter <span class="type">(voltmeter)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Displays the current value of a CV signal as a readable number/needle, like a multimeter for your
+patch. Handy for checking exactly what voltage a knob, envelope, or other CV source is currently
+putting out.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the CV signal to measure.</p>
+  </div>
+</article>
+<article class="widget-entry" id="vu-meter">
+  <h3 class="widget-entry-title">📊 VU-Meter <span class="type">(vu-meter)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A vertical VU-style level meter — shows you how loud an audio signal is in real time, just like
+the level meters on a mixing desk, so you can check for clipping or just see how hot a signal is
+running.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the audio signal to meter.</p>
+  </div>
+</article>
+<article class="widget-entry" id="vu-meter-horizontal">
+  <h3 class="widget-entry-title">📶 VU-Meter Horizontal <span class="type">(vu-meter-horizontal)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The same level metering as VU-Meter, laid out horizontally instead of vertically — useful when
+you want a level meter that fits better into a wide row on your canvas.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the audio signal to meter.</p>
+  </div>
+</article>
+<article class="widget-entry" id="oscilloscope">
+  <h3 class="widget-entry-title">🖥️ Oscilloscope <span class="type">(oscilloscope)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Draws the actual waveform shape of a signal over time, like a bench oscilloscope. Great for
+seeing exactly what a waveform, envelope, or CV signal looks like — is that oscillator really a
+clean saw wave? Is that envelope curve doing what you expect?</p>
+<h2>Inputs</h2>
+<p><span class="port-label">In 1 / In 2</span> — two signals you can view at once, for comparing two waveforms side by side.</p>
+  </div>
+</article>
+<article class="widget-entry" id="spectrum">
+  <h3 class="widget-entry-title">📈 Spectrum Analyzer <span class="type">(spectrum)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Shows the frequency content of a signal as a real-time spectrum display — instead of the
+waveform's shape over time (like an oscilloscope), this shows which frequencies are present and how
+strong they are. Useful for seeing exactly what a filter or effect is doing to a sound's tone.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the audio signal to analyze.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

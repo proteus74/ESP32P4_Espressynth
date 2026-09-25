@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Rechen- und Logik-Bausteine für CV-Signale: Addition, Division, Multiplikation, Betrag, Wertebereich-Mapping sowie die logischen Grundfunktionen AND/OR/XOR/NOT. Damit lassen sich Steuerspannungen kombinieren und umformen.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Math</div>
+<h1>Math</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Rechen- und Logik-Bausteine für CV-Signale: Addition, Division, Multiplikation, Betrag, Wertebereich-Mapping sowie die logischen Grundfunktionen AND/OR/XOR/NOT. Damit lassen sich Steuerspannungen kombinieren und umformen.</p>
+<div class="widget-index">
+  <a href="#adder">➕ Adder</a>
+  <a href="#divide">➗ Divide</a>
+  <a href="#frequency-divider">➗ Frequency Divider</a>
+  <a href="#multiplier">✖️ Multiplier</a>
+  <a href="#abs">|x| Abs</a>
+  <a href="#value-mapper">🗺️ Value Mapper</a>
+  <a href="#logic-and">& AND</a>
+  <a href="#logic-or">≥1 OR</a>
+  <a href="#logic-xor">=1 XOR</a>
+  <a href="#logic-not">¬ NOT</a>
+</div>
+<article class="widget-entry" id="adder">
+  <h3 class="widget-entry-title">➕ Adder <span class="type">(adder)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Adds two CV signals together. Handy for combining two modulation sources (e.g. an LFO plus an
+envelope) into one signal, or offsetting one CV by another.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two signals to add.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — In 1 + In 2.</p>
+  </div>
+</article>
+<article class="widget-entry" id="divide">
+  <h3 class="widget-entry-title">➗ Divide <span class="type">(divide)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Divides one CV signal by another. Useful whenever you need a ratio between two values rather than
+a sum or product — for example scaling one modulation source by how large another one currently
+is.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — In 1 is divided by In 2.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — In 1 ÷ In 2.</p>
+  </div>
+</article>
+<article class="widget-entry" id="frequency-divider">
+  <h3 class="widget-entry-title">➗ Frequency Divider <span class="type">(frequency-divider)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Divides down a clock/pitch signal so it repeats or plays less often — the CV equivalent of an
+octave/clock divider on a modular rack. Patch a Clock's pulse or an oscillator's pitch in, and get
+a slower or lower-pitched version out (e.g. divide by 2 for one octave down, or a clock at half
+speed).</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the clock or pitch CV to divide.</li>
+<li><span class="port-label">Divider</span> — the division factor.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the divided-down signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="multiplier">
+  <h3 class="widget-entry-title">✖️ Multiplier <span class="type">(multiplier)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Multiplies two CV signals together. This is how you build things like ring-modulator-style
+effects, or use one signal to scale the depth/amount of another (e.g. multiplying an LFO by an
+envelope so the wobble only happens while a note is held).</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two signals to multiply.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — In 1 × In 2.</p>
+  </div>
+</article>
+<article class="widget-entry" id="abs">
+  <h3 class="widget-entry-title">|x| Abs <span class="type">(abs)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Outputs the absolute value of its input — flips any negative part of the signal to positive, so a
+signal that swings above and below zero comes out only ever at or above zero. Useful for turning a
+bipolar LFO into a one-directional modulation source, among other tricks.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to rectify.</p>
+<h2>Output</h2>
+<p>The widget's single output — |In|, always zero or positive.</p>
+  </div>
+</article>
+<article class="widget-entry" id="value-mapper">
+  <h3 class="widget-entry-title">🗺️ Value Mapper <span class="type">(value-mapper)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Remaps an incoming CV range onto a different output range/curve — the CV equivalent of a lookup
+table. Use it to rescale a 0–127 MIDI note into a usable pitch range, turn a linear CV into an
+exponential response, or clamp/shape any signal to exactly the range a target parameter expects.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to remap.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the remapped signal (configure the input/output ranges and curve from the widget itself).</p>
+  </div>
+</article>
+<article class="widget-entry" id="logic-and">
+  <h3 class="widget-entry-title">& AND <span class="type">(logic-and)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A logic AND gate for CV/gate signals: its output is only "on" when both inputs are "on" at the
+same time. Useful for combining two gate/trigger conditions, e.g. only letting a sound through
+while two different keys or triggers are both active.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two gate/CV signals to combine.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — on only when both inputs are on.</p>
+  </div>
+</article>
+<article class="widget-entry" id="logic-or">
+  <h3 class="widget-entry-title">≥1 OR <span class="type">(logic-or)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A logic OR gate for CV/gate signals: its output is "on" whenever either input is "on". Useful for
+merging two trigger or gate sources into one, so either one can fire the same thing downstream.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two gate/CV signals to combine.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — on when at least one input is on.</p>
+  </div>
+</article>
+<article class="widget-entry" id="logic-xor">
+  <h3 class="widget-entry-title">=1 XOR <span class="type">(logic-xor)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A logic XOR ("exclusive or") gate: its output is "on" only when exactly one of its two inputs is
+on — not both, and not neither. Good for building alternation/toggle-style logic from two gate
+sources.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two gate/CV signals to combine.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — on when exactly one input is on.</p>
+  </div>
+</article>
+<article class="widget-entry" id="logic-not">
+  <h3 class="widget-entry-title">¬ NOT <span class="type">(logic-not)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A logic NOT (inverter): flips a gate/CV signal — on becomes off and off becomes on. Handy for
+inverting a gate so something happens while a key is released instead of while it's held, or for
+flipping any on/off logic in your patch.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to invert.</p>
+<h2>Output</h2>
+<p>The widget's single output — the inverted signal.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>
