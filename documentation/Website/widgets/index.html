@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget-Referenz · ESPRESSYNTH</title>
+<meta name="description" content="Übersicht aller ESPRESSYNTH-Widgets nach Kategorie">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="../index.html">Start</a> &rsaquo; Widgets</div>
+<h1>Widget-Referenz</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">
+ESPRESSYNTH ist ein modularer, Eurorack-artiger Software-Synthesizer: Man verbindet Widgets
+per Kabel zu einem Patch, genau wie an einem echten Modularsystem &ndash; nur eben im Browser,
+mit dem ESP32-P4 als Klangerzeuger. Diese Seite listet alle <strong>69 Widget-Typen</strong>,
+gruppiert in die 11 Kategorien, die auch im "Add Node"-Dialog der Web-Oberfläche
+erscheinen.
+</p>
+
+<figure>
+  <img src="../images/02-widget-picker.png" alt="Der Add-Node-Dialog von ESPRESSYNTH mit allen Widget-Kategorien">
+  <figcaption>Der "Add Node"-Dialog (Rechtsklick auf die Arbeitsfläche) zeigt alle verfügbaren Widgets, gruppiert nach Kategorie.</figcaption>
+</figure>
+
+<h2>Kategorien</h2>
+<div class="category-nav">
+  <a href="midi.html">
+  <span>MIDI</span>
+  <span class="n">2 Widgets</span>
+</a><a href="generator.html">
+  <span>Generator</span>
+  <span class="n">5 Widgets</span>
+</a><a href="modulator.html">
+  <span>Modulator</span>
+  <span class="n">10 Widgets</span>
+</a><a href="control.html">
+  <span>Control</span>
+  <span class="n">8 Widgets</span>
+</a><a href="math.html">
+  <span>Math</span>
+  <span class="n">10 Widgets</span>
+</a><a href="filter.html">
+  <span>Filter</span>
+  <span class="n">4 Widgets</span>
+</a><a href="effects.html">
+  <span>Effects</span>
+  <span class="n">7 Widgets</span>
+</a><a href="mixing-output.html">
+  <span>Mixing/Output</span>
+  <span class="n">9 Widgets</span>
+</a><a href="external-audio.html">
+  <span>External Audio</span>
+  <span class="n">3 Widgets</span>
+</a><a href="misc.html">
+  <span>Misc</span>
+  <span class="n">7 Widgets</span>
+</a><a href="external-hardware.html">
+  <span>External Hardware</span>
+  <span class="n">4 Widgets</span>
+</a>
+</div>
+
+<h2>So wird gepatcht</h2>
+<p>Jedes Widget hat links seine Eingänge (CV/Audio) und rechts seine Ausgänge. Ein Kabel wird
+gezogen, indem man mit der Maus von einem Ausgangs-Punkt (Kreis) zu einem Eingangs-Punkt eines
+anderen Widgets zieht &ndash; die Verbindung wird sofort aktiv, es muss nichts kompiliert oder
+neu gestartet werden. Die meisten Eingänge lassen sich zusätzlich direkt per Regler einstellen,
+solange kein Kabel gesteckt ist; sobald ein Kabel angeschlossen ist, übernimmt das CV-Signal die
+Kontrolle.</p>
+
+<figure>
+  <img src="../images/03-example-patch.png" alt="Beispiel-Patch: Midi-In, Oscillator, Filter, ADSR, Mixer und Gain/VCA verkabelt">
+  <figcaption>Ein einfaches Beispiel-Patch: Midi-In liefert Pitch und Gate, der Oscillator erzeugt den Ton, das Filter formt ihn,
+  die ADSR-Hüllkurve steuert die Filter-Cutoff-Frequenz, Mixer und Gain/VCA fassen alles zusammen.</figcaption>
+</figure>
+
+<div class="note">
+<strong>Hinweis:</strong> Die Kurzbeschreibungen je Widget unten sind wortgleich mit der
+eingebauten Hilfe der Web-Oberfläche (Klick auf das <code>?</code> neben jedem Widget im
+"Add Node"-Dialog, Quelle: <code>data/help/widgets/*.html</code>) und bewusst auf Englisch
+belassen, damit sie 1:1 mit dem Gerät übereinstimmen.
+</div>
+
+<h2>Ein paar visuell interessante Widgets</h2>
+<figure>
+  <img src="../images/04-visual-widgets.png" alt="Wavetable-Editor, Drum-Sequencer, Oszilloskop, Spektrumanalyzer und VU-Meter">
+  <figcaption>Der Wavetable-Editor, der Drum-Sequencer-Grid, Oszilloskop, Spektrumanalyzer und VU-Meter &ndash;
+  einige der Widgets mit eigener grafischer Darstellung statt reiner Regler-Liste.</figcaption>
+</figure>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

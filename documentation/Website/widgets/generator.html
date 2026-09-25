@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generator Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Die Klangerzeuger von ESPRESSYNTH: Oszillatoren, eine Hammond-Orgel-Emulation, Sample-Player, ein SoundFont-Player und ein klassisches FM-Piano. Jeder Generator liefert ein Audiosignal, das anschließend gefiltert, moduliert und gemischt werden kann.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Generator</div>
+<h1>Generator</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Die Klangerzeuger von ESPRESSYNTH: Oszillatoren, eine Hammond-Orgel-Emulation, Sample-Player, ein SoundFont-Player und ein klassisches FM-Piano. Jeder Generator liefert ein Audiosignal, das anschließend gefiltert, moduliert und gemischt werden kann.</p>
+<div class="widget-index">
+  <a href="#fm-oscillator">🔔 Oscillator</a>
+  <a href="#hammond">🎹 Hammond</a>
+  <a href="#wave-player">🎵 Wave Player</a>
+  <a href="#soundfont-player">🎼 SoundFont Player</a>
+  <a href="#mda-piano">🎹 MDA Piano</a>
+</div>
+<article class="widget-entry" id="fm-oscillator">
+  <h3 class="widget-entry-title">🔔 Oscillator <span class="type">(fm-oscillator)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>This is ESPRESSYNTH's main sound source — a voltage-controlled oscillator (VCO), just like the
+core oscillator in a subtractive or FM synth voice. It generates a tone at a pitch you control, and
+can also be frequency-modulated by another oscillator for FM/bell-like and metallic sounds.</p>
+<h2>Key inputs</h2>
+<ul>
+<li><span class="port-label">Pitch</span> — the 1V/oct-style pitch CV, normally patched from Midi-In's Pitch output.</li>
+<li><span class="port-label">Tune</span> — fine/coarse tuning offset, for detuning against other oscillators.</li>
+<li><span class="port-label">Amplitude</span> — overall loudness of the oscillator, often patched from Velocity or an envelope.</li>
+<li><span class="port-label">Waveform</span> — picks the wave shape (sine, saw, square, etc.).</li>
+<li><span class="port-label">Gate</span> — retriggers the oscillator's phase/feedback state when a new note starts.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+<li><span class="port-label">Feedback (Self)</span> — feeds the oscillator's own output back into itself for extra harmonic edge/distortion.</li>
+<li><span class="port-label">FM In</span> — patch another oscillator's output here to frequency-modulate this one (classic FM synthesis).</li>
+<li><span class="port-label">FM Ratio</span> — sets the modulator-to-carrier frequency ratio for FM.</li>
+<li><span class="port-label">Duty Cycle</span> — pulse width for the square wave (thin, nasal square vs. fat 50% square).</li>
+<li><span class="port-label">SuperSaw Detune / SuperSaw Mix</span> — stacks and detunes multiple saws under the hood for a thick "supersaw" trance-style sound, and blends how much of that stacking is mixed in.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the resulting audio signal. Patch it into a Filter, Gain/VCA, Mixer, or straight to an output widget.</p>
+  </div>
+</article>
+<article class="widget-entry" id="hammond">
+  <h3 class="widget-entry-title">🎹 Hammond <span class="type">(hammond)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A tonewheel organ voice, modeled after the classic Hammond drawbar organ. Instead of one
+waveform, nine "drawbars" each add a different harmonic (like the nine drawbars on a real
+Hammond), so you can dial in your own organ registration by ear.</p>
+<h2>Key inputs</h2>
+<ul>
+<li><span class="port-label">Pitch / Tune</span> — the note to play and a tuning offset.</li>
+<li><span class="port-label">Amplitude</span> — overall loudness, typically patched from Velocity.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+<li><span class="port-label">16′, 5⅓′, 8′, 4′, 2⅔′, 2′, 1⅗′, 1⅓′, 1′</span> — the nine drawbars, named by the pipe-organ foot-length convention. Each is its own CV input, so you can patch an LFO or envelope to one drawbar to make the tone evolve, or just set them by hand for a classic registration (e.g. 888000000 is a popular starting point).</li>
+</ul>
+<p>Unlike most instrument widgets, Hammond has no Gate or Waveform input — the tonewheels spin
+continuously, and note on/off is shaped entirely by the Amplitude CV and whatever ADSR/Gain you
+patch downstream.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the organ's audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="wave-player">
+  <h3 class="widget-entry-title">🎵 Wave Player <span class="type">(wave-player)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Plays back a sample/wave file you've loaded, pitched to the note you play — like a simple
+sampler. Good for one-shots, loops, or using a recorded instrument instead of a synthesized
+waveform.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Amplitude</span> — loudness, typically from Velocity or an envelope.</li>
+<li><span class="port-label">Note (0–127)</span> — which pitch to play the sample at.</li>
+<li><span class="port-label">Gate</span> — starts/stops (or retriggers) playback.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L</span> / <span class="port-label">Out R</span> — the stereo audio signal, patch both into a stereo effect or output widget.</p>
+  </div>
+</article>
+<article class="widget-entry" id="soundfont-player">
+  <h3 class="widget-entry-title">🎼 SoundFont Player <span class="type">(soundfont-player)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Plays notes using a SoundFont (.sf2) instrument bank — think orchestral instruments, GM
+instrument sets, or any sample-based patch someone has packaged as a SoundFont. It's a full
+multi-sample instrument rather than a single oscillator.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">MIDI</span> — the note stream to play, patched from Midi-In's MIDI output (or Midi-Split).</li>
+<li><span class="port-label">Bank / Program</span> — selects which instrument inside the SoundFont to use (GM bank/program numbers).</li>
+<li><span class="port-label">Enable CC Messages / Enable Mod Wheel / Enable Pitch Wheel</span> — lets you turn on/off whether incoming MIDI controller data, mod wheel, and pitch wheel affect the sound.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L</span> / <span class="port-label">Out R</span> — the stereo audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="mda-piano">
+  <h3 class="widget-entry-title">🎹 MDA Piano <span class="type">(mda-piano)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A physically-modeled acoustic piano voice (based on the classic mda ePiano), with its own drive,
+tremolo/wah, and chorus/phaser built in — a ready-to-play electric/acoustic piano sound rather than
+something you build from scratch.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">MIDI</span> — the note stream to play.</li>
+<li><span class="port-label">Enable Mod Wheel / Enable Pitch Wheel</span> — lets your MIDI controller's wheels affect the sound.</li>
+<li><span class="port-label">Voice Type</span> — picks a piano character/model variant.</li>
+<li><span class="port-label">Drive</span> — adds harmonic saturation/grit.</li>
+<li><span class="port-label">Trem/Wah Mode, Depth, Rate</span> — configures the built-in tremolo or auto-wah effect.</li>
+<li><span class="port-label">Cho/Pha Mode, Depth, Speed</span> — configures the built-in chorus or phaser effect.</li>
+<li><span class="port-label">Pre Gain / Gain</span> — input and output level trims.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L</span> / <span class="port-label">Out R</span> — the stereo piano signal.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

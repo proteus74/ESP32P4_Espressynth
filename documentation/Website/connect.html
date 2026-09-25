@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verbinden &amp; loslegen · ESPRESSYNTH</title>
+<meta name="description" content="Erste Schritte mit ESPRESSYNTH: WLAN einrichten, Web-Oberfläche öffnen, MIDI und Audio anschließen.">
+<link rel="icon" type="image/png" href="../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="index.html">
+      <img src="../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="index.html">Start</a>
+      <a href="features.html">Features</a>
+      <a href="connect.html" class="active">Verbinden</a>
+      <a href="widgets/index.html">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+
+<div class="breadcrumb"><a href="index.html">Start</a> &rsaquo; Verbinden</div>
+<h1>Verbinden &amp; loslegen</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">
+Diese Seite beschreibt den Weg vom frisch geflashten Board bis zum ersten gepatchten Sound:
+WLAN einrichten, Web-Oberfläche öffnen, MIDI- und Audio-Equipment anschließen.
+</p>
+
+<h2>1. Firmware flashen</h2>
+<p>
+Das Bauen und Flashen der Firmware mit ESP-IDF ist auf dieser Seite bewusst nicht wiederholt
+&ndash; die vollständige, aktuelle Anleitung (Zielboard wählen, <code>idf.py menuconfig</code>,
+<code>idf.py build</code>, <code>idf.py flash</code>, optional Co-Prozessor-Firmware für den
+ESP32-C6) steht im <a href="../../README.md">README.md</a> im Projekt-Wurzelverzeichnis.
+</p>
+
+<h2>2. Mit dem WLAN verbinden</h2>
+<p>
+Ist beim Bauen keine <code>WIFI_SSID</code> in <code>menuconfig</code> hinterlegt (oder ist das
+konfigurierte Netzwerk nicht erreichbar), startet das Board automatisch einen Fallback-Access-Point
+mit Captive Portal:
+</p>
+<ol>
+  <li>Mit einem Smartphone oder Laptop nach dem WLAN <strong><code>ESP32P4-Setup</code></strong>
+      suchen (offenes Netzwerk, Standardname &ndash; abhängig von der
+      <code>WIFI_CAPTIVE_PORTAL_SSID</code>-Konfiguration) und verbinden.</li>
+  <li>Ein Gerät mit Captive-Portal-Erkennung öffnet die Anmeldeseite automatisch; alternativ im
+      Browser die AP-Gateway-Adresse aufrufen (bei ESP-IDF-SoftAPs in der Regel
+      <code>http://192.168.4.1/</code>).</li>
+  <li>Über die Einstellungen der Web-Oberfläche (Menü <strong>File &rarr; Settings</strong>, bzw.
+      die vom Gerät bereitgestellte Netzwerk-Konfiguration) das eigentliche Heim-WLAN mit SSID und
+      Passwort eintragen.</li>
+  <li>Das Board verbindet sich daraufhin mit dem konfigurierten Netzwerk; der Fallback-AP und das
+      Captive Portal werden automatisch wieder abgeschaltet, sobald die Verbindung steht. Schlägt
+      die Verbindung fehl, kommt die Setup-AP im konfigurierten Intervall automatisch zurück.</li>
+</ol>
+
+<h2>3. Die Web-Oberfläche öffnen</h2>
+<p>
+Sobald das Board im Heimnetzwerk ist, braucht man nur noch seine IP-Adresse:
+</p>
+<ul>
+  <li>Im Router-Interface (DHCP-Client-Liste) nach dem Gerät suchen, oder</li>
+  <li>die IP-Adresse über ein serielles Terminal (<code>idf.py monitor</code>) beim Boot ablesen,
+      oder</li>
+  <li>über die eingebaute <a href="#cli">CLI</a> per Wi-Fi-Kommando abfragen.</li>
+</ul>
+<p>
+Danach einfach <code>http://&lt;IP-Adresse&gt;/</code> im Browser öffnen &ndash; das lädt die
+ESPRESSYNTH-Oberfläche direkt vom Gerät (siehe Screenshot auf der <a href="index.html">Startseite</a>).
+Die Oberfläche hält per WebSocket (<code>/ws</code>) eine Live-Verbindung zum Gerät; verliert der
+Browser die Verbindung (Board aus, WLAN weg), erscheint ein "Connection lost"-Hinweis mit
+automatischem Reconnect.
+</p>
+
+<h2>4. MIDI anschließen</h2>
+<div class="card-grid">
+  <div class="card">
+    <h3>USB-MIDI-Keyboard (Host)</h3>
+    <p>Ein USB-MIDI-Controller/-Keyboard direkt an den USB-Host-Port des Boards anschließen. Er
+    erscheint automatisch als MIDI-Quelle für das <a href="widgets/midi.html#midi-in">Midi-In</a>-Widget.</p>
+  </div>
+  <div class="card">
+    <h3>BLE-MIDI</h3>
+    <p>Über <strong>File &rarr; BLE Connect</strong> in der Web-Oberfläche nach BLE-MIDI-Geräten
+    scannen und verbinden &ndash; praktisch für kabellose Controller und mobile Geräte.</p>
+  </div>
+  <div class="card">
+    <h3>USB-MIDI zum Rechner (Device)</h3>
+    <p>Im USB-Device-Modus kann sich das Board selbst als USB-MIDI-Gerät an einem Rechner/einer
+    DAW anmelden.</p>
+  </div>
+</div>
+<p>
+Einmal verbunden, liefert <a href="widgets/midi.html#midi-in">Midi-In</a> Pitch, Gate, Velocity,
+Aftertouch und Pitch-Bend als CV-Signale in den Patch; <a href="widgets/midi.html#midi-split">Midi-Split</a>
+verteilt den rohen MIDI-Stream z.&nbsp;B. für Sequencer-Widgets weiter.
+</p>
+
+<h2>5. Audio-Ausgabe wählen</h2>
+<div class="card-grid">
+  <div class="card">
+    <h3><a href="widgets/external-audio.html#es8311-out">ES8311-Out</a> / <a href="widgets/external-audio.html#wm8960-out">WM8960-Out</a></h3>
+    <p>Onboard-Codec-Ausgang, je nach bestücktem Board &ndash; direkt an Kopfhörer oder aktive
+    Lautsprecher.</p>
+  </div>
+  <div class="card">
+    <h3><a href="widgets/external-audio.html#usb-out">USB-Out</a></h3>
+    <p>Stereo-Mix über USB-Audio an einen Rechner oder ein anderes USB-Audio-Gerät senden.</p>
+  </div>
+  <div class="card">
+    <h3><a href="widgets/external-hardware.html#cv-out">CV-Out</a> / <a href="widgets/external-hardware.html#digital-out">Digital-Out</a></h3>
+    <p>Steuerspannungen bzw. Gate/Trigger-Signale an echte Eurorack- oder Modular-Hardware
+    ausgeben.</p>
+  </div>
+</div>
+<p>
+Mehrere Ausgangs-Widgets können parallel im Patch liegen &ndash; z.&nbsp;B. gleichzeitig über den
+Onboard-Codec und via USB an den Rechner ausgeben.
+</p>
+
+<h2>6. Patchen &amp; Presets</h2>
+<p>
+Widgets werden per Rechtsklick auf die Arbeitsfläche hinzugefügt ("Add Node"-Dialog, siehe
+<a href="widgets/index.html">Widget-Referenz</a>), per Drag zwischen den Anschlusspunkten
+verkabelt und lassen sich über das <strong>File</strong>-Menü als Preset speichern, laden,
+exportieren oder importieren. Die Web-Oberfläche hat zwei Arbeitsflächen-Seiten
+(<em>Sound Generation</em> und <em>FX &amp; Masteroutput</em>); die
+<a href="widgets/mixing-output.html">Link-In/Link-Out-Widgets</a> verbinden Signale zwischen
+beiden Seiten.
+</p>
+
+<h2 id="cli">7. Debuggen über die CLI</h2>
+<p>
+Für Diagnose und Feintuning steht eine Kommandozeile über UART, USB-Serial/JTAG oder USB-CDC zur
+Verfügung (z.&nbsp;B. mit <code>idf.py monitor</code> erreichbar) &ndash; unter anderem mit
+Wi-Fi-/Ethernet-/BLE-Kommandos, Audio-Testton (<code>tone</code>), I2C-Bus-Scan und
+Task-/Speicher-Übersicht. Details dazu stehen im Abschnitt "CLI und Debug-Interface" im
+<a href="features.html">Feature-Überblick</a>.
+</p>
+
+<div class="note">
+<strong>Tipp:</strong> Jedes Widget im "Add Node"-Dialog hat ein kleines <code>?</code> neben dem
+Namen &ndash; das öffnet die gleiche Hilfe, die auch auf der <a href="widgets/index.html">Widget-Referenzseite</a> steht, direkt in der Web-Oberfläche.
+</div>
+
+<p><a href="widgets/index.html">Weiter zu: Widget-Referenz &rarr;</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

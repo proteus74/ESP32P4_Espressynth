@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Bedienelemente und Signal-Router: Knöpfe, Buttons, Schalter und Multiplexer, mit denen man Werte einstellt oder Signale gezielt umschaltet und verteilt.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Control</div>
+<h1>Control</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Bedienelemente und Signal-Router: Knöpfe, Buttons, Schalter und Multiplexer, mit denen man Werte einstellt oder Signale gezielt umschaltet und verteilt.</p>
+<div class="widget-index">
+  <a href="#knob">🎛️ Knob</a>
+  <a href="#button">🔘 Button</a>
+  <a href="#up-down-button">🔼 Up/Down Button</a>
+  <a href="#switch">🔀 Input-Switch</a>
+  <a href="#multiplexer">🎯 Input-Multiplexer</a>
+  <a href="#output-switch">🔀 Output Switch</a>
+  <a href="#output-multiplexer">🎯 Output Multiplexer</a>
+  <a href="#const">🔢 Const</a>
+</div>
+<article class="widget-entry" id="knob">
+  <h3 class="widget-entry-title">🎛️ Knob <span class="type">(knob)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A physical-style knob you turn by hand (with the mouse, or a real hardware knob if your board has
+one wired up) to send out a CV value — the digital equivalent of a potentiometer on a Eurorack
+panel. Use it for anything you want to control live and manually: filter cutoff, an effect mix, a
+volume, or a modulation amount.</p>
+<h2>Input</h2>
+<p><span class="port-label">Layer</span> — a CV that switches between the knob's stored "layers" (see Knob Settings), letting one physical knob recall different saved positions.</p>
+<h2>Outputs</h2>
+<p>Each knob position on the panel has its own voltage output (labeled <span class="port-label">1.1, 1.2, …</span> and so on per layer) — patch whichever knob's output you need into the parameter you want to control.</p>
+  </div>
+</article>
+<article class="widget-entry" id="button">
+  <h3 class="widget-entry-title">🔘 Button <span class="type">(button)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>An on-screen (or hardware) push button that sends out a value when pressed — use it as a manual
+gate/trigger source, a mute switch, or anything else you'd want to fire by hand instead of patching
+it from elsewhere.</p>
+<h2>Input</h2>
+<p><span class="port-label">Layer</span> — a CV that switches between the button's stored layers, so one physical button can recall different behaviors.</p>
+<h2>Outputs</h2>
+<p>Each button has its own output per layer — patch it into a Gate input, a Mute, or any other on/off-style parameter.</p>
+  </div>
+</article>
+<article class="widget-entry" id="up-down-button">
+  <h3 class="widget-entry-title">🔼 Up/Down Button <span class="type">(up-down-button)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A pair of increment/decrement buttons that step a value up or down — handy for things like paging
+through patterns, nudging a CV in fixed steps, or building a simple on-screen counter.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the current stepped value as CV.</p>
+  </div>
+</article>
+<article class="widget-entry" id="switch">
+  <h3 class="widget-entry-title">🔀 Input-Switch <span class="type">(switch)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>An Input-Switch (a CV selector with two inputs) — lets you flip between two different signals and
+send only the selected one onward, like an A/B switch on a pedalboard.</p>
+<h2>Inputs</h2>
+<ul><li><span class="port-label">In 1 / In 2</span> — the two candidate signals.</li></ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — whichever of In 1 / In 2 is currently selected (toggle it from the widget itself, or patch a CV to switch it automatically).</p>
+  </div>
+</article>
+<article class="widget-entry" id="multiplexer">
+  <h3 class="widget-entry-title">🎯 Input-Multiplexer <span class="type">(multiplexer)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>An Input-Multiplexer — like the Input-Switch but with up to 16 inputs instead of just two. Great
+for switching between many CV or audio sources and routing only the chosen one downstream, e.g.
+picking which of several oscillators currently feeds your filter.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Select</span> — picks which input is currently passed through.</li>
+<li><span class="port-label">In 1…In n</span> — the candidate signals (add more from the widget's settings, up to 16).</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the currently-selected input, passed straight through.</p>
+  </div>
+</article>
+<article class="widget-entry" id="output-switch">
+  <h3 class="widget-entry-title">🔀 Output Switch <span class="type">(output-switch)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The mirror image of Input-Switch: one incoming signal, routed to one of two possible
+destinations. Use it to send a single source to either of two places depending on a switch — for
+example, alternating a signal between two different effects chains.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to route.</p>
+<h2>Outputs</h2>
+<p><span class="port-label">Out 1 / Out 2</span> — only one carries the signal at a time, depending on which is selected.</p>
+  </div>
+</article>
+<article class="widget-entry" id="output-multiplexer">
+  <h3 class="widget-entry-title">🎯 Output Multiplexer <span class="type">(output-multiplexer)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Like Output Switch, but with up to 16 possible destinations instead of two — one input signal,
+routed to whichever one of many outputs you select. Useful for sending a single source around to
+different parts of a big patch one at a time.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the signal to route.</li>
+<li><span class="port-label">Select</span> — picks which output currently receives it.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out 1…Out n</span> — only the selected one carries the signal (add more from the widget's settings, up to 16).</p>
+  </div>
+</article>
+<article class="widget-entry" id="const">
+  <h3 class="widget-entry-title">🔢 Const <span class="type">(const)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Outputs a fixed, unchanging value — a constant CV. Use it to feed a steady offset, a fixed pitch
+transpose, or any parameter you want locked to one value rather than modulated.</p>
+<h2>Output</h2>
+<p>The widget's single output — the constant value you set on the widget itself.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

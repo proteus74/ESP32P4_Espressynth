@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Effects Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Effects</div>
+<h1>Effects</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.</p>
+<div class="widget-index">
+  <a href="#bitcrusher">▦ Bitcrusher</a>
+  <a href="#wave-folder">〰 Wave Folder</a>
+  <a href="#envelope-follower">◟◝ Envelope Follower</a>
+  <a href="#pan">⇄ Pan</a>
+  <a href="#chorus">🌀 Chorus</a>
+  <a href="#delay">🔁 Delay</a>
+  <a href="#reverb-light">🪶 Reverb Light</a>
+</div>
+<article class="widget-entry" id="bitcrusher">
+  <h3 class="widget-entry-title">▦ Bitcrusher <span class="type">(bitcrusher)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A lo-fi digital distortion effect that reduces bit depth/resolution, giving a gritty, crunchy,
+"broken digital" or retro-game character. Great on drums, basses, or anything you want to sound
+deliberately dirty.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to crush.</li>
+<li><span class="port-label">Bypass</span> — turns the effect off without unpatching it.</li>
+<li><span class="port-label">Crush</span> — how aggressive the effect is; higher usually means grittier/more distorted.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the crushed audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="wave-folder">
+  <h3 class="widget-entry-title">〰 Wave Folder <span class="type">(wave-folder)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A wave-folding distortion, in the style of West Coast synth modules (think Buchla/Serge). Instead
+of clipping the peaks like normal distortion, it "folds" the waveform back on itself once it passes
+a threshold, producing rich, harmonically complex, often bell-like or metallic timbres out of a
+simple wave.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to fold.</li>
+<li><span class="port-label">Drive</span> — pushes the signal harder into folding for more harmonics.</li>
+<li><span class="port-label">Symmetry</span> — shifts the folding off-center for asymmetrical, more complex tones.</li>
+<li><span class="port-label">Gain</span> — output level trim.</li>
+<li><span class="port-label">Mix</span> — blends the folded signal with the original dry signal.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the folded audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="envelope-follower">
+  <h3 class="widget-entry-title">◟◝ Envelope Follower <span class="type">(envelope-follower)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Tracks the volume/loudness of an audio signal over time and turns it into a CV — roughly the
+opposite direction of an ADSR (which shapes a sound): this instead reads a sound's natural dynamics
+and turns them into a controllable modulation source. Classic use: follow a drum loop or vocal and
+use the result to drive a filter for an auto-wah, or to duck another sound.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to follow.</li>
+<li><span class="port-label">Attack</span> — how quickly it reacts when the signal gets louder.</li>
+<li><span class="port-label">Release</span> — how quickly it falls back down when the signal gets quieter.</li>
+<li><span class="port-label">PreGain</span> — boosts the input before tracking, for quiet sources.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the tracked loudness as CV, patch it into a filter cutoff, gain, or anywhere else you want it to react to the input's dynamics.</p>
+  </div>
+</article>
+<article class="widget-entry" id="pan">
+  <h3 class="widget-entry-title">⇄ Pan <span class="type">(pan)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Positions a mono signal somewhere between two outputs, left and right — a stereo panner. Patch a
+CV into its Pan input for auto-panning effects, or set it by hand to place a sound in the stereo
+field.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the signal to pan.</li>
+<li><span class="port-label">Pan</span> — the pan position (patch an LFO here for automatic left-right movement).</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out1 / Out2</span> — the panned left/right signals, patch into a stereo Mixer or output widget.</p>
+  </div>
+</article>
+<article class="widget-entry" id="chorus">
+  <h3 class="widget-entry-title">🌀 Chorus <span class="type">(chorus)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A classic chorus effect — mixes the signal with slightly delayed, pitch-wobbled copies of itself
+to sound thicker and wider, like several instruments playing in unison instead of one.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to thicken.</li>
+<li><span class="port-label">Bypass</span> — turns the effect off without unpatching it.</li>
+<li><span class="port-label">Rate</span> — how fast the internal modulation wobbles.</li>
+<li><span class="port-label">Depth</span> — how strong the wobble/thickening is.</li>
+<li><span class="port-label">Offset</span> — shifts the internal delay time, changing the character of the effect.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L / Out R</span> — the widened stereo signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="delay">
+  <h3 class="widget-entry-title">🔁 Delay <span class="type">(delay)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A stereo echo/delay effect — repeats the incoming signal after a set time, with feedback for
+multiple repeats. Use it for anything from a slap-back echo to long rhythmic, dubby repeats.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to delay.</li>
+<li><span class="port-label">Bypass</span> — turns the effect off without unpatching it.</li>
+<li><span class="port-label">Time</span> — how long before each echo repeats.</li>
+<li><span class="port-label">Feedback</span> — how many times it repeats (higher feeds more of the echo back into itself).</li>
+<li><span class="port-label">Mix</span> — blends the delayed signal with the dry original.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L / Out R</span> — the delayed stereo signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="reverb-light">
+  <h3 class="widget-entry-title">🪶 Reverb Light <span class="type">(reverb-light)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A lightweight reverb — simulates the natural reflections of a room or space, giving a sound depth
+and ambience instead of sounding dry and close. "Light" means it's tuned to be efficient enough to
+run happily alongside everything else in your patch.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to add reverb to.</li>
+<li><span class="port-label">Bypass</span> — turns the effect off without unpatching it.</li>
+<li><span class="port-label">Room Size</span> — how large the simulated space feels.</li>
+<li><span class="port-label">Damping</span> — how quickly high frequencies die out in the reflections, for a brighter or darker space.</li>
+<li><span class="port-label">Wet Level</span> — how much of the reverb signal is added.</li>
+<li><span class="port-label">Dry Level</span> — how much of the original, un-reverbed signal remains.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L / Out R</span> — the reverberated stereo signal.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>
