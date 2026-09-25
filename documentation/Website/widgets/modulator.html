@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modulator Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Widgets, die sich über die Zeit verändern und damit andere Parameter steuern: LFOs, Hüllkurven, eine Wavetable-Engine, Step-Sequenzer, ein Drum-Sequenzer, Sample & Hold und mehr. Das Herzstück für Bewegung und Ausdruck im Patch.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Modulator</div>
+<h1>Modulator</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Widgets, die sich über die Zeit verändern und damit andere Parameter steuern: LFOs, Hüllkurven, eine Wavetable-Engine, Step-Sequenzer, ein Drum-Sequenzer, Sample & Hold und mehr. Das Herzstück für Bewegung und Ausdruck im Patch.</p>
+<div class="widget-index">
+  <a href="#lfo">🔄 LFO</a>
+  <a href="#wavetable">∿ Wavetable</a>
+  <a href="#adsr">⛰️ ADSR</a>
+  <a href="#dx-envelope">⌁ DX Envelope</a>
+  <a href="#detune">↔️ DeTune</a>
+  <a href="#clock">⏱️ Clock</a>
+  <a href="#step-arpeggiator">▦ Step Arpeggiator</a>
+  <a href="#drum-sequencer">▦ Drum Sequencer</a>
+  <a href="#sample-hold">⌁ S&H</a>
+  <a href="#burst-generator">⁘ Burst Gen</a>
+</div>
+<article class="widget-entry" id="lfo">
+  <h3 class="widget-entry-title">🔄 LFO <span class="type">(lfo)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A Low Frequency Oscillator — a slow, repeating wave used to wobble other things over time rather
+than to make an audible tone itself. Patch it into a filter's cutoff for a wah-wah sweep, into
+pitch for vibrato, into amplitude for tremolo, or anywhere else you want automatic, cyclic
+movement. For self-drawn, morphable shapes use the <strong>Wavetable</strong> widget instead.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Rate</span> — how fast it cycles. Double-click the widget to set the maximum rate the 0–10&nbsp;V range maps to.</li>
+<li><span class="port-label">Phase</span> — where in its cycle it starts.</li>
+<li><span class="port-label">Reset</span> — a trigger input that restarts the cycle from the beginning, handy for syncing the wobble to a new note.</li>
+<li><span class="port-label">One Shot</span> — makes the LFO run through its shape once instead of looping.</li>
+<li><span class="port-label">Global</span> — lets all voices share one LFO instead of each voice running its own.</li>
+<li><span class="port-label">Offset</span> — shifts the wave up or down so it isn't centered on zero.</li>
+<li><span class="port-label">Gain</span> — how big the wobble is (0–10&nbsp;V swing).</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the wobbling CV signal. Patch it wherever you want that slow movement.</p>
+  </div>
+</article>
+<article class="widget-entry" id="wavetable">
+  <h3 class="widget-entry-title">∿ Wavetable <span class="type">(wavetable)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A modulator like the LFO, but its waveform is a <strong>wavetable</strong>: a row of up to 16
+self-drawn single-cycle shapes of 128 steps each that the <span class="port-label">Morph</span> control
+blends between. Between the steps the value is interpolated, so even a very slow cycle glides smoothly
+instead of stepping.
+Use it for movements no fixed LFO shape can give you — stepped patterns, lopsided swells, or shapes
+that slowly change character while they play.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Rate</span> — how fast it cycles. Double-click the widget to set the maximum rate the 0–10&nbsp;V range maps to.</li>
+<li><span class="port-label">Morph</span> — the position in the wavetable: 0&nbsp;V = first slot, 10&nbsp;V = last slot, in between the neighbouring slots are crossfaded. Patch an LFO or an envelope in to sweep through the table automatically.</li>
+<li><span class="port-label">Reset</span> — a trigger input that restarts the cycle from the beginning, handy for syncing to a new note.</li>
+<li><span class="port-label">One Shot</span> — runs through the shape once per reset instead of looping.</li>
+<li><span class="port-label">Global</span> — lets all voices share one wavetable modulator instead of each voice running its own.</li>
+<li><span class="port-label">Gain</span> — how big the swing is (0–10&nbsp;V).</li>
+</ul>
+<h2>Preview and editor</h2>
+<p>The small preview shows the waveform at the current morph position, with a line marking where in
+the cycle it currently is. Click it or <strong>Edit</strong> to open the editor:</p>
+<ul>
+<li><strong>Slots</strong> — the bar at the top holds the waveforms in morph order. <strong>+</strong> adds a copy of the selected slot, <strong>−</strong> removes it.</li>
+<li><strong>Presets</strong> — Sine, Saw, Square and Triangle fill the selected slot as a starting point.</li>
+<li><strong>Freehand</strong> — draw the waveform directly with the mouse, pen or finger.</li>
+<li><strong>Harmonics</strong> — build the slot additively: each bar is the level of one harmonic (above the line positive, below inverted).</li>
+<li><strong>Cycle</strong> — how long one pass through the 128 steps takes, in seconds (the time axis under the drawing shows it). This sets the widget's Rate (Rate = 1 / Cycle); turning Rate down later simply stretches the same shape and interpolates between the steps.</li>
+<li><strong>Snap to Zero</strong> — cuts the waveform at the zero crossings nearest to its start and end and stretches it back to full length, so the loop point doesn't click. While switched on it is re-applied after every edit.</li>
+</ul>
+<p>Everything you draw is audible right away — in the browser preview and on the device — even
+before you press <strong>Apply</strong>. <strong>Apply</strong> keeps the new table,
+<strong>Cancel</strong> brings the previous one back. The table is stored permanently when you save the
+preset — until then it is only in the running sound.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the modulation CV signal (0 V up to the Gain setting).</p>
+  </div>
+</article>
+<article class="widget-entry" id="adsr">
+  <h3 class="widget-entry-title">⛰️ ADSR <span class="type">(adsr)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The classic Attack/Decay/Sustain/Release envelope generator. It turns a simple on/off Gate (a
+held key) into a shaped rise-and-fall CV curve, which is what actually gives a note its shape — a
+pluck, a swell, a pad, a stab.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Gate</span> — high while the note is held, low when released. Patch this from Midi-In's Gate.</li>
+<li><span class="port-label">Velocity</span> — can scale how strongly the envelope responds to how hard the note was played.</li>
+<li><span class="port-label">Attack</span> — how long it takes to rise to full level when the gate turns on.</li>
+<li><span class="port-label">Decay</span> — how long it takes to fall from the peak down to the sustain level.</li>
+<li><span class="port-label">Sustain</span> — the level it holds at while the key stays down.</li>
+<li><span class="port-label">Release</span> — how long it takes to fade to zero after the key is let go.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the shaped envelope CV. Patch it into an oscillator's Amplitude, a filter's Cutoff, a Gain/VCA, or anywhere you want a note-shaped rise and fall.</p>
+  </div>
+</article>
+<article class="widget-entry" id="dx-envelope">
+  <h3 class="widget-entry-title">⌁ DX Envelope <span class="type">(dx-envelope)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A four-stage rate/level envelope in the style of classic DX-series FM synths — more flexible than
+a standard ADSR because each of its four segments has its own independent level and time, so you
+can build multi-stage shapes (slow swells, double-hump attacks, plucky-then-swelling pads) that a
+simple ADSR can't do.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Gate</span> — starts the envelope running; patch from Midi-In's Gate.</li>
+<li><span class="port-label">Velocity</span> — can scale the envelope's response to playing strength.</li>
+<li><span class="port-label">Level 1–4 / Time 1–4</span> — four target levels and the time it takes to reach each one, played back in order. Think of it as drawing the envelope's shape as four connected line segments.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the resulting envelope CV, patch it anywhere an ADSR could go.</p>
+  </div>
+</article>
+<article class="widget-entry" id="detune">
+  <h3 class="widget-entry-title">↔️ DeTune <span class="type">(detune)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A small utility that shifts a pitch CV up or down by a controllable amount — useful for detuning
+a second oscillator slightly against a first for a thicker, chorused unison sound, or for
+transposing a CV by a fixed interval.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the incoming pitch CV to shift.</li>
+<li><span class="port-label">Amount</span> — how far, and in which direction, to shift it.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the shifted pitch CV. Patch it into a second oscillator's Pitch input alongside your original pitch source for a unison/detune effect.</p>
+  </div>
+</article>
+<article class="widget-entry" id="clock">
+  <h3 class="widget-entry-title">⏱️ Clock <span class="type">(clock)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sends out a steady stream of timing pulses, synced to ESPRESSYNTH's single master tempo (set from
+the tab bar's Master Clock). Use it to drive sequencers, arpeggiators, clocked LFOs, or anything
+else that needs to stay in time with your song.</p>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">Pulse</span> — a trigger that fires on every clock step, patch into a Step Arpeggiator's or Drum Sequencer's Clock input.</li>
+<li><span class="port-label">Frequency</span> — the clock's current tempo expressed as a CV, in case you want to react to tempo elsewhere in the patch.</li>
+</ul>
+<p>This widget owns only its own pulse width — the tempo itself comes from the shared Master Clock,
+so every Clock widget in your patch stays in sync.</p>
+  </div>
+</article>
+<article class="widget-entry" id="step-arpeggiator">
+  <h3 class="widget-entry-title">▦ Step Arpeggiator <span class="type">(step-arpeggiator)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A monophonic step sequencer/arpeggiator — sixteen knobs, each defining a pitch step, played back
+one after another as a clock pulses it forward. Great for classic arpeggio and sequenced-bassline
+patterns without needing a DAW.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Clock</span> — advances to the next step on each pulse (patch from a Clock widget, or leave unpatched to use the internal Rate).</li>
+<li><span class="port-label">Gate</span> — gates the sequencer on/off, e.g. from a held key.</li>
+<li><span class="port-label">Pitch</span> — an optional pitch CV added on top of the steps, useful for transposing the whole pattern by playing a key.</li>
+<li><span class="port-label">Direction</span> — picks Forward, Backward, Ping-Pong, or Random playback order.</li>
+<li><span class="port-label">Gate Out Time</span> — how long each step's gate output stays high.</li>
+<li><span class="port-label">Rate</span> — the built-in fallback clock speed, used only when nothing is patched into Clock.</li>
+<li><span class="port-label">Step 1–16</span> — the pitch value for each of the sixteen steps.</li>
+</ul>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">CV</span> — the current step's pitch, patch into an oscillator's Pitch.</li>
+<li><span class="port-label">Gate Out</span> — a gate pulse for each step, patch into an ADSR's Gate to re-shape each note.</li>
+</ul>
+  </div>
+</article>
+<article class="widget-entry" id="drum-sequencer">
+  <h3 class="widget-entry-title">▦ Drum Sequencer <span class="type">(drum-sequencer)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>An 8-track step sequencer for rhythm — a classic drum-machine-style grid where each of the eight
+tracks fires its own trigger, so you can pattern out kick, snare, hats, and more, each driving its
+own drum or percussion sound.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Clock</span> — advances the pattern one step per pulse (patch from a Clock widget, or fall back to Rate).</li>
+<li><span class="port-label">Gate</span> — starts/stops the whole sequencer.</li>
+<li><span class="port-label">Pattern</span> — selects which saved pattern is currently playing.</li>
+<li><span class="port-label">Rate</span> — the built-in fallback clock speed when Clock is unpatched.</li>
+<li><span class="port-label">Switch @ End</span> — automatically jumps to another pattern once the current one finishes, for building song-style arrangements.</li>
+</ul>
+<h2>Outputs</h2>
+<p>For each of the eight tracks: <span class="port-label">T1–T8</span> (a trigger pulse when that track's step fires — patch into a drum voice's Gate) and <span class="port-label">V1–V8</span> (that step's velocity as CV, for hit-to-hit dynamics).</p>
+  </div>
+</article>
+<article class="widget-entry" id="sample-hold">
+  <h3 class="widget-entry-title">⌁ S&H <span class="type">(sample-hold)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sample &amp; Hold "freezes" whatever value is at its input the instant it receives a trigger, and
+holds that frozen value steady until the next trigger. Classic use: feed it random noise or a fast
+LFO and trigger it from a clock for stepped random-CV sequences (bloopy sci-fi arpeggios, random
+filter sweeps).</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the signal to sample.</li>
+<li><span class="port-label">Trigger</span> — grabs a fresh sample of In the moment this crosses the threshold. Patch a Clock's Pulse here for evenly-spaced steps.</li>
+<li><span class="port-label">Threshold</span> — the trigger level that counts as "fire".</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the held (frozen) CV value, steady until the next trigger.</p>
+  </div>
+</article>
+<article class="widget-entry" id="burst-generator">
+  <h3 class="widget-entry-title">⁘ Burst Gen <span class="type">(burst-generator)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Turns one incoming trigger into a repeated burst of triggers (a roll/ratchet), or delays a single
+trigger before it fires — useful for drum rolls, ratcheted arpeggios, or simply pushing a gate a
+little later in time.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the trigger/gate to react to.</li>
+<li><span class="port-label">Mode</span> — chooses burst-repeat vs. single-delay behavior.</li>
+<li><span class="port-label">Count</span> — how many repeats to fire in burst mode.</li>
+<li><span class="port-label">Time</span> — the spacing between repeats, or the delay length in delay mode.</li>
+<li><span class="port-label">Decay</span> — fades the velocity/level of each successive repeat, for a natural-sounding roll.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the resulting trigger/gate stream, patch into a drum voice's Gate or anywhere else that wants a rhythmic pulse.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

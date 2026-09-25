@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIDI Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Der Einstieg von MIDI-Keyboards, DAWs oder anderem MIDI-Equipment in das Patch. Diese Widgets wandeln eingehende MIDI-Nachrichten in CV-Signale um, mit denen der Rest der modularen Widgets arbeiten kann.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; MIDI</div>
+<h1>MIDI</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Der Einstieg von MIDI-Keyboards, DAWs oder anderem MIDI-Equipment in das Patch. Diese Widgets wandeln eingehende MIDI-Nachrichten in CV-Signale um, mit denen der Rest der modularen Widgets arbeiten kann.</p>
+<div class="widget-index">
+  <a href="#midi-in">🎹 Midi-In</a>
+  <a href="#midi-split">✂️ Midi-Split</a>
+</div>
+<article class="widget-entry" id="midi-in">
+  <h3 class="widget-entry-title">🎹 Midi-In <span class="type">(midi-in)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Midi-In is the door where a MIDI keyboard, DAW, or other MIDI gear enters your patch. It listens
+to incoming MIDI notes and converts them into CV signals that the rest of ESPRESSYNTH's
+modular-style widgets understand — a pitch voltage for an oscillator, a gate for an envelope, and
+so on.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Voices</span> — how many notes can sound at once (polyphony). Patch a CV or set it directly to control voice stealing.</li>
+<li><span class="port-label">Glide</span> — turns portamento (pitch sliding between notes) on or off.</li>
+<li><span class="port-label">Glide Time</span> — how long the pitch takes to slide from one note to the next.</li>
+</ul>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">MIDI</span> — the raw MIDI stream, for feeding into other MIDI-aware widgets like Midi-Split.</li>
+<li><span class="port-label">Pitch</span> — the played note as a pitch CV. Patch this into an oscillator's Pitch input to play it.</li>
+<li><span class="port-label">Aftertouch</span> — how hard you're pressing a held key, as CV.</li>
+<li><span class="port-label">Pitch Bend</span> — your pitch-bend wheel position, as CV.</li>
+<li><span class="port-label">Note (0–127)</span> — the raw MIDI note number, handy for driving a Value Mapper or sequencer logic.</li>
+<li><span class="port-label">Velocity</span> — how hard the key was struck, as CV. Patch into an amplifier or filter for expressive playing.</li>
+<li><span class="port-label">Gate</span> — goes high while a key is held and low when released. Feed this into an ADSR or envelope to shape each note.</li>
+</ul>
+  </div>
+</article>
+<article class="widget-entry" id="midi-split">
+  <h3 class="widget-entry-title">✂️ Midi-Split <span class="type">(midi-split)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Midi-Split takes one incoming MIDI stream and fans it out so different parts of it can go to
+different destinations — for example, sending each MIDI channel to its own Midi-In or
+sound-generating widget, so you can layer or multitimbrally control several instruments from one
+MIDI source.</p>
+<h2>Input</h2>
+<ul><li><span class="port-label">MIDI</span> — the MIDI stream to split, usually patched from a Midi-In's MIDI output or another MIDI source.</li></ul>
+<h2>Outputs</h2>
+<p>Open the widget to configure the splits — its output jacks are created for each one you set up, each carrying its own MIDI stream.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

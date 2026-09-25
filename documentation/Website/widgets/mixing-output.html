@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mixing/Output Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Signale zusammenführen und weiterreichen: Gain/VCA, Mixer, der Sammel-Ausgang für die interne JS-Audio-Vorschau sowie die Link-In/Link-Out-Widgets, mit denen sich Signale zwischen den beiden Canvas-Seiten (Sound Generation und FX & Masteroutput) verbinden lassen.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Mixing/Output</div>
+<h1>Mixing/Output</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Signale zusammenführen und weiterreichen: Gain/VCA, Mixer, der Sammel-Ausgang für die interne JS-Audio-Vorschau sowie die Link-In/Link-Out-Widgets, mit denen sich Signale zwischen den beiden Canvas-Seiten (Sound Generation und FX & Masteroutput) verbinden lassen.</p>
+<div class="widget-index">
+  <a href="#gain">🔉 Gain/VCA</a>
+  <a href="#mixer">🎧 Mixer</a>
+  <a href="#audio-out">🔊 JS Audio-Out</a>
+  <a href="#linked-input">📥 Link In</a>
+  <a href="#linked-output">📤 Link Out</a>
+  <a href="#linked-input-4">📥 Link In 4×</a>
+  <a href="#linked-output-4">📤 Link Out 4×</a>
+  <a href="#linked-input-8">📥 Link In 8×</a>
+  <a href="#linked-output-8">📤 Link Out 8×</a>
+</div>
+<article class="widget-entry" id="gain">
+  <h3 class="widget-entry-title">🔉 Gain/VCA <span class="type">(gain)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A voltage-controlled amplifier (VCA) — the widget that actually controls how loud a signal is,
+and can be modulated to do so automatically. Patch an ADSR into its Output Gain to turn a
+constantly-on oscillator into a properly shaped note.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to control the level of.</li>
+<li><span class="port-label">Output Gain</span> — the level CV — patch an envelope here to shape notes, or an LFO for tremolo.</li>
+<li><span class="port-label">Curve</span> — how the gain CV maps to loudness (linear vs. exponential response).</li>
+<li><span class="port-label">Global</span> — lets several Gain widgets share settings/state.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the level-controlled audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="mixer">
+  <h3 class="widget-entry-title">🎧 Mixer <span class="type">(mixer)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Combines several signals into one — the same job a mixer channel strip does, summing multiple
+sound sources so they can share one output or effect.</p>
+<h2>Inputs</h2>
+<p><span class="port-label">In 1, In 2, …</span> — the signals to mix together (add more inputs from the widget's settings).</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the combined signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="audio-out">
+  <h3 class="widget-entry-title">🔊 JS Audio-Out <span class="type">(audio-out)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Sends audio out through the browser's own speakers/headphones — this is how you hear your patch
+while working on the ESPRESSYNTH web UI itself, separate from any hardware audio output.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to play, usually the final output of your patch.</li>
+<li><span class="port-label">Volume</span> — the output level.</li>
+<li><span class="port-label">Mute (Gate)</span> — silences the output without unpatching it.</li>
+</ul>
+  </div>
+</article>
+<article class="widget-entry" id="linked-input">
+  <h3 class="widget-entry-title">📥 Link In <span class="type">(linked-input)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Link In/Link Out are an invisible patch cable across pages: whatever you feed into a Link In on
+one page reappears at the matching Link Out anywhere else in your patch (including on a different
+page), without drawing a wire across your whole canvas. Useful for keeping big patches tidy.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the signal to send through the link.</p>
+  </div>
+</article>
+<article class="widget-entry" id="linked-output">
+  <h3 class="widget-entry-title">📤 Link Out <span class="type">(linked-output)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The receiving end of a Link In — outputs whatever signal was sent into its matching Link In,
+wherever that is in your patch. Together, Link In/Link Out let you route a signal across pages or
+across a busy canvas without a long visible cable.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the signal received from the matching Link In.</p>
+  </div>
+</article>
+<article class="widget-entry" id="linked-input-4">
+  <h3 class="widget-entry-title">📥 Link In 4× <span class="type">(linked-input-4)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Same idea as Link In, but bundles four independent signals into one widget so you don't need four
+separate Link In widgets cluttering the canvas.</p>
+<h2>Inputs</h2>
+<p><span class="port-label">1–4</span> — four independent signals, each sent to its matching numbered input on a Link Out 4× elsewhere in the patch.</p>
+  </div>
+</article>
+<article class="widget-entry" id="linked-output-4">
+  <h3 class="widget-entry-title">📤 Link Out 4× <span class="type">(linked-output-4)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The receiving end of Link In 4× — outputs the four signals sent from the matching Link In 4×,
+each on its own numbered jack.</p>
+<h2>Outputs</h2>
+<p><span class="port-label">1–4</span> — the four signals received from the matching Link In 4×.</p>
+  </div>
+</article>
+<article class="widget-entry" id="linked-input-8">
+  <h3 class="widget-entry-title">📥 Link In 8× <span class="type">(linked-input-8)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Same idea as Link In, but bundles eight independent signals into one widget for very busy patches
+where even Link In 4× isn't enough.</p>
+<h2>Inputs</h2>
+<p><span class="port-label">1–8</span> — eight independent signals, each sent to its matching numbered input on a Link Out 8× elsewhere in the patch.</p>
+  </div>
+</article>
+<article class="widget-entry" id="linked-output-8">
+  <h3 class="widget-entry-title">📤 Link Out 8× <span class="type">(linked-output-8)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>The receiving end of Link In 8× — outputs the eight signals sent from the matching Link In 8×,
+each on its own numbered jack.</p>
+<h2>Outputs</h2>
+<p><span class="port-label">1–8</span> — the eight signals received from the matching Link In 8×.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

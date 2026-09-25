@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Filter Widgets · ESPRESSYNTH</title>
+<meta name="description" content="Klangformung durch Filterung: ein klassisches Mehrmodenfilter, eine Emulation des legendären CEM3320-Filterchips sowie parametrische und grafische Equalizer.">
+<link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../index.html">
+      <img src="../../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="../index.html">Start</a>
+      <a href="../features.html">Features</a>
+      <a href="../connect.html">Verbinden</a>
+      <a href="index.html" class="active">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Filter</div>
+<h1>Filter</h1>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Klangformung durch Filterung: ein klassisches Mehrmodenfilter, eine Emulation des legendären CEM3320-Filterchips sowie parametrische und grafische Equalizer.</p>
+<div class="widget-index">
+  <a href="#filter">🎚️ Filter</a>
+  <a href="#curtis-filter">🎚️ CEM3320 Filter</a>
+  <a href="#esp-eq">📶 EQ</a>
+  <a href="#graphic-eq">📶 8-Band EQ</a>
+</div>
+<article class="widget-entry" id="filter">
+  <h3 class="widget-entry-title">🎚️ Filter <span class="type">(filter)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A classic voltage-controlled filter (VCF) — shapes the tone of a sound by cutting or boosting
+frequencies above/below a cutoff point, just like the filter section on almost any subtractive
+synth. This is usually what turns a raw, buzzy oscillator into something musical.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to filter, e.g. from an oscillator.</li>
+<li><span class="port-label">Filter Type</span> — low-pass, high-pass, band-pass, etc.</li>
+<li><span class="port-label">Slope</span> — how steeply it cuts (e.g. 12 dB vs. 24 dB per octave).</li>
+<li><span class="port-label">Cutoff</span> — the frequency where the filtering happens; patch an envelope or LFO here for classic filter-sweep movement.</li>
+<li><span class="port-label">Resonance</span> — emphasizes the frequencies right at the cutoff, for a more pronounced/whistly character, up to self-oscillation at high settings.</li>
+<li><span class="port-label">Global</span> — lets several Filter widgets share settings/state.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the filtered audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="curtis-filter">
+  <h3 class="widget-entry-title">🎚️ CEM3320 Filter <span class="type">(curtis-filter)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A voltage-controlled filter modeled after the CEM3320 chip — the filter chip behind many classic
+analog polysynths, known for its smooth, slightly fat low-pass character. Use it exactly like the
+regular Filter widget when you want that specific analog flavor.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to filter.</li>
+<li><span class="port-label">Filter Type</span> — low-pass, high-pass, band-pass, etc.</li>
+<li><span class="port-label">Slope</span> — filter steepness.</li>
+<li><span class="port-label">Cutoff</span> — the filtering frequency; patch an envelope or LFO here for movement.</li>
+<li><span class="port-label">Resonance</span> — emphasis around the cutoff frequency.</li>
+<li><span class="port-label">Global</span> — lets several instances share settings/state.</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the filtered audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="esp-eq">
+  <h3 class="widget-entry-title">📶 EQ <span class="type">(esp-eq)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>A stereo parametric EQ — boosts or cuts a single adjustable frequency band, like the EQ knob on a
+mixing desk. Use it for corrective tone-shaping: taming a boomy low end, adding some air on top, or
+scooping out a harsh frequency.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to EQ.</li>
+<li><span class="port-label">Bypass</span> — turns the EQ effect off without unpatching it.</li>
+<li><span class="port-label">Frequency</span> — which frequency the band is centered on.</li>
+<li><span class="port-label">Q</span> — how narrow or wide the band is.</li>
+<li><span class="port-label">Gain dB</span> — how much to boost (positive) or cut (negative) that band.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L / Out R</span> — the EQ'd stereo signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="graphic-eq">
+  <h3 class="widget-entry-title">📶 8-Band EQ <span class="type">(graphic-eq)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>An 8-band stereo graphic EQ — like the slider-bank EQ on a hi-fi or mixing desk, with eight fixed
+frequency bands you can each boost or cut. Good for broad tone-shaping across the whole spectrum in
+one widget.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In L / In R</span> — the stereo signal to EQ.</li>
+<li><span class="port-label">Bypass</span> — turns the EQ off without unpatching it.</li>
+<li><span class="port-label">63 Hz … 14 kHz</span> — eight band controls, each boosting or cutting around that frequency.</li>
+<li><span class="port-label">Gain</span> — overall output level trim.</li>
+</ul>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L / Out R</span> — the EQ'd stereo signal.</p>
+  </div>
+</article>
+<p><a href="index.html">&larr; Zurück zur Widget-Übersicht</a></p>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>

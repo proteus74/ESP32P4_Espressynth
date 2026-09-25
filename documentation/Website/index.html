@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESPRESSYNTH · Projekt-Dokumentation</title>
+<meta name="description" content="ESPRESSYNTH: ein modularer Software-Synthesizer auf dem ESP32-P4, patchbar im Browser wie ein Eurorack-System.">
+<link rel="icon" type="image/png" href="../../data/static/img/FavLogo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="index.html">
+      <img src="../../data/static/img/logo-menu.png" alt="">
+      ESPRESSYNTH
+    </a>
+    <nav class="site-nav">
+      <a href="index.html" class="active">Start</a>
+      <a href="features.html">Features</a>
+      <a href="connect.html">Verbinden</a>
+      <a href="widgets/index.html">Widgets</a>
+    </nav>
+  </div>
+</header>
+<main>
+
+<section class="hero">
+  <h1>ESPRESSYNTH</h1>
+  <p class="tagline">
+    Ein modularer, Eurorack-artiger Software-Synthesizer, der komplett auf einem ESP32-P4 läuft
+    und über eine Web-Oberfläche im Browser gepatcht wird &ndash; per Maus, mit Kabeln zwischen
+    Widgets, ganz ohne Programmieren.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-primary" href="widgets/index.html">Widget-Referenz ansehen</a>
+    <a class="btn" href="features.html">Alle Features</a>
+    <a class="btn" href="connect.html">Verbinden &amp; loslegen</a>
+  </div>
+  <figure>
+    <img src="images/03-example-patch.png" alt="ESPRESSYNTH Web-Oberfläche mit einem verkabelten Beispiel-Patch">
+    <figcaption>Ein einfaches Patch in der Web-Oberfläche: Midi-In &rarr; Oscillator &rarr; Filter (gesteuert von einer ADSR-Hüllkurve) &rarr; Mixer &rarr; Gain/VCA.</figcaption>
+  </figure>
+</section>
+
+<h2>Was ist ESPRESSYNTH?</h2>
+<p>
+ESPRESSYNTH läuft als Firmware auf einem ESP32-P4-Board (z.&nbsp;B. JC8012P4A1, JC1060P470C 7"
+oder dem Waveshare ESP32-P4 Wi-Fi&nbsp;6 Dev Kit) und bringt einen kompletten, node-basierten
+Synthesizer-Klangmotor mit. Bedient wird alles über eine Web-Oberfläche, die das Gerät selbst
+ausliefert: Browser öffnen, IP-Adresse des Boards eingeben, patchen. Es ist kein Zusatz-PC, keine
+DAW und keine App nötig &ndash; das ESP32-P4 rendert den Klang selbst und gibt ihn über seinen
+Audio-Codec, per USB-Audio oder über CV/Digital-Ausgänge an echte Modular-Hardware aus.
+</p>
+<p>
+Wer schon einmal mit einem Eurorack-Modularsystem oder mit node-basierter Audiosoftware
+(z.&nbsp;B. VCV Rack, Reaktor, Pure Data) gearbeitet hat, wird sich sofort zurechtfinden: Widgets
+sind die "Module", jedes hat Ein- und Ausgänge, und Kabel verbinden sie zu einem Signalfluss aus
+Audio- und Steuerspannungen (CV).
+</p>
+
+<h2>Was man damit machen kann</h2>
+<div class="card-grid">
+  <div class="card">
+    <h3>🎹 Als Synth spielen</h3>
+    <p>MIDI-Keyboard per USB oder BLE anschließen, einen Patch aus Oszillatoren, Filtern und
+    Hüllkurven bauen und live spielen &ndash; von klassischem Subtraktiv-Sound über FM bis zur
+    Hammond-Orgel-Emulation.</p>
+  </div>
+  <div class="card">
+    <h3>🧩 Modular patchen</h3>
+    <p>69 Widgets aus 11 Kategorien (Generatoren, Modulatoren, Filter, Logik, Mixing, Meter, ...)
+    frei verkabeln &ndash; genau wie an einem echten Modularsystem, nur ohne Kabelsalat auf dem
+    Tisch.</p>
+  </div>
+  <div class="card">
+    <h3>🔌 Mit echter Hardware koppeln</h3>
+    <p>CV-In/Out- und Digital-In/Out-Widgets verbinden das Patch mit echtem Eurorack-Equipment
+    &ndash; ESPRESSYNTH kann Steuerspannungen empfangen und aussenden.</p>
+  </div>
+  <div class="card">
+    <h3>🖥️ Als USB-Audio-Interface</h3>
+    <p>Der USB-Out-Ausgang macht aus dem Board eine USB-Audio-Karte für den Rechner oder ein
+    anderes USB-Host-Gerät.</p>
+  </div>
+  <div class="card">
+    <h3>🥁 Sequenzen bauen</h3>
+    <p>Step-Arpeggiator, Drum-Sequencer, Clock und Sample&amp;Hold erlauben rhythmische und
+    sich selbst weiterentwickelnde Patches, auch ganz ohne angeschlossenes MIDI-Gerät.</p>
+  </div>
+  <div class="card">
+    <h3>💾 Presets sichern</h3>
+    <p>Patches lassen sich als Preset speichern, laden und exportieren &ndash; über das
+    Datei-Menü der Web-Oberfläche, mit Ablage auf dem Gerät selbst (LittleFS/SD).</p>
+  </div>
+</div>
+
+<h2>Die Widgets im Überblick</h2>
+<p>
+Alle verfügbaren Widgets sind auf der <a href="widgets/index.html">Widget-Referenzseite</a>
+dokumentiert, gruppiert in dieselben Kategorien wie im "Add Node"-Dialog der Oberfläche:
+</p>
+<div class="category-nav">
+  <a href="widgets/midi.html"><span>MIDI</span><span class="n">2</span></a>
+  <a href="widgets/generator.html"><span>Generator</span><span class="n">5</span></a>
+  <a href="widgets/modulator.html"><span>Modulator</span><span class="n">10</span></a>
+  <a href="widgets/control.html"><span>Control</span><span class="n">8</span></a>
+  <a href="widgets/math.html"><span>Math</span><span class="n">10</span></a>
+  <a href="widgets/filter.html"><span>Filter</span><span class="n">4</span></a>
+  <a href="widgets/effects.html"><span>Effects</span><span class="n">7</span></a>
+  <a href="widgets/mixing-output.html"><span>Mixing/Output</span><span class="n">9</span></a>
+  <a href="widgets/external-audio.html"><span>External Audio</span><span class="n">3</span></a>
+  <a href="widgets/misc.html"><span>Misc</span><span class="n">7</span></a>
+  <a href="widgets/external-hardware.html"><span>External Hardware</span><span class="n">4</span></a>
+</div>
+
+<figure>
+  <img src="images/04-visual-widgets.png" alt="Wavetable-Editor, Drum-Sequencer, Oszilloskop, Spektrumanalyzer und VU-Meter">
+  <figcaption>Einige der Widgets mit eigener grafischer Darstellung: Wavetable-Editor, Drum-Sequencer, Oszilloskop, Spektrumanalyzer, VU-Meter.</figcaption>
+</figure>
+
+<h2>Die Hardware dahinter</h2>
+<p>
+ESPRESSYNTH ist die Synth-Anwendung auf Basis eines größeren ESP32-P4-Firmware-Templates, das
+Board-Unterstützung, USB-Host/-Device, Audio-Codecs, Wi-Fi/Ethernet/BLE (über einen ESP32-C6
+Co-Prozessor), LVGL-Display-Anbindung, Dateisystem und eine Web-Oberfläche mitbringt. Details
+dazu stehen auf der <a href="features.html">Feature-Seite</a>; die vollständige technische
+Dokumentation zum Bauen und Flashen der Firmware steht im
+<a href="../../README.md">README.md</a> im Projekt-Wurzelverzeichnis.
+</p>
+
+<div class="note">
+<strong>Über diese Website:</strong> Diese Seiten sind eine reine Dokumentations-/Referenzsite
+(statisches HTML, kein Build-Schritt nötig) und liegen unter
+<code>documentation/Website/</code>. Sie ergänzen die eingebaute Hilfe der Web-Oberfläche
+(<code>data/help/</code>) um einen Gesamtüberblick über das Projekt.
+</div>
+
+</main>
+<footer class="site-footer">
+  ESPRESSYNTH &middot; Projekt-Dokumentation &middot; erzeugt aus dem Quellcode dieses Repositories
+</footer>
+</body>
+</html>
