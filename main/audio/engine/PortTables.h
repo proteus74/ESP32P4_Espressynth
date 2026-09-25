@@ -190,6 +190,11 @@ inline int audioInIndex(NodeType type, const char *portName)
         // NodeInstance.cpp/LfoState::zeroPointFixed).
         if (is(portName, "zeroPoint"))
             return 3;
+        // "morph" - Wavetable mode's table position (0-10V). Deliberately a
+        // genuine audio-rate port (not control-only): a second LFO or an
+        // envelope patched here sweeps the bank per sample.
+        if (is(portName, "morph"))
+            return 4;
         return -1;
     case NodeType::Detune:
         // cv only - amount isn't a real port (Knob-mappable by name via
@@ -750,7 +755,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 4; // "reset" + "oneShot" + "global" + "zeroPoint" (CV)
+        return 5; // "reset" + "oneShot" + "global" + "zeroPoint" + "morph" (CV)
     case NodeType::Detune:
         return 1;
     case NodeType::Switch:

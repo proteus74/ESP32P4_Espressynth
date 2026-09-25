@@ -1,5 +1,7 @@
-import { AudioEngine } from "./audio-engine.js?v=20260924-firmware-parity-1";
+import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-2";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
+import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-4";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -1766,6 +1768,7 @@ const WIDGET_TYPES = {
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
       { id: "zeroPoint", label: "Offset" },
+      { id: "morph", label: "Morph" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -3994,6 +3997,11 @@ function createWidget(type, label, x, y, forcedId) {
       oneShotDone: true,
       oneShotAccum: 0,
       global: false,
+      // Wavetable mode (WT button): wavetables stays null until the mode is
+      // first used, so a classic LFO's preset carries no table payload.
+      wavetable: false,
+      morph: 0,
+      wavetables: null,
       cyclePos: 0,
       linearPos: 0,
       lastTick: null,
@@ -4032,7 +4040,45 @@ function createWidget(type, label, x, y, forcedId) {
       });
       waveButtons.appendChild(btn);
     });
+    // Wavetable mode switch - sits in the waveform row since it replaces the
+    // waveform; Reset/One Shot/Global/Phase/Offset keep working unchanged.
+    const wtBtn = document.createElement("button");
+    wtBtn.className = "osc-wave-btn lfo-wavetable-btn";
+    wtBtn.dataset.wave = "wavetable";
+    wtBtn.title = "Wavetable (morphable, editable)";
+    wtBtn.innerHTML = LFO_WAVETABLE_ICON;
+    wtBtn.style.setProperty("--wave-color", "#e879f9");
+    wtBtn.style.setProperty("--wave-glow", "rgba(232, 121, 249, 0.55)");
+    wtBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setLfoWavetableMode(id, !lfoStates.get(id)?.wavetable);
+    });
+    waveButtons.appendChild(wtBtn);
     body.appendChild(waveButtons);
+
+    const wtPanel = document.createElement("div");
+    wtPanel.className = "lfo-wavetable-panel hidden";
+    wtPanel.dataset.role = "lfo-wavetable-panel";
+    const wtPreview = document.createElement("canvas");
+    wtPreview.className = "lfo-wavetable-preview";
+    wtPreview.width = 160;
+    wtPreview.height = 44;
+    wtPreview.dataset.role = "lfo-wavetable-preview";
+    wtPreview.title = "Current morphed waveform - click to edit";
+    const wtEdit = document.createElement("button");
+    wtEdit.className = "btn-secondary lfo-wavetable-edit";
+    wtEdit.textContent = "Edit";
+    wtEdit.title = "Open the wavetable editor";
+    [wtPreview, wtEdit].forEach((node) => {
+      node.addEventListener("mousedown", (e) => e.stopPropagation());
+      node.addEventListener("dblclick", (e) => e.stopPropagation());
+      node.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openLfoWavetableEditor(id);
+      });
+    });
+    wtPanel.append(wtPreview, wtEdit);
+    body.appendChild(wtPanel);
 
     
     
@@ -4824,6 +4870,30 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.className = "port-value";
         valueSpan.dataset.role = "lfo-zeropoint-port-value";
         valueSpan.textContent = `${formatNumber(state.zeroPoint)} V`;
+        row.appendChild(valueSpan);
+      }
+      if (type === "lfo" && port.id === "morph") {
+        // Wavetable position: 0 V = first slot, 10 V = last slot. Only
+        // audible in Wavetable mode (the row is dimmed otherwise).
+        const state = lfoStates.get(id);
+        row.dataset.role = "lfo-morph-row";
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(state.morph);
+        slider.dataset.role = "lfo-morph-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, "morph", parseFloat(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "lfo-morph-value";
+        valueSpan.textContent = `${formatNumber(state.morph)} V`;
         row.appendChild(valueSpan);
       }
       if ((type === "filter" || type === "curtis-filter") && (port.id === "cutoff" || port.id === "resonance")) {
@@ -11672,7 +11742,22 @@ function tickLfo(widgetId) {
   const phaseOffset = state.phase / 360;
 
   let raw;
-  if (state.waveType === "linear-up" || state.waveType === "linear-down") {
+  if (state.wavetable) {
+    // Same cycle/one-shot bookkeeping as the classic shapes below, only the
+    // value comes from the morphed wavetable bank.
+    if (!(state.oneShot && state.oneShotDone)) {
+      state.cyclePos = wrapPhase(state.cyclePos + state.rate * dt);
+      if (state.oneShot) {
+        state.oneShotAccum += state.rate * dt;
+        if (state.oneShotAccum >= 1) {
+          state.oneShotDone = true;
+          state.oneShotAccum = 0;
+          state.cyclePos = 0;
+        }
+      }
+    }
+    raw = sampleBank(lfoWavetableBank(state), wrapPhase(state.cyclePos + phaseOffset), state.morph / CV_MAX_VOLTS);
+  } else if (state.waveType === "linear-up" || state.waveType === "linear-down") {
     // Free-running: repeats like a sawtooth. One Shot: one non-wrapping ramp
     // from the last reset, then hold at the end value.
     if (!(state.oneShot && state.oneShotDone)) {
@@ -11707,6 +11792,8 @@ function tickLfo(widgetId) {
     }
   }
 
+  if (state.wavetable) updateLfoWavetablePreview(widgetId);
+
   const value = clamp(center + raw * halfSwing, 0, CV_MAX_VOLTS);
   propagate(widgetId, "value", roundFloat(value, 4));
 }
@@ -11732,13 +11819,135 @@ function updateLfoWaveButtons(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   el.querySelectorAll(".osc-wave-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.wave === state.waveType);
+    btn.classList.toggle("active", state.wavetable ? btn.dataset.wave === "wavetable" : btn.dataset.wave === state.waveType);
+  });
+  const panel = el.querySelector('[data-role="lfo-wavetable-panel"]');
+  if (panel) panel.classList.toggle("hidden", !state.wavetable);
+  const morphRow = el.querySelector('[data-role="lfo-morph-row"]');
+  if (morphRow) morphRow.classList.toggle("lfo-morph-inactive", !state.wavetable);
+  if (state.wavetable) updateLfoWavetablePreview(widgetId);
+}
+
+// --- LFO Wavetable mode -------------------------------------------------
+
+const LFO_WAVETABLE_ICON = `<svg ${WAVE_ICON_ATTRS} stroke-width="7"><path d="M 8,62 Q 22,20 36,62 T 64,62" opacity=".45"/><path d="M 30,44 L 46,22 L 62,44 L 78,22 L 92,44"/><path d="M 8,86 L 92,86" opacity=".35"/></svg>`;
+
+function lfoWavetableBank(state) {
+  if (!state.wavetables) state.wavetables = createDefaultBank();
+  return state.wavetables;
+}
+
+function updateLfoWavetablePreview(widgetId) {
+  const state = lfoStates.get(widgetId);
+  const canvas = document.getElementById(widgetId)?.querySelector('[data-role="lfo-wavetable-preview"]');
+  if (!state || !canvas || !state.wavetable) return;
+  // Playhead: the table read position (cycle position + phase offset), same
+  // value tickLfo() feeds into sampleBank().
+  drawWavetablePreview(canvas, lfoWavetableBank(state), state.morph, wrapPhase(state.cyclePos + state.phase / 360));
+}
+
+// Live audition of editor changes on the device: POST the whole bank to
+// /api/wavetable (swapped into the running graph, no preset save / graph
+// rebuild). At most one request in flight; edits arriving meanwhile only
+// keep the newest bank, sent as soon as the previous request returns.
+const lfoWavetableLiveSend = new Map(); // widgetId -> { inFlight, pending }
+
+function postLfoWavetableLive(widgetId, tables) {
+  let entry = lfoWavetableLiveSend.get(widgetId);
+  if (!entry) {
+    entry = { inFlight: false, pending: null };
+    lfoWavetableLiveSend.set(widgetId, entry);
+  }
+  entry.pending = tables;
+  if (entry.inFlight) return;
+  const sendNext = () => {
+    const next = entry.pending;
+    entry.pending = null;
+    if (!next) {
+      entry.inFlight = false;
+      return;
+    }
+    entry.inFlight = true;
+    fetch(`/api/wavetable?widget=${encodeURIComponent(widgetId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wavetables: encodeBank(next) }),
+    })
+      .catch(() => {}) // no device (offline editing) - the browser preview still plays
+      .finally(sendNext);
+  };
+  sendNext();
+}
+
+function setLfoWavetableMode(widgetId, on) {
+  const state = lfoStates.get(widgetId);
+  if (!state || state.wavetable === on) return;
+  state.wavetable = on;
+  if (on) audioEngine.setParam(widgetId, "wavetables", lfoWavetableBank(state));
+  audioEngine.setParam(widgetId, "wavetable", on);
+  updateLfoWaveButtons(widgetId);
+  sendLiveParamUpdate(widgetId, { wavetable: on });
+  // The device may not have this LFO's bank yet (preset saved without
+  // Wavetable mode) - hand it over live via /api/wavetable instead of
+  // saving the preset, which would rebuild the whole graph. Until it lands
+  // (a few ms) the device keeps playing the classic waveform. The bank
+  // becomes permanent with the next regular preset save.
+  if (on) postLfoWavetableLive(widgetId, lfoWavetableBank(state));
+}
+
+function setLfoMorph(widgetId, volts) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  state.morph = clamp(Number(volts) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, "morph", state.morph);
+  const el = document.getElementById(widgetId);
+  const slider = el?.querySelector('[data-role="lfo-morph-slider"]');
+  if (slider) slider.value = String(state.morph);
+  const value = el?.querySelector('[data-role="lfo-morph-value"]');
+  if (value) value.textContent = `${formatNumber(state.morph)} V`;
+  updateLfoWavetablePreview(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { morph: state.morph });
+}
+
+function openLfoWavetableEditor(widgetId) {
+  const state = lfoStates.get(widgetId);
+  if (!state) return;
+  const original = lfoWavetableBank(state).map((t) => Float32Array.from(t));
+  const label = document.getElementById(widgetId)?.querySelector(".widget-instance-label")?.textContent || "LFO";
+  const preview = (tables, live = true) => {
+    state.wavetables = tables;
+    audioEngine.setParam(widgetId, "wavetables", tables);
+    updateLfoWavetablePreview(widgetId);
+    if (live && state.wavetable) postLfoWavetableLive(widgetId, tables);
+  };
+  openWavetableEditor({
+    title: `Wavetable Editor – ${label}`,
+    tables: original,
+    onPreview: preview,
+    onCancel: () => preview(original),
+    onApply: (tables) => {
+      // Undo snapshot of the pre-edit bank (the live previews already
+      // replaced it in state).
+      preview(original, false);
+      pushHistorySnapshot();
+      // No preset save here (a save rebuilds the whole graph on the device
+      // and takes too long): the device already plays the edited bank via
+      // the live path - this final post just makes sure it has the very
+      // last state. It is written to flash with the next regular preset
+      // save (serializePreset() includes state.wavetables).
+      preview(tables, true);
+    },
   });
 }
 
 function setLfoWaveType(widgetId, waveType) {
   const state = lfoStates.get(widgetId);
   if (!state) return;
+  if (state.wavetable) {
+    state.wavetable = false;
+    audioEngine.setParam(widgetId, "wavetable", false);
+    sendLiveParamUpdate(widgetId, { wavetable: false });
+  }
   state.waveType = waveType;
   state.linearPos = 0;
   audioEngine.setParam(widgetId, "waveType", waveType);
@@ -11829,6 +12038,11 @@ function updateLfoVisual(widgetId) {
   if (oneShotToggle) oneShotToggle.checked = state.oneShot === true;
   const globalToggle = el.querySelector('[data-role="lfo-global-switch"]');
   if (globalToggle) globalToggle.checked = state.global === true;
+  const morphSlider = el.querySelector('[data-role="lfo-morph-slider"]');
+  if (morphSlider) morphSlider.value = String(state.morph);
+  const morphValue = el.querySelector('[data-role="lfo-morph-value"]');
+  if (morphValue) morphValue.textContent = `${formatNumber(state.morph)} V`;
+  updateLfoWavetablePreview(widgetId);
 }
 
 
@@ -18684,6 +18898,11 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
+  if (el.dataset.widgetType === "lfo" && portId === "morph") {
+    const num = Number(value);
+    if (!Number.isNaN(num)) setLfoMorph(widgetId, num);
+  }
+
   if (el.dataset.widgetType === "lfo" && portId === "zeroPoint") {
     const num = Number(value);
     if (!Number.isNaN(num)) {
@@ -20543,6 +20762,9 @@ const WIDGET_ENGINES = {
             zeroPoint: state.zeroPoint,
             oneShot: state.oneShot,
             global: state.global,
+            wavetable: state.wavetable,
+            morph: state.morph,
+            ...(state.wavetables ? { wavetables: encodeBank(state.wavetables) } : {}),
           }
         : {};
     },
@@ -20558,6 +20780,9 @@ const WIDGET_ENGINES = {
       state.zeroPoint = params.zeroPoint ?? 5;
       state.oneShot = params.oneShot === true;
       state.global = params.global === true;
+      state.wavetable = params.wavetable === true;
+      state.morph = clamp(Number(params.morph ?? 0) || 0, 0, CV_MAX_VOLTS);
+      state.wavetables = decodeBank(params.wavetables) || (state.wavetable ? createDefaultBank() : null);
       
       
       state.oneShotDone = true;
@@ -20571,6 +20796,9 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "zeroPoint", state.zeroPoint);
       audioEngine.setParam(id, "oneShot", state.oneShot);
       audioEngine.setParam(id, "global", state.global);
+      if (state.wavetables) audioEngine.setParam(id, "wavetables", state.wavetables);
+      audioEngine.setParam(id, "morph", state.morph);
+      audioEngine.setParam(id, "wavetable", state.wavetable);
       updateLfoWaveButtons(id);
       updateLfoVisual(id);
     },

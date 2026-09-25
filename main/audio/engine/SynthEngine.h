@@ -385,7 +385,68 @@ public:
     // output sink. Only ever called on the render task.
     bool applyOutputParam(const char *widgetId, cJSON *params);
 
+    // Live wavetable edit (POST /api/wavetable, see synth_web_api.hpp): hands
+    // a freshly parsed bank for one LFO widget to the render task, which
+    // swaps it into every voice instance at the next block - no graph
+    // rebuild, so drawing in the editor is heard immediately. Takes over the
+    // caller's reference to `bank` in every case (released here when the
+    // queue is full). Safe to call from any task.
+    bool postLiveWavetable(const char *widgetId, wavetable::Bank *bank)
+    {
+        if (liveWavetableQueue_ == nullptr || widgetId == nullptr || bank == nullptr)
+        {
+            wavetable::release(bank);
+            return false;
+        }
+        LiveWavetableMsg msg{};
+        snprintf(msg.widgetId, sizeof(msg.widgetId), "%s", widgetId);
+        msg.bank = bank;
+        if (xQueueSend(liveWavetableQueue_, &msg, 0) != pdTRUE)
+        {
+            wavetable::release(bank);
+            return false;
+        }
+        return true;
+    }
+
 private:
+    struct LiveWavetableMsg
+    {
+        char widgetId[24];
+        wavetable::Bank *bank;
+    };
+
+    // Render task: drains LiveWavetableMsg and swaps the banks in (or just
+    // drops them when `graph` is null - graph swap/reset path).
+    void applyLiveWavetables(Graph *graph)
+    {
+        LiveWavetableMsg msg;
+        while (liveWavetableQueue_ != nullptr && xQueueReceive(liveWavetableQueue_, &msg, 0) == pdTRUE)
+        {
+            if (graph != nullptr)
+            {
+                for (uint16_t w = 0; w < graph->widgetCount; ++w)
+                {
+                    const WidgetSlot &slot = graph->widgets[w];
+                    if (slot.type != NodeType::Lfo || strcmp(slot.id, msg.widgetId) != 0)
+                        continue;
+                    for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                    {
+                        LfoState &lfo = graph->instances[slot.instanceBase + v].lfo;
+                        wavetable::Bank *old = lfo.wavetableBank;
+                        lfo.wavetableBank = wavetable::acquire(msg.bank);
+                        // Last reference to a replaced bank frees ~64KB of
+                        // PSRAM right here on the render task - a single
+                        // heap_caps_free(), and only at editor-stroke rate.
+                        wavetable::release(old);
+                    }
+                    break;
+                }
+            }
+            wavetable::release(msg.bank);
+        }
+    }
+
     void publishMidiVoiceUsage()
     {
         uint16_t active = 0;
@@ -579,6 +640,7 @@ private:
     i2s_chan_handle_t secondaryI2sTxHandle_ = nullptr;
     QueueHandle_t presetChangedQueue_ = nullptr;
     QueueHandle_t liveParamQueue_ = nullptr;
+    QueueHandle_t liveWavetableQueue_ = nullptr; // any task -> render task, LiveWavetableMsg (see postLiveWavetable)
     QueueHandle_t midiEventQueue_ = nullptr;
     QueueHandle_t builtGraphQueue_ = nullptr; // length 1; loader task -> render task, fully-built Graph* ready to swap in
     QueueHandle_t retiredGraphQueue_ = nullptr; // render task -> loader task; heap destruction stays off the real-time core
@@ -951,6 +1013,7 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     snprintf(loaderKnownPresetPath_, sizeof(loaderKnownPresetPath_), "%s", initialPresetPath);
 
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
+    liveWavetableQueue_ = xQueueCreate(4, sizeof(LiveWavetableMsg));
     builtGraphQueue_ = xQueueCreate(1, sizeof(BuiltGraphMsg));
     retiredGraphQueue_ = xQueueCreate(2, sizeof(Graph *));
 
@@ -1267,6 +1330,7 @@ inline void SynthEngine::taskLoop()
                 applyLiveParamMessage(*this, *liveGraph_, paramMsg.json);
                 ++liveParamCount;
             }
+            applyLiveWavetables(liveGraph_);
             liveParamUs = esp_timer_get_time() - liveParamStartUs;
         }
 
@@ -1444,6 +1508,9 @@ inline void SynthEngine::taskLoop()
             {
                 xQueueReset(liveParamQueue_);
             }
+            // Same for live wavetable edits - but each message owns a bank
+            // reference, so drain-and-release instead of xQueueReset.
+            applyLiveWavetables(nullptr);
             if (xQueueSend(retiredGraphQueue_, &retiredGraph, 0) != pdTRUE)
             {
                 // Queue depth two is sufficient because the loader serializes

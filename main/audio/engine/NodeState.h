@@ -82,6 +82,11 @@ struct FmOscillatorState
     uint32_t superSawSidePhase[6] = {};
 };
 
+namespace wavetable
+{
+struct Bank;
+}
+
 struct LfoState
 {
     PhaseOsc phaseGen;
@@ -136,6 +141,16 @@ struct LfoState
     // ControlRoute - otherwise its voltage (>=kGateThresholdVolts = global)
     // decides per block.
     bool global = false;
+    // Wavetable mode (see nodes/LfoNode.h / Wavetable.h): replaces the
+    // classic `wave` with a morphable single-cycle table bank. Reset, One
+    // Shot, Global, Phase and the amplitude/offset mapping stay exactly the
+    // same - only the raw -1..+1 waveform source changes. `morph` is the
+    // manual 0-10V fallback for the "morph" port (index 4, audio-rate).
+    // `wavetableBank` is shared by all voices of the widget and reference
+    // counted (acquired in build(), released in Graph::destroy()).
+    bool wavetable = false;
+    float morph = 0.0f;
+    wavetable::Bank *wavetableBank = nullptr;
 };
 
 // cv (port "cv", index 0) in -> out (outL) out: one pitch-CV signal, cv plus
