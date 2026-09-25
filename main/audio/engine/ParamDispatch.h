@@ -33,6 +33,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiSplitNode.h"
@@ -68,6 +69,8 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     {
     case NodeType::Lfo:
         return nodes::lfo::setParam(inst, name, value);
+    case NodeType::Wavetable:
+        return nodes::wavetable::setParam(inst, name, value);
 
     case NodeType::Oscillator:
         return nodes::oscillator::setParam(inst, name, value);

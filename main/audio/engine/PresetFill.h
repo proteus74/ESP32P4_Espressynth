@@ -38,6 +38,7 @@
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
 #include "nodes/LfoNode.h"
+#include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
@@ -87,6 +88,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Lfo:
         nodes::lfo::parsePreset(p, out);
+        break;
+    case NodeType::Wavetable:
+        nodes::wavetable::parsePreset(p, out);
         break;
     case NodeType::Detune:
         nodes::detune::parsePreset(p, out);

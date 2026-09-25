@@ -72,6 +72,7 @@ enum class NodeType : uint8_t
     DigitalIn,
     DigitalOut,
     MdaPiano,
+    Wavetable,
     Unknown,
 };
 
@@ -140,6 +141,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::FmOscillator;
     if (strcmp(typeStr, "lfo") == 0)
         return NodeType::Lfo;
+    if (strcmp(typeStr, "wavetable") == 0)
+        return NodeType::Wavetable;
     if (strcmp(typeStr, "detune") == 0)
         return NodeType::Detune;
     if (strcmp(typeStr, "adsr") == 0)

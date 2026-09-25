@@ -1,7 +1,7 @@
-import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-2";
+import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-7";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
-import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
-import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-4";
+import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-7";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -1762,13 +1762,28 @@ const WIDGET_TYPES = {
     icon: "🔄",
     inputs: [
       { id: "rate", label: "Rate" },
-      { id: "amplitude", label: "Amplitude" },
       { id: "phase", label: "Phase" },
       { id: "reset", label: "Reset" },
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
       { id: "zeroPoint", label: "Offset" },
+      { id: "gain", label: "Gain" },
+    ],
+    outputs: [{ id: "value", label: "Out" }],
+  },
+  // Own widget (not an LFO mode) so ordinary LFO presets never carry the
+  // table payload. Shares the LFO's state/timer/reset/one-shot/global logic
+  // (lfoStates, tickLfo, ...) - see isLfoLikeType().
+  wavetable: {
+    label: "Wavetable",
+    icon: "∿",
+    inputs: [
+      { id: "rate", label: "Rate" },
       { id: "morph", label: "Morph" },
+      { id: "reset", label: "Reset" },
+      { id: "oneShot", label: "One Shot" },
+      { id: "global", label: "Global" },
+      { id: "gain", label: "Gain" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -1815,7 +1830,7 @@ const WIDGET_TYPES = {
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
-  { label: "Modulator", types: ["lfo", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold", "burst-generator"] },
+  { label: "Modulator", types: ["lfo", "wavetable", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold", "burst-generator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
   { label: "Filter", types: ["filter", "curtis-filter", "esp-eq", "graphic-eq"] },
@@ -1861,6 +1876,7 @@ const AUDIO_PORTS = {
   
   
   lfo: { out: ["value"] },
+  wavetable: { out: ["value"] },
   // Const is a scalar control source. It is not an audio-rate output.
   const: { out: [] },
   
@@ -2234,7 +2250,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
 
 
 
@@ -2700,7 +2716,14 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player", "lfo", "wavetable"]);
+
+// LFO and Wavetable share one implementation (state in lfoStates, tickLfo,
+// reset/one-shot/global handling, rate settings dialog); state.wavetable
+// tells them apart where they differ.
+function isLfoLikeType(type) {
+  return type === "lfo" || type === "wavetable";
+}
 
 function createWidget(type, label, x, y, forcedId) {
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
@@ -3811,7 +3834,7 @@ function createWidget(type, label, x, y, forcedId) {
     outputMultiplexerSwitchBody = body;
   }
 
-  if (type === "lfo") {
+  if (isLfoLikeType(type)) {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button, input, .port-dot")) return;
       e.stopPropagation();
@@ -3989,7 +4012,7 @@ function createWidget(type, label, x, y, forcedId) {
       waveType: "sine",
       rate: 2,
       maxRate: LFO_MAX_RATE_HZ,
-      amplitude: 10,
+      gain: CV_MAX_VOLTS,
       phase: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
@@ -3997,11 +4020,7 @@ function createWidget(type, label, x, y, forcedId) {
       oneShotDone: true,
       oneShotAccum: 0,
       global: false,
-      // Wavetable mode (WT button): wavetables stays null until the mode is
-      // first used, so a classic LFO's preset carries no table payload.
       wavetable: false,
-      morph: 0,
-      wavetables: null,
       cyclePos: 0,
       linearPos: 0,
       lastTick: null,
@@ -4012,7 +4031,7 @@ function createWidget(type, label, x, y, forcedId) {
       waveType: "sine",
       rate: 2,
       maxRate: LFO_MAX_RATE_HZ,
-      amplitude: 10,
+      gain: CV_MAX_VOLTS,
       phase: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
@@ -4040,45 +4059,7 @@ function createWidget(type, label, x, y, forcedId) {
       });
       waveButtons.appendChild(btn);
     });
-    // Wavetable mode switch - sits in the waveform row since it replaces the
-    // waveform; Reset/One Shot/Global/Phase/Offset keep working unchanged.
-    const wtBtn = document.createElement("button");
-    wtBtn.className = "osc-wave-btn lfo-wavetable-btn";
-    wtBtn.dataset.wave = "wavetable";
-    wtBtn.title = "Wavetable (morphable, editable)";
-    wtBtn.innerHTML = LFO_WAVETABLE_ICON;
-    wtBtn.style.setProperty("--wave-color", "#e879f9");
-    wtBtn.style.setProperty("--wave-glow", "rgba(232, 121, 249, 0.55)");
-    wtBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setLfoWavetableMode(id, !lfoStates.get(id)?.wavetable);
-    });
-    waveButtons.appendChild(wtBtn);
     body.appendChild(waveButtons);
-
-    const wtPanel = document.createElement("div");
-    wtPanel.className = "lfo-wavetable-panel hidden";
-    wtPanel.dataset.role = "lfo-wavetable-panel";
-    const wtPreview = document.createElement("canvas");
-    wtPreview.className = "lfo-wavetable-preview";
-    wtPreview.width = 160;
-    wtPreview.height = 44;
-    wtPreview.dataset.role = "lfo-wavetable-preview";
-    wtPreview.title = "Current morphed waveform - click to edit";
-    const wtEdit = document.createElement("button");
-    wtEdit.className = "btn-secondary lfo-wavetable-edit";
-    wtEdit.textContent = "Edit";
-    wtEdit.title = "Open the wavetable editor";
-    [wtPreview, wtEdit].forEach((node) => {
-      node.addEventListener("mousedown", (e) => e.stopPropagation());
-      node.addEventListener("dblclick", (e) => e.stopPropagation());
-      node.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openLfoWavetableEditor(id);
-      });
-    });
-    wtPanel.append(wtPreview, wtEdit);
-    body.appendChild(wtPanel);
 
     
     
@@ -4108,6 +4089,69 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(body);
 
     startLfoTimer(id);
+  }
+
+  if (type === "wavetable") {
+    const wavetables = createDefaultBank();
+    lfoStates.set(id, {
+      waveType: "sine",
+      rate: 2,
+      maxRate: LFO_MAX_RATE_HZ,
+      gain: CV_MAX_VOLTS,
+      phase: 0,
+      zeroPointFixed: false,
+      zeroPoint: 5,
+      oneShot: false,
+      oneShotDone: true,
+      oneShotAccum: 0,
+      global: false,
+      wavetable: true,
+      morph: 0,
+      wavetables,
+      cyclePos: 0,
+      linearPos: 0,
+      lastTick: null,
+      timer: null,
+      resetPrevByVoice: new Map(),
+    });
+    audioEngine.createNode(id, "wavetable", {
+      rate: 2,
+      maxRate: LFO_MAX_RATE_HZ,
+      gain: CV_MAX_VOLTS,
+      oneShot: false,
+      global: false,
+      morph: 0,
+      wavetables,
+    });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body lfo-body";
+    const wtPanel = document.createElement("div");
+    wtPanel.className = "lfo-wavetable-panel";
+    const wtPreview = document.createElement("canvas");
+    wtPreview.className = "lfo-wavetable-preview";
+    wtPreview.width = 160;
+    wtPreview.height = 44;
+    wtPreview.dataset.role = "lfo-wavetable-preview";
+    wtPreview.title = "Current morphed waveform - click to edit";
+    const wtEdit = document.createElement("button");
+    wtEdit.className = "btn-secondary lfo-wavetable-edit";
+    wtEdit.textContent = "Edit";
+    wtEdit.title = "Open the wavetable editor";
+    [wtPreview, wtEdit].forEach((node) => {
+      node.addEventListener("mousedown", (e) => e.stopPropagation());
+      node.addEventListener("dblclick", (e) => e.stopPropagation());
+      node.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openLfoWavetableEditor(id);
+      });
+    });
+    wtPanel.append(wtPreview, wtEdit);
+    body.appendChild(wtPanel);
+    el.appendChild(body);
+
+    startLfoTimer(id);
+    requestAnimationFrame(() => updateLfoWavetablePreview(id));
   }
 
   if (type === "vu-meter") {
@@ -4782,7 +4826,7 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = formatDxEnvelopeValue(state, port.id);
         row.appendChild(valueSpan);
       }
-      if (type === "lfo" && port.id === "oneShot") {
+      if (isLfoLikeType(type) && port.id === "oneShot") {
         const state = lfoStates.get(id);
         const switchLabel = document.createElement("label");
         switchLabel.className = "switch";
@@ -4799,8 +4843,8 @@ function createWidget(type, label, x, y, forcedId) {
         switchLabel.appendChild(switchTrack);
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
       }
-      if ((type === "lfo" || type === "gain" || type === "filter" || type === "curtis-filter") && port.id === "global") {
-        const stateMap = { lfo: lfoStates, gain: gainStates, filter: filterStates, "curtis-filter": filterStates }[type];
+      if ((isLfoLikeType(type) || type === "gain" || type === "filter" || type === "curtis-filter") && port.id === "global") {
+        const stateMap = { lfo: lfoStates, wavetable: lfoStates, gain: gainStates, filter: filterStates, "curtis-filter": filterStates }[type];
         const state = stateMap.get(id);
         const switchLabel = document.createElement("label");
         switchLabel.className = "switch";
@@ -4811,7 +4855,7 @@ function createWidget(type, label, x, y, forcedId) {
         toggle.addEventListener("mousedown", (e) => e.stopPropagation());
         toggle.addEventListener("click", (e) => e.stopPropagation());
         toggle.addEventListener("change", () => {
-          if (type === "lfo") setLfoGlobal(id, toggle.checked);
+          if (isLfoLikeType(type)) setLfoGlobal(id, toggle.checked);
           else if (type === "gain") setGainGlobal(id, toggle.checked);
           else setFilterGlobal(id, toggle.checked);
         });
@@ -4872,11 +4916,9 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = `${formatNumber(state.zeroPoint)} V`;
         row.appendChild(valueSpan);
       }
-      if (type === "lfo" && port.id === "morph") {
-        // Wavetable position: 0 V = first slot, 10 V = last slot. Only
-        // audible in Wavetable mode (the row is dimmed otherwise).
+      if (type === "wavetable" && port.id === "morph") {
+        // Wavetable position: 0 V = first slot, 10 V = last slot.
         const state = lfoStates.get(id);
-        row.dataset.role = "lfo-morph-row";
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "port-slider";
@@ -5686,7 +5728,7 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = `${formatNumber(gainState.curve)} V`;
         row.appendChild(valueSpan);
       }
-      if (type === "lfo" && (port.id === "rate" || port.id === "amplitude" || port.id === "phase")) {
+      if (isLfoLikeType(type) && (port.id === "rate" || port.id === "gain" || port.id === "phase")) {
         const lfoState = lfoStates.get(id);
         const cfg = LFO_SLIDER_CONFIG[port.id];
 
@@ -11637,7 +11679,7 @@ let pendingLfoId = null;
 
 const LFO_SLIDER_CONFIG = {
   rate: { min: 0, max: LFO_MAX_RATE_HZ, step: 0.01 },
-  amplitude: { min: 0, max: 10, step: 0.01 }, 
+  gain: { min: 0, max: 10, step: 0.01 },
   phase: { min: -180, max: 180, step: 1 },
 };
 
@@ -11693,7 +11735,7 @@ function snapToDetent(value, detents, snapRange) {
 
 function formatLfoValue(portId, value) {
   if (portId === "rate") return `${formatNumber(value)} Hz`;
-  if (portId === "amplitude") return `${formatNumber(value)} V`;
+  if (portId === "gain") return `${formatNumber(value)} V`;
   if (portId === "phase") return `${Math.round(value)}°`;
   return formatNumber(value);
 }
@@ -11733,7 +11775,7 @@ function tickLfo(widgetId) {
   
   
   
-  const halfSwing = state.amplitude / 2;
+  const halfSwing = state.gain / 2;
   const center = state.zeroPointFixed ? state.zeroPoint : halfSwing;
   
   
@@ -11819,18 +11861,11 @@ function updateLfoWaveButtons(widgetId) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   el.querySelectorAll(".osc-wave-btn").forEach((btn) => {
-    btn.classList.toggle("active", state.wavetable ? btn.dataset.wave === "wavetable" : btn.dataset.wave === state.waveType);
+    btn.classList.toggle("active", btn.dataset.wave === state.waveType);
   });
-  const panel = el.querySelector('[data-role="lfo-wavetable-panel"]');
-  if (panel) panel.classList.toggle("hidden", !state.wavetable);
-  const morphRow = el.querySelector('[data-role="lfo-morph-row"]');
-  if (morphRow) morphRow.classList.toggle("lfo-morph-inactive", !state.wavetable);
-  if (state.wavetable) updateLfoWavetablePreview(widgetId);
 }
 
-// --- LFO Wavetable mode -------------------------------------------------
-
-const LFO_WAVETABLE_ICON = `<svg ${WAVE_ICON_ATTRS} stroke-width="7"><path d="M 8,62 Q 22,20 36,62 T 64,62" opacity=".45"/><path d="M 30,44 L 46,22 L 62,44 L 78,22 L 92,44"/><path d="M 8,86 L 92,86" opacity=".35"/></svg>`;
+// --- Wavetable widget ----------------------------------------------------
 
 function lfoWavetableBank(state) {
   if (!state.wavetables) state.wavetables = createDefaultBank();
@@ -11851,6 +11886,7 @@ function updateLfoWavetablePreview(widgetId) {
 // rebuild). At most one request in flight; edits arriving meanwhile only
 // keep the newest bank, sent as soon as the previous request returns.
 const lfoWavetableLiveSend = new Map(); // widgetId -> { inFlight, pending }
+const WAVETABLE_LIVE_MIN_GAP_MS = 80;
 
 function postLfoWavetableLive(widgetId, tables) {
   let entry = lfoWavetableLiveSend.get(widgetId);
@@ -11868,31 +11904,25 @@ function postLfoWavetableLive(widgetId, tables) {
       return;
     }
     entry.inFlight = true;
+    // While the device's web server is busy receiving/parsing the bank, its
+    // periodic WS status broadcasts arrive late - keep the connection
+    // watchdog from mistaking that for a lost device (see
+    // suspendWsWatchdog()), for the whole stroke plus a grace period.
+    suspendWsWatchdog(WS_WATCHDOG_BUSY_GRACE_MS);
     fetch(`/api/wavetable?widget=${encodeURIComponent(widgetId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wavetables: encodeBank(next) }),
     })
       .catch(() => {}) // no device (offline editing) - the browser preview still plays
-      .finally(sendNext);
+      .finally(() => {
+        suspendWsWatchdog(WS_WATCHDOG_BUSY_GRACE_MS);
+        // Short breather between requests so the device's single httpd
+        // task also gets to its WS traffic in between.
+        setTimeout(sendNext, WAVETABLE_LIVE_MIN_GAP_MS);
+      });
   };
   sendNext();
-}
-
-function setLfoWavetableMode(widgetId, on) {
-  const state = lfoStates.get(widgetId);
-  if (!state || state.wavetable === on) return;
-  state.wavetable = on;
-  if (on) audioEngine.setParam(widgetId, "wavetables", lfoWavetableBank(state));
-  audioEngine.setParam(widgetId, "wavetable", on);
-  updateLfoWaveButtons(widgetId);
-  sendLiveParamUpdate(widgetId, { wavetable: on });
-  // The device may not have this LFO's bank yet (preset saved without
-  // Wavetable mode) - hand it over live via /api/wavetable instead of
-  // saving the preset, which would rebuild the whole graph. Until it lands
-  // (a few ms) the device keeps playing the classic waveform. The bank
-  // becomes permanent with the next regular preset save.
-  if (on) postLfoWavetableLive(widgetId, lfoWavetableBank(state));
 }
 
 function setLfoMorph(widgetId, volts) {
@@ -11923,6 +11953,16 @@ function openLfoWavetableEditor(widgetId) {
   openWavetableEditor({
     title: `Wavetable Editor – ${label}`,
     tables: original,
+    // One pass through the table <-> the widget's Rate (Hz = 1 / seconds).
+    cycleSeconds: state.rate > 0 ? 1 / state.rate : 1,
+    onCycleSeconds: (seconds) => {
+      const hz = 1 / seconds;
+      // A duration shorter than the current max rate allows raises the max
+      // rate (up to the widget's hard limit) instead of silently clamping.
+      if (hz > state.maxRate) setLfoMaxRate(widgetId, Math.min(LFO_MAX_RATE_HZ, hz));
+      setLfoManualRate(widgetId, hz);
+      return state.rate > 0 ? 1 / state.rate : seconds;
+    },
     onPreview: preview,
     onCancel: () => preview(original),
     onApply: (tables) => {
@@ -11943,11 +11983,6 @@ function openLfoWavetableEditor(widgetId) {
 function setLfoWaveType(widgetId, waveType) {
   const state = lfoStates.get(widgetId);
   if (!state) return;
-  if (state.wavetable) {
-    state.wavetable = false;
-    audioEngine.setParam(widgetId, "wavetable", false);
-    sendLiveParamUpdate(widgetId, { wavetable: false });
-  }
   state.waveType = waveType;
   state.linearPos = 0;
   audioEngine.setParam(widgetId, "waveType", waveType);
@@ -12022,7 +12057,7 @@ function updateLfoVisual(widgetId) {
   const rateSlider = el.querySelector('[data-role="lfo-rate-slider"]');
   if (rateSlider) rateSlider.max = String(state.maxRate);
 
-  ["rate", "amplitude", "phase"].forEach((portId) => {
+  ["rate", "gain", "phase"].forEach((portId) => {
     const slider = el.querySelector(`[data-role="lfo-${portId}-slider"]`);
     if (slider) slider.value = String(state[portId]);
     const valueSpan = el.querySelector(`[data-role="lfo-${portId}-value"]`);
@@ -18783,7 +18818,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "lfo" && portId === "rate") {
+  if (isLfoLikeType(el.dataset.widgetType) && portId === "rate") {
     const state = lfoStates.get(widgetId);
     if (state) {
       const num = Number(value);
@@ -18795,14 +18830,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "lfo" && portId === "amplitude") {
+  if (isLfoLikeType(el.dataset.widgetType) && portId === "gain") {
     const state = lfoStates.get(widgetId);
     if (state) {
       const num = Number(value);
-      state.amplitude = Number.isNaN(num) ? CV_MAX_VOLTS : clamp(num, 0, CV_MAX_VOLTS);
-      audioEngine.setParam(widgetId, "amplitude", state.amplitude);
+      state.gain = Number.isNaN(num) ? CV_MAX_VOLTS : clamp(num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "gain", state.gain);
       updateLfoVisual(widgetId);
-      sendLiveParamUpdateThrottled(widgetId, { amplitude: state.amplitude });
+      sendLiveParamUpdateThrottled(widgetId, { gain: state.gain });
     }
   }
 
@@ -18836,7 +18871,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
-  if (el.dataset.widgetType === "lfo" && portId === "reset") {
+  if (isLfoLikeType(el.dataset.widgetType) && portId === "reset") {
     const state = lfoStates.get(widgetId);
     if (state) {
       const above = Number(value) >= GATE_THRESHOLD_VOLTS;
@@ -18871,7 +18906,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
-  if (el.dataset.widgetType === "lfo" && portId === "oneShot") {
+  if (isLfoLikeType(el.dataset.widgetType) && portId === "oneShot") {
     const state = lfoStates.get(widgetId);
     if (state) {
       state.oneShot = Number(value) >= GATE_THRESHOLD_VOLTS;
@@ -18883,7 +18918,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   
   
-  if (el.dataset.widgetType === "lfo" && portId === "global") {
+  if (isLfoLikeType(el.dataset.widgetType) && portId === "global") {
     const state = lfoStates.get(widgetId);
     if (state) {
       state.global = Number(value) >= GATE_THRESHOLD_VOLTS;
@@ -18898,7 +18933,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
-  if (el.dataset.widgetType === "lfo" && portId === "morph") {
+  if (el.dataset.widgetType === "wavetable" && portId === "morph") {
     const num = Number(value);
     if (!Number.isNaN(num)) setLfoMorph(widgetId, num);
   }
@@ -20756,15 +20791,12 @@ const WIDGET_ENGINES = {
             waveType: state.waveType,
             rate: state.rate,
             maxRate: state.maxRate,
-            amplitude: state.amplitude,
+            gain: state.gain,
             phase: state.phase,
             zeroPointFixed: state.zeroPointFixed,
             zeroPoint: state.zeroPoint,
             oneShot: state.oneShot,
             global: state.global,
-            wavetable: state.wavetable,
-            morph: state.morph,
-            ...(state.wavetables ? { wavetables: encodeBank(state.wavetables) } : {}),
           }
         : {};
     },
@@ -20774,15 +20806,12 @@ const WIDGET_ENGINES = {
       state.waveType = params.waveType === "supersaw" ? "sine" : (params.waveType || "sine");
       state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
       state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
-      state.amplitude = params.amplitude ?? CV_MAX_VOLTS;
+      state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
       state.phase = clamp(params.phase ?? 0, -180, 180);
       state.zeroPointFixed = params.zeroPointFixed === true;
       state.zeroPoint = params.zeroPoint ?? 5;
       state.oneShot = params.oneShot === true;
       state.global = params.global === true;
-      state.wavetable = params.wavetable === true;
-      state.morph = clamp(Number(params.morph ?? 0) || 0, 0, CV_MAX_VOLTS);
-      state.wavetables = decodeBank(params.wavetables) || (state.wavetable ? createDefaultBank() : null);
       
       
       state.oneShotDone = true;
@@ -20790,16 +20819,50 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "waveType", state.waveType);
       audioEngine.setParam(id, "maxRate", state.maxRate);
       audioEngine.setParam(id, "rate", state.rate);
-      audioEngine.setParam(id, "amplitude", state.amplitude);
+      audioEngine.setParam(id, "gain", state.gain);
       audioEngine.setParam(id, "phase", state.phase);
       audioEngine.setParam(id, "zeroPointFixed", state.zeroPointFixed);
       audioEngine.setParam(id, "zeroPoint", state.zeroPoint);
       audioEngine.setParam(id, "oneShot", state.oneShot);
       audioEngine.setParam(id, "global", state.global);
-      if (state.wavetables) audioEngine.setParam(id, "wavetables", state.wavetables);
-      audioEngine.setParam(id, "morph", state.morph);
-      audioEngine.setParam(id, "wavetable", state.wavetable);
       updateLfoWaveButtons(id);
+      updateLfoVisual(id);
+    },
+  },
+  wavetable: {
+    getParams: (id) => {
+      const state = lfoStates.get(id);
+      return state
+        ? {
+            rate: state.rate,
+            maxRate: state.maxRate,
+            gain: state.gain,
+            morph: state.morph,
+            oneShot: state.oneShot,
+            global: state.global,
+            wavetables: encodeBank(lfoWavetableBank(state)),
+          }
+        : {};
+    },
+    applyParams: (id, params) => {
+      const state = lfoStates.get(id);
+      if (!state || !params) return;
+      state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
+      state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
+      state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
+      state.morph = clamp(Number(params.morph ?? 0) || 0, 0, CV_MAX_VOLTS);
+      state.oneShot = params.oneShot === true;
+      state.global = params.global === true;
+      state.wavetables = decodeBank(params.wavetables) || createDefaultBank();
+      state.oneShotDone = true;
+      state.oneShotAccum = 0;
+      audioEngine.setParam(id, "maxRate", state.maxRate);
+      audioEngine.setParam(id, "rate", state.rate);
+      audioEngine.setParam(id, "gain", state.gain);
+      audioEngine.setParam(id, "wavetables", state.wavetables);
+      audioEngine.setParam(id, "morph", state.morph);
+      audioEngine.setParam(id, "oneShot", state.oneShot);
+      audioEngine.setParam(id, "global", state.global);
       updateLfoVisual(id);
     },
   },
@@ -22427,6 +22490,19 @@ const WS_WATCHDOG_INTERVAL_MS = 500;
 let lastWsMessageAt = 0;
 let wsWatchdogTimer = null;
 
+// Heavy HTTP transfers to the device (e.g. the wavetable editor's live
+// uploads, see postLfoWavetableLive()) occupy its web server task, so WS
+// broadcasts pile up behind them and arrive late although the device is
+// fine. Such callers suspend the silence check until `ms` from now; the
+// stale timeout then counts from the end of the suspension, not from the
+// last (delayed) message. A real socket "close" is still handled at once.
+const WS_WATCHDOG_BUSY_GRACE_MS = 5000;
+let wsWatchdogSuspendedUntil = 0;
+
+function suspendWsWatchdog(ms) {
+  wsWatchdogSuspendedUntil = Math.max(wsWatchdogSuspendedUntil, Date.now() + ms);
+}
+
 // Shared by the "close" handler and the watchdog below: flips the UI to
 // "lost" exactly once per socket and hands the socket off. Returns false if
 // this socket has already been superseded (e.g. the watchdog already
@@ -22446,7 +22522,9 @@ function startWsWatchdog(socket) {
   wsWatchdogTimer = setInterval(() => {
     if (currentSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
     if (lastWsMessageAt === 0) return;
-    if (Date.now() - lastWsMessageAt > WS_STALE_TIMEOUT_MS) {
+    const now = Date.now();
+    if (now < wsWatchdogSuspendedUntil) return;
+    if (now - Math.max(lastWsMessageAt, wsWatchdogSuspendedUntil) > WS_STALE_TIMEOUT_MS) {
       if (markWsLost(socket)) {
         clearTimeout(reconnectTimer);
         connectWs();

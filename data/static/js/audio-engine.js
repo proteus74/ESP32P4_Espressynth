@@ -1,7 +1,7 @@
 
 
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
-import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-1";
+import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
 
 function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
@@ -93,7 +93,7 @@ function lfoLinearHold(entry) {
 
 // Raw -1..+1 value an LFO rests at while One Shot is holding (the cycle
 // start, shifted by the phase offset) - the wavetable bank at the current
-// morph position in Wavetable mode, the classic waveform otherwise.
+// morph position for the Wavetable widget, the classic waveform otherwise.
 function lfoHeldRaw(entry) {
   if (entry.lfoWavetable) {
     return sampleBank(entry.wtTables, (entry.lfoPhase ?? 0) / 360, (entry.wtMorph ?? 0) / 10);
@@ -2891,7 +2891,12 @@ export class AudioEngine {
           tuneCvActive: false,
         };
       }
-      case "lfo": {
+      case "lfo":
+      case "wavetable": {
+        // "wavetable" is its own widget but reuses this LFO chain completely
+        // (rate, gain, one-shot hold, global mirroring, reset) - only the raw
+        // -1..+1 source is the wavetable worklet instead of lfoOsc (see
+        // _setLfoWavetable). Its entry keeps type "wavetable".
         
         
         
@@ -2902,7 +2907,7 @@ export class AudioEngine {
         
         
         
-        const amplitude = params.amplitude ?? CV_MAX_VOLTS;
+        const amplitude = clampRange(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
         const halfSwing = amplitude / 2;
         const center = params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing;
         const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, LFO_MAX_RATE_HZ);
@@ -2910,7 +2915,7 @@ export class AudioEngine {
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
         const oneShot = params.oneShot === true;
-        const wavetable = params.wavetable === true;
+        const wavetable = type === "wavetable";
         const wtTables = Array.isArray(params.wavetables) && params.wavetables.length > 0
           ? params.wavetables.map((t) => Float32Array.from(t))
           : createDefaultBank();
@@ -2994,7 +2999,7 @@ export class AudioEngine {
           lfoOneShot: oneShot,
           lfoOneShotRunning: false,
           lfoOneShotTimer: null,
-          // Wavetable mode (see _setLfoWavetable): wtSource replaces lfoOsc
+          // Wavetable widget (see _setLfoWavetable): wtSource replaces lfoOsc
           // as the raw signal feeding lfoGain.
           lfoWavetable: false,
           wtTables,
@@ -4917,7 +4922,7 @@ export class AudioEngine {
         entry.lfoOsc.disconnect();
       }
       if (entry.lfoOneShotTimer) clearTimeout(entry.lfoOneShotTimer);
-      if (entry.type === "lfo") this._destroyLfoWavetableSource(entry);
+      if (entry.type === "wavetable") this._destroyLfoWavetableSource(entry);
       if (entry.lfoGain) entry.lfoGain.disconnect();
       if (entry.centerOffset) {
         entry.centerOffset.stop();
@@ -5198,10 +5203,10 @@ export class AudioEngine {
     entry.lfoOneShotRunning = running;
   }
 
-  // --- LFO Wavetable mode ------------------------------------------------
+  // --- Wavetable widget (LFO chain with a wavetable source) ---------------
   //
   // The wavetable source replaces lfoOsc as the raw -1..+1 signal into
-  // lfoGain; everything downstream (amplitude/offset, One Shot hold via
+  // lfoGain; everything downstream (gain, One Shot hold via
   // _setLfoRunning, Global via rawOut/sharedGate) is untouched. Preferred
   // source is the "wavetable-lfo" AudioWorklet (morph is a real AudioParam
   // there). AudioWorklet only exists in secure contexts - the device UI is
@@ -5213,7 +5218,7 @@ export class AudioEngine {
     if (!ctx.audioWorklet || typeof AudioWorkletNode === "undefined") return null;
     if (!this._wavetableWorkletPromise) {
       this._wavetableWorkletPromise = ctx.audioWorklet
-        .addModule(new URL("./wavetable-worklet.js", import.meta.url))
+        .addModule(new URL("./wavetable-worklet.js?v=20260924-wavetable-7", import.meta.url))
         .then(() => true)
         .catch(() => false);
     }
@@ -5221,7 +5226,7 @@ export class AudioEngine {
   }
 
   _setLfoWavetable(entry, enabled) {
-    if (!entry || entry.type !== "lfo" || entry.lfoWavetable === enabled) return;
+    if (!entry || entry.type !== "wavetable" || entry.lfoWavetable === enabled) return;
     entry.lfoWavetable = enabled;
     if (enabled) {
       try {
@@ -5355,12 +5360,12 @@ export class AudioEngine {
     const wrapper = this.nodes.get(id);
     if (!wrapper || !this.ctx) return;
     const resetOne = (entry) => {
-      if (!entry || entry.type !== "lfo") return;
+      if (!entry || (entry.type !== "lfo" && entry.type !== "wavetable")) return;
       const oldOsc = entry.lfoOsc;
       const newOsc = this.ctx.createOscillator();
       setOscWaveType(this.ctx, newOsc, entry.lfoWaveType, (entry.lfoPhase ?? 0) / 360);
       newOsc.frequency.value = oldOsc.frequency.value;
-      // In Wavetable mode the wavetable source (not the oscillator) drives
+      // For the Wavetable widget the wavetable source (not the oscillator) drives
       // lfoGain - restart its phase instead.
       if (!entry.lfoWavetable) newOsc.connect(entry.lfoGain);
       this._resetLfoWavetablePhase(entry);
@@ -5764,7 +5769,8 @@ export class AudioEngine {
           }
         }
         break;
-      case "lfo": {
+      case "lfo":
+      case "wavetable": {
         if (paramName === "rate") {
           const rate = clampRange(Number(value) || 0, 0, entry.lfoMaxRate ?? 50);
           entry.lfoRate = rate;
@@ -5776,8 +5782,6 @@ export class AudioEngine {
           entry.lfoRate = rate;
           applyRampValue(entry.lfoOsc.frequency, rate);
           this._syncLfoWavetableParams(entry);
-        } else if (paramName === "wavetable") {
-          this._setLfoWavetable(entry, value === true || value === 1);
         } else if (paramName === "wavetables") {
           if (Array.isArray(value) && value.length > 0) {
             entry.wtTables = value.map((t) => Float32Array.from(t));
@@ -5786,8 +5790,8 @@ export class AudioEngine {
         } else if (paramName === "morph") {
           entry.wtMorph = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
           if (entry.wtSource && entry.wtSource.parameters) applyRampValue(entry.wtSource.parameters.get("morph"), entry.wtMorph);
-        } else if (paramName === "amplitude") {
-          entry.lfoAmplitude = value;
+        } else if (paramName === "gain") {
+          entry.lfoAmplitude = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
         } else if (paramName === "phase") {
           // Takes effect immediately, like LfoNode.h's read-time phase
           // offset: swapping the wave keeps the oscillator's running phase.
@@ -5829,8 +5833,8 @@ export class AudioEngine {
             entry.lfoLinearRunning = false;
           }
         }
-        if (paramName === "amplitude" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType" ||
-            paramName === "wavetable" || paramName === "wavetables" || paramName === "morph") {
+        if (paramName === "gain" || paramName === "phase" || paramName === "zeroPointFixed" || paramName === "zeroPoint" || paramName === "waveType" ||
+            paramName === "wavetables" || paramName === "morph") {
           const halfSwing = entry.lfoAmplitude / 2;
           const center = entry.lfoZeroPointFixed ? entry.lfoZeroPoint : halfSwing;
           if (entry.lfoOneShot && !entry.lfoOneShotRunning) {
@@ -5842,7 +5846,7 @@ export class AudioEngine {
           }
         }
         if (lfoLinearHold(entry) &&
-            ["rate", "maxRate", "amplitude", "phase", "zeroPointFixed", "zeroPoint", "waveType"].includes(paramName)) {
+            ["rate", "maxRate", "gain", "phase", "zeroPointFixed", "zeroPoint", "waveType"].includes(paramName)) {
           applyLfoLinear(this.ctx, entry, false);
         }
         break;
@@ -6081,7 +6085,7 @@ export class AudioEngine {
       
       if (
         paramName === "global" &&
-        (wrapper.type === "lfo" || wrapper.type === "gain" || wrapper.type === "filter" || wrapper.type === "curtis-filter")
+        (wrapper.type === "lfo" || wrapper.type === "wavetable" || wrapper.type === "gain" || wrapper.type === "filter" || wrapper.type === "curtis-filter")
       ) {
         this._setGlobalMode(wrapper, value === true);
         return;
@@ -6107,7 +6111,7 @@ export class AudioEngine {
     const now = this.ctx.currentTime;
     for (let v = 1; v < wrapper.instances.length; v += 1) {
       const entry = wrapper.instances[v];
-      if (wrapper.type === "lfo") {
+      if (wrapper.type === "lfo" || wrapper.type === "wavetable") {
         if (isGlobal && !entry._sharedWired) {
           primary.rawOut.connect(entry.sharedGate);
           entry._sharedWired = true;
@@ -6181,7 +6185,7 @@ export class AudioEngine {
     if (entry.type === "oscillator" && port === "value") return entry.outGain;
     if (entry.type === "fm-oscillator" && port === "value") return entry.outGain;
     if (entry.type === "hammond" && port === "value") return entry.outGain;
-    if (entry.type === "lfo" && port === "value") return entry.output;
+    if ((entry.type === "lfo" || entry.type === "wavetable") && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
     if (entry.type === "output-switch") {
       if (port === "out1") return entry.gain1;

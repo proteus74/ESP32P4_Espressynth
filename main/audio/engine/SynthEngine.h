@@ -386,7 +386,7 @@ public:
     bool applyOutputParam(const char *widgetId, cJSON *params);
 
     // Live wavetable edit (POST /api/wavetable, see synth_web_api.hpp): hands
-    // a freshly parsed bank for one LFO widget to the render task, which
+    // a freshly parsed bank for one Wavetable widget to the render task, which
     // swaps it into every voice instance at the next block - no graph
     // rebuild, so drawing in the editor is heard immediately. Takes over the
     // caller's reference to `bank` in every case (released here when the
@@ -428,14 +428,14 @@ private:
                 for (uint16_t w = 0; w < graph->widgetCount; ++w)
                 {
                     const WidgetSlot &slot = graph->widgets[w];
-                    if (slot.type != NodeType::Lfo || strcmp(slot.id, msg.widgetId) != 0)
+                    if (slot.type != NodeType::Wavetable || strcmp(slot.id, msg.widgetId) != 0)
                         continue;
                     for (uint16_t v = 0; v < slot.instanceCount; ++v)
                     {
                         LfoState &lfo = graph->instances[slot.instanceBase + v].lfo;
                         wavetable::Bank *old = lfo.wavetableBank;
                         lfo.wavetableBank = wavetable::acquire(msg.bank);
-                        // Last reference to a replaced bank frees ~64KB of
+                        // Last reference to a replaced bank frees ~8KB of
                         // PSRAM right here on the render task - a single
                         // heap_caps_free(), and only at editor-stroke rate.
                         wavetable::release(old);

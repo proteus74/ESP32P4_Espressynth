@@ -10,18 +10,18 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 
-// Wavetable bank for the LFO's Wavetable mode (see nodes/LfoNode.h). One
+// Wavetable bank for the Wavetable widget (see nodes/WavetableNode.h). One
 // bank = up to kMaxTables single-cycle waveforms of kTableSize samples each
 // (-1..+1). The LFO morphs linearly between neighbouring tables (morph
 // 0-10V spans table 0 .. table count-1) and interpolates linearly between
 // neighbouring samples inside a table.
 //
-// Ownership: parsed once per preset into WidgetParams::lfoWavetable (see
-// LfoNode.h's parsePreset), then shared read-only by every voice instance of
-// that LFO widget. Reference counted, because the PresetDoc and the Graph
+// Ownership: parsed once per preset into WidgetParams::wavetableBank (see
+// WavetableNode.h's parsePreset), then shared read-only by every voice instance of
+// that Wavetable widget. Reference counted, because the PresetDoc and the Graph
 // built from it have independent lifetimes (GraphBuilder may even build
 // several graphs from one doc while it searches a fitting voice count).
-// The ~64KB payload lives in PSRAM - it is read at LFO rate, one or two
+// The ~8KB payload lives in PSRAM - it is read at LFO rate, one or two
 // cache lines per sample at most.
 //
 // Preset JSON: "wavetables" is an array of strings, one per table, each the
@@ -31,7 +31,15 @@
 namespace wavetable
 {
 
-constexpr size_t kTableSize = 1024;
+// 128 steps per table: plenty for a modulation shape (the widget runs at
+// LFO rates, and the render reads it with linear interpolation between the
+// steps, so a slow cycle glides smoothly from step to step) and it keeps the
+// preset/live-upload payload small (~350 base64 chars per table).
+constexpr size_t kTableSize = 128;
+constexpr uint32_t kIndexShift = 25;                  // 32-bit phase -> top 7 bits = step 0..127
+constexpr uint32_t kFracMask = (1u << kIndexShift) - 1u;
+constexpr float kFracScale = 1.0f / static_cast<float>(1u << kIndexShift);
+static_assert(kTableSize == (1u << (32 - kIndexShift)), "kIndexShift must match kTableSize");
 constexpr size_t kMaxTables = 16;
 
 struct Bank
@@ -132,7 +140,7 @@ inline bool readNumberTable(cJSON *arr, float *out)
 }
 } // namespace detail
 
-// Default bank used when a preset turns Wavetable mode on without any
+// Default bank used when a Wavetable widget's preset has no
 // stored tables: sine -> triangle -> sawtooth -> square, the same four
 // presets the web editor offers (wavetable-core.js's fillPreset()).
 inline void fillDefault(Bank &bank)
@@ -150,8 +158,8 @@ inline void fillDefault(Bank &bank)
 }
 
 // Builds a bank from the preset's "wavetables" array. Returns nullptr when
-// the key is absent/empty and `wanted` is false (LFO not in wavetable mode -
-// no need to spend 64KB), a default bank when wanted but absent/unreadable.
+// the key is absent/empty and `wanted` is false (e.g. a live upload that
+// carried no tables), a default bank when wanted but absent/unreadable.
 inline Bank *parse(cJSON *arr, bool wanted)
 {
     const bool present = cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0;
@@ -184,9 +192,9 @@ inline Bank *parse(cJSON *arr, bool wanted)
 // cycle). morph: 0..1 across the whole bank.
 inline float sample(const Bank &bank, uint32_t phase, float morph)
 {
-    const uint32_t i0 = phase >> 22; // top 10 bits = 0..1023
+    const uint32_t i0 = phase >> kIndexShift;
     const uint32_t i1 = (i0 + 1u) & (kTableSize - 1u);
-    const float frac = static_cast<float>(phase & 0x3FFFFFu) * (1.0f / 4194304.0f);
+    const float frac = static_cast<float>(phase & kFracMask) * kFracScale;
     if (bank.count <= 1)
     {
         const float *t = bank.data[0];

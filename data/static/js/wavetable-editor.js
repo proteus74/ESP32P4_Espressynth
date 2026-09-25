@@ -1,4 +1,4 @@
-// Wavetable editor popup + mini preview for the LFO's Wavetable mode.
+// Wavetable editor popup + mini preview for the Wavetable widget.
 //
 // openWavetableEditor() works on a private copy of the bank and only hands
 // it back through the callbacks:
@@ -17,7 +17,7 @@ import {
   createAdditiveTable,
   snapTableToZero,
   sampleBank,
-} from "./wavetable-core.js?v=20260924-wavetable-1";
+} from "./wavetable-core.js?v=20260924-wavetable-7";
 
 const PRESET_BUTTONS = [
   { id: "sine", label: "Sine", path: "M 6,50 Q 28,8 50,50 T 94,50" },
@@ -35,6 +35,17 @@ function cssVar(name, fallback) {
   return value || fallback;
 }
 
+// Editor canvases keep a fixed pixel resolution, independent of the table's
+// step count (WAVETABLE_SIZE).
+const CANVAS_W = 1024;
+
+// Cycle duration shown/edited in the editor (seconds per pass = 1 / rate).
+function formatSeconds(sec) {
+  if (sec >= 10) return `${sec.toFixed(1)} s`;
+  if (sec >= 1) return `${sec.toFixed(2)} s`;
+  return `${Math.round(sec * 1000)} ms`;
+}
+
 function drawTablePath(ctx, w, h, valueAt, steps = WAVETABLE_SIZE) {
   ctx.beginPath();
   for (let i = 0; i <= steps; i += 1) {
@@ -46,9 +57,9 @@ function drawTablePath(ctx, w, h, valueAt, steps = WAVETABLE_SIZE) {
   ctx.stroke();
 }
 
-// Mini preview used inside the LFO widget: the currently morphed waveform,
+// Mini preview used inside the Wavetable widget: the currently morphed waveform,
 // plus (when cursorPhase is a number, 0..1) a playhead line with a dot on the
-// curve marking where in the cycle the LFO is right now.
+// curve marking where in the cycle it is right now.
 export function drawWavetablePreview(canvas, tables, morphVolts, cursorPhase) {
   if (!canvas || !tables || tables.length === 0) return;
   const ctx = canvas.getContext("2d");
@@ -104,7 +115,10 @@ function el(tag, className, text) {
 
 let activeEditor = null;
 
-export function openWavetableEditor({ title, tables, onPreview, onApply, onCancel }) {
+// cycleSeconds / onCycleSeconds(seconds): the duration of one pass through
+// the table (the widget's rate is 1 / seconds). The 128 steps are spread
+// over that time; slower playback interpolates linearly between them.
+export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSeconds, onPreview, onApply, onCancel }) {
   if (activeEditor) activeEditor.close(false);
 
   const bank = (tables && tables.length > 0 ? tables : [createPresetTable("sine")]).map((t) => Float32Array.from(t));
@@ -112,6 +126,7 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
   let slot = 0;
   let mode = "draw";
   let snapZero = false;
+  let seconds = Number.isFinite(cycleSeconds) && cycleSeconds > 0 ? cycleSeconds : 1;
 
   const overlay = el("div", "modal-overlay wavetable-editor-overlay");
   const modal = el("div", "modal modal-wide wavetable-editor");
@@ -163,15 +178,39 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
     if (snapZero) commitEdit();
   });
   toolRow.appendChild(snapLabel);
+
+  const durationLabel = el("label", "wavetable-duration");
+  durationLabel.title = "Duration of one pass through the table - sets the widget's Rate (Rate = 1 / duration). The 128 steps are spread over this time; slower playback interpolates smoothly between them.";
+  const durationInput = document.createElement("input");
+  durationInput.type = "number";
+  durationInput.min = "0.002";
+  durationInput.max = "600";
+  durationInput.step = "0.01";
+  durationInput.value = String(Number(seconds.toFixed(3)));
+  durationLabel.append(el("span", "", "Cycle"), durationInput, el("span", "", "s"));
+  durationInput.addEventListener("change", () => {
+    const value = Number(durationInput.value);
+    if (!(value > 0)) {
+      durationInput.value = String(Number(seconds.toFixed(3)));
+      return;
+    }
+    // The caller clamps to the widget's max rate and reports back the
+    // duration it actually applied.
+    const applied = onCycleSeconds ? onCycleSeconds(value) : value;
+    seconds = Number.isFinite(applied) && applied > 0 ? applied : value;
+    durationInput.value = String(Number(seconds.toFixed(3)));
+    renderCanvas();
+  });
+  toolRow.appendChild(durationLabel);
   modal.appendChild(toolRow);
 
   // Drawing canvas (2.2)
   const canvas = el("canvas", "wavetable-canvas");
-  canvas.width = WAVETABLE_SIZE;
+  canvas.width = CANVAS_W;
   canvas.height = 320;
   modal.appendChild(canvas);
   const harmCanvas = el("canvas", "wavetable-harmonics-canvas");
-  harmCanvas.width = WAVETABLE_SIZE;
+  harmCanvas.width = CANVAS_W;
   harmCanvas.height = 160;
   modal.appendChild(harmCanvas);
   const hint = el("p", "modal-hint");
@@ -241,6 +280,14 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
       ctx.lineTo((i / 8) * w, h);
       ctx.stroke();
     }
+    // Time axis: the cycle duration spread across the table.
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.font = "18px sans-serif";
+    ctx.textBaseline = "bottom";
+    for (let i = 0; i <= 4; i += 1) {
+      ctx.textAlign = i === 0 ? "left" : i === 4 ? "right" : "center";
+      ctx.fillText(i === 0 ? "0" : formatSeconds((seconds * i) / 4), (i / 4) * w + (i === 0 ? 4 : i === 4 ? -4 : 0), h - 4);
+    }
     ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
     ctx.beginPath();
     ctx.moveTo(0, h / 2);
@@ -252,12 +299,21 @@ export function openWavetableEditor({ title, tables, onPreview, onApply, onCance
       if (n < 0 || n >= bank.length) return;
       ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
       const t = bank[n];
-      drawTablePath(ctx, w, h, (p) => t[Math.min(WAVETABLE_SIZE - 1, Math.floor(p * WAVETABLE_SIZE))]);
+      drawTablePath(ctx, w, h, (p) => sampleBank([t], p, 0), w);
     });
-    ctx.strokeStyle = cssVar("--accent", "#06b6d4");
+    // Current slot as it plays: straight lines between the 128 steps (the
+    // same linear interpolation the engine uses), one dot per step.
+    const accent = cssVar("--accent", "#06b6d4");
+    ctx.strokeStyle = accent;
     ctx.lineWidth = 2.5;
     const t = bank[slot];
-    drawTablePath(ctx, w, h, (p) => t[Math.min(WAVETABLE_SIZE - 1, Math.floor(p * WAVETABLE_SIZE))]);
+    drawTablePath(ctx, w, h, (p) => sampleBank([t], p, 0), w);
+    ctx.fillStyle = accent;
+    for (let i = 0; i < WAVETABLE_SIZE; i += 1) {
+      ctx.beginPath();
+      ctx.arc((i / WAVETABLE_SIZE) * w, h / 2 - t[i] * (h / 2 - 2), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function renderHarmonics() {

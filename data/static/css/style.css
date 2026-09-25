@@ -2287,8 +2287,7 @@ body.show-oscilloscopes .oscilloscope-only-body {
   padding: 0.6rem 0.7rem;
 }
 
-/* LFO Wavetable mode: mini preview + Edit button (only while the WT wave
-   button is active), and the dimmed Morph row outside that mode. */
+/* Wavetable widget: mini preview (with playhead) + Edit button. */
 
 .lfo-wavetable-panel {
   display: flex;
@@ -2313,10 +2312,6 @@ body.show-oscilloscopes .oscilloscope-only-body {
 .lfo-wavetable-edit {
   padding: 0.25rem 0.55rem;
   font-size: 0.75rem;
-}
-
-.lfo-morph-inactive {
-  opacity: 0.45;
 }
 
 /* Wavetable editor popup (wavetable-editor.js) */
@@ -2411,6 +2406,17 @@ body.show-oscilloscopes .oscilloscope-only-body {
   gap: 0.4rem;
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.wavetable-duration {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.wavetable-duration input {
+  width: 5.5rem;
 }
 
 .wavetable-canvas,

@@ -93,13 +93,12 @@ struct LfoState
     WaveType wave = WaveType::Sine;
     float rate = 2.0f;
     float maxRateHz = 50.0f;
-    // 0-10V (CV convention, see CvConventions.h) - the peak swing: in "auto"
-    // zero-point mode the output ranges [0, amplitude] (center = amplitude/2,
-    // e.g. amplitude=7 -> swings 0-7V, centered at 3.5V); in "fixed" mode the
-    // swing is still +/-(amplitude/2) but centered on zeroPoint instead.
-    // Default 10V + auto mode reproduces the old fixed-5V-center/full-swing
-    // behavior exactly (halfSwing=5, center=5).
-    float amplitude = 10.0f;
+    // "Gain", 0-10V (CV convention, see CvConventions.h) - the peak swing: in
+    // "auto" zero-point mode the output ranges [0, gain] (center = gain/2,
+    // e.g. gain=7 -> swings 0-7V, centered at 3.5V); in "fixed" mode the
+    // swing is still +/-(gain/2) but centered on zeroPoint instead. Default
+    // 10V + auto mode = full 0-10V swing (halfSwing=5, center=5).
+    float gain = 10.0f;
     // Phase offset in degrees (-180..180, see LFO_SLIDER_CONFIG in main.js) -
     // added on every evaluation (not written into phaseGen itself), so a
     // reset (phaseGen.resetPhase() -> phase_=0) automatically lands exactly
@@ -141,14 +140,11 @@ struct LfoState
     // ControlRoute - otherwise its voltage (>=kGateThresholdVolts = global)
     // decides per block.
     bool global = false;
-    // Wavetable mode (see nodes/LfoNode.h / Wavetable.h): replaces the
-    // classic `wave` with a morphable single-cycle table bank. Reset, One
-    // Shot, Global, Phase and the amplitude/offset mapping stay exactly the
-    // same - only the raw -1..+1 waveform source changes. `morph` is the
-    // manual 0-10V fallback for the "morph" port (index 4, audio-rate).
-    // `wavetableBank` is shared by all voices of the widget and reference
-    // counted (acquired in build(), released in Graph::destroy()).
-    bool wavetable = false;
+    // Wavetable widget only (NodeType::Wavetable, see nodes/WavetableNode.h
+    // - it reuses LfoState for its phase/reset/one-shot/global machinery).
+    // `morph` is the manual 0-10V fallback for its "morph" port (index 3,
+    // audio-rate). `wavetableBank` is shared by all voices of the widget and
+    // reference counted (acquired in build(), released in Graph::destroy()).
     float morph = 0.0f;
     wavetable::Bank *wavetableBank = nullptr;
 };

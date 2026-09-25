@@ -2,35 +2,16 @@
 <p>A Low Frequency Oscillator — a slow, repeating wave used to wobble other things over time rather
 than to make an audible tone itself. Patch it into a filter's cutoff for a wah-wah sweep, into
 pitch for vibrato, into amplitude for tremolo, or anywhere else you want automatic, cyclic
-movement.</p>
+movement. For self-drawn, morphable shapes use the <strong>Wavetable</strong> widget instead.</p>
 <h2>Inputs</h2>
 <ul>
-<li><span class="port-label">Rate</span> — how fast it cycles.</li>
-<li><span class="port-label">Amplitude</span> — how big the wobble is.</li>
+<li><span class="port-label">Rate</span> — how fast it cycles. Double-click the widget to set the maximum rate the 0–10&nbsp;V range maps to.</li>
 <li><span class="port-label">Phase</span> — where in its cycle it starts.</li>
 <li><span class="port-label">Reset</span> — a trigger input that restarts the cycle from the beginning, handy for syncing the wobble to a new note.</li>
 <li><span class="port-label">One Shot</span> — makes the LFO run through its shape once instead of looping.</li>
-<li><span class="port-label">Global</span> — lets several LFO widgets share one free-running clock instead of each running independently.</li>
+<li><span class="port-label">Global</span> — lets all voices share one LFO instead of each voice running its own.</li>
 <li><span class="port-label">Offset</span> — shifts the wave up or down so it isn't centered on zero.</li>
-<li><span class="port-label">Morph</span> — only in Wavetable mode: picks the position in the wavetable (0&nbsp;V = first slot, 10&nbsp;V = last slot, in between the neighbouring slots are crossfaded). Patch another LFO or an envelope in to sweep through the table automatically.</li>
+<li><span class="port-label">Gain</span> — how big the wobble is (0–10&nbsp;V swing).</li>
 </ul>
-<h2>Wavetable mode</h2>
-<p>The last waveform button (<strong>WT</strong>) switches the LFO from its fixed shapes to a
-wavetable: a row of up to 16 self-drawn single-cycle waveforms that the <span class="port-label">Morph</span>
-control blends between. Rate, Amplitude, Phase, Offset, Reset, One&nbsp;Shot and Global keep working
-exactly as with the other shapes. The small preview shows the waveform at the current morph
-position, with a line marking where in the cycle the LFO currently is; click it or
-<strong>Edit</strong> to open the editor:</p>
-<ul>
-<li><strong>Slots</strong> — the bar at the top holds the waveforms in morph order. <strong>+</strong> adds a copy of the selected slot, <strong>−</strong> removes it.</li>
-<li><strong>Presets</strong> — Sine, Saw, Square and Triangle fill the selected slot as a starting point.</li>
-<li><strong>Freehand</strong> — draw the waveform directly with the mouse, pen or finger.</li>
-<li><strong>Harmonics</strong> — build the slot additively: each bar is the level of one harmonic (above the line positive, below inverted).</li>
-<li><strong>Snap to Zero</strong> — cuts the waveform at the zero crossings nearest to its start and end and stretches it back to full length, so the loop point doesn't click. While switched on it is re-applied after every edit.</li>
-</ul>
-<p>Everything you draw is audible right away - in the browser preview and on the device - even
-before you press <strong>Apply</strong>. <strong>Apply</strong> keeps the new table,
-<strong>Cancel</strong> brings the previous one back. The table is stored permanently when you save the
-preset - until then it is only in the running sound.</p>
 <h2>Output</h2>
 <p><span class="port-label">Out</span> — the wobbling CV signal. Patch it wherever you want that slow movement.</p>

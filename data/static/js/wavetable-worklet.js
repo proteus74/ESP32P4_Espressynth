@@ -1,6 +1,6 @@
-// AudioWorkletProcessor for the LFO's Wavetable mode (see audio-engine.js,
-// case "lfo"). Emits the raw -1..+1 wavetable signal; the LFO's existing
-// amplitude/offset/one-shot/global chain in audio-engine.js scales it into
+// AudioWorkletProcessor for the Wavetable widget (see audio-engine.js,
+// case "lfo"/"wavetable"). Emits the raw -1..+1 wavetable signal; the LFO chain
+// (gain/one-shot/global) in audio-engine.js scales it into
 // the 0-10 V CV window exactly as it does for the classic waveforms.
 //
 // AudioParams:
@@ -11,7 +11,7 @@
 // Messages (port.postMessage):
 //   { type: "tables", tables: Float32Array[] }  - replace the bank
 //   { type: "reset" }                           - restart at phase 0
-import { WavetableLfoCore } from "./wavetable-core.js";
+import { WavetableLfoCore } from "./wavetable-core.js?v=20260924-wavetable-7";
 
 class WavetableLfoProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {

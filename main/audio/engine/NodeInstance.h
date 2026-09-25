@@ -354,6 +354,7 @@ struct NodeInstance
             new (&fmOsc) FmOscillatorState();
             break;
         case NodeType::Lfo:
+        case NodeType::Wavetable: // shares LfoState, see nodes/WavetableNode.h
             new (&lfo) LfoState();
             break;
         case NodeType::Detune:
