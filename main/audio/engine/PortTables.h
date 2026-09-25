@@ -101,9 +101,10 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "tune"))
             return 2;
         // "waveform" is a real, but control-only audio-rate port (see
-        // isControlOnlyInput) - 0-10V CV, six equal bands in WaveType order
-        // (Sine, Square, Triangle, Sawtooth, white Noise, Pink Noise; see
-        // nodes/OscillatorNode.h's waveTypeFromCv()). Not wired: falls back
+        // isControlOnlyInput) - 0-10V CV, nine equal bands in WaveType order
+        // (Sine, Linear Up, Linear Down, Square, Triangle, Sawtooth, falling
+        // Sawtooth, white Noise, Pink Noise; see nodes/OscillatorNode.h's
+        // waveTypeFromCv()). Not wired: falls back
         // to the waveform dropdown value (OscillatorState::wave), as before.
         if (is(portName, "waveform"))
             return 3;
@@ -189,6 +190,11 @@ inline int audioInIndex(NodeType type, const char *portName)
         // NodeInstance.cpp/LfoState::zeroPointFixed).
         if (is(portName, "zeroPoint"))
             return 3;
+        // "morph" - Wavetable mode's table position (0-10V). Deliberately a
+        // genuine audio-rate port (not control-only): a second LFO or an
+        // envelope patched here sweeps the bank per sample.
+        if (is(portName, "morph"))
+            return 4;
         return -1;
     case NodeType::Detune:
         // cv only - amount isn't a real port (Knob-mappable by name via
@@ -749,7 +755,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 4; // "reset" + "oneShot" + "global" + "zeroPoint" (CV)
+        return 5; // "reset" + "oneShot" + "global" + "zeroPoint" + "morph" (CV)
     case NodeType::Detune:
         return 1;
     case NodeType::Switch:

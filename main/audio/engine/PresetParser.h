@@ -8,6 +8,7 @@
 
 #include "NodeTypes.h"
 #include "SynthConfig.h"
+#include "Wavetable.h"
 
 // One drum-sequencer pattern grid (see WidgetParams::drumPatterns below).
 struct DrumSequencerPatternParams
@@ -57,6 +58,11 @@ struct WidgetParams
     float lfoZeroPoint = 5.0f;
     bool lfoOneShot = false;
     bool lfoGlobal = false;
+    // Wavetable mode (see LfoState::wavetable). lfoWavetable is a counted
+    // reference owned by this WidgetParams - released by ~PresetDoc().
+    bool lfoWavetableMode = false;
+    float lfoMorph = 0.0f;
+    wavetable::Bank *lfoWavetable = nullptr;
     // detune - amount is 0-10V, 5V = 0 offset (see DetuneState in
     // NodeState.h). maxOffsetCents is the settings-dialog range; stepCents
     // is the rounding grid (100 = semitone steps, 1 = cent steps).
@@ -398,6 +404,18 @@ struct PresetDoc
     uint16_t widgetCount = 0;
     ConnectionDesc connections[synth::kMaxConnections];
     uint16_t connectionCount = 0;
+
+    PresetDoc() = default;
+    PresetDoc(const PresetDoc &) = delete;
+    PresetDoc &operator=(const PresetDoc &) = delete;
+    ~PresetDoc()
+    {
+        for (WidgetDesc &w : widgets)
+        {
+            wavetable::release(w.params.lfoWavetable);
+            w.params.lfoWavetable = nullptr;
+        }
+    }
 };
 
 // parsePreset() itself lives in PresetFill.h, not here - it needs every

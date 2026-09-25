@@ -78,9 +78,15 @@ enum class NodeType : uint8_t
 enum class WaveType : uint8_t
 {
     Sine,
+    // One non-wrapping linear ramp per phase restart, then hold at the end
+    // value (PhaseOsc saturates instead of wrapping; the LFO tracks its own
+    // position, see nodes/LfoNode.h).
+    LinearUp,
+    LinearDown,
     Square,
     Triangle,
     Sawtooth,
+    SawtoothDown,
     Noise,
     PinkNoise,
     SuperSaw,
@@ -262,6 +268,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
     return NodeType::Unknown;
 }
 
+inline bool isLinearWave(WaveType w) { return w == WaveType::LinearUp || w == WaveType::LinearDown; }
+
 inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
 {
     if (s == nullptr)
@@ -272,12 +280,18 @@ inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
         return WaveType::Triangle;
     if (strcmp(s, "sawtooth") == 0)
         return WaveType::Sawtooth;
+    if (strcmp(s, "sawtooth-down") == 0)
+        return WaveType::SawtoothDown;
     if (strcmp(s, "noise") == 0)
         return WaveType::Noise;
     if (strcmp(s, "pink-noise") == 0)
         return WaveType::PinkNoise;
     if (allowSuperSaw && strcmp(s, "supersaw") == 0)
         return WaveType::SuperSaw;
+    if (strcmp(s, "linear-up") == 0)
+        return WaveType::LinearUp;
+    if (strcmp(s, "linear-down") == 0)
+        return WaveType::LinearDown;
     return WaveType::Sine;
 }
 

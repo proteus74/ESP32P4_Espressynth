@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -7,9 +8,10 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
+#include "../Wavetable.h"
 
-// Free-running LFO (sine/square/triangle/sawtooth/noise) with reset/one-shot/
-// global modes. LfoState (value member) stays in NodeState.h.
+// Free-running LFO (sine/square/triangle/sawtooth/noise, or a morphable
+// wavetable - see Wavetable.h) with reset/one-shot/global modes. LfoState (value member) stays in NodeState.h.
 namespace nodes::lfo
 {
 
@@ -26,6 +28,60 @@ inline float clampRate(float value, float maxRate)
     const float limit = clampRate(maxRate);
     const float safe = value >= 0.0f ? value : 0.0f;
     return safe > limit ? limit : safe;
+}
+
+// Global mode, called by Graph::renderBlock once per block for a voiced Lfo
+// widget with several voice instances (`voices` = voice 0..count-1). Voice 0
+// is the master whose output every other voice mirrors (see render()). The
+// shared LFO belongs to the whole chord, not to voice 0's own note:
+//  - it (re)starts (phase 0, One Shot re-armed) when the first note begins,
+//    i.e. when "any voice sounds" rises, and when the OR over all voices'
+//    reset inputs rises (so a gate patched to reset only fires for the first
+//    note, later notes find it already high);
+//  - while any voice still sounds it keeps running / holding its One Shot end
+//    state for everybody, no matter which voice was played first or released;
+//  - once every voice is silent it stops, and the next note starts it anew.
+// Returns true when the master must be rendered this block. When global is
+// off it just clears the flags and returns false (each voice runs alone).
+inline bool globalUpdate(NodeInstance *voices, uint16_t count, bool anySounding)
+{
+    using namespace noderender;
+    auto &s = voices[0].lfo;
+    const bool modeFed = controlPortConnected(voices[0], 2) ||
+                         (voices[0].audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    const bool globalActive = modeFed ? (portSample(voices[0], 2, 0) >= cv::kGateThresholdVolts) : s.global;
+    s.globalManaged = globalActive;
+    if (!globalActive)
+    {
+        s.globalRunning = false;
+        s.globalResetPrev = false;
+        return false;
+    }
+    bool resetOr = false;
+    for (uint16_t v = 0; v < count && !resetOr; ++v)
+    {
+        const NodeInstance &voice = voices[v];
+        const bool resetFed = controlPortConnected(voice, 0) ||
+                              (voice.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
+        resetOr = resetFed && portSample(voice, 0, 0) >= cv::kGateThresholdVolts;
+    }
+    const bool restart = (resetOr && !s.globalResetPrev) || (anySounding && !s.globalRunning);
+    s.globalResetPrev = resetOr;
+    s.globalRunning = anySounding;
+    if (restart)
+    {
+        s.phaseGen.resetPhase();
+        s.linearPos = 0.0f;
+        const bool oneShotFed = controlPortConnected(voices[0], 1) ||
+                                (voices[0].audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
+        const bool oneShotOn = oneShotFed ? (portSample(voices[0], 1, 0) >= cv::kGateThresholdVolts) : s.oneShot;
+        if (oneShotOn)
+        {
+            s.oneShotDone = false;
+            s.oneShotAccum = 0.0f;
+        }
+    }
+    return anySounding;
 }
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -92,7 +148,10 @@ inline void render(NodeInstance &inst, size_t frames)
     // check as every other control-only input (see Oscillator's
     // pitchCv/tune). When One Shot's port is unconnected, its UI toggle
     // (s.oneShot) is the fallback - matches ReverbLight's bypass pattern.
-    const bool resetFed = controlPortConnected(inst, 0) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
+    // In global mode the reset input is consumed by globalUpdate() (OR over
+    // all voices), not per instance.
+    const bool resetFed = !s.globalManaged &&
+                          (controlPortConnected(inst, 0) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0);
     const float resetVal = resetFed ? portSample(inst, 0, 0) : 0.0f;
     const bool resetAbove = resetVal >= cv::kGateThresholdVolts;
     const bool resetEdge = resetFed && resetAbove && !s.resetPrev;
@@ -105,12 +164,91 @@ inline void render(NodeInstance &inst, size_t frames)
     if (resetEdge)
     {
         s.phaseGen.resetPhase();
+        s.linearPos = 0.0f;
         if (oneShotOn)
         {
             // Re-arm: play exactly one fresh cycle from this edge.
             s.oneShotDone = false;
             s.oneShotAccum = 0.0f;
         }
+    }
+    // Wavetable mode: same phase accumulator (so reset/global restarts and
+    // the phase offset behave exactly like the classic shapes), but the raw
+    // -1..+1 value comes from the widget's table bank, crossfaded by
+    // "morph". Morph (port 4) is a real audio-rate input: a connected LFO/
+    // envelope sweeps through the bank per sample; unconnected, the manual
+    // Morph slider (s.morph) is used. One Shot plays exactly one cycle per
+    // reset edge and then holds the phase - morph keeps acting on the held
+    // position, so a frozen One-Shot LFO can still be scanned through the
+    // bank.
+    if (s.wavetable && s.wavetableBank != nullptr)
+    {
+        const wavetable::Bank &bank = *s.wavetableBank;
+        const bool morphFed = controlPortConnected(inst, 4) ||
+                              (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+        const uint32_t offsetInt = PhaseOsc::toPhaseInt(phaseOffset);
+        const float step = s.rate / kSampleRate;
+        const uint32_t inc = PhaseOsc::toPhaseInt(step);
+        const float manualMorph = s.morph * cv::kInvMaxVolts;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const float morph = morphFed ? portSample(inst, 4, i) * cv::kInvMaxVolts : manualMorph;
+            const float raw = wavetable::sample(bank, s.phaseGen.phaseInt() + offsetInt, morph);
+            inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);
+            if (oneShotOn && s.oneShotDone)
+                continue;
+            if (oneShotOn)
+            {
+                s.oneShotAccum += step;
+                if (s.oneShotAccum >= 1.0f)
+                {
+                    // Land exactly on the cycle start (the reset position)
+                    // instead of one increment past it.
+                    s.phaseGen.resetPhase();
+                    s.oneShotDone = true;
+                    s.oneShotAccum = 0.0f;
+                    continue;
+                }
+            }
+            s.phaseGen.advancePhaseOnly(inc, 1);
+        }
+        return;
+    }
+    // LinearUp/LinearDown: free-running they repeat like a sawtooth (wrapping
+    // ramp); with One Shot they run exactly one non-wrapping ramp from the
+    // reset edge and then HOLD the end value (a Sawtooth would fall back to
+    // its start instead). Tracked in linearPos because phaseGen wraps and
+    // can't represent "finished".
+    if (isLinearWave(s.wave))
+    {
+        const float step = s.rate / kSampleRate;
+        const bool up = s.wave == WaveType::LinearUp;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            float pos = s.linearPos + phaseOffset;
+            pos = oneShotOn ? clampf(pos, 0.0f, 1.0f) : pos - floorf(pos);
+            const float raw = up ? 2.0f * pos - 1.0f : 1.0f - 2.0f * pos;
+            inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);
+            if (oneShotOn && s.oneShotDone)
+                continue;
+            s.linearPos += step;
+            if (oneShotOn)
+            {
+                if (s.linearPos > 1.0f)
+                    s.linearPos = 1.0f;
+                s.oneShotAccum += step;
+                if (s.oneShotAccum >= 1.0f)
+                {
+                    s.oneShotDone = true;
+                    s.oneShotAccum = 0.0f;
+                }
+            }
+            else
+            {
+                s.linearPos -= floorf(s.linearPos);
+            }
+        }
+        return;
     }
     // One Shot forces the per-sample path unconditionally (it must freeze
     // mid-block the instant a full cycle completes - the fast interpolated
@@ -165,6 +303,12 @@ inline void render(NodeInstance &inst, size_t frames)
     }
 }
 
+inline float clampf01Volts(float volts)
+{
+    if (!(volts >= 0.0f)) return 0.0f;
+    return volts > cv::kMaxVolts ? cv::kMaxVolts : volts;
+}
+
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     inst.lfo.wave = p.waveType;
@@ -176,6 +320,16 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.lfo.zeroPoint = p.lfoZeroPoint;
     inst.lfo.oneShot = p.lfoOneShot;
     inst.lfo.global = p.lfoGlobal;
+    inst.lfo.wavetable = p.lfoWavetableMode;
+    inst.lfo.morph = clampf01Volts(p.lfoMorph);
+    // Every voice instance holds its own reference to the one shared bank.
+    inst.lfo.wavetableBank = wavetable::acquire(p.lfoWavetable);
+}
+
+inline void destroy(NodeInstance &inst)
+{
+    wavetable::release(inst.lfo.wavetableBank);
+    inst.lfo.wavetableBank = nullptr;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -210,6 +364,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.zeroPoint = value;
         return true;
     }
+    if (strcmp(name, "morph") == 0)
+    {
+        inst.lfo.morph = clampf01Volts(value);
+        return true;
+    }
     return false;
 }
 
@@ -224,6 +383,12 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.lfoZeroPoint = presetparser::getFloat(p, "zeroPoint", 5.0f);
     out.lfoOneShot = presetparser::getBool(p, "oneShot", false);
     out.lfoGlobal = presetparser::getBool(p, "global", false);
+    out.lfoWavetableMode = presetparser::getBool(p, "wavetable", false);
+    out.lfoMorph = clampf01Volts(presetparser::getFloat(p, "morph", 0.0f));
+    // Bank is parsed whenever tables are stored, even with the mode off, so
+    // a live "wavetable": true toggle (Graph::applyLiveParams) finds it.
+    out.lfoWavetable = wavetable::parse(p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "wavetables") : nullptr,
+                                        out.lfoWavetableMode);
 }
 
 } // namespace nodes::lfo
