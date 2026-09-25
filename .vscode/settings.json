@@ -40,5 +40,6 @@
     ".codegraph": true,
     ".devcon*": true,
     ".vscode*": true
-  }
+  },
+  "idf.port": "COM15"
 }
