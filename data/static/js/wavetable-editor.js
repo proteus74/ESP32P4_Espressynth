@@ -17,7 +17,9 @@ import {
   createAdditiveTable,
   snapTableToZero,
   sampleBank,
-} from "./wavetable-core.js?v=20260924-wavetable-7";
+  encodeTable,
+  decodeTable,
+} from "./wavetable-core.js?v=20260926-knob-2";
 
 const PRESET_BUTTONS = [
   { id: "sine", label: "Sine", path: "M 6,50 Q 28,8 50,50 T 94,50" },
@@ -38,13 +40,6 @@ function cssVar(name, fallback) {
 // Editor canvases keep a fixed pixel resolution, independent of the table's
 // step count (WAVETABLE_SIZE).
 const CANVAS_W = 1024;
-
-// Cycle duration shown/edited in the editor (seconds per pass = 1 / rate).
-function formatSeconds(sec) {
-  if (sec >= 10) return `${sec.toFixed(1)} s`;
-  if (sec >= 1) return `${sec.toFixed(2)} s`;
-  return `${Math.round(sec * 1000)} ms`;
-}
 
 function drawTablePath(ctx, w, h, valueAt, steps = WAVETABLE_SIZE) {
   ctx.beginPath();
@@ -115,18 +110,77 @@ function el(tag, className, text) {
 
 let activeEditor = null;
 
-// cycleSeconds / onCycleSeconds(seconds): the duration of one pass through
-// the table (the widget's rate is 1 / seconds). The 128 steps are spread
-// over that time; slower playback interpolates linearly between them.
-export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSeconds, onPreview, onApply, onCancel }) {
+// Copy/paste buffer for single tables - shared by every editor session on this page
+// (e.g. copy from one oscillator's bank, paste into another widget's).
+let copiedTable = null;
+
+// Export/import files: the same base64 int16 table encoding as the preset.
+const SINGLE_FILE_TYPE = "espressynth-wavetable";
+const BANK_FILE_TYPE = "espressynth-wavetables";
+
+function downloadJson(fileName, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Opens a file picker and resolves with the decoded tables of a single-table or bank file
+// (either kind is accepted by both import paths), or null when cancelled/invalid.
+function pickWavetableFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return resolve(null);
+      try {
+        const data = JSON.parse(await file.text());
+        const raw = Array.isArray(data?.tables) ? data.tables : data?.table !== undefined ? [data.table] : Array.isArray(data) ? data : [];
+        const tables = raw.map((t) => decodeTable(t)).filter(Boolean);
+        resolve(tables.length > 0 ? tables : null);
+      } catch {
+        resolve(null);
+      }
+    });
+    input.click();
+  });
+}
+
+// Editor working preferences (Snap to Zero, Freehand/Harmonics) are
+// per-browser and remembered across editor sessions and page reloads.
+const SNAP_ZERO_KEY = "espressynth.wavetableSnapZero";
+const MODE_KEY = "espressynth.wavetableMode";
+function loadPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function storePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private mode / blocked storage: the choice lasts for this page only.
+  }
+}
+
+export function openWavetableEditor({ title, tables, onPreview, onApply, onCancel }) {
   if (activeEditor) activeEditor.close(false);
 
   const bank = (tables && tables.length > 0 ? tables : [createPresetTable("sine")]).map((t) => Float32Array.from(t));
   const harmonics = bank.map(() => null);
   let slot = 0;
-  let mode = "draw";
-  let snapZero = false;
-  let seconds = Number.isFinite(cycleSeconds) && cycleSeconds > 0 ? cycleSeconds : 1;
+  let mode = loadPref(MODE_KEY, "draw") === "harmonics" ? "harmonics" : "draw";
+  if (mode === "harmonics") harmonics[slot] = analyzeHarmonics(bank[slot]);
+  let snapZero = loadPref(SNAP_ZERO_KEY, "0") === "1";
 
   const overlay = el("div", "modal-overlay wavetable-editor-overlay");
   const modal = el("div", "modal modal-wide wavetable-editor");
@@ -170,38 +224,17 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
   const snapSwitch = el("span", "switch");
   const snapInput = document.createElement("input");
   snapInput.type = "checkbox";
+  snapInput.checked = snapZero;
   snapSwitch.append(snapInput, el("span", "switch-track"));
   snapLabel.append(snapSwitch, el("span", "", "Snap to Zero"));
   snapLabel.title = "Cut the loop at the zero crossings nearest to start and end and stretch it back to full length - removes the click at the loop point. Re-applied after every edit while active.";
   snapInput.addEventListener("change", () => {
     snapZero = snapInput.checked;
+    storePref(SNAP_ZERO_KEY, snapZero ? "1" : "0");
     if (snapZero) commitEdit();
   });
   toolRow.appendChild(snapLabel);
 
-  const durationLabel = el("label", "wavetable-duration");
-  durationLabel.title = "Duration of one pass through the table - sets the widget's Rate (Rate = 1 / duration). The 128 steps are spread over this time; slower playback interpolates smoothly between them.";
-  const durationInput = document.createElement("input");
-  durationInput.type = "number";
-  durationInput.min = "0.002";
-  durationInput.max = "600";
-  durationInput.step = "0.01";
-  durationInput.value = String(Number(seconds.toFixed(3)));
-  durationLabel.append(el("span", "", "Cycle"), durationInput, el("span", "", "s"));
-  durationInput.addEventListener("change", () => {
-    const value = Number(durationInput.value);
-    if (!(value > 0)) {
-      durationInput.value = String(Number(seconds.toFixed(3)));
-      return;
-    }
-    // The caller clamps to the widget's max rate and reports back the
-    // duration it actually applied.
-    const applied = onCycleSeconds ? onCycleSeconds(value) : value;
-    seconds = Number.isFinite(applied) && applied > 0 ? applied : value;
-    durationInput.value = String(Number(seconds.toFixed(3)));
-    renderCanvas();
-  });
-  toolRow.appendChild(durationLabel);
   modal.appendChild(toolRow);
 
   // Drawing canvas (2.2)
@@ -217,12 +250,67 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
   modal.appendChild(hint);
 
   const actions = el("div", "modal-actions");
+  const exportAllBtn = el("button", "btn-secondary wavetable-bank-export", "Export Wavetables");
+  const importAllBtn = el("button", "btn-secondary", "Import Wavetables");
   const cancelBtn = el("button", "btn-secondary", "Cancel");
   const applyBtn = el("button", "", "Apply");
-  cancelBtn.type = "button";
-  applyBtn.type = "button";
-  actions.append(cancelBtn, applyBtn);
+  [exportAllBtn, importAllBtn, cancelBtn, applyBtn].forEach((b) => (b.type = "button"));
+  exportAllBtn.title = "Save all tables of this bank as a JSON file";
+  importAllBtn.title = "Replace all tables with the ones from a JSON file";
+  actions.append(exportAllBtn, importAllBtn, cancelBtn, applyBtn);
   modal.appendChild(actions);
+
+  exportAllBtn.addEventListener("click", () =>
+    downloadJson("wavetables.json", { type: BANK_FILE_TYPE, version: 1, tables: bank.map((t) => encodeTable(t)) }));
+  importAllBtn.addEventListener("click", async () => {
+    const tables = await pickWavetableFile();
+    if (!tables) return;
+    bank.splice(0, bank.length, ...tables.slice(0, WAVETABLE_MAX_TABLES));
+    harmonics.splice(0, harmonics.length, ...bank.map(() => null));
+    slot = 0;
+    if (mode === "harmonics") harmonics[slot] = analyzeHarmonics(bank[slot]);
+    commitEdit(false);
+  });
+
+  // Right-click menu of one slot thumbnail: copy/paste/export/import just that table.
+  let slotMenu = null;
+  function closeSlotMenu() {
+    if (slotMenu) slotMenu.remove();
+    slotMenu = null;
+  }
+  function replaceSlot(index, table) {
+    bank[index] = Float32Array.from(table);
+    harmonics[index] = mode === "harmonics" ? analyzeHarmonics(bank[index]) : null;
+    commitEdit(false);
+  }
+  function openSlotMenu(x, y, index) {
+    closeSlotMenu();
+    slotMenu = el("div", "midi-chip-context-menu wavetable-slot-menu");
+    const item = (label, action, disabled = false) => {
+      const b = el("button", "", label);
+      b.type = "button";
+      b.disabled = disabled;
+      b.addEventListener("click", () => {
+        closeSlotMenu();
+        action();
+      });
+      slotMenu.appendChild(b);
+    };
+    item("Copy", () => (copiedTable = Float32Array.from(bank[index])));
+    item("Paste", () => replaceSlot(index, copiedTable), !copiedTable);
+    item("Export…", () =>
+      downloadJson(`wavetable-${index + 1}.json`, { type: SINGLE_FILE_TYPE, version: 1, table: encodeTable(bank[index]) }));
+    item("Import…", async () => {
+      const tables = await pickWavetableFile();
+      if (tables) replaceSlot(index, tables[0]);
+    });
+    slotMenu.style.left = `${x}px`;
+    slotMenu.style.top = `${y}px`;
+    document.body.appendChild(slotMenu);
+  }
+  overlay.addEventListener("pointerdown", (event) => {
+    if (slotMenu && !slotMenu.contains(event.target)) closeSlotMenu();
+  });
 
   function renderSlots() {
     slotBar.innerHTML = "";
@@ -238,6 +326,12 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
       btn.addEventListener("click", () => {
         slot = index;
         render();
+      });
+      btn.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        slot = index;
+        render();
+        openSlotMenu(event.clientX, event.clientY, index);
       });
       slotBar.appendChild(btn);
     });
@@ -279,14 +373,6 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
       ctx.moveTo((i / 8) * w, 0);
       ctx.lineTo((i / 8) * w, h);
       ctx.stroke();
-    }
-    // Time axis: the cycle duration spread across the table.
-    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-    ctx.font = "18px sans-serif";
-    ctx.textBaseline = "bottom";
-    for (let i = 0; i <= 4; i += 1) {
-      ctx.textAlign = i === 0 ? "left" : i === 4 ? "right" : "center";
-      ctx.fillText(i === 0 ? "0" : formatSeconds((seconds * i) / 4), (i / 4) * w + (i === 0 ? 4 : i === 4 ? -4 : 0), h - 4);
     }
     ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
     ctx.beginPath();
@@ -383,6 +469,7 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
 
   function setMode(next) {
     mode = next;
+    storePref(MODE_KEY, mode);
     if (mode === "harmonics" && !harmonics[slot]) harmonics[slot] = analyzeHarmonics(bank[slot]);
     render();
   }
@@ -476,6 +563,7 @@ export function openWavetableEditor({ title, tables, cycleSeconds, onCycleSecond
   };
 
   function close(apply) {
+    closeSlotMenu();
     livePreviewTimer = cancelLivePreview();
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();

@@ -1,7 +1,8 @@
 
 
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
-import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
+import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
+import { createReverbCore } from "./reverb-core.js?v=20260926-knob-2";
 
 function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
@@ -1186,6 +1187,22 @@ function createFmOscillatorCore(entry, sampleRate) {
           }
           sample += sideSum * sideWeight;
           if (feedbackActive) feedbackSample = sample;
+          output[i] = sample;
+        }
+        return;
+      }
+      if (wave === "wavetable") {
+        // Morphable wavetable bank, same read as FmOscillatorNode.h's Wavetable branch.
+        // Morph is block-rate here (the widget's value); the firmware also takes it per sample.
+        const tables = entry.wavetables && entry.wavetables.length > 0 ? entry.wavetables : null;
+        const morph = clampRange((Number(entry.morph) || 0) / CV_MAX_VOLTS, 0, 1);
+        for (let i = 0; i < output.length; i += 1) {
+          let offset = fmInBuf[i] * phaseOffsetScale;
+          if (feedbackActive) offset += feedbackSample * feedbackAmount;
+          const sample = tables ? sampleBank(tables, phase + offset, morph) : Math.sin(2 * Math.PI * (phase + offset));
+          if (feedbackActive) feedbackSample = sample;
+          phase = (phase + hzBuf[i] * invSr) % 1;
+          if (phase < 0) phase += 1;
           output[i] = sample;
         }
         return;
@@ -2712,6 +2729,8 @@ export class AudioEngine {
           processor,
           freqConst,
           directHz: params.frequency ?? 0,
+          wavetables: Array.isArray(params.wavetables) ? params.wavetables.map((t) => Float32Array.from(t)) : null,
+          morph: params.morph ?? 0,
           fmInScale,
           fmIndexIn,
           feedbackIn,
@@ -4255,11 +4274,8 @@ export class AudioEngine {
         };
       }
       case "reverb-light": {
-        // 1:1 port of renderReverbLight() (ReverbNode.h): mono sum -> four
-        // feedback combs (Freeverb lengths scaled to the sample rate, gains
-        // from the room size's RT60) -> two Schroeder allpasses -> one-pole
-        // damping lowpass, then dry/wet per channel. Replaces a convolver
-        // with a random noise impulse, which sounded nothing like hardware.
+        // Dattorro plate (reverb-core.js), a 1:1 port of renderReverbLight() in
+        // nodes/ReverbNode.h: mono sum in, stereo dry/wet out.
         const inputNodeL = ctx.createGain();
         const inputNodeR = ctx.createGain();
         const inputMerger = ctx.createChannelMerger(2);
@@ -4274,76 +4290,14 @@ export class AudioEngine {
         splitter.connect(outputL, 0);
         splitter.connect(outputR, 1);
 
-        const sampleRate = ctx.sampleRate;
-        const scale = sampleRate / 44100;
-        const makeLine = (len44k) => {
-          const length = Math.max(1, Math.floor(len44k * scale + 0.5));
-          return { buffer: new Float32Array(length), index: 0 };
-        };
-        const flushDenorm = (x) => (x > -1e-15 && x < 1e-15 ? 0 : x);
-        const rv = {
-          combs: [1116, 1188, 1277, 1356].map(makeLine),
-          allpasses: [556, 441].map(makeLine),
-          combGain: [0, 0, 0, 0],
-          dampCoeff: 0,
-          dampState: 0,
-          roomSize: Number(params.roomSize ?? 0.5),
-          damping: Number(params.damping ?? 0.5),
-          wetGain: 10 ** (Number(params.wetLevelDb ?? -6) / 20),
-          dryGain: 10 ** (Number(params.dryLevelDb ?? 0) / 20),
-          bypass: params.bypass === true,
-          recomputeCombGains() {
-            const sizeSec = 0.1 + this.roomSize * 7.9;
-            this.combs.forEach((comb, c) => {
-              const g = 10 ** (-3 * comb.buffer.length / (sampleRate * sizeSec));
-              this.combGain[c] = clampRange(g, 0, 0.98);
-            });
-          },
-          recomputeDamping() {
-            const cutoffHz = 20000 - this.damping * 19800;
-            this.dampCoeff = Math.exp(-2 * Math.PI * cutoffHz / sampleRate);
-          },
-        };
-        rv.recomputeCombGains();
-        rv.recomputeDamping();
-        const kAllpassG = 0.5;
+        const rv = createReverbCore(ctx.sampleRate, params);
         processor.onaudioprocess = (event) => {
-          const inL = event.inputBuffer.getChannelData(0);
-          const inR = event.inputBuffer.getChannelData(1);
-          const outL = event.outputBuffer.getChannelData(0);
-          const outR = event.outputBuffer.getChannelData(1);
-          if (rv.bypass) {
-            outL.set(inL);
-            outR.set(inR);
-            return;
-          }
-          const { combs, allpasses, combGain } = rv;
-          for (let i = 0; i < outL.length; i += 1) {
-            const xl = inL[i];
-            const xr = inR[i];
-            const mono = (xl + xr) * 0.5;
-            let combSum = 0;
-            for (let c = 0; c < 4; c += 1) {
-              const comb = combs[c];
-              const delayed = comb.buffer[comb.index];
-              comb.buffer[comb.index] = flushDenorm(mono + delayed * combGain[c]);
-              comb.index = comb.index + 1 === comb.buffer.length ? 0 : comb.index + 1;
-              combSum += delayed;
-            }
-            let ap = combSum * 0.25;
-            for (let a = 0; a < 2; a += 1) {
-              const line = allpasses[a];
-              const buf = line.buffer[line.index];
-              const apOut = -kAllpassG * ap + buf;
-              line.buffer[line.index] = flushDenorm(ap + kAllpassG * buf);
-              line.index = line.index + 1 === line.buffer.length ? 0 : line.index + 1;
-              ap = apOut;
-            }
-            rv.dampState = flushDenorm(ap * (1 - rv.dampCoeff) + rv.dampState * rv.dampCoeff);
-            const wet = rv.dampState * rv.wetGain;
-            outL[i] = xl * rv.dryGain + wet;
-            outR[i] = xr * rv.dryGain + wet;
-          }
+          rv.process(
+            event.inputBuffer.getChannelData(0),
+            event.inputBuffer.getChannelData(1),
+            event.outputBuffer.getChannelData(0),
+            event.outputBuffer.getChannelData(1),
+          );
         };
         return {
           type,
@@ -5218,7 +5172,7 @@ export class AudioEngine {
     if (!ctx.audioWorklet || typeof AudioWorkletNode === "undefined") return null;
     if (!this._wavetableWorkletPromise) {
       this._wavetableWorkletPromise = ctx.audioWorklet
-        .addModule(new URL("./wavetable-worklet.js?v=20260924-wavetable-7", import.meta.url))
+        .addModule(new URL("./wavetable-worklet.js?v=20260926-knob-2", import.meta.url))
         .then(() => true)
         .catch(() => false);
     }
@@ -5496,6 +5450,10 @@ export class AudioEngine {
             if (!entry[cvInput[1]]) applyRampValue(cvInput[0].fallback.offset, Number(value) || 0);
           } else if (paramName === "dutyCycle") {
             entry.dutyCycle = Number(value) || 0;
+          } else if (paramName === "morph") {
+            entry.morph = Number(value) || 0;
+          } else if (paramName === "wavetables") {
+            entry.wavetables = Array.isArray(value) ? value.map((t) => Float32Array.from(t)) : null;
           }
         } else if (paramName === "feedback") {
           entry.feedback = value;
@@ -6055,17 +6013,15 @@ export class AudioEngine {
         const rv = entry.reverb;
         const num = Number(value);
         if (paramName === "bypass") {
-          rv.bypass = value === true || num >= 0.5;
+          rv.state.bypass = value === true || num >= 0.5;
         } else if (paramName === "roomSize" && Number.isFinite(num)) {
-          rv.roomSize = num;
-          rv.recomputeCombGains();
+          rv.setRoomSize(num);
         } else if (paramName === "damping" && Number.isFinite(num)) {
-          rv.damping = num;
-          rv.recomputeDamping();
+          rv.setDamping(num);
         } else if (paramName === "wetLevelDb" && Number.isFinite(num)) {
-          rv.wetGain = 10 ** (num / 20);
+          rv.state.wetGain = 10 ** (num / 20);
         } else if (paramName === "dryLevelDb" && Number.isFinite(num)) {
-          rv.dryGain = 10 ** (num / 20);
+          rv.state.dryGain = 10 ** (num / 20);
         }
         break;
       }

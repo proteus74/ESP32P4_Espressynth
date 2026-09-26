@@ -2332,6 +2332,9 @@ inline void Graph::destroy()
         case NodeType::Wavetable:
             nodes::wavetable::destroy(inst);
             break;
+        case NodeType::FmOscillator:
+            nodes::fmoscillator::destroy(inst);
+            break;
         case NodeType::StepArpeggiator:
             nodes::steparp::destroy(inst);
             break;

@@ -154,6 +154,10 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 10;
         if (is(portName, "gate"))
             return 11; // control-only, rising edge restarts the waveform (see render())
+        // "morph": wavetable position 0-10V (first..last table), a genuine audio-rate input
+        // like the Wavetable widget's own morph. Only audible with WaveType::Wavetable.
+        if (is(portName, "morph"))
+            return 12;
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -829,7 +833,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Oscillator:
         return 7; // existing five inputs + internal-feedback depth (CV) + "gate"
     case NodeType::FmOscillator:
-        return 12; // existing nine + SuperSaw detune/mix + "gate"
+        return 13; // existing nine + SuperSaw detune/mix + "gate" + "morph"
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:

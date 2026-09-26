@@ -56,14 +56,10 @@ struct KnobControl
             return valueList[idx];
         }
 
-        float value = point2In == point1In
-                          ? point1Out
-                          : point1Out + (raw - point1In) * (point2Out - point1Out) / (point2In - point1In);
-        if (hasMin && value < minVal)
-            value = minVal;
-        if (hasMax && value > maxVal)
-            value = maxVal;
-        return value;
+        // Linear from A Out (raw 0, knob fully left) to B Out (raw 127). The former A In/B In
+        // and Min/Max settings were removed from the UI; values still stored in old presets
+        // are ignored so device and browser always agree (main.js mapKnobValue()).
+        return point1Out + raw * (1.0f / 127.0f) * (point2Out - point1Out);
     }
 };
 

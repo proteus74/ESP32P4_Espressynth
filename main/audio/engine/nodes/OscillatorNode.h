@@ -35,15 +35,16 @@ inline WaveType waveTypeFromCv(float volts)
         idx = 8;
     switch (idx)
     {
+    // Same order as main.js's WAVE_TYPE_BUTTONS (the browser's mapWaveformValue()).
     case 0: return WaveType::Sine;
     case 1: return WaveType::LinearUp;
     case 2: return WaveType::LinearDown;
-    case 3: return WaveType::Square;
-    case 4: return WaveType::Triangle;
-    case 5: return WaveType::Sawtooth;
-    case 6: return WaveType::SawtoothDown;
-    case 7: return WaveType::Noise;
-    default: return WaveType::PinkNoise;
+    case 3: return WaveType::Sawtooth;
+    case 4: return WaveType::SawtoothDown;
+    case 5: return WaveType::Triangle;
+    case 6: return WaveType::Square;
+    case 7: return WaveType::PinkNoise;
+    default: return WaveType::Noise;
     }
 }
 
@@ -422,7 +423,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         renderSelectedFastLoop<WaveType::LinearDown>(ctx, frames, feedbackActive);
         break;
     case WaveType::SuperSaw:
-        // Defensive only: parsing/live updates reject SuperSaw for WaveGen.
+    case WaveType::Wavetable:
+        // Defensive only: parsing/live updates reject SuperSaw/Wavetable for WaveGen.
         renderSelectedFastLoop<WaveType::Sine>(ctx, frames, feedbackActive);
         break;
     }

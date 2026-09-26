@@ -1,7 +1,7 @@
-import { AudioEngine } from "./audio-engine.js?v=20260924-wavetable-7";
+import { AudioEngine } from "./audio-engine.js?v=20260926-knob-2";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
-import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260924-wavetable-7";
-import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260924-wavetable-7";
+import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
+import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -1034,7 +1034,7 @@ async function importPresetFromFile(file) {
   
   
   currentPresetName = null;
-  await applyPresetData(data);
+  await applyPresetData(data, { fitToView: true });
   await savePresetNow();
   await refreshPresetMenu();
   showToast("Preset imported");
@@ -1402,6 +1402,8 @@ const WIDGET_TYPES = {
       { id: "dutyCycle", label: "Duty Cycle" },
       { id: "superSawDetune", label: "SuperSaw Detune" },
       { id: "superSawMix", label: "SuperSaw Mix" },
+      // Wavetable-only (row hidden otherwise): 0-10V = first..last table.
+      { id: "morph", label: "Morph" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -1780,7 +1782,7 @@ const WIDGET_TYPES = {
     ],
   },
   "reverb-light": {
-    label: "Reverb Light",
+    label: "Reverb",
     icon: "🪶",
     inputs: [
       { id: "inL", label: "In L" },
@@ -2212,7 +2214,7 @@ const WAVE_TYPE_LABELS = {
   noise: "Noise",
   "pink-noise": "Pink Noise",
   supersaw: "SuperSaw",
-  waveshaper: "WaveShaper",
+  wavetable: "Wavetable",
 };
 
 const WAVE_ICON_ATTRS = 'viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"';
@@ -2249,16 +2251,16 @@ const WAVE_TYPE_BUTTONS = [
     icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,16 L 90,84 L 90,16"/></svg>`,
   },
   {
-    id: "square",
-    color: "#8b5cf6",
-    glow: "rgba(139, 92, 246, 0.55)",
-    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 10,16 L 50,16 L 50,84 L 90,84 L 90,16"/></svg>`,
-  },
-  {
     id: "triangle",
     color: "#06b6d4",
     glow: "rgba(6, 182, 212, 0.55)",
     icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 8,82 L 50,18 L 92,82"/></svg>`,
+  },
+  {
+    id: "square",
+    color: "#8b5cf6",
+    glow: "rgba(139, 92, 246, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="9"><path d="M 10,84 L 10,16 L 50,16 L 50,84 L 90,84 L 90,16"/></svg>`,
   },
   {
     id: "pink-noise",
@@ -2274,26 +2276,25 @@ const WAVE_TYPE_BUTTONS = [
   },
 ];
 
+// Button row AND "waveform" CV band order (FmOscillatorNode.h's waveTypeFromCv() mirrors it):
+// the shapes up to Square, then SuperSaw, Wavetable, and the two noises last.
 const FM_WAVE_TYPE_BUTTONS = [
-  ...WAVE_TYPE_BUTTONS,
+  ...WAVE_TYPE_BUTTONS.filter((w) => w.id !== "pink-noise" && w.id !== "noise"),
   {
     id: "supersaw",
     color: "#ef4444",
     glow: "rgba(239, 68, 68, 0.55)",
     icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="7"><path d="M 6,80 L 46,20 L 46,80 L 86,20" opacity=".4"/><path d="M 6,70 L 42,14 L 42,70 L 82,14" opacity=".7"/><path d="M 10,88 L 50,26 L 50,88 L 90,26"/></svg>`,
   },
+  // Morphable, self-drawn wavetable bank (same editor/format as the Wavetable widget).
+  {
+    id: "wavetable",
+    color: "#a855f7",
+    glow: "rgba(168, 85, 247, 0.55)",
+    icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,90 Q 25,90 40,50 Q 55,10 70,50 Q 85,90 90,10"/></svg>`,
+  },
+  ...WAVE_TYPE_BUTTONS.filter((w) => w.id === "pink-noise" || w.id === "noise"),
 ];
-
-// Not in FM_WAVE_TYPE_BUTTONS on purpose: disabled placeholder, not yet a real
-// waveType (backend doesn't know it), so it must stay out of the CV-mapping/
-// validity list and only get appended to the rendered button row below.
-const WAVESHAPER_BUTTON_PLACEHOLDER = {
-  id: "waveshaper",
-  disabled: true,
-  color: "#a855f7",
-  glow: "rgba(168, 85, 247, 0.4)",
-  icon: `<svg ${WAVE_ICON_ATTRS} stroke-width="8"><path d="M 10,90 Q 25,90 40,50 Q 55,10 70,50 Q 85,90 90,10"/></svg>`,
-};
 
 
 
@@ -2813,6 +2814,8 @@ function isLfoLikeType(type) {
 }
 
 function createWidget(type, label, x, y, forcedId) {
+  // The reverb was renamed; presets saved with the old default name follow along.
+  if (type === "reverb-light" && label === "Reverb Light") label = "Reverb";
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
     const existing = pages.fx.canvasContentEl.querySelector(`.widget-instance[data-widget-type="${type}"]`);
     if (existing) {
@@ -3429,6 +3432,8 @@ function createWidget(type, label, x, y, forcedId) {
       dutyCycle: center,
       superSawDetune: center,
       superSawMix: center,
+      morph: 0,
+      wavetables: null, // created on first use (see fmOscillatorWavetableBank)
     };
     fmOscillatorStates.set(id, fmOscState);
     audioEngine.createNode(id, "fm-oscillator", {
@@ -3449,7 +3454,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     const waveButtons = document.createElement("div");
     waveButtons.className = "osc-wave-buttons";
-    [...FM_WAVE_TYPE_BUTTONS, WAVESHAPER_BUTTON_PLACEHOLDER].forEach((w) => {
+    FM_WAVE_TYPE_BUTTONS.forEach((w) => {
       const btn = document.createElement("button");
       btn.className = "osc-wave-btn";
       btn.innerHTML = w.icon;
@@ -3476,7 +3481,25 @@ function createWidget(type, label, x, y, forcedId) {
 
     body.appendChild(waveButtons);
     body.appendChild(freqLabel);
-    appendOscilloscopePanel(body);
+    // Oscilloscope and - in Wavetable mode - the static morphed-wave preview side by side.
+    const panels = document.createElement("div");
+    panels.className = "osc-panels-row";
+    appendOscilloscopePanel(panels);
+    const wtPreview = document.createElement("canvas");
+    wtPreview.className = "osc-wavetable-preview";
+    wtPreview.width = 160;
+    wtPreview.height = 48;
+    wtPreview.dataset.role = "fm-wavetable-preview";
+    wtPreview.title = "Wavetable (current morph position) - click to edit";
+    wtPreview.hidden = true;
+    wtPreview.addEventListener("mousedown", (e) => e.stopPropagation());
+    wtPreview.addEventListener("dblclick", (e) => e.stopPropagation());
+    wtPreview.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openFmWavetableEditor(id);
+    });
+    panels.appendChild(wtPreview);
+    body.appendChild(panels);
     el.appendChild(body);
   }
 
@@ -5743,7 +5766,6 @@ function createWidget(type, label, x, y, forcedId) {
         const fmOscState = fmOscillatorStates.get(id);
         const role = port.id === "superSawDetune" ? "supersaw-detune" : "supersaw-mix";
         row.dataset.role = `fm-oscillator-${role}-row`;
-        row.hidden = fmOscState.waveType !== "supersaw";
 
         const slider = document.createElement("input");
         slider.type = "range";
@@ -5762,6 +5784,29 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.className = "port-value";
         valueSpan.dataset.role = `fm-oscillator-${role}-value`;
         valueSpan.textContent = formatNumber(fmOscState[port.id]);
+        row.appendChild(valueSpan);
+      }
+      if (type === "fm-oscillator" && port.id === "morph") {
+        const fmOscState = fmOscillatorStates.get(id);
+        row.dataset.role = "fm-oscillator-morph-row";
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fmOscState.morph);
+        slider.dataset.role = "fm-oscillator-morph-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, "morph", parseFloat(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "fm-oscillator-morph-value";
+        valueSpan.textContent = formatNumber(fmOscState.morph);
         row.appendChild(valueSpan);
       }
       if (type === "detune" && port.id === "amount") {
@@ -7194,20 +7239,8 @@ function mapKnobValue(control) {
     return list[idx];
   }
 
-  const { point1In, point1Out, point2In, point2Out, constraintMin, constraintMax } = control;
-
-  let value;
-  if (point2In === point1In) {
-    value = point1Out;
-  } else {
-    const slope = (point2Out - point1Out) / (point2In - point1In);
-    value = point1Out + (control.raw - point1In) * slope;
-  }
-
-  if (constraintMin !== null && value < constraintMin) value = constraintMin;
-  if (constraintMax !== null && value > constraintMax) value = constraintMax;
-
-  return value;
+  // Linear from A Out (raw 0, knob fully left) to B Out (raw 127) - same as KnobNode.h.
+  return control.point1Out + (control.raw / 127) * (control.point2Out - control.point1Out);
 }
 
 function updateKnobVisual(widgetId, index = 0) {
@@ -7490,10 +7523,8 @@ function renderKnobSettingsGrid(widgetId) {
 
     card.appendChild(createKnobSettingsInput("listText", control.listText ?? ""));
     [
-      ["point1In", control.point1In], ["point1Out", control.point1Out],
-      ["point2In", control.point2In], ["point2Out", control.point2Out],
-      ["constraintMin", control.constraintMin === null ? "" : control.constraintMin],
-      ["constraintMax", control.constraintMax === null ? "" : control.constraintMax],
+      ["point1Out", control.point1Out],
+      ["point2Out", control.point2Out],
     ].forEach(([field, value]) => {
       const input = createKnobSettingsInput(field, value);
       input.dataset.knobLinear = "true";
@@ -7537,17 +7568,12 @@ function syncKnobSettingsGrid(widgetId, layerIndex = pendingKnobLayerIndex) {
       return Number.isNaN(value) ? fallback : value;
     };
     control.listText = field("listText");
-    control.point1In = numberField("point1In", 0);
+    control.point1In = 0;
     control.point1Out = numberField("point1Out", 0);
-    control.point2In = numberField("point2In", 127);
+    control.point2In = 127;
     control.point2Out = numberField("point2Out", CV_MAX_VOLTS);
-    let constraintMin = field("constraintMin").trim() === "" ? null : parseFloatFlexible(field("constraintMin"));
-    let constraintMax = field("constraintMax").trim() === "" ? null : parseFloatFlexible(field("constraintMax"));
-    if (Number.isNaN(constraintMin)) constraintMin = null;
-    if (Number.isNaN(constraintMax)) constraintMax = null;
-    if (constraintMin !== null && constraintMax !== null && constraintMin > constraintMax) [constraintMin, constraintMax] = [constraintMax, constraintMin];
-    control.constraintMin = constraintMin;
-    control.constraintMax = constraintMax;
+    control.constraintMin = null;
+    control.constraintMax = null;
     controls.push(control);
     labels.push(field("label").trim());
   });
@@ -12335,16 +12361,6 @@ function openLfoWavetableEditor(widgetId) {
   openWavetableEditor({
     title: `Wavetable Editor – ${label}`,
     tables: original,
-    // One pass through the table <-> the widget's Rate (Hz = 1 / seconds).
-    cycleSeconds: state.rate > 0 ? 1 / state.rate : 1,
-    onCycleSeconds: (seconds) => {
-      const hz = 1 / seconds;
-      // A duration shorter than the current max rate allows raises the max
-      // rate (up to the widget's hard limit) instead of silently clamping.
-      if (hz > state.maxRate) setLfoMaxRate(widgetId, Math.min(LFO_MAX_RATE_HZ, hz));
-      setLfoManualRate(widgetId, hz);
-      return state.rate > 0 ? 1 / state.rate : seconds;
-    },
     onPreview: preview,
     onCancel: () => preview(original),
     onApply: (tables) => {
@@ -13427,21 +13443,90 @@ function updateFmOscillatorDutyCycleVisual(widgetId) {
 function updateFmOscillatorSuperSawVisual(widgetId) {
   const state = fmOscillatorStates.get(widgetId);
   if (!state) return;
-  const visible = state.waveType === "supersaw";
+  // Rows always visible; greyed out (like Duty Cycle) unless SuperSaw is selected.
+  const active = state.waveType === "supersaw";
   [
     ["superSawDetune", "supersaw-detune"],
     ["superSawMix", "supersaw-mix"],
   ].forEach(([param, role]) => {
     const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === param);
     const row = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-row"]`);
-    if (row) row.hidden = !visible;
+    if (row) row.classList.toggle("disabled", !active);
     const slider = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-slider"]`);
     if (slider) {
       slider.value = String(state[param]);
-      slider.disabled = connected;
+      slider.disabled = connected || !active;
     }
     const valueSpan = document.querySelector(`#${widgetId} [data-role="fm-oscillator-${role}-value"]`);
     if (valueSpan) valueSpan.textContent = formatNumber(state[param]);
+  });
+}
+
+// --- Oscillator wavetable ---------------------------------------------------
+// Same bank format/editor as the Wavetable widget. The bank lives in the widget
+// state, goes to the device live (/api/wavetable, postLfoWavetableLive) and is
+// written to flash only with a regular preset save (WIDGET_ENGINES getParams).
+
+function fmOscillatorWavetableBank(state) {
+  if (!state.wavetables) state.wavetables = createDefaultBank();
+  return state.wavetables;
+}
+
+function updateFmOscillatorWavetableVisual(widgetId) {
+  const state = fmOscillatorStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const active = state.waveType === "wavetable";
+  // Row always visible; greyed out (like Duty Cycle) unless Wavetable is selected.
+  const row = el.querySelector('[data-role="fm-oscillator-morph-row"]');
+  if (row) row.classList.toggle("disabled", !active);
+  const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "morph");
+  const slider = el.querySelector('[data-role="fm-oscillator-morph-slider"]');
+  if (slider) {
+    slider.value = String(state.morph);
+    slider.disabled = connected || !active;
+  }
+  const valueSpan = el.querySelector('[data-role="fm-oscillator-morph-value"]');
+  if (valueSpan) valueSpan.textContent = formatNumber(state.morph);
+  const canvas = el.querySelector('[data-role="fm-wavetable-preview"]');
+  if (canvas) {
+    canvas.hidden = !active;
+    // Static picture of the morphed wave - no playhead, it would cycle at audio rate.
+    if (active) drawWavetablePreview(canvas, fmOscillatorWavetableBank(state), state.morph);
+  }
+}
+
+function setFmOscillatorMorph(widgetId, volts) {
+  const state = fmOscillatorStates.get(widgetId);
+  if (!state) return;
+  state.morph = clamp(Number(volts) || 0, 0, CV_MAX_VOLTS);
+  audioEngine.setParam(widgetId, "morph", state.morph);
+  updateFmOscillatorWavetableVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { morph: state.morph });
+}
+
+function openFmWavetableEditor(widgetId) {
+  const state = fmOscillatorStates.get(widgetId);
+  if (!state) return;
+  const original = fmOscillatorWavetableBank(state).map((t) => Float32Array.from(t));
+  const label = document.getElementById(widgetId)?.querySelector(".widget-instance-label")?.textContent || "Oscillator";
+  const preview = (tables, live = true) => {
+    state.wavetables = tables;
+    audioEngine.setParam(widgetId, "wavetables", tables);
+    updateFmOscillatorWavetableVisual(widgetId);
+    if (live) postLfoWavetableLive(widgetId, tables);
+  };
+  openWavetableEditor({
+    title: `Wavetable Editor – ${label}`,
+    tables: original,
+    onPreview: preview,
+    onCancel: () => preview(original),
+    onApply: (tables) => {
+      preview(original, false);
+      pushHistorySnapshot();
+      // Written to flash with the next regular preset save (serializePreset()).
+      preview(tables, true);
+    },
   });
 }
 
@@ -13450,9 +13535,18 @@ function setFmOscillatorWaveType(widgetId, waveType) {
   if (!state) return;
   state.waveType = waveType;
   audioEngine.setParam(widgetId, "waveType", waveType);
+  if (waveType === "wavetable") {
+    // The device may not hold a bank for this widget yet (the preset had another waveform):
+    // send it along; until it arrives the device plays a sine.
+    const bank = fmOscillatorWavetableBank(state);
+    audioEngine.setParam(widgetId, "wavetables", bank);
+    audioEngine.setParam(widgetId, "morph", state.morph);
+    postLfoWavetableLive(widgetId, bank);
+  }
   updateFmOscillatorWaveButtons(widgetId);
   updateFmOscillatorDutyCycleVisual(widgetId);
   updateFmOscillatorSuperSawVisual(widgetId);
+  updateFmOscillatorWavetableVisual(widgetId);
   sendLiveParamUpdate(widgetId, { waveType });
 }
 
@@ -14896,7 +14990,7 @@ function openEffectCvSettings(widgetId) {
   const type = el.dataset.widgetType;
   pendingEffectCvId = widgetId;
   pendingEffectCvType = type;
-  const effectCvTitleLabel = type === "delay" ? "Delay" : "Reverb Light";
+  const effectCvTitleLabel = type === "delay" ? "Delay" : "Reverb";
   effectCvSettingsTitle.textContent = `${effectCvTitleLabel} Settings`;
   effectCvSettingsFields.innerHTML = "";
   for (const p of EFFECT_CV_PARAMS[type] || []) {
@@ -18679,7 +18773,9 @@ function refreshWiredSliderLocks() {
     const widget = row.closest(".widget-instance");
     if (!widget) return;
     const wired = connections.some((c) => c.to.widgetId === widget.id && c.to.portId === row.dataset.portId);
-    slider.disabled = wired;
+    // A row greyed out by its widget's mode (e.g. Duty Cycle outside Square, SuperSaw/Morph
+    // outside their waveform) stays locked too.
+    slider.disabled = wired || row.classList.contains("disabled");
     slider.title = wired ? "Von verbundenem Port gesteuert" : "";
     row.classList.toggle("port-row-modulated", wired);
   });
@@ -19504,6 +19600,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       updateFmOscillatorDutyCycleVisual(widgetId);
       sendLiveParamUpdateThrottled(widgetId, { dutyCycle: state.dutyCycle });
     }
+  }
+
+  if (el.dataset.widgetType === "fm-oscillator" && portId === "morph") {
+    setFmOscillatorMorph(widgetId, value);
   }
 
   if (el.dataset.widgetType === "fm-oscillator" && (portId === "superSawDetune" || portId === "superSawMix")) {
@@ -20828,12 +20928,12 @@ const WIDGET_ENGINES = {
           control.cc = typeof raw.cc === "number" ? raw.cc : null;
           control.channel = typeof raw.channel === "number" ? raw.channel : null;
           control.raw = typeof raw.raw === "number" ? raw.raw : 0;
-          control.point1In = typeof raw.point1In === "number" ? raw.point1In : 0;
+          control.point1In = 0; // A In/B In/Min/Max were removed - fixed full knob travel
           control.point1Out = typeof raw.point1Out === "number" ? raw.point1Out : 0;
-          control.point2In = typeof raw.point2In === "number" ? raw.point2In : 127;
+          control.point2In = 127;
           control.point2Out = typeof raw.point2Out === "number" ? raw.point2Out : CV_MAX_VOLTS;
-          control.constraintMin = typeof raw.constraintMin === "number" ? raw.constraintMin : null;
-          control.constraintMax = typeof raw.constraintMax === "number" ? raw.constraintMax : null;
+          control.constraintMin = null;
+          control.constraintMax = null;
           control.listText = Array.isArray(raw.valueList) && raw.valueList.length
             ? raw.valueList.join(", ")
             : (typeof raw.listText === "string" ? raw.listText : "");
@@ -20852,12 +20952,11 @@ const WIDGET_ENGINES = {
         if (typeof params.cc === "number") control.cc = params.cc;
         if (typeof params.channel === "number") control.channel = params.channel;
         if (typeof params.raw === "number") control.raw = params.raw;
-        if (typeof params.point1In === "number") control.point1In = params.point1In;
+
         if (typeof params.point1Out === "number") control.point1Out = params.point1Out;
-        if (typeof params.point2In === "number") control.point2In = params.point2In;
+
         if (typeof params.point2Out === "number") control.point2Out = params.point2Out;
-        if (typeof params.constraintMin === "number") control.constraintMin = params.constraintMin;
-        if (typeof params.constraintMax === "number") control.constraintMax = params.constraintMax;
+
         if (Array.isArray(params.valueList)) control.listText = params.valueList.join(", ");
       }
       const bindings = Array.isArray(params.bindings) ? params.bindings : state.layers[0].controls;
@@ -21339,6 +21438,9 @@ const WIDGET_ENGINES = {
         dutyCycle: state.dutyCycle,
         superSawDetune: state.superSawDetune,
         superSawMix: state.superSawMix,
+        morph: state.morph,
+        // The bank only travels with the preset while the wavetable waveform is selected.
+        ...(state.waveType === "wavetable" ? { wavetables: encodeBank(fmOscillatorWavetableBank(state)) } : {}),
       };
     },
     applyParams: (id, params) => {
@@ -21354,6 +21456,8 @@ const WIDGET_ENGINES = {
       state.dutyCycle = params.dutyCycle ?? center;
       state.superSawDetune = params.superSawDetune ?? center;
       state.superSawMix = params.superSawMix ?? center;
+      state.morph = clamp(Number(params.morph) || 0, 0, CV_MAX_VOLTS);
+      state.wavetables = decodeBank(params.wavetables) || state.wavetables;
       state.pitchCv = center;
       audioEngine.setParam(id, "waveType", state.waveType);
       audioEngine.setParam(id, "amplitude", 0, 0);
@@ -21363,6 +21467,8 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "dutyCycle", state.dutyCycle);
       audioEngine.setParam(id, "superSawDetune", state.superSawDetune);
       audioEngine.setParam(id, "superSawMix", state.superSawMix);
+      audioEngine.setParam(id, "morph", state.morph);
+      if (state.wavetables) audioEngine.setParam(id, "wavetables", state.wavetables);
       recomputeFmOscillatorFreq(id, undefined);
       updateFmOscillatorTuneVisual(id);
       updateFmOscillatorGainVisual(id);
@@ -21370,6 +21476,7 @@ const WIDGET_ENGINES = {
       updateFmOscillatorFeedbackVisual(id);
       updateFmOscillatorDutyCycleVisual(id);
       updateFmOscillatorSuperSawVisual(id);
+      updateFmOscillatorWavetableVisual(id);
       updateFmOscillatorWaveButtons(id);
     },
   },
@@ -22560,13 +22667,6 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   });
   ensureSingletonLinkWidget("fx");
 
-  if (fitToView) {
-    [...generatorPageNames(), "fx"].forEach((name) => {
-      switchPage(name);
-      fitPageToView();
-    });
-  }
-
   
   
   connections = dedupeConnections([
@@ -22707,6 +22807,15 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   refreshVoiceGroups();
   refreshLinkedIO();
 
+  // Same as a middle-button click on every page: fit all widgets and cables into view.
+  // Done after the cables exist so their bounds count too.
+  if (fitToView) {
+    [...generatorPageNames(), "fx"].forEach((name) => {
+      switchPage(name);
+      fitPageToView();
+    });
+  }
+
   switchPage("generator");
   restoringPreset = false;
   
@@ -22750,7 +22859,7 @@ async function loadPresetByName(name, { activate = true } = {}) {
     const headerName = res.headers.get("X-Preset-Name") || "";
     const data = await res.json();
     currentPresetName = headerName || null;
-    await applyPresetData(data);
+    await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {
     appendLog(`Preset could not be loaded: ${err.message}`);
@@ -22916,7 +23025,13 @@ const connectionLostOverlay = document.getElementById("connectionLostOverlay");
 // fresh connection attempt immediately; the old socket is abandoned (its
 // eventual native "close"/"error", whenever that fires, becomes a no-op via
 // the currentSocket check below since a newer socket has already taken over).
-const WS_STALE_TIMEOUT_MS = 2500;
+const WS_STALE_TIMEOUT_MS = 5000;
+// The "connection lost" overlay only appears once the device has been unreachable for at
+// least this long; a short drop that reconnects in time goes unnoticed (no overlay, no
+// page reload).
+const CONNECTION_LOST_UI_DELAY_MS = 5000;
+let wsLastGoodAt = 0;
+let connectionLostUiTimer = null;
 const WS_WATCHDOG_INTERVAL_MS = 500;
 let lastWsMessageAt = 0;
 let wsWatchdogTimer = null;
@@ -22942,9 +23057,16 @@ function suspendWsWatchdog(ms) {
 function markWsLost(socket) {
   if (currentSocket !== socket) return false;
   clearInterval(wsWatchdogTimer);
-  wsHasBeenDisconnected = true;
-  connectionLostOverlay?.classList.remove("hidden");
   currentSocket = null;
+  if (!connectionLostUiTimer && !wsHasBeenDisconnected) {
+    const lostFor = Date.now() - (wsLastGoodAt || Date.now());
+    connectionLostUiTimer = setTimeout(() => {
+      connectionLostUiTimer = null;
+      if (currentSocket && currentSocket.readyState === WebSocket.OPEN) return; // back already
+      wsHasBeenDisconnected = true;
+      connectionLostOverlay?.classList.remove("hidden");
+    }, Math.max(0, CONNECTION_LOST_UI_DELAY_MS - lostFor));
+  }
   return true;
 }
 
@@ -23010,6 +23132,7 @@ function connectWs() {
 
   socket.addEventListener("message", (event) => {
     lastWsMessageAt = Date.now();
+    wsLastGoodAt = lastWsMessageAt;
     let data;
     try {
       data = JSON.parse(event.data);
@@ -23065,6 +23188,9 @@ function connectWs() {
   socket.addEventListener("open", () => {
     if (currentSocket !== socket) return;
     lastWsMessageAt = 0;
+    wsLastGoodAt = Date.now();
+    clearTimeout(connectionLostUiTimer);
+    connectionLostUiTimer = null;
     startWsWatchdog(socket);
     // Only a genuine reconnect (we've been through at least one "close" before)
     // warrants a reload - the very first connectWs() call on page load also

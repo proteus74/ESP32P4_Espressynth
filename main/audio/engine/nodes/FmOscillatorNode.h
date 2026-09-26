@@ -12,6 +12,7 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
+#include "../Wavetable.h"
 
 // Single-operator phase-modulation FM oscillator. Structurally a clone of
 // nodes::oscillator (same carrier: phase-accumulator PhaseOsc, same
@@ -33,26 +34,28 @@ namespace nodes::fmoscillator
 
 namespace
 {
-// FM alone has ten equal CV bands; WaveGen retains its nine-band map.
+// FM has eleven equal CV bands; WaveGen keeps its nine-band map.
 inline WaveType waveTypeFromCv(float volts)
 {
-    int idx = static_cast<int>(volts / (cv::kMaxVolts / 10.0f));
+    // Eleven equal bands, same order as main.js's FM_WAVE_TYPE_BUTTONS.
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / 11.0f));
     if (idx < 0)
         idx = 0;
-    if (idx > 9)
-        idx = 9;
+    if (idx > 10)
+        idx = 10;
     switch (idx)
     {
     case 0: return WaveType::Sine;
     case 1: return WaveType::LinearUp;
     case 2: return WaveType::LinearDown;
-    case 3: return WaveType::Square;
-    case 4: return WaveType::Triangle;
-    case 5: return WaveType::Sawtooth;
-    case 6: return WaveType::SawtoothDown;
-    case 7: return WaveType::Noise;
-    case 8: return WaveType::PinkNoise;
-    default: return WaveType::SuperSaw;
+    case 3: return WaveType::Sawtooth;
+    case 4: return WaveType::SawtoothDown;
+    case 5: return WaveType::Triangle;
+    case 6: return WaveType::Square;
+    case 7: return WaveType::SuperSaw;
+    case 8: return WaveType::Wavetable;
+    case 9: return WaveType::PinkNoise;
+    default: return WaveType::Noise;
     }
 }
 
@@ -623,6 +626,64 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         return;
     }
 
+    if (wave == WaveType::Wavetable)
+    {
+        // Wavetable: same pitch/amp/gain/FM/feedback handling as the plain waveforms, but the
+        // sample is read from the morphed bank. Morph comes from the "morph" port (12, audio
+        // rate) or the widget's own morph setting. Without a bank yet (e.g. switched live
+        // before the browser's bank upload arrived) it plays a sine.
+        const ::wavetable::Bank *bank = s.wavetableBank;
+        const bool morphFed = portIsFed(inst, 12);
+        const float morphConst = s.morphCv * cv::kInvMaxVolts;
+        const float hzConst = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts));
+        const uint32_t incConst = PhaseOsc::toPhaseInt(hzConst * kInvSampleRate);
+        if (!feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f && !needsAudioRatePitch)
+        {
+            s.phaseGen.advancePhaseOnly(incConst, frames);
+            if (!gainFed && !gainConverged)
+                for (size_t i = 0; i < frames; ++i) s.gainSmooth.process(gainTarget);
+            memset(inst.outL, 0, frames * sizeof(float));
+            inst.outIsConstant = true;
+            inst.outConstantValue = 0.0f;
+            return;
+        }
+        for (size_t i = 0; i < frames; ++i)
+        {
+            uint32_t inc = incConst;
+            if (needsAudioRatePitch)
+            {
+                const float pitchCv = pitchNeedsAudioRate ? portSample(inst, 1, i) : pitchCvConst;
+                const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
+                inc = PhaseOsc::toPhaseInt(cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * kInvSampleRate);
+            }
+            const float amp = ampConstantForBlock
+                                  ? ampConstantValue
+                                  : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+            const float gainMul = gainFed ? cv::vcaGain(gainBuf[i], false)
+                                          : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
+            float phaseOffset = fmActive ? fmInBuf[i] * phaseOffsetScale : 0.0f;
+            if (feedbackActive)
+                phaseOffset += s.feedbackSample * feedbackAmount;
+            const uint32_t readPhase =
+                phaseOffset != 0.0f ? s.phaseGen.phaseInt() + PhaseOsc::toPhaseInt(phaseOffset) : s.phaseGen.phaseInt();
+            float sample;
+            if (bank != nullptr)
+            {
+                const float morph = morphFed ? portSample(inst, 12, i) * cv::kInvMaxVolts : morphConst;
+                sample = ::wavetable::sample(*bank, readPhase, morph);
+            }
+            else
+            {
+                sample = dsp::sineLookupInt(readPhase);
+            }
+            if (feedbackActive)
+                s.feedbackSample = sample;
+            s.phaseGen.advancePhaseOnly(inc, 1);
+            inst.outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
+        }
+        return;
+    }
+
     if (needsAudioRatePitch)
     {
         if (modulationActive)
@@ -754,7 +815,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         renderSelectedFastLoop<WaveType::LinearDown>(ctx, frames, fmActive, feedbackActive);
         break;
     case WaveType::SuperSaw:
-        break;
+    case WaveType::Wavetable:
+        break; // handled above
     }
 }
 
@@ -770,8 +832,17 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.dutyCycleCv = p.dutyCycle;
     s.superSawDetuneCv = p.superSawDetune;
     s.superSawMixCv = p.superSawMix;
+    s.morphCv = p.wavetableMorph;
+    // Every voice instance holds its own reference to the one shared bank.
+    s.wavetableBank = ::wavetable::acquire(p.wavetableBank);
     // Same cutoff/reason as Oscillator's gainSmooth - see NodeState.h.
     s.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
+}
+
+inline void destroy(NodeInstance &inst)
+{
+    ::wavetable::release(inst.fmOsc.wavetableBank);
+    inst.fmOsc.wavetableBank = nullptr;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -781,6 +852,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         return false;
     }
     auto &s = inst.fmOsc;
+    if (strcmp(name, "morph") == 0)
+    {
+        s.morphCv = value < 0.0f ? 0.0f : (value > cv::kMaxVolts ? cv::kMaxVolts : value);
+        return true;
+    }
     if (strcmp(name, "tune") == 0)
     {
         s.tuneVolts = value;
@@ -850,6 +926,11 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.dutyCycle = presetparser::getFloat(p, "dutyCycle", 5.0f);
     out.superSawDetune = presetparser::getFloat(p, "superSawDetune", 5.0f);
     out.superSawMix = presetparser::getFloat(p, "superSawMix", 5.0f);
+    // Wavetable: same "wavetables"/"morph" keys and format as the Wavetable widget. A bank is
+    // only built when stored or when the preset selects the wavetable waveform (default bank).
+    out.wavetableMorph = presetparser::getFloat(p, "morph", 0.0f);
+    out.wavetableBank = ::wavetable::parse(p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "wavetables") : nullptr,
+                                           out.waveType == WaveType::Wavetable);
 }
 
 } // namespace nodes::fmoscillator

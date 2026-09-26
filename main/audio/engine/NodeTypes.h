@@ -92,6 +92,8 @@ enum class WaveType : uint8_t
     Noise,
     PinkNoise,
     SuperSaw,
+    // FM oscillator only: reads the widget's morphable wavetable bank (Wavetable.h).
+    Wavetable,
 };
 
 // Order matters: the Filter widget's "filterType" CV port maps 0-10V onto this
@@ -294,6 +296,8 @@ inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
         return WaveType::PinkNoise;
     if (allowSuperSaw && strcmp(s, "supersaw") == 0)
         return WaveType::SuperSaw;
+    if (allowSuperSaw && strcmp(s, "wavetable") == 0)
+        return WaveType::Wavetable;
     if (strcmp(s, "linear-up") == 0)
         return WaveType::LinearUp;
     if (strcmp(s, "linear-down") == 0)

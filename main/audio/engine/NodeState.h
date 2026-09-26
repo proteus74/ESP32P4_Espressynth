@@ -44,6 +44,11 @@ struct OscillatorState
     float feedbackSample = 0.0f;
 };
 
+namespace wavetable
+{
+struct Bank;
+}
+
 // Single-operator phase-modulation FM oscillator (see
 // nodes/FmOscillatorNode.h). Carrier is a plain PhaseOsc, exactly like
 // OscillatorState; "fmIn" (a modulator signal, typically another
@@ -80,6 +85,10 @@ struct FmOscillatorState
     float superSawDetuneCv = 5.0f;
     float superSawMixCv = 5.0f;
     uint32_t superSawSidePhase[6] = {};
+    // WaveType::Wavetable: the widget's bank (shared by all voices, counted reference - see
+    // Wavetable.h) and the manual morph position 0-10V, overridden by the "morph" port (12).
+    wavetable::Bank *wavetableBank = nullptr;
+    float morphCv = 0.0f;
 };
 
 namespace wavetable

@@ -2408,17 +2408,6 @@ body.show-oscilloscopes .oscilloscope-only-body {
   cursor: pointer;
 }
 
-.wavetable-duration {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-}
-
-.wavetable-duration input {
-  width: 5.5rem;
-}
-
 .wavetable-canvas,
 .wavetable-harmonics-canvas {
   display: block;
@@ -4205,7 +4194,7 @@ body.show-oscilloscopes .oscilloscope-only-body {
 .knob-settings-head,
 .knob-settings-card {
   display: grid;
-  grid-template-columns: 32px 110px 150px 180px repeat(6, clamp(48px, 4vw, 72px)) 102px;
+  grid-template-columns: 32px 110px 150px 180px repeat(2, clamp(56px, 5vw, 80px)) 102px;
   column-gap: 0.35rem;
   min-width: 900px;
 }
@@ -5193,4 +5182,43 @@ input[type="range"].port-slider + .port-value {
   justify-content: space-between;
   font-size: 0.75rem;
   opacity: 0.7;
+}
+
+/* Oscillator: oscilloscope + wavetable preview side by side */
+.osc-panels-row {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.osc-wavetable-preview {
+  display: block;
+  margin-top: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.osc-wavetable-preview[hidden] {
+  display: none;
+}
+
+/* Wavetable editor: slot right-click menu above the editor overlay, bank import/export bottom left */
+.wavetable-slot-menu {
+  z-index: 60;
+}
+
+.wavetable-slot-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.wavetable-editor .wavetable-bank-export {
+  margin-right: 0;
+}
+
+.wavetable-editor .modal-actions > button:nth-child(2) {
+  margin-right: auto;
 }

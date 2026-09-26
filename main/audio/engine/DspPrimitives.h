@@ -961,6 +961,12 @@ public:
 
     uint32_t capacitySamples() const { return length_; }
 
+    // Raw ring access for hot loops that keep their own local copy of the write index for a
+    // whole block (see nodes/ReverbNode.h) - write the index back with setWriteIndex().
+    float *data() { return buffer_; }
+    uint32_t writeIndex() const { return writeIdx_; }
+    void setWriteIndex(uint32_t idx) { writeIdx_ = idx; }
+
 private:
     bool allocate(uint32_t lengthSamples, bool psram)
     {

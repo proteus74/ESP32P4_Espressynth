@@ -428,13 +428,16 @@ private:
                 for (uint16_t w = 0; w < graph->widgetCount; ++w)
                 {
                     const WidgetSlot &slot = graph->widgets[w];
-                    if (slot.type != NodeType::Wavetable || strcmp(slot.id, msg.widgetId) != 0)
+                    if ((slot.type != NodeType::Wavetable && slot.type != NodeType::FmOscillator) ||
+                        strcmp(slot.id, msg.widgetId) != 0)
                         continue;
                     for (uint16_t v = 0; v < slot.instanceCount; ++v)
                     {
-                        LfoState &lfo = graph->instances[slot.instanceBase + v].lfo;
-                        wavetable::Bank *old = lfo.wavetableBank;
-                        lfo.wavetableBank = wavetable::acquire(msg.bank);
+                        NodeInstance &inst = graph->instances[slot.instanceBase + v];
+                        wavetable::Bank *&target =
+                            slot.type == NodeType::Wavetable ? inst.lfo.wavetableBank : inst.fmOsc.wavetableBank;
+                        wavetable::Bank *old = target;
+                        target = wavetable::acquire(msg.bank);
                         // Last reference to a replaced bank frees ~8KB of
                         // PSRAM right here on the render task - a single
                         // heap_caps_free(), and only at editor-stroke rate.
