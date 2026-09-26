@@ -36,7 +36,18 @@ inline uint8_t clampTrackCount(int value)
 
 inline float clampPulseMs(float value)
 {
+    if (!std::isfinite(value)) return 50.0f;
     return value < 0.1f ? 0.1f : (value > 60000.0f ? 60000.0f : value);
+}
+
+inline void applyTrackPulseMs(cJSON *values, float *out)
+{
+    if (!cJSON_IsArray(values)) return;
+    for (size_t track = 0; track < synth::kDrumSequencerMaxTracks; ++track)
+    {
+        const cJSON *item = cJSON_GetArrayItem(values, static_cast<int>(track));
+        if (cJSON_IsNumber(item)) out[track] = clampPulseMs(static_cast<float>(item->valuedouble));
+    }
 }
 
 inline float clampMaxBpm(float value)
@@ -107,7 +118,7 @@ inline int indexedCell(const char *name)
     return value;
 }
 
-inline void triggerStep(DrumSequencerState &s, uint16_t totalSteps, uint32_t pulseSamples)
+inline void triggerStep(DrumSequencerState &s, uint16_t totalSteps)
 {
     const DrumSequencerPattern &pattern = s.patterns[s.activePattern];
     for (uint8_t track = 0; track < s.trackCount; ++track)
@@ -115,6 +126,7 @@ inline void triggerStep(DrumSequencerState &s, uint16_t totalSteps, uint32_t pul
         const size_t cell = static_cast<size_t>(track) * totalSteps + s.currentStep;
         if (!cellActive(pattern.active, cell)) continue;
         s.heldVelocity[track] = decodeVelocity(pattern.velocity[cell]);
+        const uint32_t pulseSamples = static_cast<uint32_t>(s.trackPulseMs[track] * 0.001f * synth::kSampleRate + 0.5f);
         const uint32_t nextPulse = pulseSamples > 0 ? pulseSamples : 1;
         if (s.pulseSamplesRemaining[track] > 0)
         {
@@ -187,7 +199,6 @@ inline void render(NodeInstance &inst, size_t frames)
     // 16-step pattern is one 4/4 bar. 120 BPM must trigger 8 steps/sec.
     const float periodSec = bpm > 0.0f ? 15.0f / bpm : 0.0f;
     const float dtSec = 1.0f / static_cast<float>(synth::kSampleRate);
-    const uint32_t pulseSamples = static_cast<uint32_t>(s.pulseMs * 0.001f * synth::kSampleRate + 0.5f);
 
     for (size_t i = 0; i < frames; ++i)
     {
@@ -210,7 +221,7 @@ inline void render(NodeInstance &inst, size_t frames)
             memset(s.pulseSamplesRemaining, 0, sizeof(s.pulseSamplesRemaining));
             memset(s.pendingPulseSamples, 0, sizeof(s.pendingPulseSamples));
             memset(s.retriggerGapRemaining, 0, sizeof(s.retriggerGapRemaining));
-            triggerStep(s, totalSteps, pulseSamples);
+            triggerStep(s, totalSteps);
             triggeredByGate = true;
         }
         else if (!gateNow && s.gatePrev)
@@ -249,7 +260,7 @@ inline void render(NodeInstance &inst, size_t frames)
             s.clockPrev = false;
         }
 
-        if (!triggeredByGate && rising && gateNow) triggerStep(s, totalSteps, pulseSamples);
+        if (!triggeredByGate && rising && gateNow) triggerStep(s, totalSteps);
 
         for (uint8_t track = 0; track < s.trackCount; ++track)
         {
@@ -283,7 +294,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.activePattern = s.manualPatternSelect;
     s.pendingPattern = 0xFF;
     s.switchAtEnd = p.drumSwitchAtEnd;
-    s.pulseMs = clampPulseMs(p.drumPulseMs);
+    for (size_t track = 0; track < synth::kDrumSequencerMaxTracks; ++track)
+        s.trackPulseMs[track] = clampPulseMs(p.drumTrackPulseMs[track]);
     s.internalClockCvVolts = p.drumClockCvVolts < 0.0f ? 0.0f : (p.drumClockCvVolts > cv::kMaxVolts ? cv::kMaxVolts : p.drumClockCvVolts);
     s.internalClockMaxBpm = clampMaxBpm(p.drumClockMaxBpm);
     s.internalClockRoundBpm = p.drumClockRoundBpm;
@@ -341,7 +353,10 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     else if (strcmp(name, "switchAtEnd") == 0)
         s.switchAtEnd = value >= 0.5f;
     else if (strcmp(name, "pulseMs") == 0)
-        s.pulseMs = clampPulseMs(value);
+    {
+        // Legacy live updates still set every track together.
+        for (float &pulseMs : s.trackPulseMs) pulseMs = clampPulseMs(value);
+    }
     else if (strcmp(name, "clockCvVolts") == 0)
         s.internalClockCvVolts = value < 0.0f ? 0.0f : (value > cv::kMaxVolts ? cv::kMaxVolts : value);
     else if (strcmp(name, "clockMaxBpm") == 0)
@@ -411,7 +426,10 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
         presetparser::getInt(p, "activePatternIndex", 0), out.drumPatternCount);
     out.drumSwitchAtEnd = presetparser::getBool(p, "switchAtEnd", false);
 
-    out.drumPulseMs = clampPulseMs(presetparser::getFloat(p, "pulseMs", 10.0f));
+    // Old presets have one shared pulse width; new presets store all tracks.
+    const float legacyPulseMs = clampPulseMs(presetparser::getFloat(p, "pulseMs", 50.0f));
+    for (float &pulseMs : out.drumTrackPulseMs) pulseMs = legacyPulseMs;
+    applyTrackPulseMs(p == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(p, "trackPulseMs"), out.drumTrackPulseMs);
     const float clockCv = presetparser::getFloat(p, "clockCvVolts", 0.0f);
     out.drumClockCvVolts = clockCv < 0.0f ? 0.0f : (clockCv > cv::kMaxVolts ? cv::kMaxVolts : clockCv);
     out.drumClockMaxBpm = clampMaxBpm(presetparser::getFloat(p, "clockMaxBpm", 120.0f));

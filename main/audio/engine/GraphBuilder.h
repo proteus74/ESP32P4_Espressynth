@@ -37,6 +37,7 @@
 #include "nodes/ConstNode.h"
 #include "features/io/i2c_bus_manager.hpp"
 #include "nodes/CurtisFilterNode.h"
+#include "nodes/CombFilterNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/DxEnvelopeNode.h"
@@ -51,6 +52,7 @@
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
+#include "nodes/MidiFilterNode.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
@@ -283,6 +285,38 @@ inline uint16_t requestedMidiVoices(const WidgetDesc &widget)
     return widget.params.voices < 1 ? 1 : widget.params.voices;
 }
 
+// Inherit voice count from MIDI sources, including filter/splitter chains.
+inline uint8_t midiFilterVoices(const PresetDoc &doc, uint16_t widget, uint16_t cap)
+{
+    bool visited[synth::kMaxWidgets] = {};
+    uint16_t queue[synth::kMaxWidgets];
+    uint16_t head = 0, tail = 1;
+    queue[0] = widget;
+    visited[widget] = true;
+    uint16_t voices = 1;
+    while (head < tail)
+    {
+        const uint16_t current = queue[head++];
+        if (doc.widgets[current].type == NodeType::MidiIn)
+        {
+            const uint16_t requested = requestedMidiVoices(doc.widgets[current]);
+            if (requested > voices) voices = requested;
+            continue;
+        }
+        for (uint16_t c = 0; c < doc.connectionCount; ++c)
+        {
+            const auto &connection = doc.connections[c];
+            if (strcmp(connection.toWidget, doc.widgets[current].id) != 0 || strcmp(connection.toPort, "midi") != 0) continue;
+            if (strcmp(connection.fromPort, "midi") != 0 && strstr(connection.fromPort, "Midi") == nullptr) continue;
+            const int source = findWidgetIndex(doc, connection.fromWidget);
+            if (source < 0 || visited[source]) continue;
+            visited[source] = true;
+            queue[tail++] = static_cast<uint16_t>(source);
+        }
+    }
+    return static_cast<uint8_t>(voices < cap ? voices : cap);
+}
+
 // Voiced/global BFS classification - port of main.js's traverseVoiceSet().
 // Boundary types (link widgets, no-output widgets) are never voiced and
 // stop traversal; everything else reachable from a >1-voice midi-in is
@@ -365,6 +399,10 @@ inline void classifyVoiced(const PresetDoc &doc, bool *voiced)
 
 inline void classifyIdleRendered(const PresetDoc &doc, const bool *voiced, bool *renderWhenIdle)
 {
+    // Comb resonances must decay after the upstream voice envelope has ended.
+    for (uint16_t i = 0; i < doc.widgetCount; ++i)
+        if (voiced[i] && doc.widgets[i].type == NodeType::CombFilter)
+            renderWhenIdle[i] = true;
     bool changed;
     do
     {
@@ -591,6 +629,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::Filter:
         nodes::filter::build(inst, p);
         break;
+    case NodeType::CombFilter:
+        nodes::combfilter::build(inst, p, psram);
+        break;
     case NodeType::CurtisFilter:
         nodes::curtisfilter::build(inst, p);
         break;
@@ -677,6 +718,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::MidiIn:
         nodes::midiin::build(inst, p);
+        break;
+    case NodeType::MidiFilter:
+        nodes::midifilter::build(inst, p);
         break;
     case NodeType::MidiSplit:
         nodes::midisplit::build(inst, p);
@@ -824,7 +868,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         w.type = doc.widgets[i].type;
         w.voiced = voiced[i];
         w.renderWhenIdle = renderWhenIdle[i];
-        w.instanceCount = voiced[i] ? voiceCount : 1;
+        w.instanceCount = voiced[i] && w.type != NodeType::MidiFilter ? voiceCount : 1;
         w.instanceBase = total;
         total += w.instanceCount;
         if (w.type == NodeType::UsbOut && g->usbOutWidget < 0)
@@ -975,6 +1019,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 inst.filter = allocateNodeState<FilterState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.filter == nullptr);
                 break;
+            case NodeType::MidiFilter:
+                inst.midiFilter = allocateNodeState<MidiFilterState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.midiFilter == nullptr);
+                break;
+            case NodeType::CombFilter:
+                inst.combFilter = allocateNodeState<CombFilterState>(outputPsramFallbacks);
+                stateAllocFailed = (inst.combFilter == nullptr);
+                break;
             case NodeType::CurtisFilter:
                 inst.curtisFilter = allocateNodeState<CurtisFilterState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.curtisFilter == nullptr);
@@ -1109,6 +1161,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 }
             }
             applyParams(inst, w.type, doc.widgets[i].params, kPsram, outputPsramFallbacks);
+            if (w.type == NodeType::CombFilter && inst.combFilter->delay.capacitySamples() == 0)
+            {
+                ESP_LOGE(kGraphBuilderTag, "Comb filter delay buffer allocation failed");
+                g->destroy();
+                g->widgetCount = 0;
+                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                return g;
+            }
             if (w.type == NodeType::MidiIn && doc.widgets[i].isFxPage)
             {
                 inst.midiIn.voices = 1;
@@ -1122,6 +1182,12 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             {
                 initSoundFontPlayer(*g, i, inst, doc.widgets[i].params, v == 0);
             }
+        }
+        if (w.type == NodeType::MidiFilter)
+        {
+            auto &m = g->instances[w.instanceBase].midiFilter->midi;
+            m.voices = midiFilterVoices(doc, i, voiceCount);
+            g->voiceAllocators[i].configure(m.voices, m.overflowMode);
         }
         if (w.type == NodeType::MidiIn)
         {
@@ -1202,7 +1268,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // connection is still how they reach their target - resolve into a
         // ControlRoute instead of a DSP edge. No render-order dependency is
         // needed since midi-in isn't a rendered node.
-        if (fromType == NodeType::MidiIn && g->controlRouteCount < synth::kMaxConnections)
+        if ((fromType == NodeType::MidiIn || fromType == NodeType::MidiFilter) && g->controlRouteCount < synth::kMaxConnections)
         {
             ControlRoute::Kind kind;
             bool known = true;
@@ -1219,7 +1285,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             else if (strcmp(cd.fromPort, "pitchBend") == 0)
                 kind = ControlRoute::Kind::MidiPitchBend;
             else if (strcmp(cd.fromPort, "midi") == 0 &&
-                     (toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano) &&
+                     (toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano || toType == NodeType::MidiFilter) &&
                      strcmp(cd.toPort, "midi") == 0)
                 kind = ControlRoute::Kind::MidiRaw;
             // MidiSplit's single "midi" input - one wire standing in for what
@@ -1269,7 +1335,9 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 ControlRoute &route = g->controlRoutes[g->controlRouteCount++];
                 route.sourceWidget = static_cast<uint16_t>(fromIdx);
                 route.targetWidget = static_cast<uint16_t>(toIdx);
-                route.kind = kind;
+                route.kind = strstr(cd.fromPort, "Midi") && strcmp(cd.toPort, "midi") == 0 &&
+                    (toType == NodeType::MidiFilter || toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano)
+                    ? ControlRoute::Kind::MidiRaw : kind;
                 route.side = static_cast<uint8_t>(zoneIdx);
                 if (toPort >= 0)
                 {
@@ -1757,7 +1825,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     // applied to the builder itself).
     uint32_t viewPortCount = 0;
     // Buffer-view optimization (plan section 3, P2: "Bei nur einer
-    // unskalierten Quelle und einem ausschließlich lesenden Ziel auf den
+    // unskalierten Quelle und einem ausschlieÃƒÅ¸lich lesenden Ziel auf den
     // Quellpuffer verweisen"): a destination port fed by exactly one
     // unscaled, non-monitor-tap edge whose source is guaranteed to render
     // before it every block (both widgets inside the safe, non-cyclic
@@ -1876,7 +1944,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     }
 
     // Subgraph pruning (plan section 3, P2: "Nur vom Ausgang oder einem
-    // aktiven Monitor benötigte Teilgraphen rendern"): a widget no edge-path
+    // aktiven Monitor benÃƒÂ¶tigte Teilgraphen rendern"): a widget no edge-path
     // leads to any audio/CV hardware sink or an active monitor tap
     // produces output nobody ever reads - Graph::renderBlock (see
     // WidgetSlot::needed) skips it, and its own outgoing edges, entirely.

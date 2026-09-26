@@ -1316,7 +1316,7 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .widget-instance[data-widget-type="drum-sequencer"] {
-  width: 680px;
+  width: 740px;
   max-width: calc(100vw - 40px);
 }
 
@@ -1345,13 +1345,8 @@ body.show-node-cpu .widget-cpu-badge {
   margin-left: -0.9rem;
 }
 
-.drum-sequencer-rate {
-  width: 120px;
-  margin-left: 0.4rem;
-}
-
+.drum-sequencer-rate,
 .drum-sequencer-pattern-select {
-  width: 90px;
   margin-left: 0.4rem;
 }
 
@@ -1453,13 +1448,14 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .drum-sequencer-outputs {
-  flex: 0 0 58px;
+  flex: 0 0 118px;
   padding: 0.25rem 0 0.3rem;
   border-left: 1px solid var(--card-border);
 }
 
 .drum-sequencer-output-header {
   height: 36px;
+  padding-left: 54px;
   text-align: center;
   color: #8290a3;
   font-size: 0.58rem;
@@ -1469,15 +1465,32 @@ body.show-node-cpu .widget-cpu-badge {
 
 .drum-sequencer-output-pair {
   height: 36px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  grid-template-rows: 17px 17px;
+  align-items: center;
   gap: 0;
   padding-right: 0.6rem;
 }
 
+.drum-sequencer-pulse-value {
+  grid-row: 1 / span 2;
+  padding: 0.2rem;
+  font-size: 0.65rem;
+  color: var(--text);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.drum-sequencer-pulse-value:hover,
+.drum-sequencer-pulse-value:focus-visible {
+  border-color: var(--accent);
+}
+
 .drum-sequencer-output-pair .drum-sequencer-port-out {
+  justify-content: flex-end;
   gap: 0.15rem;
   min-height: 17px;
 }
@@ -2083,6 +2096,28 @@ body.show-node-cpu .widget-cpu-badge {
   background: var(--ok);
   border-color: var(--ok);
   box-shadow: 0 0 6px var(--ok);
+}
+
+.midi-filter-body {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.5rem;
+}
+
+.midi-filter-body label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.midi-filter-body select {
+  min-width: 125px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.25rem;
 }
 
 .clock-bpm-label {

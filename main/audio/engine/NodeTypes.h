@@ -74,6 +74,8 @@ enum class NodeType : uint8_t
     MdaPiano,
     Wavetable,
     RgbLed,
+    CombFilter,
+    MidiFilter,
     Unknown,
 };
 
@@ -225,6 +227,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Spectrum;
     if (strcmp(typeStr, "midi-in") == 0)
         return NodeType::MidiIn;
+    if (strcmp(typeStr, "midi-filter") == 0)
+        return NodeType::MidiFilter;
     if (strcmp(typeStr, "midi-split") == 0)
         return NodeType::MidiSplit;
     if (strcmp(typeStr, "const") == 0)
@@ -255,6 +259,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Multiplexer;
     if (strcmp(typeStr, "curtis-filter") == 0)
         return NodeType::CurtisFilter;
+    if (strcmp(typeStr, "comb-filter") == 0)
+        return NodeType::CombFilter;
     if (strcmp(typeStr, "step-arpeggiator") == 0)
         return NodeType::StepArpeggiator;
     if (strcmp(typeStr, "drum-sequencer") == 0)

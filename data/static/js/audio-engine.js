@@ -2,6 +2,7 @@
 
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
 import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
+import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv, createCombFilterDsp } from "./comb-filter-core.js?v=20260926-comb-1";
 import { createReverbCore } from "./reverb-core.js?v=20260926-knob-2";
 
 function clampRange(value, lo, hi) {
@@ -3260,6 +3261,38 @@ export class AudioEngine {
           sourceLinkId: params.sourceLinkId,
         };
       }
+      case "comb-filter": {
+        const filterInput = ctx.createGain();
+        const inputMerger = ctx.createChannelMerger(7);
+        filterInput.connect(inputMerger, 0, 0);
+        const processor = ctx.createScriptProcessor(256, 7, 1);
+        inputMerger.connect(processor);
+        const filterOutput = ctx.createGain();
+        processor.connect(filterOutput);
+        const entry = { type, filterInput, inputMerger, processor, filterOutput,
+          seeds: [], controlConnectionCounts: Array(6).fill(0) };
+        COMB_FILTER_PORTS.forEach((port, index) => {
+          entry[port] = combFilterCv(params[port], COMB_FILTER_DEFAULTS[port]);
+          const seed = ctx.createConstantSource();
+          seed.offset.value = entry[port];
+          seed.connect(inputMerger, 0, index + 1);
+          seed.start();
+          entry.seeds.push(seed);
+        });
+        entry.dsp = createCombFilterDsp(entry, ctx.sampleRate);
+        processor.onaudioprocess = (event) => {
+          const inputs = Array.from({ length: 7 }, (_, i) => event.inputBuffer.getChannelData(i));
+          entry.dsp.render(inputs, event.outputBuffer.getChannelData(0));
+        };
+        entry.spectrumAnalyser = ctx.createAnalyser();
+        entry.spectrumAnalyser.fftSize = 2048;
+        entry.spectrumBuffer = new Uint8Array(entry.spectrumAnalyser.frequencyBinCount);
+        filterOutput.connect(entry.spectrumAnalyser);
+        const maxHz = Math.min(20000, ctx.sampleRate / 2 - 1);
+        entry.responseFreqs = Float32Array.from({ length: 1024 }, (_, i) => 20 * (maxHz / 20) ** (i / 1023));
+        entry.responseMag = new Float32Array(entry.responseFreqs.length);
+        return entry;
+      }
       case "filter":
       case "curtis-filter": {
         // filterInput -> merger ch0, cutoff CV -> ch1, resonance CV -> ch2 ->
@@ -4734,7 +4767,7 @@ export class AudioEngine {
     const wrapper = this.nodes.get(id);
     if (!wrapper) return null;
     const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
-    if (!entry || (entry.type !== "filter" && entry.type !== "curtis-filter")) return null;
+    if (!entry || !["filter", "curtis-filter", "comb-filter"].includes(entry.type)) return null;
     entry.spectrumAnalyser.getByteFrequencyData(entry.spectrumBuffer);
     return entry.spectrumBuffer;
   }
@@ -4745,8 +4778,8 @@ export class AudioEngine {
     const wrapper = this.nodes.get(id);
     if (!wrapper) return null;
     const entry = wrapper.voiced ? wrapper.instances[0] : wrapper;
-    if (!entry || (entry.type !== "filter" && entry.type !== "curtis-filter")) return null;
-    if (entry.coeffsDirty && !entry.cutoffCvActive && !entry.resonanceCvActive) {
+    if (!entry || !["filter", "curtis-filter", "comb-filter"].includes(entry.type)) return null;
+    if (entry.type !== "comb-filter" && entry.coeffsDirty && !entry.cutoffCvActive && !entry.resonanceCvActive) {
       // Not rendered yet since the last change - show the new settings.
       if (entry.type === "curtis-filter") {
         entry.dsp.updateCoefficients(entry.cutoff, entry.resonance, filterPolesFromSlope(entry.slope));
@@ -5546,6 +5579,14 @@ export class AudioEngine {
       case "linked-output-8":
         if (paramName === "sourceLinkId") entry.sourceLinkId = value;
         break;
+      case "comb-filter": {
+        const index = COMB_FILTER_PORTS.indexOf(paramName);
+        if (index >= 0) {
+          entry[paramName] = combFilterCv(value, COMB_FILTER_DEFAULTS[paramName]);
+          entry.seeds[index].offset.value = entry[paramName];
+        }
+        break;
+      }
       case "filter":
       case "curtis-filter": {
         // Everything is read per block by the processor (see createFilterDsp/
@@ -6175,7 +6216,7 @@ export class AudioEngine {
       const match = /^out([1-8])$/.exec(port);
       if (match) return entry.gainNodes?.[Number(match[1]) - 1] || null;
     }
-    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "out") {
+    if (["filter", "curtis-filter", "comb-filter"].includes(entry.type) && port === "out") {
       return entry.filterOutput || entry.filterNode;
     }
     if (entry.type.startsWith("esp-") && (port === "outL" || port === "outR")) return port === "outL" ? entry.outputL : entry.outputR;
@@ -6243,7 +6284,7 @@ export class AudioEngine {
     
     if (entry.type === "gain" && port === "amount") return entry.prescale;
     if (entry.type === "gain" && port === "curve") return entry.curveCv.prescale;
-    if ((entry.type === "filter" || entry.type === "curtis-filter") && port === "in") return entry.filterInput;
+    if (["filter", "curtis-filter", "comb-filter"].includes(entry.type) && port === "in") return entry.filterInput;
     
     
     
@@ -6369,6 +6410,10 @@ export class AudioEngine {
   }
 
   _connectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
+    if (toEntry?.type === "comb-filter" && COMB_FILTER_PORTS.includes(toPort)) {
+      this._wireCombFilterInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
+      return;
+    }
     if (toEntry && toEntry.type === "wave-folder") {
       const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
@@ -6651,6 +6696,10 @@ export class AudioEngine {
   }
 
   _disconnectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
+    if (toEntry?.type === "comb-filter" && COMB_FILTER_PORTS.includes(toPort)) {
+      this._wireCombFilterInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
+      return;
+    }
     if (toEntry && toEntry.type === "wave-folder") {
       const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
@@ -7052,6 +7101,22 @@ export class AudioEngine {
       }
     } catch (err) {
 
+    }
+  }
+
+  _wireCombFilterInput(entry, port, sourceNode, connecting) {
+    const index = COMB_FILTER_PORTS.indexOf(port);
+    if (!sourceNode || index < 0) return;
+    const seed = entry.seeds[index];
+    const count = entry.controlConnectionCounts[index];
+    if (connecting) {
+      sourceNode.connect(entry.inputMerger, 0, index + 1);
+      if (count === 0) seed.disconnect(entry.inputMerger, 0, index + 1);
+      entry.controlConnectionCounts[index] = count + 1;
+    } else {
+      sourceNode.disconnect(entry.inputMerger, 0, index + 1);
+      entry.controlConnectionCounts[index] = Math.max(0, count - 1);
+      if (count === 1) seed.connect(entry.inputMerger, 0, index + 1);
     }
   }
 

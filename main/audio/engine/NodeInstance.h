@@ -62,6 +62,17 @@ struct CurtisFilterState;
 }
 using nodes::curtisfilter::CurtisFilterState;
 
+namespace nodes::combfilter
+{
+struct CombFilterState;
+}
+using nodes::combfilter::CombFilterState;
+namespace nodes::midifilter
+{
+struct MidiFilterState;
+}
+using nodes::midifilter::MidiFilterState;
+
 namespace nodes::chorus
 {
 struct ChorusState;
@@ -111,7 +122,7 @@ struct NodeInstance
     // Which audio-input ports are a borrowed VIEW into another instance's
     // output buffer rather than an owned accumulator (bit i = inPorts[i]) -
     // set once in GraphBuilder::build()'s post-pass (plan section 3, P2:
-    // "Bei nur einer unskalierten Quelle und einem ausschließlich lesenden
+    // "Bei nur einer unskalierten Quelle und einem ausschlieÃŸlich lesenden
     // Ziel auf den Quellpuffer verweisen"), only for a port fed by exactly
     // one unscaled, non-monitor-tap edge whose source is guaranteed (by the
     // build's topological sort) to render before this instance every block.
@@ -296,6 +307,8 @@ struct NodeInstance
         DrumSequencerState *drumSequencer;
         FilterState *filter;
         CurtisFilterState *curtisFilter;
+        CombFilterState *combFilter;
+        MidiFilterState *midiFilter;
         EspEqState *espEq;
         GraphicEqState *graphicEq;
         KnobState *knob;

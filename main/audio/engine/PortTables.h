@@ -246,6 +246,15 @@ inline int audioInIndex(NodeType type, const char *portName)
         // Mirror of Switch: one audio input routed to whichever of "out1"/
         // "out2" is selected - see nodes/OutputSwitchNode.h.
         return is(portName, "in") ? 0 : -1;
+    case NodeType::CombFilter:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "time")) return 1;
+        if (is(portName, "feedback")) return 2;
+        if (is(portName, "mix")) return 3;
+        if (is(portName, "polarity")) return 4;
+        if (is(portName, "damping")) return 5;
+        if (is(portName, "gain")) return 6;
+        return -1;
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         // "cutoff"/"resonance" are real, but control-only audio-rate ports
@@ -627,6 +636,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "voices"))
             return 2;
         return -1;
+    case NodeType::MidiFilter:
     case NodeType::MidiSplit:
     case NodeType::Const:
     case NodeType::UpDownButton:
@@ -682,6 +692,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
         return is(portName, "out") ? 0 : -1;
     case NodeType::Filter:
     case NodeType::CurtisFilter:
+    case NodeType::CombFilter:
     case NodeType::Gain:
         return is(portName, "out") ? 0 : -1;
     case NodeType::EspEq:
@@ -815,6 +826,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Oscilloscope:
     case NodeType::Spectrum:
     case NodeType::MidiIn:
+    case NodeType::MidiFilter:
     case NodeType::MidiSplit:
     case NodeType::CvOut:
     case NodeType::DigitalOut:
@@ -846,6 +858,8 @@ inline int audioInPortCount(NodeType type)
         return 2;
     case NodeType::OutputSwitch:
         return 1; // "in"
+    case NodeType::CombFilter:
+        return 7; // audio + time/feedback/mix/polarity/damping/gain
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         return 6; // "in" + "filterType" + "slope" + "cutoff" + "resonance" + "global" (CV)
@@ -938,6 +952,7 @@ inline int audioInPortCount(NodeType type)
         return 1; // externally controlled layer selector
     case NodeType::MidiIn:
         return 3; // "glide" + "glideTime" + "voices" (CV)
+    case NodeType::MidiFilter:
     case NodeType::MidiSplit:
     case NodeType::Const:
     case NodeType::UpDownButton:
@@ -1068,6 +1083,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return portIdx == 0 || portIdx == 1; // "cv"/"amount" - same reasoning as Oscillator's pitchCv
     case NodeType::Gain:
         return portIdx == 3; // "global" - "amount"(1) and "curve"(2) both stay real audio-rate
+    case NodeType::CombFilter:
+        return portIdx >= 1 && portIdx <= 5; // gain stays audio-rate
     case NodeType::Filter:
     case NodeType::CurtisFilter:
         return portIdx >= 1; // "filterType"+"slope"+"cutoff"+"resonance"+"global"

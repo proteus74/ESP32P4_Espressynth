@@ -52,7 +52,7 @@ struct WidgetSlot
     // reachability post-pass proves no edge-path leads from this widget to
     // any audio/CV hardware sink or an active monitor tap - see that pass's comment
     // (plan section 3, P2: "Nur vom Ausgang oder einem aktiven Monitor
-    // benötigte Teilgraphen rendern"). Graph::renderBlock skips a widget
+    // benÃ¶tigte Teilgraphen rendern"). Graph::renderBlock skips a widget
     // entirely (render + its own outgoing edges) when this is false; safe
     // by construction, since a widget only ends up false when NONE of its
     // outgoing edges lead anywhere needed either.
@@ -256,7 +256,7 @@ public:
     // edges into downstream instances - previously entirely unmeasured (see
     // documentation/native-synth-optimization-plan-2026-09-09.md section 7:
     // "Eingangspuffer vorbereiten und ausgehende Verbindungen summieren
-    // liegen außerhalb"). Same rotation, same O(1)-per-block cost - just two
+    // liegen auÃŸerhalb"). Same rotation, same O(1)-per-block cost - just two
     // timer-read pairs for the profiled widget instead of one.
     float widgetLoadPercent[synth::kMaxWidgets] = {};
     float widgetEdgeLoadPercent[synth::kMaxWidgets] = {};
@@ -606,7 +606,11 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::MidiPitchCv:
             if (route.targetPort >= 0 && noteOn)
             {
-                const MidiInState &midi = graph.instances[graph.widgets[sourceWidget].instanceBase].midiIn;
+                const auto &source = graph.widgets[sourceWidget];
+                const auto &sourceInst = graph.instances[source.instanceBase];
+                const MidiInState defaults;
+                const MidiInState &midi = source.type == NodeType::MidiIn ? sourceInst.midiIn :
+                    source.type == NodeType::MidiFilter ? sourceInst.midiFilter->midi : defaults;
                 const float targetCv = cv::noteToVoltage(static_cast<float>(note));
                 target.midiPitchRampPort = route.targetPort;
                 const float glideSeconds = midi.glideTime < 0.0f ? 0.0f : (midi.glideTime > 2.0f ? 2.0f : midi.glideTime);
@@ -1058,6 +1062,51 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     }
 }
 
+inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &event,
+                           bool *filtered, UsbMidiEvent *filterEvents, bool *path)
+{
+    if (path[source]) return;
+    path[source] = true;
+    const bool isNote = event.codeIndex == 8 || event.codeIndex == 9 || event.codeIndex == 10;
+    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
+    {
+        const auto &route = graph.controlRoutes[r];
+        if (route.sourceWidget != source) continue;
+        const auto &target = graph.widgets[route.targetWidget];
+        if (route.kind != ControlRoute::Kind::MidiRaw &&
+            !(route.kind == ControlRoute::Kind::MidiGate && target.type == NodeType::MidiSplit)) continue;
+        UsbMidiEvent forwarded = event;
+        if (graph.widgets[source].type == NodeType::MidiSplit)
+        {
+            const auto &split = graph.instances[graph.widgets[source].instanceBase].midiSplit;
+            if (route.side >= split.zoneCount) continue;
+            const auto &zone = split.zones[route.side];
+            if (isNote)
+            {
+                if (event.data1 < zone.fromNote || event.data1 > zone.toNote) continue;
+                int note = event.data1 + zone.octaveTranspose * 12;
+                forwarded.data1 = static_cast<uint8_t>(note < 0 ? 0 : note > 127 ? 127 : note);
+            }
+        }
+        auto &inst = graph.instances[target.instanceBase];
+        if (target.type == NodeType::MidiFilter)
+        {
+            if (filtered[route.targetWidget] || path[route.targetWidget]) continue;
+            if (!inst.midiFilter->accepts(forwarded.status, forwarded.data1, forwarded.data2)) continue;
+            filtered[route.targetWidget] = true;
+            filterEvents[route.targetWidget] = forwarded;
+            deliverRawMidi(graph, route.targetWidget, forwarded, filtered, filterEvents, path);
+        }
+        else if (target.type == NodeType::MidiSplit)
+            deliverRawMidi(graph, route.targetWidget, forwarded, filtered, filterEvents, path);
+        else if (target.type == NodeType::SoundFontPlayer)
+            soundfont::handleMidi(inst.soundFontPlayer, forwarded);
+        else if (target.type == NodeType::MdaPiano)
+            nodes::mdapiano::handleMidi(inst.mdaPiano, forwarded);
+    }
+    path[source] = false;
+}
+
 inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapshot *debugOut)
 {
     if (debugOut != nullptr && event.codeIndex == 0xB)
@@ -1065,26 +1114,15 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
         *debugOut = {};
     }
 
-    // Direct MIDI cable: each wired MidiIn->SoundFontPlayer route delivers
-    // complete channel messages straight to that SoundFontPlayer's own
-    // synth (a preset can have several, see soundfont::sweepFileCache() -
-    // TinySoundFont owns polyphony independently per instance). Bypasses
-    // graph voice allocation entirely.
-    for (uint16_t r = 0; r < controlRouteCount; ++r)
+    bool filtered[synth::kMaxWidgets] = {};
+    UsbMidiEvent filterEvents[synth::kMaxWidgets] = {};
+    bool path[synth::kMaxWidgets] = {};
+    for (uint16_t w = 0; w < widgetCount; ++w)
     {
-        const ControlRoute &route = controlRoutes[r];
-        if (route.kind != ControlRoute::Kind::MidiRaw) continue;
-        const WidgetSlot &source = widgets[route.sourceWidget];
-        if (source.type != NodeType::MidiIn) continue;
-        const MidiInState &midi = instances[source.instanceBase].midiIn;
-        const int eventChannel = event.status & 0x0F;
-        if (midi.channel >= 0 && midi.channel != eventChannel) continue;
-        WidgetSlot &target = widgets[route.targetWidget];
-        NodeInstance &targetInstance = instances[target.instanceBase];
-        if (target.type == NodeType::SoundFontPlayer)
-            soundfont::handleMidi(targetInstance.soundFontPlayer, event);
-        else if (target.type == NodeType::MdaPiano)
-            nodes::mdapiano::handleMidi(targetInstance.mdaPiano, event);
+        if (widgets[w].type != NodeType::MidiIn) continue;
+        const auto &m = instances[widgets[w].instanceBase].midiIn;
+        if (event.status < 0xF0 && m.channel >= 0 && m.channel != (event.status & 15)) continue;
+        deliverRawMidi(*this, w, event, filtered, filterEvents, path);
     }
 
     // Control Change: knob CC-learn/mapping, entirely independent of note
@@ -1228,8 +1266,22 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                 // selectIn2 above, just picking the output side instead.
                 os.selectOut2 = ccValue >= 64;
             }
-            else if (widgets[w].type == NodeType::MidiIn)
+            else if (widgets[w].type == NodeType::MidiIn ||
+                     (widgets[w].type == NodeType::MidiFilter && filtered[w]))
             {
+                if (widgets[w].type == NodeType::MidiFilter && (ccNumber == 120 || ccNumber == 123))
+                {
+                    auto &m = instances[widgets[w].instanceBase].midiFilter->midi;
+                    auto &allocator = voiceAllocators[w];
+                    for (uint8_t v = 0; v < allocator.voiceCount(); ++v)
+                    {
+                        const int16_t heldNote = allocator.currentNote(v);
+                        if (heldNote >= 0) releaseVoiceGate(*this, w, v, static_cast<uint8_t>(heldNote));
+                    }
+                    allocator.configure(m.voices, m.overflowMode);
+                    m.sustainPedalDown = false;
+                    continue;
+                }
                 // Sustain pedal, CC64: >=64 down / <64 up, same convention
                 // already used by Button's CC-learn above. Always active per
                 // MidiIn, no enable/disable toggle (see plan).
@@ -1238,7 +1290,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                     continue;
                 }
                 NodeInstance &midiInst = instances[widgets[w].instanceBase];
-                MidiInState &m = midiInst.midiIn;
+                MidiInState &m = widgets[w].type == NodeType::MidiFilter ? midiInst.midiFilter->midi : midiInst.midiIn;
                 if (m.channel >= 0 && static_cast<uint8_t>(m.channel) != ccChannel0)
                 {
                     continue;
@@ -1354,12 +1406,14 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
 
     for (uint16_t w = 0; w < widgetCount; ++w)
     {
-        if (widgets[w].type != NodeType::MidiIn)
+        if (widgets[w].type != NodeType::MidiIn && !(widgets[w].type == NodeType::MidiFilter && filtered[w]))
         {
             continue;
         }
         NodeInstance &midiInst = instances[widgets[w].instanceBase];
-        const int8_t midiChannel = midiInst.midiIn.channel;
+        MidiInState &midi = widgets[w].type == NodeType::MidiFilter ? midiInst.midiFilter->midi : midiInst.midiIn;
+        const uint8_t sourceNote = widgets[w].type == NodeType::MidiFilter ? filterEvents[w].data1 : note;
+        const int8_t midiChannel = midi.channel;
         if (midiChannel >= 0 && midiChannel != static_cast<int8_t>(eventChannel0))
         {
             continue;
@@ -1368,7 +1422,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
         VoiceAllocator &alloc = voiceAllocators[w];
         const int16_t previousNote = alloc.currentNote(0);
         const int8_t voiceIdx =
-            noteOn ? alloc.noteOn(note, voiceStillSounding) : alloc.noteOff(note, midiInst.midiIn.sustainPedalDown);
+            noteOn ? alloc.noteOn(sourceNote, voiceStillSounding) : alloc.noteOff(sourceNote, midi.sustainPedalDown);
         if (voiceIdx < 0)
         {
             continue;
@@ -1387,12 +1441,12 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
             }
             else if (fallbackNote < 0)
             {
-                deliverNoteControlRoutes(*this, w, 0, note, false, velocity, /*side=*/-1);
+                deliverNoteControlRoutes(*this, w, 0, sourceNote, false, velocity, /*side=*/-1);
             }
             continue;
         }
 
-        deliverNoteControlRoutes(*this, w, static_cast<uint8_t>(voiceIdx), note, noteOn, velocity, /*side=*/-1);
+        deliverNoteControlRoutes(*this, w, static_cast<uint8_t>(voiceIdx), sourceNote, noteOn, velocity, /*side=*/-1);
     }
 }
 
@@ -1592,6 +1646,13 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         if (slot.type == NodeType::MidiIn && strcmp(key, "pitchBendQuantizeCents") == 0 && cJSON_IsBool(item))
         {
             instances[slot.instanceBase].midiIn.pitchBendQuantizeCents = cJSON_IsTrue(item);
+            continue;
+        }
+
+        if (slot.type == NodeType::DrumSequencer && strcmp(key, "trackPulseMs") == 0 && cJSON_IsArray(item))
+        {
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                nodes::drumsequencer::applyTrackPulseMs(item, instances[slot.instanceBase + v].drumSequencer->trackPulseMs);
             continue;
         }
 
@@ -2306,6 +2367,13 @@ inline void Graph::destroy()
             break;
         case NodeType::Chorus:
             nodes::chorus::destroy(inst);
+            break;
+        case NodeType::MidiFilter:
+            heap_caps_free(inst.midiFilter);
+            inst.midiFilter = nullptr;
+            break;
+        case NodeType::CombFilter:
+            nodes::combfilter::destroy(inst);
             break;
         case NodeType::Delay:
             nodes::delay::destroy(inst);

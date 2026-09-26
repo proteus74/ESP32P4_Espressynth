@@ -28,6 +28,7 @@
 #include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/CurtisFilterNode.h"
+#include "nodes/CombFilterNode.h"
 #include "nodes/FmOscillatorNode.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
@@ -37,6 +38,7 @@
 #include "nodes/LinkNodes.h"
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiSplitNode.h"
+#include "nodes/MidiFilterNode.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
@@ -86,6 +88,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::FrequencyDivider:
         return nodes::arithmetic::setParamFrequencyDivider(inst, name, value);
+
+    case NodeType::MidiFilter:
+        return nodes::midifilter::setParam(inst, name, value);
 
     case NodeType::MidiSplit:
         return nodes::midisplit::setParam(inst, name, value);
@@ -214,6 +219,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Chorus:
         return nodes::chorus::setParam(inst, name, value);
+
+    case NodeType::CombFilter:
+        return nodes::combfilter::setParam(inst, name, value);
 
     case NodeType::Delay:
         return nodes::delay::setParam(inst, name, value);

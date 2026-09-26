@@ -102,6 +102,8 @@ struct WidgetParams
     // filterGlobal is the "global" port's UI-toggle fallback (see
     // FilterState::global), same pattern as gainGlobal.
     bool filterGlobal = false;
+    // comb-filter: raw 0-10V time/feedback/mix/polarity/damping/gain.
+    float combCv[6] = {0.5f, 5.0f, 5.0f, 0.0f, 10.0f, 10.0f};
     // esp-eq: one stereo band, filter type switchable (peak/shelf/hi-lo-pass)
     EqFilterKind eqFilterType = EqFilterKind::Peak;
     float eqFrequency = 1000.0f;
@@ -225,6 +227,7 @@ struct WidgetParams
     float glideTime = 0.0f;
     float midiInPitchBendRangeCents = 200.0f;
     bool midiInPitchBendQuantizeCents = false;
+    int16_t midiFilterNote = -1;
     // midi-split
     uint8_t midiSplitZoneCount = 0; // starts empty - no zone until the user adds one
     int8_t midiSplitZoneFrom[4] = {0, 0, 0, 0};
@@ -380,7 +383,7 @@ struct WidgetParams
     uint8_t drumPatternCount = 1;
     uint8_t drumActivePatternIndex = 0;
     bool drumSwitchAtEnd = false;
-    float drumPulseMs = 10.0f;
+    float drumTrackPulseMs[synth::kDrumSequencerMaxTracks] = {50, 50, 50, 50, 50, 50, 50, 50};
     float drumClockCvVolts = 0.0f;
     float drumClockMaxBpm = 120.0f;
     bool drumClockRoundBpm = false;

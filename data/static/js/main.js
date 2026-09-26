@@ -1,4 +1,6 @@
-import { AudioEngine } from "./audio-engine.js?v=20260926-knob-2";
+import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
+import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
+import { AudioEngine } from "./audio-engine.js?v=20260927-drum-pulse-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -1143,6 +1145,18 @@ const WIDGET_TYPES = {
       { id: "gate", label: "Gate" },
     ],
   },
+  "midi-filter": {
+    label: "MIDI-Filter",
+    icon: "🎹",
+    inputs: [{ id: "midi", label: "MIDI-In" }],
+    outputs: [
+      { id: "midi", label: "MIDI-Out" },
+      { id: "pitchCv", label: "Pitch" },
+      { id: "note", label: "Note (0–127)" },
+      { id: "velocity", label: "Velocity" },
+      { id: "gate", label: "Gate" },
+    ],
+  },
   "midi-split": {
     label: "Midi-Split",
     icon: "✂️",
@@ -1565,6 +1579,20 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
+  "comb-filter": {
+    label: "Comb Filter",
+    icon: "🎛️",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "time", label: "Delay" },
+      { id: "feedback", label: "Feedback" },
+      { id: "mix", label: "Mix" },
+      { id: "polarity", label: "Feedback ±" },
+      { id: "damping", label: "Damping" },
+      { id: "gain", label: "Output Gain" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   "curtis-filter": {
     label: "CEM3320 Filter",
     icon: "🎚️",
@@ -1917,12 +1945,12 @@ const WIDGET_TYPES = {
 
 
 const WIDGET_CATEGORIES = [
-  { label: "Midi", types: ["midi-in", "midi-split"] },
+  { label: "Midi", types: ["midi-in", "midi-split", "midi-filter"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["lfo", "wavetable", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "sample-hold", "burst-generator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
-  { label: "Filter", types: ["filter", "curtis-filter", "esp-eq", "graphic-eq"] },
+  { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
@@ -1986,6 +2014,7 @@ const AUDIO_PORTS = {
   
   filter: { in: ["in", "cutoff", "resonance"], out: ["out"] },
   "curtis-filter": { in: ["in", "cutoff", "resonance"], out: ["out"] },
+  "comb-filter": { in: ["in", ...COMB_FILTER_PORTS], out: ["out"] },
   "esp-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
   "graphic-eq": { in: ["inL", "inR"], out: ["outL", "outR"] },
 
@@ -2338,7 +2367,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"];
+const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"];
 
 
 
@@ -2804,7 +2833,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player", "lfo", "wavetable"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player", "lfo", "wavetable", "comb-filter"]);
 
 // LFO and Wavetable share one implementation (state in lfoStates, tickLfo,
 // reset/one-shot/global handling, rate settings dialog); state.wavetable
@@ -3191,6 +3220,38 @@ function createWidget(type, label, x, y, forcedId) {
     voiceSlotsLabel.className = "midi-in-voice-slots hidden";
     voiceSlotsLabel.dataset.role = "midi-in-voice-slots";
     body.appendChild(voiceSlotsLabel);
+    el.appendChild(body);
+  }
+
+  if (type === "midi-filter") {
+    midiFilterStates.set(id, createMidiFilterState());
+    midiVoiceSlotStates.set(id, {
+      slots: [{ note: null, heldSince: 0, held: false }], holdCounter: 0,
+      pedalDown: false, pendingRelease: false, monoHeldNotes: new Map(), monoCurrentNote: null,
+    });
+    const body = document.createElement("div");
+    body.className = "widget-instance-body midi-filter-body";
+    for (const [parameter, title, maximum] of [["channel", "Kanal", 15], ["note", "Note", 127]]) {
+      const label = document.createElement("label");
+      label.textContent = title;
+      const select = document.createElement("select");
+      select.dataset.role = `midi-filter-${parameter}`;
+      select.add(new Option("Alle", "-1"));
+      for (let value = 0; value <= maximum; value += 1) {
+        const name = parameter === "channel" ? String(value + 1) :
+          `${value} · ${["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"][value % 12]}${Math.floor(value / 12) - 1}`;
+        select.add(new Option(name, String(value)));
+      }
+      select.value = "-1";
+      select.addEventListener("change", () => {
+        pushHistorySnapshot();
+        const state = midiFilterStates.get(id);
+        state[parameter] = midiFilterCriterion(select.value, maximum);
+        sendLiveParamUpdate(id, { [parameter]: state[parameter] });
+      });
+      label.appendChild(select);
+      body.appendChild(label);
+    }
     el.appendChild(body);
   }
 
@@ -3616,7 +3677,7 @@ function createWidget(type, label, x, y, forcedId) {
       activePatternIndex: 0,
       pendingPatternIndex: -1,
       switchAtEnd: false,
-      pulseMs: 10,
+      trackPulseMs: new Array(DRUM_MAX_TRACKS).fill(50),
       clockCvVolts: 0,
       clockMaxBpm: 120,
       clockRoundBpm: false,
@@ -3774,6 +3835,11 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "gain") {
     gainStates.set(id, { amount: CV_MAX_VOLTS, curve: CV_MAX_VOLTS / 2, global: false });
     audioEngine.createNode(id, "gain", { amount: CV_MAX_VOLTS, curve: CV_MAX_VOLTS / 2 });
+  }
+
+  if (type === "comb-filter") {
+    combFilterStates.set(id, { ...COMB_FILTER_DEFAULTS });
+    audioEngine.createNode(id, type, { ...COMB_FILTER_DEFAULTS });
   }
 
   if (type === "filter" || type === "curtis-filter") {
@@ -4121,11 +4187,13 @@ function createWidget(type, label, x, y, forcedId) {
   if (isLinkedIoType(type)) {
     const body = document.createElement("div");
     body.className = "widget-instance-body linked-io-body";
-    const groupName = document.createElement("div");
-    groupName.className = "linked-io-group-name";
-    groupName.dataset.role = "linked-io-group-name";
-    groupName.textContent = isLinkedInputType(type) ? "(unnamed)" : "Not connected";
-    body.appendChild(groupName);
+    if (isLinkedOutputType(type)) {
+      const status = document.createElement("div");
+      status.className = "linked-io-group-name";
+      status.dataset.role = "linked-io-group-name";
+      status.textContent = "Not connected";
+      body.appendChild(status);
+    }
     el.appendChild(body);
   }
 
@@ -5091,6 +5159,50 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = "lfo-morph-value";
         valueSpan.textContent = `${formatNumber(state.morph)} V`;
         row.appendChild(valueSpan);
+      }
+      if (type === "comb-filter" && COMB_FILTER_PORTS.includes(port.id)) {
+        const state = combFilterStates.get(id);
+        const value = document.createElement("span");
+        value.className = "port-value";
+        value.dataset.role = `comb-${port.id}-value`;
+        value.textContent = formatCombFilterValue(state, port.id);
+        if (port.id === "polarity") {
+          const switchLabel = document.createElement("label");
+          switchLabel.className = "switch";
+          const toggle = document.createElement("input");
+          toggle.type = "checkbox";
+          toggle.checked = state.polarity >= 5;
+          toggle.dataset.role = "comb-polarity-switch";
+          toggle.setAttribute("aria-label", "Negative feedback polarity");
+          toggle.addEventListener("mousedown", (e) => e.stopPropagation());
+          toggle.addEventListener("click", (e) => e.stopPropagation());
+          toggle.addEventListener("change", () => {
+            deliverToWidget(id, "polarity", toggle.checked ? 10 : 0);
+            markDirty();
+          });
+          const track = document.createElement("span");
+          track.className = "switch-track";
+          switchLabel.append(toggle, track);
+          row.insertBefore(switchLabel, row.querySelector(".port-label"));
+        } else {
+          const slider = document.createElement("input");
+          slider.type = "range";
+          slider.className = "port-slider";
+          slider.min = "0";
+          slider.max = "10";
+          slider.step = "0.01";
+          slider.value = String(state[port.id]);
+          slider.dataset.role = `comb-${port.id}-slider`;
+          slider.setAttribute("aria-label", port.label);
+          slider.addEventListener("mousedown", (e) => e.stopPropagation());
+          slider.addEventListener("click", (e) => e.stopPropagation());
+          slider.addEventListener("input", () => {
+            deliverToWidget(id, port.id, Number(slider.value));
+            markDirty();
+          });
+          row.appendChild(slider);
+        }
+        row.appendChild(value);
       }
       if ((type === "filter" || type === "curtis-filter") && (port.id === "cutoff" || port.id === "resonance")) {
         const filterState = filterStates.get(id);
@@ -6062,7 +6174,7 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(scopeBody);
   }
 
-  if (type === "filter" || type === "curtis-filter") {
+  if (["filter", "curtis-filter", "comb-filter"].includes(type)) {
     const scopeBody = document.createElement("div");
     scopeBody.className = "widget-instance-body spectrum-body";
 
@@ -6131,6 +6243,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "envelope-follower") updateEnvelopeFollowerVisual(id);
   if (type === "burst-generator") updateBurstGeneratorVisual(id);
   if (type === "pan") updatePanVisual(id);
+  if (type === "comb-filter") updateCombFilterVisual(id);
   // Main Gain/Volume control (see MAIN_GAIN_WIDGET_TYPES/.gain-control-row above) always sits
   // last in the widget, below every other control - regardless of which code path built it
   // (a plain port row from the def.inputs loop, or the bespoke audio-out-family volume row).
@@ -6156,6 +6269,7 @@ function removeWidget(id, force = false) {
   midiInStates.delete(id);
   midiVoiceSlotStates.delete(id);
   midiSplitStates.delete(id);
+  midiFilterStates.delete(id);
   multiplierStates.delete(id);
   adderStates.delete(id);
   divideStates.delete(id);
@@ -6181,6 +6295,7 @@ function removeWidget(id, force = false) {
   linkedOutputStates.delete(id);
   gainStates.delete(id);
   filterStates.delete(id);
+  combFilterStates.delete(id);
   espEffectStates.delete(id);
   mixerStates.delete(id);
   multiplexerStates.delete(id);
@@ -9037,6 +9152,7 @@ document.getElementById("linkedOutputSettingsSave").addEventListener("click", ()
 
 
 const midiInStates = new Map();
+const midiFilterStates = new Map();
 
 
 
@@ -10400,6 +10516,7 @@ function refreshAllDualModeWidgets() {
   
   gainStates.forEach((_, id) => updateGainVisual(id));
   filterStates.forEach((_, id) => updateFilterVisual(id));
+  combFilterStates.forEach((_, id) => updateCombFilterVisual(id));
   multiplexerStates.forEach((_, id) => updateMultiplexerVisual(id));
   switchStates.forEach((_, id) => updateSwitchVisual(id));
   
@@ -10550,7 +10667,7 @@ function traverseVoiceSet(midiInId) {
     }
 
     const outputs = (WIDGET_TYPES[type] && WIDGET_TYPES[type].outputs) || [];
-    const isBoundary = LINK_WIDGET_TYPES.includes(type) || outputs.length === 0 || type === "soundfont-player";
+    const isBoundary = LINK_WIDGET_TYPES.includes(type) || (outputs.length === 0 && type !== "midi-split") || type === "soundfont-player";
     if (isBoundary) continue;
 
     visited.add(widgetId);
@@ -10583,6 +10700,11 @@ function refreshVoiceGroups() {
         desiredVoiceCounts.set(widgetId, Math.max(current, state.voices));
       });
     }
+  });
+
+  midiFilterStates.forEach((state, id) => {
+    state.voices = desiredVoiceCounts.get(id) || 1;
+    resizeVoiceSlots(id, state.voices);
   });
 
   document.querySelectorAll(".widget-instance").forEach((el) => {
@@ -12546,14 +12668,18 @@ function tickAudioMonitors() {
     drawSpectrum(canvas, spectrum);
     drawEqCurve(canvas, response);
   });
-  document.querySelectorAll('.widget-instance[data-widget-type="filter"], .widget-instance[data-widget-type="curtis-filter"]').forEach((el) => {
+  document.querySelectorAll('.widget-instance[data-widget-type="filter"], .widget-instance[data-widget-type="curtis-filter"], .widget-instance[data-widget-type="comb-filter"]').forEach((el) => {
     const canvas = el.querySelector('[data-role="filter-spectrum-canvas"]');
     if (!canvas) return;
     const spectrum = audioEngine.getFilterSpectrum(el.id);
     const response = audioEngine.getFilterFrequencyResponse(el.id);
     if (!spectrum || !response) return;
-    drawSpectrum(canvas, spectrum);
-    drawEqCurve(canvas, response);
+    if (el.dataset.widgetType === "comb-filter") {
+      drawGraphicEqPreview(canvas, spectrum, response, [], audioEngine.ctx.sampleRate);
+    } else {
+      drawSpectrum(canvas, spectrum);
+      drawEqCurve(canvas, response);
+    }
   });
   document.querySelectorAll('.widget-instance[data-widget-type="graphic-eq"]').forEach((el) => {
     const canvas = el.querySelector('[data-role="graphic-eq-spectrum-canvas"]');
@@ -12610,7 +12736,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 
 
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
-  "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter",
+  "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter", "comb-filter",
   "esp-eq", "graphic-eq",
   "mixer", "bitcrusher", "wave-folder", "pan", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
@@ -13081,7 +13207,6 @@ const DRUM_MAX_PATTERNS = 8;
 const drumSequencerSettingsOverlay = document.getElementById("drumSequencerSettingsOverlay");
 const drumSequencerStepCountInput = document.getElementById("drumSequencerStepCountInput");
 const drumSequencerTrackCountInput = document.getElementById("drumSequencerTrackCountInput");
-const drumSequencerPulseMsInput = document.getElementById("drumSequencerPulseMsInput");
 const drumSequencerClockMaxBpmInput = document.getElementById("drumSequencerClockMaxBpmInput");
 const drumSequencerClockRoundBpmInput = document.getElementById("drumSequencerClockRoundBpmInput");
 let pendingDrumSequencerId = null;
@@ -13092,7 +13217,6 @@ function openDrumSequencerSettings(widgetId) {
   pendingDrumSequencerId = widgetId;
   drumSequencerStepCountInput.value = String(state.stepCount);
   drumSequencerTrackCountInput.value = String(state.trackCount);
-  drumSequencerPulseMsInput.value = String(state.pulseMs);
   drumSequencerClockMaxBpmInput.value = String(state.clockMaxBpm);
   drumSequencerClockRoundBpmInput.checked = state.clockRoundBpm === true;
   drumSequencerSettingsOverlay.classList.remove("hidden");
@@ -13145,9 +13269,6 @@ document.getElementById("drumSequencerSettingsSave").addEventListener("click", (
     }
     if (structural) reshapeDrumSequencer(state, stepCount, trackCount);
 
-    let pulseMs = parseFloatFlexible(drumSequencerPulseMsInput.value);
-    if (!Number.isFinite(pulseMs) || pulseMs <= 0) pulseMs = 10;
-    state.pulseMs = clamp(pulseMs, 0.1, 60000);
     let maxBpm = parseFloatFlexible(drumSequencerClockMaxBpmInput.value);
     if (!Number.isFinite(maxBpm) || maxBpm <= 0) maxBpm = 120;
     state.clockMaxBpm = clamp(maxBpm, 0.1, 10000);
@@ -13162,7 +13283,6 @@ document.getElementById("drumSequencerSettingsSave").addEventListener("click", (
       updateDrumSequencerVisual(widgetId);
       drumSequencerRestartInternalClock(widgetId);
       sendLiveParamUpdate(widgetId, {
-        pulseMs: state.pulseMs,
         clockMaxBpm: state.clockMaxBpm,
         clockRoundBpm: state.clockRoundBpm ? 1 : 0,
       });
@@ -13624,8 +13744,6 @@ function updateLinkedInputVisual(widgetId) {
   const el = document.getElementById(widgetId);
   const state = linkedInputStates.get(widgetId);
   if (!el || !state) return;
-  const groupName = el.querySelector('[data-role="linked-io-group-name"]');
-  if (groupName) groupName.textContent = state.linkName || "(unbenannt)";
   el.querySelectorAll(".port-row-in").forEach((row, index) => {
     const label = row.querySelector(".linked-io-port-label");
     if (label) label.textContent = state.labels?.[index] || String(index + 1);
@@ -13650,17 +13768,9 @@ function updateLinkedOutputVisual(widgetId) {
   }
   const sourceEntry = [...linkedInputStates.entries()].find(([, source]) => source.linkId === state.sourceLinkId);
   if (sourceEntry) {
-    const [sourceWidgetId, source] = sourceEntry;
-    const linkName = source.linkName || source.linkId;
-    const pageName = pageTitleForWidget(sourceWidgetId);
-    const pagePart = document.createElement("span");
-    pagePart.className = "linked-io-page-name";
-    pagePart.textContent = pageName;
-    const linkPart = document.createElement("span");
-    linkPart.className = "linked-io-link-name";
-    linkPart.textContent = ` → ${linkName}`;
-    status.replaceChildren(pagePart, linkPart);
-    status.title = `${pageName} → ${linkName}`;
+    const [, source] = sourceEntry;
+    status.textContent = "";
+    status.removeAttribute("title");
     status.classList.remove("missing");
     portLabels.forEach((label, index) => { label.textContent = source.labels?.[index] || String(index + 1); });
   } else {
@@ -13886,6 +13996,35 @@ function updateGainVisual(widgetId) {
 
 
 const filterStates = new Map();
+const combFilterStates = new Map();
+
+function formatCombFilterValue(state, port) {
+  const value = state[port];
+  if (port === "time") return `${formatNumber(value * 10)} ms`;
+  if (port === "feedback") return `${formatNumber(value * 9.5)} %`;
+  if (port === "mix") return `${formatNumber(value * 10)} %`;
+  if (port === "polarity") return value >= 5 ? "−" : "+";
+  if (port === "damping") return value >= 10 ? "Off" : `${Math.round(20 * 1000 ** (value / 10))} Hz`;
+  return `${formatNumber(value)} V`;
+}
+
+function updateCombFilterVisual(widgetId) {
+  const state = combFilterStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  COMB_FILTER_PORTS.forEach((port) => {
+    const slider = el.querySelector(`[data-role="comb-${port}-slider"]`);
+    const value = el.querySelector(`[data-role="comb-${port}-value"]`);
+    if (slider) slider.value = String(state[port]);
+    if (value) value.textContent = formatCombFilterValue(state, port);
+  });
+  const toggle = el.querySelector('[data-role="comb-polarity-switch"]');
+  if (toggle) {
+    toggle.checked = state.polarity >= 5;
+    toggle.disabled = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "polarity");
+  }
+}
+
 // graphic-eq's non-CV scalars - band center frequencies (settings-dialog
 // only, NOT CV-controllable) and the final output trim (raw 0-10V CV, see
 // the "gain" port slider). Per-band GAIN lives in effectCvStates instead
@@ -16080,7 +16219,7 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   patternSlider.min = "0";
   patternSlider.max = String(Math.max(0, state.patterns.length - 1));
   patternSlider.step = "1";
-  patternSlider.className = "drum-sequencer-pattern-select";
+  patternSlider.className = "port-slider drum-sequencer-pattern-select";
   patternSlider.dataset.role = "drum-sequencer-pattern-select";
   patternSlider.addEventListener("mousedown", (e) => e.stopPropagation());
   patternSlider.addEventListener("input", () => setDrumSequencerActivePattern(widgetId, Number(patternSlider.value)));
@@ -16097,7 +16236,7 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   rateSlider.min = "0";
   rateSlider.max = String(CV_MAX_VOLTS);
   rateSlider.step = "0.05";
-  rateSlider.className = "drum-sequencer-rate";
+  rateSlider.className = "port-slider drum-sequencer-rate";
   rateSlider.dataset.role = "drum-sequencer-rate";
   rateSlider.addEventListener("mousedown", (e) => e.stopPropagation());
   rateSlider.addEventListener("input", () => setDrumSequencerRate(widgetId, Number(rateSlider.value)));
@@ -16133,6 +16272,8 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   const grid = document.createElement("div");
   grid.className = "drum-sequencer-grid";
   const totalSteps = drumSequencerTotalSteps(state);
+  const widget = document.getElementById(widgetId);
+  if (widget) widget.style.width = `${164 + totalSteps * 36}px`;
   grid.style.gridTemplateColumns = `40px repeat(${totalSteps}, 36px)`;
 
   const stepCorner = document.createElement("span");
@@ -16184,6 +16325,25 @@ function renderDrumSequencerPorts(widgetId, portsEl) {
   for (let track = 1; track <= state.trackCount; track += 1) {
     const row = document.createElement("div");
     row.className = "drum-sequencer-output-pair";
+    const pulseValue = document.createElement("button");
+    pulseValue.type = "button";
+    pulseValue.className = "drum-sequencer-pulse-value";
+    pulseValue.dataset.drumPulseTrack = String(track - 1);
+    pulseValue.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openNumericValuePopup({
+        label: `Track ${track} Trigger Pulse`, unit: "ms", value: state.trackPulseMs[track - 1],
+        min: 0.1, max: 60000,
+        onSave: (value) => {
+          pushHistorySnapshot();
+          state.trackPulseMs[track - 1] = drumSequencerPulseMs(value);
+          updateDrumSequencerVisual(widgetId);
+          sendLiveParamUpdate(widgetId, { trackPulseMs: [...state.trackPulseMs] });
+          markDirty();
+        },
+      });
+    });
+    row.appendChild(pulseValue);
     row.appendChild(buildDrumSequencerPort(widgetId, { id: `trigger${track}`, label: "T" }, "out"));
     row.appendChild(buildDrumSequencerPort(widgetId, { id: `velocity${track}`, label: "V" }, "out"));
     outputs.appendChild(row);
@@ -16218,6 +16378,12 @@ function updateDrumSequencerVisual(widgetId) {
     updateDrumSequencerCell(widgetId, index, cell);
   });
   updateDrumSequencerPlayhead(widgetId);
+  el.querySelectorAll("[data-drum-pulse-track]").forEach((button) => {
+    const track = Number(button.dataset.drumPulseTrack);
+    button.textContent = `${Number(state.trackPulseMs[track].toFixed(1))} ms`;
+    button.setAttribute("aria-label", `Track ${track + 1} trigger pulse: ${state.trackPulseMs[track]} ms`);
+    button.title = "Click to change trigger pulse length";
+  });
   const rateSlider = el.querySelector('[data-role="drum-sequencer-rate"]');
   const rateWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "rate");
   if (rateSlider) {
@@ -16340,6 +16506,10 @@ function clearDrumSequencer(widgetId) {
   savePresetNow();
 }
 
+function drumSequencerPulseMs(value, fallback = 50) {
+  return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0.1, 60000) : fallback;
+}
+
 function drumSequencerBpm(state) {
   const bpm = (state.clockCvVolts / CV_MAX_VOLTS) * state.clockMaxBpm;
   return state.clockRoundBpm ? Math.round(bpm) : bpm;
@@ -16396,7 +16566,7 @@ function drumSequencerTriggerStep(widgetId) {
         setLedActive(triggerDot, false);
         propagate(widgetId, triggerPort, GATE_OFF_VOLTS);
         state.triggerTimers[track] = null;
-      }, state.pulseMs);
+      }, state.trackPulseMs[track]);
     };
     if (state.triggerTimers[track]) {
       clearTimeout(state.triggerTimers[track]);
@@ -17605,7 +17775,7 @@ const numericEditOverlay = document.getElementById("numericEditOverlay");
 const numericEditLabel = document.getElementById("numericEditLabel");
 const numericEditInput = document.getElementById("numericEditInput");
 const numericEditUnit = document.getElementById("numericEditUnit");
-let pendingNumericEditSlider = null;
+let pendingNumericEdit = null;
 
 function findSliderForNumericEdit(target) {
   const slider = target.closest('input[type="range"].port-slider');
@@ -17621,34 +17791,44 @@ function unitFromValueText(text) {
   return match ? match[1].trim() : "";
 }
 
-function openNumericEditPopup(slider) {
-  pendingNumericEditSlider = slider;
-  const row = slider.closest(".port-row, .audio-out-volume-row") || slider.parentElement;
-  const label = row ? row.querySelector(".port-label") : null;
-  numericEditLabel.textContent = label ? label.textContent : "Value";
-  const valueEl = row ? row.querySelector(".port-value") : null;
-  numericEditUnit.textContent = valueEl ? unitFromValueText(valueEl.textContent) : "";
-  numericEditInput.value = slider.value;
+function openNumericValuePopup(edit) {
+  pendingNumericEdit = edit;
+  numericEditLabel.textContent = edit.label;
+  numericEditUnit.textContent = edit.unit;
+  numericEditInput.value = String(edit.value);
   numericEditOverlay.classList.remove("hidden");
   numericEditInput.focus();
   numericEditInput.select();
 }
 
+function openNumericEditPopup(slider) {
+  if (slider.disabled) return;
+  const row = slider.closest(".port-row, .audio-out-volume-row") || slider.parentElement;
+  const label = row?.querySelector(".port-label");
+  const valueEl = row?.querySelector(".port-value");
+  openNumericValuePopup({
+    label: label ? label.textContent : "Value",
+    unit: valueEl ? unitFromValueText(valueEl.textContent) : "",
+    value: slider.value,
+    min: slider.min !== "" ? Number(slider.min) : -Infinity,
+    max: slider.max !== "" ? Number(slider.max) : Infinity,
+    onSave: (value) => {
+      slider.value = String(value);
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+  });
+}
+
 function closeNumericEditPopup() {
   numericEditOverlay.classList.add("hidden");
-  pendingNumericEditSlider = null;
+  pendingNumericEdit = null;
 }
 
 function saveNumericEditPopup() {
-  const slider = pendingNumericEditSlider;
-  if (!slider) return;
+  const edit = pendingNumericEdit;
+  if (!edit) return;
   const parsed = parseFloatFlexible(numericEditInput.value);
-  if (!Number.isNaN(parsed)) {
-    const min = slider.min !== "" ? Number(slider.min) : -Infinity;
-    const max = slider.max !== "" ? Number(slider.max) : Infinity;
-    slider.value = String(clamp(parsed, min, max));
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  if (Number.isFinite(parsed)) edit.onSave(clamp(parsed, edit.min, edit.max));
   closeNumericEditPopup();
 }
 
@@ -18769,7 +18949,11 @@ document.addEventListener("mouseover", (e) => {
 function refreshWiredSliderLocks() {
   document.querySelectorAll(".widget-instance .port-row-in[data-port-id]").forEach((row) => {
     const slider = row.querySelector("input.port-slider");
-    if (!slider) return;
+    if (!slider) {
+      if (row.closest('[data-widget-type="comb-filter"]') && row.dataset.portId === "polarity")
+        updateCombFilterVisual(row.closest(".widget-instance").id);
+      return;
+    }
     const widget = row.closest(".widget-instance");
     if (!widget) return;
     const wired = connections.some((c) => c.to.widgetId === widget.id && c.to.portId === row.dataset.portId);
@@ -20043,6 +20227,18 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "comb-filter" && COMB_FILTER_PORTS.includes(portId)) {
+    const state = combFilterStates.get(widgetId);
+    if (state) {
+      const volts = combFilterCv(Number(value));
+      state[portId] = volts;
+      if (voiceIndex !== undefined) audioEngine.setVoiceParam(widgetId, voiceIndex, portId, volts);
+      else audioEngine.setParam(widgetId, portId, volts);
+      updateCombFilterVisual(widgetId);
+      sendLiveParamUpdateThrottled(widgetId, { [portId]: volts });
+    }
+  }
+
   if ((el.dataset.widgetType === "filter" || el.dataset.widgetType === "curtis-filter") && (portId === "cutoff" || portId === "resonance")) {
     const state = filterStates.get(widgetId);
     if (state) {
@@ -20485,7 +20681,7 @@ function mostRecentHeldMonoNote(slotState) {
 const midiPitchGlideStates = new Map();
 
 function propagateMidiPitchCv(widgetId, targetCv, voiceIndex) {
-  const state = midiInStates.get(widgetId);
+  const state = midiInStates.get(widgetId) || midiFilterStates.get(widgetId);
   if (!state) return;
 
   const key = `${widgetId}:${voiceIndex ?? 0}`;
@@ -20571,32 +20767,13 @@ function testMidiInGlide(widgetId) {
   socket.addEventListener("error", () => socket.close());
 }
 
-function routeMidiToWidgets(data) {
-  if (data.type !== "midi") return;
-  if (
-    data.midiType !== "note_on" &&
-    data.midiType !== "note_off" &&
-    data.midiType !== "control_change" &&
-    data.midiType !== "aftertouch" &&
-    data.midiType !== "pitchwheel"
-  )
-    return;
-
-  
-  
-  
-  
-  document.querySelectorAll('.widget-instance[data-widget-type="midi-in"]').forEach((el) => {
-    const id = el.id;
-    const state = midiInStates.get(id);
-    if (state && state.channel !== null && data.channel !== state.channel) return;
-
+function routeMidiWidget(data, id, state) {
     const slotState = midiVoiceSlotStates.get(id);
     if (!state || !slotState) return;
 
     if (data.midiType === "note_on") {
       if (state.voices <= 1) {
-        if (isFxMidiIn(id) && slotState.monoCurrentNote !== null) return;
+        if (midiInStates.has(id) && isFxMidiIn(id) && slotState.monoCurrentNote !== null) return;
         slotState.pendingRelease = false;
         slotState.holdCounter += 1;
         slotState.monoHeldNotes.set(data.note, { order: slotState.holdCounter, velocity: data.velocity });
@@ -20656,6 +20833,26 @@ function routeMidiToWidgets(data) {
       propagate(id, "gate", GATE_OFF_VOLTS, voiceIndex);
       deliverMidiSplitZones(id, data.note, data.velocity, false, voiceIndex);
     } else if (data.midiType === "control_change") {
+      if (midiFilterStates.has(id) && (data.control === 120 || data.control === 123)) {
+        if (state.voices <= 1) {
+          propagate(id, "gate", GATE_OFF_VOLTS);
+          if (slotState.monoCurrentNote !== null) deliverMidiSplitZones(id, slotState.monoCurrentNote, 0, false, undefined);
+        } else {
+          slotState.slots.forEach((slot, voiceIndex) => {
+            if (slot.note !== null) {
+              propagate(id, "gate", GATE_OFF_VOLTS, voiceIndex);
+              deliverMidiSplitZones(id, slot.note, 0, false, voiceIndex);
+            }
+            slot.note = null;
+            slot.held = false;
+          });
+        }
+        slotState.monoHeldNotes.clear();
+        slotState.monoCurrentNote = null;
+        slotState.pendingRelease = false;
+        slotState.pedalDown = false;
+        return;
+      }
       if (data.control !== 64) return; 
 
       const wasDown = slotState.pedalDown;
@@ -20666,6 +20863,8 @@ function routeMidiToWidgets(data) {
       if (state.voices <= 1) {
         if (slotState.pendingRelease) {
           propagate(id, "gate", GATE_OFF_VOLTS);
+          if (slotState.monoCurrentNote !== null) deliverMidiSplitZones(id, slotState.monoCurrentNote, 0, false, undefined);
+          slotState.monoCurrentNote = null;
           slotState.pendingRelease = false;
         }
         return;
@@ -20687,72 +20886,51 @@ function routeMidiToWidgets(data) {
       if (state.pitchBendQuantizeCents) cv = Math.round(cv * 1200) / 1200;
       propagate(id, "pitchBend", cv);
     }
-  });
 }
 
-let warnedNoSf2MidiWire = false;
-
-
-
-
-
-
-function routeMidiToSoundFontPlayer(data) {
-  if (data.type !== "midi") return;
-  const wires = connections.filter(
-    (c) =>
-      c.from.portId === "midi" &&
-      c.to.portId === "midi" &&
-      document.getElementById(c.to.widgetId)?.dataset.widgetType === "soundfont-player" &&
-      document.getElementById(c.from.widgetId)?.dataset.widgetType === "midi-in"
-  );
-  if (
-    wires.length === 0 &&
-    !warnedNoSf2MidiWire &&
-    document.querySelector('.widget-instance[data-widget-type="soundfont-player"]')
-  ) {
-    warnedNoSf2MidiWire = true;
-    console.warn(
-      'SoundFont Player: no "MIDI" wire from a Midi-In widget\'s MIDI output to the SoundFont Player\'s MIDI ' +
-        "input - it needs this dedicated wire (separate from Note/Gate/Velocity) to receive notes at all."
-    );
+function routeRawMidi(sourceId, portId, data, path = new Set(), delivered = new Set()) {
+  const key = `${sourceId}:${portId}`;
+  if (path.has(key)) return;
+  path.add(key);
+  for (const cable of connections) {
+    if (cable.from.widgetId !== sourceId || cable.from.portId !== portId || cable.to.portId !== "midi") continue;
+    const id = cable.to.widgetId;
+    const type = document.getElementById(id)?.dataset.widgetType;
+    if (type === "midi-filter") {
+      if (delivered.has(id) || path.has(`${id}:midi`)) continue;
+      const state = midiFilterStates.get(id);
+      if (!state || !acceptsMidiFilter(state, data)) continue;
+      delivered.add(id);
+      routeMidiWidget(data, id, state);
+      routeRawMidi(id, "midi", data, path, delivered);
+    } else if (type === "midi-split") {
+      const state = midiSplitStates.get(id);
+      for (let z = 0; z < (state?.zoneCount || 0); z += 1) {
+        const zone = state.zones[z];
+        const noteEvent = ["note_on", "note_off", "polytouch"].includes(data.midiType);
+        if (noteEvent && (data.note < zone.from || data.note > zone.to)) continue;
+        const forwarded = noteEvent ? { ...data, note: clamp(data.note + zone.octave * 12, 0, 127) } : data;
+        routeRawMidi(id, `zone${z + 1}Midi`, forwarded, path, delivered);
+      }
+    } else if (type === "soundfont-player") {
+      audioEngine.handleSoundFontMidi(id, data);
+    } else if (type === "mda-piano") {
+      audioEngine.handleMdaPianoMidi(id, data);
+    }
   }
-  wires.forEach((c) => {
-    const midiInState = midiInStates.get(c.from.widgetId);
-    if (midiInState && midiInState.channel !== null && data.channel !== midiInState.channel) return;
-    audioEngine.handleSoundFontMidi(c.to.widgetId, data);
-  });
+  path.delete(key);
 }
 
-let warnedNoMdaPianoMidiWire = false;
-
-function routeMidiToMdaPiano(data) {
+function routeMidiToWidgets(data) {
   if (data.type !== "midi") return;
-  const wires = connections.filter(
-    (c) =>
-      c.from.portId === "midi" &&
-      c.to.portId === "midi" &&
-      document.getElementById(c.to.widgetId)?.dataset.widgetType === "mda-piano" &&
-      document.getElementById(c.from.widgetId)?.dataset.widgetType === "midi-in"
-  );
-  if (
-    wires.length === 0 &&
-    !warnedNoMdaPianoMidiWire &&
-    document.querySelector('.widget-instance[data-widget-type="mda-piano"]')
-  ) {
-    warnedNoMdaPianoMidiWire = true;
-    console.warn(
-      'MDA Piano: no "MIDI" wire from a Midi-In widget\'s MIDI output to the MDA Piano\'s MIDI ' +
-        "input - it needs this dedicated wire (separate from Note/Gate/Velocity) to receive notes at all."
-    );
-  }
-  wires.forEach((c) => {
-    const midiInState = midiInStates.get(c.from.widgetId);
-    if (midiInState && midiInState.channel !== null && data.channel !== midiInState.channel) return;
-    audioEngine.handleMdaPianoMidi(c.to.widgetId, data);
+  if (data.midiType === "note_on" && data.velocity === 0) data = { ...data, midiType: "note_off" };
+  const delivered = new Set();
+  midiInStates.forEach((state, id) => {
+    if (state.channel !== null && data.channel !== state.channel) return;
+    routeMidiWidget(data, id, state);
+    routeRawMidi(id, "midi", data, new Set(), delivered);
   });
 }
-
 
 
 function applyFilterWidgetParams(id, params, curtis = false) {
@@ -20839,6 +21017,22 @@ const WIDGET_ENGINES = {
       state.pitchBendQuantizeCents = state.pitchBendQuantizeCents === true;
       resizeVoiceSlots(id, state.voices);
       updateMidiInControls(id);
+    },
+  },
+  "midi-filter": {
+    getParams: (id) => {
+      const state = midiFilterStates.get(id);
+      return state ? { channel: state.channel, note: state.note } : {};
+    },
+    applyParams: (id, params) => {
+      const state = midiFilterStates.get(id);
+      if (!state || !params) return;
+      state.channel = midiFilterCriterion(params.channel, 15);
+      state.note = midiFilterCriterion(params.note, 127);
+      for (const parameter of ["channel", "note"]) {
+        const select = document.getElementById(id)?.querySelector(`[data-role="midi-filter-${parameter}"]`);
+        if (select) select.value = String(state[parameter]);
+      }
     },
   },
   "midi-split": {
@@ -21720,6 +21914,18 @@ const WIDGET_ENGINES = {
     },
     applyParams: (id, params) => applyFilterWidgetParams(id, params, true),
   },
+  "comb-filter": {
+    getParams: (id) => ({ ...combFilterStates.get(id) }),
+    applyParams: (id, params) => {
+      const state = combFilterStates.get(id);
+      if (!state || !params) return;
+      COMB_FILTER_PORTS.forEach((port) => {
+        state[port] = combFilterCv(params[port], COMB_FILTER_DEFAULTS[port]);
+        audioEngine.setParam(id, port, state[port]);
+      });
+      updateCombFilterVisual(id);
+    },
+  },
   "graphic-eq": {
     getParams: (id) => ({
       ...graphicEqCvEngine.getParams(id),
@@ -21929,7 +22135,7 @@ const WIDGET_ENGINES = {
             })),
             activePatternIndex: state.activePatternIndex,
             switchAtEnd: state.switchAtEnd === true,
-            pulseMs: state.pulseMs,
+            trackPulseMs: [...state.trackPulseMs],
             clockCvVolts: state.clockCvVolts,
             clockMaxBpm: state.clockMaxBpm,
             clockRoundBpm: state.clockRoundBpm === true,
@@ -21969,8 +22175,9 @@ const WIDGET_ENGINES = {
       state.pendingPatternIndex = -1;
       state.switchAtEnd = params.switchAtEnd === true;
 
-      const pulseMs = Number(params.pulseMs);
-      state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? clamp(pulseMs, 0.1, 60000) : 10;
+      const legacyPulseMs = drumSequencerPulseMs(params.pulseMs);
+      const trackPulseMs = Array.isArray(params.trackPulseMs) ? params.trackPulseMs : [];
+      state.trackPulseMs = Array.from({ length: DRUM_MAX_TRACKS }, (_, track) => drumSequencerPulseMs(trackPulseMs[track], legacyPulseMs));
       state.clockCvVolts = clamp(Number(params.clockCvVolts) || 0, 0, CV_MAX_VOLTS);
       const maxBpm = Number(params.clockMaxBpm);
       state.clockMaxBpm = Number.isFinite(maxBpm) && maxBpm > 0 ? clamp(maxBpm, 0.1, 10000) : 120;
@@ -23154,8 +23361,8 @@ function connectWs() {
       routeMidiToUpDownButtons(data);
       routeMidiToSwitches(data);
       routeMidiToOutputSwitches(data);
-      routeMidiToSoundFontPlayer(data);
-      routeMidiToMdaPiano(data);
+
+
       routeMidiToMasterClock(data);
       routeMidiToPresetNav(data);
       if (["note_on", "note_off"].includes(data.midiType)) {

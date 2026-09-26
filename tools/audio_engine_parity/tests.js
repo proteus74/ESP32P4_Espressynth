@@ -273,6 +273,49 @@ export async function runAll() {
     if (!(p > 0.5 && p <= 5.01)) throw new Error(`peak ${p}`);
     return `peak ${p.toFixed(3)}`;
   });
+  await test("comb filter: CV ports, negative feedback and final gain", async () => {
+    const { data, engine } = await render(0.8, (e) => {
+      e.createNode("f", "comb-filter", { time: 0.5, feedback: 0, mix: 0, gain: 10 });
+      constNode(e, "in", 1);
+      e.connect("in", "audio", "f", "in");
+      for (const [port, volts] of [["time", 0.5], ["feedback", 5], ["mix", 10], ["polarity", 10], ["damping", 3], ["gain", 5]]) {
+        constNode(e, port, volts);
+        e.connect(port, "audio", "f", port);
+      }
+      return out(e, "f", "out");
+    });
+    expectClose(at(data, 0.7), 0.5 / 1.475, 0.001, "DC ");
+    const response = engine.getFilterFrequencyResponse("f");
+    const dc = new Float32Array(1);
+    engine.nodes.get("f").dsp.response(new Float32Array([0]), dc);
+    expectClose(dc[0], 0.5 / 1.475, 0.001, "response ");
+    if (!response.every(Number.isFinite)) throw new Error("non-finite response");
+    if (engine.getFilterSpectrum("f").length !== 1024) throw new Error("missing spectrum");
+    return "all six CV ports + response";
+  });
+  await test("comb filter: last CV disconnect restores manual gain", async () => {
+    const { data } = await render(0.5, (e) => {
+      e.createNode("f", "comb-filter", { mix: 0, gain: 7 });
+      constNode(e, "in", 1); constNode(e, "a", 2); constNode(e, "b", 3);
+      e.connect("in", "audio", "f", "in");
+      e.connect("a", "audio", "f", "gain");
+      e.connect("b", "audio", "f", "gain");
+      e.disconnect("a", "audio", "f", "gain");
+      e.disconnect("b", "audio", "f", "gain");
+      return out(e, "f", "out");
+    });
+    return expectClose(at(data, 0.4), 0.7, 1e-5);
+  });
+  await test("comb filter: per-voice instances have independent delay state", async () => {
+    const { engine } = await newEngine(0.1);
+    engine.createNode("f", "comb-filter", {}, 4);
+    const voices = engine.nodes.get("f").instances;
+    if (voices.length !== 4 || new Set(voices.map((v) => v.dsp)).size !== 4) throw new Error("shared DSP state");
+    engine.setVoiceParam("f", 2, "polarity", 10);
+    if (voices[2].polarity !== 10 || voices[0].polarity !== 0) throw new Error("shared parameter state");
+    engine.removeNode("f");
+    return "four independent voices";
+  });
   await test("filter frequency response for UI", async () => {
     const { engine } = await render(0.1, (e) => {
       e.createNode("f", "filter", { filterType: "lowpass", slope: 18, cutoff: 5 });
@@ -405,7 +448,7 @@ export async function runAll() {
   await test("smoke: build, wire and remove every node type", async () => {
     const types = ["oscillator", "fm-oscillator", "hammond", "lfo", "wavetable", "const", "up-down-button", "button", "knob",
       "switch", "output-switch", "audio-out", "usb-out", "gain", "linked-input", "linked-output", "filter",
-      "curtis-filter", "esp-eq", "graphic-eq", "mixer", "multiplexer", "output-multiplexer", "multiplier", "adder",
+      "curtis-filter", "comb-filter", "esp-eq", "graphic-eq", "mixer", "multiplexer", "output-multiplexer", "multiplier", "adder",
       "divide", "frequency-divider", "abs", "logic-and", "logic-or", "logic-xor", "logic-not", "value-mapper",
       "detune", "adsr", "dx-envelope", "bitcrusher", "wave-folder", "envelope-follower", "pan", "sample-hold",
       "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "vu-meter",

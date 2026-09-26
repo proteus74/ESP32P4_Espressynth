@@ -30,6 +30,7 @@
 #include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
+#include "nodes/CombFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -242,6 +243,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Chorus:
         nodes::chorus::render(inst, frames);
         break;
+    case NodeType::CombFilter:
+        nodes::combfilter::render(inst, frames);
+        break;
     case NodeType::Delay:
         nodes::delay::render(inst, frames);
         break;
@@ -347,6 +351,7 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::MidiIn:
         nodes::midiin::render(inst, frames);
         break;
+    case NodeType::MidiFilter:
     case NodeType::MidiSplit:
     case NodeType::Unknown:
     default:

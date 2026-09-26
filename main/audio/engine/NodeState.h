@@ -505,7 +505,7 @@ struct DrumSequencerState
     uint16_t currentStep = 0;
     bool clockPrev = false;
     bool gatePrev = false;
-    float pulseMs = 10.0f;
+    float trackPulseMs[synth::kDrumSequencerMaxTracks] = {50, 50, 50, 50, 50, 50, 50, 50};
     float internalClockCvVolts = 0.0f;
     float internalClockMaxBpm = 120.0f;
     bool internalClockRoundBpm = false;

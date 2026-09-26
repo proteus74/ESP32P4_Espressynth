@@ -29,6 +29,7 @@
 #include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
+#include "nodes/CombFilterNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -44,6 +45,7 @@
 #include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
+#include "nodes/MidiFilterNode.h"
 #include "nodes/MixerNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
@@ -180,6 +182,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::Chorus:
         nodes::chorus::parsePreset(p, out);
         break;
+    case NodeType::CombFilter:
+        nodes::combfilter::parsePreset(p, out);
+        break;
     case NodeType::Delay:
         nodes::delay::parsePreset(p, out);
         break;
@@ -203,6 +208,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::MidiIn:
         nodes::midiin::parsePreset(p, out);
+        break;
+    case NodeType::MidiFilter:
+        nodes::midifilter::parsePreset(p, out);
         break;
     case NodeType::MidiSplit:
         nodes::midisplit::parsePreset(p, out);
