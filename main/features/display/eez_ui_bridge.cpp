@@ -14,7 +14,9 @@ extern "C" {
 #include "ui.h"
 }
 
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -41,29 +43,57 @@ void action_select_preset(lv_event_t *)
     if (eez_synth_load_preset(s_preset_list.entries[row - 1].file_name)) loadScreen(SCREEN_ID_MAIN);
 }
 
-void update_midi_label()
+// lv_label_set_text() always invalidates (and so re-renders) the label, even for identical
+// text - with a dozen status labels refreshed 8x per second that alone kept taskLVGL busy
+// re-drawing unchanged pixels. Only touch a label when its text actually differs.
+void set_label_text(lv_obj_t *label, const char *text)
 {
-    EezSynthStatus synth{};
-    eez_synth_status(&synth);
-    lv_label_set_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
+    const char *current = lv_label_get_text(label);
+    if (current == nullptr || strcmp(current, text) != 0) lv_label_set_text(label, text);
+}
+
+__attribute__((format(printf, 2, 3))) void set_label_fmt(lv_obj_t *label, const char *fmt, ...)
+{
+    char text[96];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    set_label_text(label, text);
 }
 
 void update_runtime_labels()
 {
-    const unsigned psram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
-    const unsigned psram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
-    const unsigned sysram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
-    const unsigned sysram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL) / 1024);
-    lv_label_set_text_fmt(objects.lbl_psram_info, "PSRAM: %u / %u KB", psram_free, psram_total);
-    lv_label_set_text_fmt(objects.lbl_sysram_info, "System: %u / %u KB", sysram_free, sysram_total);
-    update_midi_label();
+    EezSynthStatus synth{};
+    eez_synth_status(&synth);
+    set_label_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
 
+    // Preset loader bar: every timer tick, so the progress animation stays smooth.
+    if (synth.preset_load_active) {
+        lv_obj_clear_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
+        lv_bar_set_value(objects.bar_preset_loader, synth.preset_load_progress, LV_ANIM_ON);
+    } else {
+        lv_obj_add_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (synth.preset_name[0] != '\0') set_label_text(objects.lbl_preset_name, synth.preset_name);
+    if (synth.preset_count != 0)
+        set_label_fmt(objects.lbl_preset_number, "Preset %u von %u", static_cast<unsigned>(synth.preset_number),
+                      static_cast<unsigned>(synth.preset_count));
+    else
+        set_label_text(objects.lbl_preset_number, "Preset --");
+    set_label_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
+    set_label_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
+
+    // Load/memory/IP readouts: twice per second - they change on nearly every sample, so the
+    // text comparison above wouldn't save their redraws at a faster rate. Also gives the
+    // Core 0 figure a stable 500 ms averaging window.
     static int64_t previous_sample_us = 0;
     static uint32_t previous_idle_runtime = 0;
     const int64_t now_us = esp_timer_get_time();
+    if (previous_sample_us != 0 && now_us - previous_sample_us < 500000) return;
     const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(App::MAIN_CORE);
     float core0 = 0.0f;
-    if (previous_sample_us != 0 && now_us > previous_sample_us) {
+    if (previous_sample_us != 0) {
         core0 = 100.0f * (1.0f - static_cast<float>(idle_runtime - previous_idle_runtime) /
                                    static_cast<float>(now_us - previous_sample_us));
         if (core0 < 0.0f) core0 = 0.0f;
@@ -72,30 +102,20 @@ void update_runtime_labels()
     previous_sample_us = now_us;
     previous_idle_runtime = idle_runtime;
 
-    EezSynthStatus synth{};
-    eez_synth_status(&synth);
-    if (synth.preset_load_active) {
-        lv_obj_clear_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-        lv_bar_set_value(objects.bar_preset_loader, synth.preset_load_progress, LV_ANIM_ON);
-    } else {
-        lv_obj_add_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (synth.preset_name[0] != '\0') lv_label_set_text(objects.lbl_preset_name, synth.preset_name);
-    if (synth.preset_count != 0)
-        lv_label_set_text_fmt(objects.lbl_preset_number, "Preset %u von %u", static_cast<unsigned>(synth.preset_number),
-                              static_cast<unsigned>(synth.preset_count));
-    else
-        lv_label_set_text_static(objects.lbl_preset_number, "Preset --");
+    const unsigned psram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned psram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
+    const unsigned sysram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+    const unsigned sysram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL) / 1024);
+    set_label_fmt(objects.lbl_psram_info, "PSRAM: %u / %u KB", psram_free, psram_total);
+    set_label_fmt(objects.lbl_sysram_info, "System: %u / %u KB", sysram_free, sysram_total);
 
     char ip_address[24] = {};
     eez_network_ip(ip_address, sizeof(ip_address));
-    lv_label_set_text_fmt(objects.lbl_ip_address, "IP: %s", ip_address);
-    lv_label_set_text_fmt(objects.lbl_core0_util, "Core 0: %u %%", static_cast<unsigned>(core0 + 0.5f));
-    lv_label_set_text_fmt(objects.lbl_core1_util, "Core 1: %u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
+    set_label_fmt(objects.lbl_ip_address, "IP: %s", ip_address);
+    set_label_fmt(objects.lbl_core0_util, "Core 0: %u %%", static_cast<unsigned>(core0 + 0.5f));
+    set_label_fmt(objects.lbl_core1_util, "Core 1: %u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
     lv_bar_set_value(objects.bar_core0_util, static_cast<int32_t>(core0 + 0.5f), LV_ANIM_OFF);
     lv_bar_set_value(objects.bar_core1_util, static_cast<int32_t>(synth.audio_core_load + 0.5f), LV_ANIM_OFF);
-    lv_label_set_text_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
-    lv_label_set_text_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
 }
 
 void timer_callback(lv_timer_t *)
@@ -168,7 +188,7 @@ void start()
 {
     if (s_timer != nullptr) return;
     update_runtime_labels();
-    s_timer = lv_timer_create(timer_callback, 125, nullptr);
+    s_timer = lv_timer_create(timer_callback, 100, nullptr);
 }
 
 } // namespace Feature::EEZUI

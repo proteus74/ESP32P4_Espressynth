@@ -114,6 +114,10 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 4;
         if (is(portName, "feedback"))
             return 5;
+        // "gate": control-only - a rising edge restarts the waveform, like a MIDI note-on
+        // (see nodes/OscillatorNode.h's render()).
+        if (is(portName, "gate"))
+            return 6;
         return -1;
     case NodeType::FmOscillator:
         // Oscillator's port set plus "fmIn"/"fmIndex" for phase-modulation FM
@@ -148,6 +152,8 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 9;
         if (is(portName, "superSawMix"))
             return 10;
+        if (is(portName, "gate"))
+            return 11; // control-only, rising edge restarts the waveform (see render())
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -190,6 +196,14 @@ inline int audioInIndex(NodeType type, const char *portName)
         // NodeInstance.cpp/LfoState::zeroPointFixed).
         if (is(portName, "zeroPoint"))
             return 3;
+        // "rate"/"gain"/"phase": control-only CV ports, a wired source overrides the
+        // widget's own slider (see nodes::lfo::applyPortOverrides).
+        if (is(portName, "rate"))
+            return 4;
+        if (is(portName, "gain"))
+            return 5;
+        if (is(portName, "phase"))
+            return 6;
         return -1;
     case NodeType::Wavetable:
         // reset/oneShot/global: same indices and semantics as the LFO's
@@ -204,11 +218,20 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 2;
         if (is(portName, "morph"))
             return 3;
+        if (is(portName, "rate"))
+            return 4;
+        if (is(portName, "gain"))
+            return 5;
         return -1;
     case NodeType::Detune:
-        // cv only - amount isn't a real port (Knob-mappable by name via
-        // setFloatFieldByName/paramName, same as Filter's cutoff/resonance).
-        return is(portName, "cv") ? 0 : -1;
+        // "amount" is a real (control-only) port so any wired source - e.g. an
+        // LFO - drives it natively; unconnected it falls back to the
+        // settings/Knob-set value (see nodes/DetuneNode.h).
+        if (is(portName, "cv"))
+            return 0;
+        if (is(portName, "amount"))
+            return 1;
+        return -1;
     case NodeType::Switch:
         if (is(portName, "in1"))
             return 0;
@@ -261,16 +284,36 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 3;
         return -1;
     case NodeType::EspEq:
+        // "bypass"/"frequency"/"q"/"gainDb": control-only CV ports, a wired source overrides
+        // the widget's own setting (see NodeRender.h's EspEq case).
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
             return 1;
+        if (is(portName, "bypass"))
+            return 2;
+        if (is(portName, "frequency"))
+            return 3;
+        if (is(portName, "q"))
+            return 4;
+        if (is(portName, "gainDb"))
+            return 5;
         return -1;
     case NodeType::GraphicEq:
+        // "bypass", "band1".."band8" (0-10V mapped per band via bandNMin/Max/Curve) and
+        // "gain" (0-10V output level): control-only CV ports, a wired source overrides the
+        // widget's own setting (see NodeRender.h's GraphicEq case).
         if (is(portName, "inL"))
             return 0;
         if (is(portName, "inR"))
             return 1;
+        if (is(portName, "bypass"))
+            return 2;
+        if (portName != nullptr && strncmp(portName, "band", 4) == 0 && portName[4] >= '1' && portName[4] <= '8' &&
+            portName[5] == '\0')
+            return 3 + (portName[4] - '1');
+        if (is(portName, "gain"))
+            return 11;
         return -1;
     case NodeType::Mixer:
     case NodeType::Multiplier:
@@ -346,9 +389,22 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "threshold")) return 2;
         return -1;
     case NodeType::Chorus:
-        return is(portName, "in") ? 0 : -1;
+        // "bypass" (gate) and "rate"/"depth"/"offset" are control-only CV ports - a wired
+        // source overrides the widget's own setting (see nodes/ChorusNode.h).
+        if (is(portName, "in"))
+            return 0;
+        if (is(portName, "bypass"))
+            return 1;
+        if (is(portName, "rate"))
+            return 2;
+        if (is(portName, "depth"))
+            return 3;
+        if (is(portName, "offset"))
+            return 4;
+        return -1;
     case NodeType::CvOut:
     case NodeType::DigitalOut:
+    case NodeType::RgbLed:
         return is(portName, "in") ? 0 : -1;
     case NodeType::Delay:
         // "time"/"feedback"/"mix" are real, but control-only audio-rate
@@ -503,6 +559,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "time3")) return 6;
         if (is(portName, "time4")) return 7;
         if (is(portName, "gate")) return 8;
+        if (is(portName, "velocity")) return 9; // 0-10V -> 0..1 output scale, see DxEnvelopeNode.h
         return -1;
     case NodeType::StepArpeggiator:
         if (is(portName, "clock"))
@@ -556,6 +613,16 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::Button:
         return is(portName, "layer") ? 0 : -1;
     case NodeType::MidiIn:
+        // Control-only CV inputs, read once per block by nodes::midiin::render(): "glide"
+        // (gate), "glideTime" (0-10V -> 0-2s) and "voices" (0-10V -> 1..max voices, applied
+        // by a graph rebuild once the value is stable, see SynthEngine's loader task).
+        if (is(portName, "glide"))
+            return 0;
+        if (is(portName, "glideTime"))
+            return 1;
+        if (is(portName, "voices"))
+            return 2;
+        return -1;
     case NodeType::MidiSplit:
     case NodeType::Const:
     case NodeType::UpDownButton:
@@ -747,6 +814,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::MidiSplit:
     case NodeType::CvOut:
     case NodeType::DigitalOut:
+    case NodeType::RgbLed:
     case NodeType::Unknown:
     default:
         return -1;
@@ -759,17 +827,17 @@ inline int audioInPortCount(NodeType type)
     switch (type)
     {
     case NodeType::Oscillator:
-        return 6; // existing five inputs + internal-feedback depth (CV)
+        return 7; // existing five inputs + internal-feedback depth (CV) + "gate"
     case NodeType::FmOscillator:
-        return 11; // existing nine + SuperSaw detune/mix
+        return 12; // existing nine + SuperSaw detune/mix + "gate"
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 4; // "reset" + "oneShot" + "global" + "zeroPoint" (CV)
+        return 7; // "reset" + "oneShot" + "global" + "zeroPoint" + "rate" + "gain" + "phase" (CV)
     case NodeType::Wavetable:
-        return 4; // "reset" + "oneShot" + "global" + "morph" (CV)
+        return 6; // "reset" + "oneShot" + "global" + "morph" + "rate" + "gain" (CV)
     case NodeType::Detune:
-        return 1;
+        return 2; // "cv" + "amount"
     case NodeType::Switch:
         return 2;
     case NodeType::OutputSwitch:
@@ -780,9 +848,9 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Gain:
         return 4; // "in" + "amount" (CV) + "curve" (CV) + "global" (CV)
     case NodeType::EspEq:
-        return 2;
+        return 6; // "inL" + "inR" + "bypass" + "frequency" + "q" + "gainDb"
     case NodeType::GraphicEq:
-        return 2;
+        return 12; // "inL" + "inR" + "bypass" + "band1".."band8" + "gain"
     case NodeType::Mixer:
     case NodeType::Multiplier:
     case NodeType::Adder:
@@ -815,7 +883,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::SampleHold:
         return 3; // "in" + "trigger" + "threshold", all audio-rate
     case NodeType::Chorus:
-        return 1;
+        return 5; // "in" + "bypass" + "rate" + "depth" + "offset"
     case NodeType::Delay:
         return 6; // "inL"+"inR"+"bypass"+"time"+"feedback"+"mix" (CV)
     case NodeType::ReverbLight:
@@ -832,6 +900,7 @@ inline int audioInPortCount(NodeType type)
         return 4;
     case NodeType::CvOut:
     case NodeType::DigitalOut:
+    case NodeType::RgbLed:
         return 1; // "in"
     case NodeType::VuMeter:
     case NodeType::Spectrum:
@@ -855,7 +924,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Adsr:
         return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
-        return 9; // four level plus four time CV inputs, plus "gate" (CV)
+        return 10; // four level plus four time CV inputs, plus "gate" and "velocity" (CV)
     case NodeType::StepArpeggiator:
         return 22; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate" + "step1".."step16" (CV)
     case NodeType::DrumSequencer:
@@ -864,6 +933,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Button:
         return 1; // externally controlled layer selector
     case NodeType::MidiIn:
+        return 3; // "glide" + "glideTime" + "voices" (CV)
     case NodeType::MidiSplit:
     case NodeType::Const:
     case NodeType::UpDownButton:
@@ -913,7 +983,7 @@ inline bool hasNoOutputs(NodeType type)
     return type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
            type == NodeType::Wm8960Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
            type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::CvOut ||
-           type == NodeType::DigitalOut;
+           type == NodeType::DigitalOut || type == NodeType::RgbLed;
     // Note: Button/UpDownButton/Switch are deliberately NOT listed here even
     // though they may have no *audio* output port - hasNoOutputs() gates the
     // voiced/global BFS sink check, and these types still produce a value
@@ -968,14 +1038,14 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::LogicNot:
         return true; // all inputs
     case NodeType::Oscillator:
-        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5; // pitch/tune/waveform/feedback
+        return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 5 || portIdx == 6; // pitch/tune/waveform/feedback/gate
     case NodeType::FmOscillator:
         // "pitchCv"(1)+"tune"(2)+"waveform"(3)+"fmIndex"(6)+"feedback"(7)+
         // "dutyCycle"(8)+SuperSaw detune/mix(9/10) - "amplitude"(0),
         // "gain"(4) AND "fmIn"(5) stay genuinely audio-rate; "fmIn" being
         // read per-sample is the entire point of this node.
         return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7 ||
-               portIdx == 8 || portIdx == 9 || portIdx == 10;
+               portIdx == 8 || portIdx == 9 || portIdx == 10 || portIdx == 11; // + "gate"(11)
     case NodeType::Hammond:
         // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
         // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars
@@ -983,8 +1053,15 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         // point of the port-limit widening (SynthConfig.h); a block-rate
         // read here would defeat it.
         return portIdx == 1 || portIdx == 2;
+    case NodeType::Chorus:
+        return portIdx >= 1; // "bypass"+"rate"+"depth"+"offset" - "in"(0) stays audio-rate
+    case NodeType::MidiIn:
+        return true; // "glide"/"glideTime"/"voices" - settings, not signals
+    case NodeType::EspEq:
+    case NodeType::GraphicEq:
+        return portIdx >= 2; // everything but the stereo audio inputs
     case NodeType::Detune:
-        return portIdx == 0; // "cv" - same reasoning as Oscillator's pitchCv
+        return portIdx == 0 || portIdx == 1; // "cv"/"amount" - same reasoning as Oscillator's pitchCv
     case NodeType::Gain:
         return portIdx == 3; // "global" - "amount"(1) and "curve"(2) both stay real audio-rate
     case NodeType::Filter:
@@ -1003,9 +1080,9 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::DxEnvelope:
         return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:
-        return portIdx == 0 || portIdx == 1 || portIdx == 2 || portIdx == 3; // "reset"+"oneShot"+"global"+"zeroPoint" - trigger-/gate-/slider-like signals, control-rate suffices
+        return true; // "reset"+"oneShot"+"global"+"zeroPoint"+"rate"+"gain"+"phase" - trigger-/gate-/slider-like signals, control-rate suffices
     case NodeType::Wavetable:
-        return portIdx <= 2; // "reset"+"oneShot"+"global" like the LFO - "morph"(3) stays audio-rate
+        return portIdx != 3; // like the LFO - only "morph"(3) stays audio-rate
     case NodeType::WavePlayer:
         return portIdx == 1 || portIdx == 2; // "note"+"gate" - "amplitude" (index 0) stays audio-rate
     case NodeType::SoundFontPlayer:

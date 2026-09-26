@@ -19,6 +19,7 @@
 #include "UsbMidiEvent.h"
 #include "features/filesystem/littlefs_manager.hpp"
 #include "features/io/gpio_manager.hpp"
+#include "features/io/led_strip_manager.hpp"
 
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
     #include "features/audio/es8311_manager.hpp"
@@ -597,6 +598,7 @@ inline esp_err_t init() {
     synth::loadDeviceSettingsFromFs();
     Feature::IO::loadGpioSettingsFromFs();
     Feature::IO::apply_gpio_settings(); // gpio_config() every configured pin before any preset's DigitalIn/DigitalOut render()s
+    Feature::LedStrip::init(); // after the GPIO table, so it can refuse a pin already claimed there
 
     // Core 0, low priority - same placement as SynthEngine's "preset_loader" task just below
     // (SynthEngine.h): pure background filesystem work, must never land on core 1, which

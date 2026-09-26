@@ -40,7 +40,11 @@ inline void render(NodeInstance &inst, size_t frames)
     // arithmetic below, no trig/pow involved, so per-sample evaluation in
     // the genuinely-varying case is effectively free either way.
     auto &s = inst.detune;
-    const float amount = s.amountSmooth.process(s.amountTarget);
+    // "amount" port (index 1): a wired source overrides the settings/Knob value.
+    const bool amountFed = controlPortConnected(inst, 1) || (inst.audioConnectedPortMask & synth::portBit(1)) != 0;
+    float amountIn = amountFed ? portSample(inst, 1, 0) : s.amountTarget;
+    amountIn = amountIn < 0.0f ? 0.0f : (amountIn > cv::kMaxVolts ? cv::kMaxVolts : amountIn);
+    const float amount = s.amountSmooth.process(amountIn);
     const float deltaVolts = detuneOffsetVolts(amount, s.maxOffsetCents, s.stepCents);
     float cvValue = 0.0f;
     if (audioPortConstantForBlock(inst, 0, frames, cvValue))

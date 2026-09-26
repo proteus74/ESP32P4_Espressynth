@@ -378,6 +378,20 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     const float kInvSampleRate = 1.0f / kSampleRate;
     auto &s = inst.fmOsc;
+    // "gate" (port 11): rising edge restarts the waveform - same as setParam("gate") below and
+    // the MidiGate route in Graph.h.
+    if (portIsFed(inst, 11))
+    {
+        const bool gateNow = portSample(inst, 11, 0) > cv::kGateThresholdVolts;
+        if (gateNow && !s.gatePrev)
+        {
+            s.phaseGen.resetPhase();
+            for (uint32_t &phase : s.superSawSidePhase)
+                phase = 0u;
+            s.feedbackSample = 0.0f;
+        }
+        s.gatePrev = gateNow;
+    }
     constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
     // Cleared unconditionally up front, same reasoning as AdsrNode.h's
     // outIsRamp reset - a downstream Constant-aware consumer (see

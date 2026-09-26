@@ -242,6 +242,10 @@ struct GraphicEqState
     espae::S32PlanarScratch scratch;
     float frequencyHz[kBandCount] = {63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 14000.0f};
     float gainDb[kBandCount] = {};
+    // CV mapping for the "bandN" ports (see PortTables.h / NodeRender.h).
+    float bandMin[kBandCount] = {};
+    float bandMax[kBandCount] = {};
+    bool bandLog[kBandCount] = {};
     float outputGainCv = 10.0f; // 0-10V, 10V = unity (cv::vcaGain)
     bool ready = false;
     bool bypass = false;
@@ -411,6 +415,19 @@ struct DigitalOutState
     bool invert = false; // cached from Feature::IO::GpioSettings at build() time
 };
 
+// RGB LED - maps its input voltage through a sorted stop list to a 0xRRGGBB color, which
+// render() hands to Feature::LedStrip (see nodes/RgbLedNode.h). The browser computes its own
+// on-widget color from its preview engine - nothing is reported back over the network.
+constexpr uint8_t kRgbLedMaxStops = 8;
+struct RgbLedState
+{
+    int16_t ledIndex = 0;
+    uint8_t stopCount = 0;
+    float stopVolts[kRgbLedMaxStops] = {};
+    uint32_t stopColor[kRgbLedMaxStops] = {};
+    bool stopFade[kRgbLedMaxStops] = {};
+};
+
 // Samples "in" exactly once for each below-to-at/above-threshold transition
 // on "trigger", then keeps that CV at "out" until the next transition.
 struct SampleHoldState
@@ -539,6 +556,11 @@ struct MidiInState
     // discrete-note steps, rather than a smooth in-between value.
     bool pitchBendQuantizeCents = false;
     bool sustainPedalDown = false; // runtime only - CC64 state, never persisted/loaded
+    // "voices" CV port (runtime only, see nodes::midiin::render): candidate voice count and
+    // for how many blocks it has been stable, plus the last count already requested.
+    uint8_t voicesCvCandidate = 0;
+    uint16_t voicesCvStableBlocks = 0;
+    uint8_t voicesCvRequested = 0;
 };
 
 struct ConstState

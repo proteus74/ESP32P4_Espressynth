@@ -78,6 +78,7 @@ inline void render(NodeInstance &inst, size_t frames)
     }
 
     const ::wavetable::Bank &bank = *s.wavetableBank;
+    lfo::applyPortOverrides(inst, false);
     const float halfSwing = s.gain * 0.5f;
     const bool morphFed = portFed(inst, kPortMorph);
     const float manualMorph = s.morph * cv::kInvMaxVolts;

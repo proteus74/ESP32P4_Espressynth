@@ -263,6 +263,7 @@ struct NodeInstance
         CvOutState cvOut;
         DigitalInState digitalIn;
         DigitalOutState digitalOut;
+        RgbLedState rgbLed;
     };
     // Type-specific states below are heap-allocated (GraphBuilder::build)
     // only for an instance whose type actually needs them, and freed in
@@ -440,6 +441,9 @@ struct NodeInstance
         case NodeType::DigitalOut:
             new (&digitalOut) DigitalOutState();
             break;
+        case NodeType::RgbLed:
+            new (&rgbLed) RgbLedState();
+            break;
         default:
             emptyInlineState = 0;
             break;
@@ -511,6 +515,18 @@ inline float clampf(float v, float lo, float hi)
 inline bool controlPortConnected(const NodeInstance &inst, int portIdx)
 {
     return (inst.controlConnectedPortMask & synth::portBit(portIdx)) != 0;
+}
+
+// True if anything is wired into `portIdx` - a ControlRoute (Knob/Button/MIDI) or a DSP edge.
+inline bool portIsFed(const NodeInstance &inst, int portIdx)
+{
+    return ((inst.controlConnectedPortMask | inst.audioConnectedPortMask) & synth::portBit(portIdx)) != 0;
+}
+
+// NaN-safe clamp for a port value read once per block.
+inline float clampToRange(float value, float lo, float hi)
+{
+    return !(value >= lo) ? lo : (value > hi ? hi : value);
 }
 
 // True if `port` resolves to one repeated value for this whole block,

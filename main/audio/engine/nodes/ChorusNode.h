@@ -6,6 +6,7 @@
 
 #include "esp_heap_caps.h"
 
+#include "../CvConventions.h"
 #include "../DspPrimitives.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
@@ -38,8 +39,7 @@ struct ChorusState
     float lfoStep = 0.0f;
     float offsetSamples = 0.0f;
     float depthSamples = 0.0f;
-    // Manual-only (no PortTables.h port, see plan's "Muster B" - same as
-    // rate/offset/depth above, pure UI toggle + setParam, no wired CV).
+    // UI toggle / setParam value; a wired "bypass" port overrides it (see render()).
     bool bypass = false;
 };
 
@@ -51,11 +51,27 @@ inline void refreshDerived(ChorusState &s)
     s.depthSamples = s.depthSec * kSampleRate;
 }
 
+inline float clampChorus(float value, float lo, float hi)
+{
+    return !(value >= lo) ? lo : (value > hi ? hi : value);
+}
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     auto &s = *inst.chorus;
-    if (s.bypass)
+    // Wired ports override the widget's settings once per block, same raw units the browser
+    // preview uses (rate Hz, depth/offset seconds), clamped to the widget's slider ranges
+    // (CHORUS_SLIDER_CONFIG in data/static/js/main.js).
+    auto fed = [&](int port)
+    { return controlPortConnected(inst, port) || (inst.audioConnectedPortMask & synth::portBit(port)) != 0; };
+    bool derivedDirty = false;
+    if (fed(2)) { s.rateHz = clampChorus(portSample(inst, 2, 0), 0.05f, 8.0f); derivedDirty = true; }
+    if (fed(3)) { s.depthSec = clampChorus(portSample(inst, 3, 0), 0.0f, 0.015f); derivedDirty = true; }
+    if (fed(4)) { s.offsetSec = clampChorus(portSample(inst, 4, 0), 0.0f, 0.04f); derivedDirty = true; }
+    if (derivedDirty) refreshDerived(s);
+    const bool bypass = fed(1) ? portSample(inst, 1, 0) >= cv::kGateThresholdVolts : s.bypass;
+    if (bypass)
     {
         // Dry passthrough - mono "in" duplicated to both outputs, same as
         // the normal (non-bypassed) signal is always mono-sourced stereo

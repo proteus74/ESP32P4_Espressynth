@@ -30,6 +30,29 @@ inline float clampRate(float value, float maxRate)
     return safe > limit ? limit : safe;
 }
 
+// "rate" (port 4), "gain" (5) and - LFO only - "phase" (6): a wired source overrides the
+// widget's own slider value once per block, with the same mapping the browser preview uses
+// (rate: 0-10V -> 0..maxRate, gain: 0-10V, phase: degrees -180..180).
+inline void applyPortOverrides(NodeInstance &inst, bool hasPhasePort)
+{
+    using namespace noderender;
+    auto &s = inst.lfo;
+    auto fed = [&](int port)
+    { return controlPortConnected(inst, port) || (inst.audioConnectedPortMask & synth::portBit(port)) != 0; };
+    auto volts = [&](int port)
+    {
+        const float v = portSample(inst, port, 0);
+        return !(v >= 0.0f) ? 0.0f : (v > cv::kMaxVolts ? cv::kMaxVolts : v);
+    };
+    if (fed(4)) s.rate = clampRate(volts(4) * s.maxRateHz / cv::kMaxVolts, s.maxRateHz);
+    if (fed(5)) s.gain = volts(5);
+    if (hasPhasePort && fed(6))
+    {
+        const float deg = portSample(inst, 6, 0);
+        s.phaseOffsetDeg = deg < -180.0f ? -180.0f : (deg > 180.0f ? 180.0f : deg);
+    }
+}
+
 // Global mode, called by Graph::renderBlock once per block for a voiced Lfo
 // widget with several voice instances (`voices` = voice 0..count-1). Voice 0
 // is the master whose output every other voice mirrors (see render()). The
@@ -123,6 +146,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // is centered on the user-set zeroPoint instead. Default gain=10V
     // + auto mode reproduces the old fixed-5V-center/full-swing behavior
     // exactly.
+    applyPortOverrides(inst, true);
     const float halfSwing = s.gain * 0.5f;
     const float clampLo = 0.0f;
     const float clampHi = cv::kMaxVolts;

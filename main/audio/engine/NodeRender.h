@@ -26,6 +26,8 @@
 #include "nodes/CvOutNode.h"
 #include "nodes/DigitalInNode.h"
 #include "nodes/DigitalOutNode.h"
+#include "nodes/MidiInNode.h"
+#include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -100,6 +102,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::DigitalOut:
         nodes::digitalout::render(inst, frames);
         break;
+    case NodeType::RgbLed:
+        nodes::rgbled::render(inst, frames);
+        break;
     case NodeType::SampleHold:
         nodes::samplehold::render(inst, frames);
         break;
@@ -155,11 +160,40 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         nodes::outputmultiplexer::render(inst, frames);
         break;
     case NodeType::EspEq:
-        processEspEq(*inst.espEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
+    {
+        using namespace noderender;
+        // Wired control ports override the widget's settings once per block, same raw units
+        // as the browser preview (Hz / Q / dB), clamped to the widget's slider ranges. The
+        // filter coefficients are only recomputed when a value actually changes.
+        auto &eq = *inst.espEq;
+        if (portIsFed(inst, 2)) eq.bypass = portSample(inst, 2, 0) >= cv::kGateThresholdVolts;
+        float frequency = eq.frequencyHz, q = eq.q, gainDb = eq.gainDb;
+        if (portIsFed(inst, 3)) frequency = clampToRange(portSample(inst, 3, 0), 20.0f, 22049.0f);
+        if (portIsFed(inst, 4)) q = clampToRange(portSample(inst, 4, 0), 0.1f, 20.0f);
+        if (portIsFed(inst, 5)) gainDb = clampToRange(portSample(inst, 5, 0), -15.0f, 15.0f);
+        if (frequency != eq.frequencyHz || q != eq.q || gainDb != eq.gainDb)
+            updateEspEq(eq, eq.filterType, frequency, q, gainDb);
+        processEspEq(eq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
         break;
+    }
     case NodeType::GraphicEq:
-        processGraphicEq(*inst.graphicEq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
+    {
+        using namespace noderender;
+        // Same override pattern as EspEq above: "bandN" maps 0-10V through that band's
+        // min/max/curve (like the browser's EFFECT_CV_PARAMS), "gain" is raw 0-10V.
+        auto &geq = *inst.graphicEq;
+        if (portIsFed(inst, 2)) geq.bypass = portSample(inst, 2, 0) >= cv::kGateThresholdVolts;
+        for (int band = 0; band < GraphicEqState::kBandCount; ++band)
+        {
+            if (!portIsFed(inst, 3 + band)) continue;
+            const float volts = clampToRange(portSample(inst, 3 + band, 0), 0.0f, cv::kMaxVolts);
+            const float gainDb = cv::cvToRange(volts, geq.bandMin[band], geq.bandMax[band], geq.bandLog[band]);
+            if (gainDb != geq.gainDb[band]) updateGraphicEqBandGain(geq, band, gainDb);
+        }
+        if (portIsFed(inst, 11)) geq.outputGainCv = clampToRange(portSample(inst, 11, 0), 0.0f, cv::kMaxVolts);
+        processGraphicEq(geq, inst.inPorts[0], inst.inPorts[1], inst.outL, inst.outR, frames);
         break;
+    }
     case NodeType::Multiplier:
         nodes::arithmetic::renderMultiplier(inst, frames);
         break;
@@ -311,6 +345,8 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Oscilloscope:
         break;
     case NodeType::MidiIn:
+        nodes::midiin::render(inst, frames);
+        break;
     case NodeType::MidiSplit:
     case NodeType::Unknown:
     default:

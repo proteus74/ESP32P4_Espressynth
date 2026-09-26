@@ -5096,3 +5096,101 @@ input[type="range"].port-slider + .port-value {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding: 0.15rem 0;
 }
+
+/* RGB LED widget + settings modal */
+.widget-instance[data-widget-type="rgb-led"] {
+  min-width: 140px;
+}
+
+.widget-instance[data-widget-type="rgb-led"] .widget-ports {
+  padding: 0;
+}
+
+/* Port label hidden, LED centered across the whole widget (not just the space after the dot). */
+.rgb-led-port-row > .port-label {
+  display: none;
+}
+
+.rgb-led-port-row {
+  min-height: 2.6rem;
+}
+
+.rgb-led-group {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.rgb-led-label {
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.rgb-led-warn {
+  color: #f87171;
+  font-weight: bold;
+}
+
+.rgb-led-lamp {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #000;
+  border: 2px solid var(--card-border);
+  transition: background-color 0.05s linear, box-shadow 0.05s linear;
+}
+
+.rgb-led-stop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+}
+
+.rgb-led-stop-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rgb-led-stop-row input[type="number"] {
+  width: 5.5rem;
+}
+
+.rgb-led-stop-row input[type="color"] {
+  width: 2.5rem;
+  height: 1.8rem;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.rgb-led-stop-fade {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+
+.rgb-led-stop-fade[hidden] {
+  display: none;
+}
+
+.rgb-led-preview {
+  height: 18px;
+  margin-top: 0.6rem;
+  border-radius: 4px;
+  border: 1px solid var(--card-border);
+}
+
+.rgb-led-preview-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}

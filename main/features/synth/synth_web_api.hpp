@@ -33,6 +33,7 @@
 
 #include "features/filesystem/littlefs_manager.hpp"
 #include "features/io/gpio_manager.hpp"
+#include "features/io/led_strip_manager.hpp"
 #include "features/io/i2c_device_registry.h"
 #include "features/sd_card/sd_card_manager.hpp"
 #include "features/web/web_server.hpp"
@@ -1316,12 +1317,20 @@ esp_err_t masterclock_handler(httpd_req_t *req) {
 // paramUpdate branch in the /ws handler below, not a POST here.
 esp_err_t device_settings_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
-    char json[320];
-    const int n = synth::formatDeviceSettingsJson(json, sizeof(json));
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+    char json[400];
+    int n = synth::formatDeviceSettingsJson(json, sizeof(json));
+    if (n <= 1 || static_cast<size_t>(n) >= sizeof(json)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
         return ESP_FAIL;
     }
+    // WS2812 string (features/io/led_strip_manager.hpp) rides along here instead of its own
+    // route - the URI handler table is nearly full. ledActiveCount is what the running driver
+    // addresses (settings only apply after a reboot), which is what RGB LED widgets validate against.
+    const auto &led = Feature::LedStrip::settings();
+    snprintf(json + n - 1, sizeof(json) - static_cast<size_t>(n - 1),
+             ",\"ledPin\":%d,\"ledCount\":%u,\"ledActiveCount\":%u,\"ledMaxCount\":%u}", led.pin,
+             static_cast<unsigned>(led.count), static_cast<unsigned>(Feature::LedStrip::active_count()),
+             static_cast<unsigned>(Feature::LedStrip::kMaxLeds));
     httpd_resp_sendstr(req, json);
     return ESP_OK;
 }
@@ -1402,7 +1411,8 @@ esp_err_t gpio_info_handler(httpd_req_t *req) {
     bool first = true;
     for (int pin = 0; pin < SOC_GPIO_PIN_COUNT; ++pin) {
         const auto gpio = static_cast<gpio_num_t>(pin);
-        if (!GPIO_IS_VALID_GPIO(gpio) || !Feature::IO::is_pin_reserved_for_gpio_settings(gpio)) continue;
+        if (!GPIO_IS_VALID_GPIO(gpio) ||
+            (!Feature::IO::is_pin_reserved_for_gpio_settings(gpio) && pin != Feature::LedStrip::settings().pin)) continue;
         len += snprintf(json + len, sizeof(json) - static_cast<size_t>(len), "%s%d", first ? "" : ",", pin);
         first = false;
     }
@@ -1591,6 +1601,25 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsNumber(nextCc)) ds.nextCc = nextCc->valueint;
                     if (cJSON_IsNumber(nextChannel)) ds.nextChannel = nextChannel->valueint;
                     synth::saveDeviceSettingsToFs();
+                    // WS2812 string pin/count - persisted only, applied at the next boot.
+                    cJSON *ledPin = cJSON_GetObjectItemCaseSensitive(params, "ledPin");
+                    cJSON *ledCount = cJSON_GetObjectItemCaseSensitive(params, "ledCount");
+                    if (cJSON_IsNumber(ledPin) || cJSON_IsNumber(ledCount)) {
+                        auto &led = Feature::LedStrip::settings();
+                        if (cJSON_IsNumber(ledPin)) {
+                            const int pin = ledPin->valueint;
+                            const bool usable = pin >= 0 && pin < SOC_GPIO_PIN_COUNT &&
+                                                GPIO_IS_VALID_OUTPUT_GPIO(static_cast<gpio_num_t>(pin)) &&
+                                                !Feature::IO::is_pin_reserved_for_gpio_settings(static_cast<gpio_num_t>(pin)) &&
+                                                Feature::IO::findGpioEntry(static_cast<int8_t>(pin)) == nullptr;
+                            led.pin = usable ? static_cast<int8_t>(pin) : -1;
+                        }
+                        if (cJSON_IsNumber(ledCount)) {
+                            const int count = ledCount->valueint;
+                            led.count = static_cast<uint16_t>(count < 0 ? 0 : count > Feature::LedStrip::kMaxLeds ? Feature::LedStrip::kMaxLeds : count);
+                        }
+                        Feature::LedStrip::save_settings_to_fs();
+                    }
                     handled_locally = true;
                 } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@gpioSettings") == 0 &&
                            cJSON_IsObject(params)) {

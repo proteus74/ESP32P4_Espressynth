@@ -118,6 +118,10 @@ struct WidgetParams
     float geqFreqHz[8] = {63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 14000.0f};
     float geqOutputGain = 10.0f;
     bool geqBypass = false;
+    // Per-band CV mapping for the "bandN" ports (main.js EFFECT_CV_PARAMS: bandNMin/Max/Curve).
+    float geqBandMin[8] = {-15.0f, -15.0f, -15.0f, -15.0f, -15.0f, -15.0f, -15.0f, -15.0f};
+    float geqBandMax[8] = {15.0f, 15.0f, 15.0f, 15.0f, 15.0f, 15.0f, 15.0f, 15.0f};
+    bool geqBandLog[8] = {};
     // gain - "amount" (Output Gain) and "curve" are raw CV (0-10V, see
     // CvConventions.h): amount 10V = unity gain default, curve 5V = unity
     // default (see GainState/cv::curveGain). gainGlobal is the "global"
@@ -204,6 +208,13 @@ struct WidgetParams
     // (Feature::IO::gpioSettings()) this widget talks to, chosen via the settings modal,
     // never live-updated (structural, set only in build()). -1 = placed but never configured.
     int8_t gpioPin = -1;
+    // rgb-led - target LED in the WS2812 string (Feature::LedStrip) plus the voltage->color
+    // stop list, sorted by volts at parse time (see nodes/RgbLedNode.h).
+    int16_t rgbLedIndex = 0;
+    uint8_t rgbStopCount = 0;
+    float rgbStopVolts[8] = {};
+    uint32_t rgbStopColor[8] = {}; // 0xRRGGBB
+    bool rgbStopFade[8] = {};
     // sample-hold - manual threshold, overridden by a connected Threshold CV.
     float sampleHoldThreshold = 5.0f;
     // midi-in

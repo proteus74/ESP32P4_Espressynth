@@ -799,6 +799,10 @@ private:
     // in yet - cleared at swap time in taskLoop.
     std::atomic<uint16_t> currentVoiceCount_{1};
     std::atomic<bool> cpuReloadRequested_{false};
+    // Voice count forced by a MIDI In "voices" CV (0 = none) - loader-task-owned, applied to
+    // every rebuild of the current preset until a real preset change/save clears it (see
+    // loaderTaskLoop/buildFromFile and nodes::midiin::render). Runtime only, never saved.
+    uint8_t voicesCvOverride_ = 0;
     std::atomic<bool> cpuReloadPending_{false};
     std::atomic<uint16_t> cpuReloadCeiling_{0};
     std::atomic<bool> panicClearMidiRequested_{false};
@@ -1080,6 +1084,22 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
         ESP_LOGW(kSynthEngineTag, "Preset JSON invalid (%s), keeping current graph", path);
         return nullptr;
     }
+    if (voicesCvOverride_ != 0)
+    {
+        // Only MIDI In widgets whose "voices" input is actually wired follow the CV.
+        for (uint16_t c = 0; c < doc->connectionCount; ++c)
+        {
+            if (strcmp(doc->connections[c].toPort, "voices") != 0) continue;
+            for (uint16_t w = 0; w < doc->widgetCount; ++w)
+            {
+                if (doc->widgets[w].type == NodeType::MidiIn &&
+                    strcmp(doc->widgets[w].id, doc->connections[c].toWidget) == 0)
+                {
+                    doc->widgets[w].params.voices = voicesCvOverride_;
+                }
+            }
+        }
+    }
 
     // A rebuild otherwise briefly needs room for OLD+NEW simultaneously
     // (liveGraph_ still renders while this is being built) - more internal
@@ -1174,7 +1194,19 @@ inline void SynthEngine::loaderTaskLoop()
         }
         const bool panicReload = panicReloadRequested_.exchange(false, std::memory_order_relaxed);
         const bool cpuReload = cpuReloadRequested_.exchange(false, std::memory_order_acquire);
-        if (!gotMsg && !panicReload && !cpuReload)
+        const uint8_t voicesCvRequest = nodes::midiin::gVoicesCvRequest.exchange(0, std::memory_order_acquire);
+        if (gotMsg)
+        {
+            voicesCvOverride_ = 0; // a new/re-saved preset starts from its own voice setting
+        }
+        else if (voicesCvRequest != 0 && voicesCvRequest != voicesCvOverride_)
+        {
+            voicesCvOverride_ = voicesCvRequest;
+            ESP_LOGI(kSynthEngineTag, "MIDI In voices CV -> rebuilding with %u voices",
+                     static_cast<unsigned>(voicesCvOverride_));
+        }
+        const bool voicesCvReload = !gotMsg && voicesCvRequest != 0;
+        if (!gotMsg && !panicReload && !cpuReload && !voicesCvReload)
         {
             continue;
         }

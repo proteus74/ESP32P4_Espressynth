@@ -222,6 +222,12 @@ inline void render(NodeInstance &inst, size_t frames)
             state.gatePrev = gateNow;
         }
     }
+    // "velocity" (port 9): any wired source scales the output 0-10V -> 0..1, like Adsr's
+    // velocity port. The MidiVelocity route writes the same value into this port.
+    if (noderender::portIsFed(inst, 9))
+    {
+        state.velocity = noderender::clampToRange(noderender::portSample(inst, 9, 0) * cv::kInvMaxVolts, 0.0f, 1.0f);
+    }
 
     inst.outIsRamp = false;
     inst.outIsConstant = false;

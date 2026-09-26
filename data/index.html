@@ -215,6 +215,13 @@
       </div>
 
       <div class="settings-section">
+        <h4 class="modal-section-title">LED String (WS2812)</h4>
+        <label class="modal-field"><span>Data Pin</span><select id="ledStripPinSelect"></select></label>
+        <label class="modal-field"><span>Number of LEDs</span><input type="number" id="ledStripCountInput" min="0" max="256" step="1"></label>
+        <p id="ledStripStatusText" class="modal-field-hint"></p>
+      </div>
+
+      <div class="settings-section">
         <h4 class="modal-section-title">Network</h4>
         <p id="networkSummaryText" class="modal-field-readout">–</p>
         <button type="button" id="openNetworkSettings" class="btn-secondary">Configure Network…</button>
@@ -1070,6 +1077,31 @@
     <div class="modal-actions">
       <button id="digitalOutSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="digitalOutSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="rgbLedSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>RGB LED Settings</h3>
+    <label class="modal-field"><span>LED Position</span><input type="number" id="rgbLedIndexInput" min="1" step="1"></label>
+    <p id="rgbLedIndexHint" class="modal-hint"></p>
+    <label class="modal-field">
+      <span>Color Mode</span>
+      <select id="rgbLedModeSelect">
+        <option value="gradient">Gradient (fade between stops)</option>
+        <option value="steps">Hard thresholds</option>
+        <option value="free">Free (fade per stop)</option>
+      </select>
+    </label>
+    <div id="rgbLedStopList" class="rgb-led-stop-list"></div>
+    <button type="button" id="rgbLedAddStop" class="btn-secondary">+ Add Stop</button>
+    <div id="rgbLedPreview" class="rgb-led-preview"></div>
+    <div class="rgb-led-preview-scale"><span>0 V</span><span>5 V</span><span>10 V</span></div>
+    <p class="modal-hint">Each stop's color applies from its voltage up to the next stop; below the first stop the first color holds. With fading, the color blends toward the next stop.</p>
+    <div class="modal-actions">
+      <button id="rgbLedSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="rgbLedSettingsSave">Save</button>
     </div>
   </div>
 </div>

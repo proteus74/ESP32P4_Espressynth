@@ -1,14 +1,58 @@
 #pragma once
 
+#include <atomic>
+#include <cmath>
+
+#include "../CvConventions.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
+#include "../SynthConfig.h"
 
-// Graph participant only - not a DSP-rendered node (no audio ports, no
-// render()), exists so the voiced/global BFS has a starting point and
-// ControlRoutes can reference it. See Graph::handleMidiEvent for the actual
-// note-on/off/CC routing. MidiInState (value member) stays in NodeState.h.
+// Graph participant - exists so the voiced/global BFS has a starting point and ControlRoutes
+// can reference it. See Graph::handleMidiEvent for the actual note-on/off/CC routing.
+// render() only reads its three control-only CV inputs (glide/glideTime/voices), so a patch
+// can drive them standalone, without the browser. MidiInState stays in NodeState.h.
 namespace nodes::midiin
 {
+
+// Voice count requested by a "voices" CV (0 = none pending). Written by the render task,
+// consumed by SynthEngine's loader task, which rebuilds the current preset with it.
+inline std::atomic<uint8_t> gVoicesCvRequest{0};
+
+// A voice-count change means a graph rebuild (short audio dropout), so a CV value must stay
+// on the same voice count this long before it is requested.
+constexpr float kVoicesCvStableSeconds = 0.3f;
+
+inline void render(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    auto &m = inst.midiIn;
+    if (portIsFed(inst, 0)) m.glide = portSample(inst, 0, 0) >= cv::kGateThresholdVolts;
+    if (portIsFed(inst, 1)) m.glideTime = clampToRange(portSample(inst, 1, 0), 0.0f, cv::kMaxVolts) * (2.0f / cv::kMaxVolts);
+    if (!portIsFed(inst, 2)) return;
+
+    // Same mapping as the browser: 0-10V -> 1..max voices, rounded.
+    const float normalized = clampToRange(portSample(inst, 2, 0), 0.0f, cv::kMaxVolts) / cv::kMaxVolts;
+    const uint8_t desired = static_cast<uint8_t>(lroundf(1.0f + normalized * static_cast<float>(SYNTH_VOICE_COUNT - 1)));
+    if (desired != m.voicesCvCandidate)
+    {
+        m.voicesCvCandidate = desired;
+        m.voicesCvStableBlocks = 0;
+        return;
+    }
+    const uint32_t stableBlocksNeeded =
+        static_cast<uint32_t>(kVoicesCvStableSeconds * static_cast<float>(synth::kSampleRate) / static_cast<float>(frames > 0 ? frames : 1));
+    if (m.voicesCvStableBlocks < stableBlocksNeeded)
+    {
+        ++m.voicesCvStableBlocks;
+        return;
+    }
+    if (desired != m.voices && desired != m.voicesCvRequested)
+    {
+        m.voicesCvRequested = desired;
+        gVoicesCvRequest.store(desired, std::memory_order_release);
+    }
+}
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {

@@ -1,0 +1,17 @@
+<h2>What it's for</h2>
+<p>Shows a signal from your patch as a color on one LED of a WS2812 LED string connected to the
+board. The widget's own round LED mirrors the color the real LED shows.</p>
+<p>The string itself (data pin and number of LEDs) is set up once in <strong>Settings &rarr; LED String</strong>;
+changes there take effect after a reboot. The LEDs are refreshed 20 times per second.</p>
+<h2>Input</h2>
+<p><span class="port-label">In</span> — the voltage that selects the color.</p>
+<h2>Settings</h2>
+<p>Double-click the widget to choose which LED of the string it controls and how voltages map to colors.
+The mapping is a list of up to 8 stops, each with a voltage and a color:</p>
+<ul>
+  <li><strong>Gradient</strong> — the color fades smoothly between neighbouring stops (e.g. 0 V red, 5 V green, 10 V blue: 7 V gives a green-blue mix).</li>
+  <li><strong>Hard thresholds</strong> — each stop's color applies from its voltage up to the next stop, with no fading (e.g. 0 V black, 0.1 V red: off at 0 V, bright red above 0.1 V).</li>
+  <li><strong>Free</strong> — choose per stop whether it fades to the next one.</li>
+</ul>
+<p>Below the first stop the first color holds, above the last stop the last color holds.
+If the chosen LED doesn't exist in the configured string, the widget shows a ❗ badge.</p>

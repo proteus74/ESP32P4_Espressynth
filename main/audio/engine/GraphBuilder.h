@@ -32,6 +32,7 @@
 #include "nodes/CvOutNode.h"
 #include "nodes/DigitalInNode.h"
 #include "nodes/DigitalOutNode.h"
+#include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
 #include "nodes/ConstNode.h"
 #include "features/io/i2c_bus_manager.hpp"
@@ -431,8 +432,14 @@ inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint1
     }
     else if (fromW.voiced && !toW.voiced)
     {
-        const bool monitorTap =
-            toW.type == NodeType::VuMeter || toW.type == NodeType::Oscilloscope || toW.type == NodeType::Spectrum;
+        // Monitor taps only pass the most recently played voice (Graph::monitorVoiceIndex),
+        // unscaled - an RGB LED shows that one voice's value, not a sqrt(N)-scaled voice sum.
+        // The same holds for any control-only input of a global widget (a setting such as a
+        // global filter's cutoff or MIDI In's glide): a sum of per-voice CVs is meaningless
+        // there, the last played voice is what the browser preview shows as well.
+        const bool monitorTap = toW.type == NodeType::VuMeter || toW.type == NodeType::Oscilloscope ||
+                                toW.type == NodeType::Spectrum || toW.type == NodeType::RgbLed ||
+                                ports::isControlOnlyInput(toW.type, toPort);
         const float scale = monitorTap ? 1.0f : 1.0f / sqrtf(static_cast<float>(fromW.instanceCount));
         for (uint16_t v = 0; v < fromW.instanceCount; ++v)
         {
@@ -594,6 +601,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::GraphicEq:
         initGraphicEq(*inst.graphicEq, p.geqFreqHz, p.geqGainDb, p.geqOutputGain);
         inst.graphicEq->bypass = p.geqBypass;
+        memcpy(inst.graphicEq->bandMin, p.geqBandMin, sizeof(p.geqBandMin));
+        memcpy(inst.graphicEq->bandMax, p.geqBandMax, sizeof(p.geqBandMax));
+        memcpy(inst.graphicEq->bandLog, p.geqBandLog, sizeof(p.geqBandLog));
         break;
     case NodeType::Gain:
         nodes::gain::build(inst, p);
@@ -612,6 +622,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::DigitalOut:
         nodes::digitalout::build(inst, p);
+        break;
+    case NodeType::RgbLed:
+        nodes::rgbled::build(inst, p);
         break;
     case NodeType::SampleHold:
         nodes::samplehold::build(inst, p);
@@ -1890,7 +1903,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         for (uint16_t w = 0; w < g->widgetCount; ++w)
         {
             if (g->widgets[w].type == NodeType::CvIn || g->widgets[w].type == NodeType::CvOut ||
-                g->widgets[w].type == NodeType::DigitalIn || g->widgets[w].type == NodeType::DigitalOut)
+                g->widgets[w].type == NodeType::DigitalIn || g->widgets[w].type == NodeType::DigitalOut ||
+                g->widgets[w].type == NodeType::RgbLed || g->widgets[w].type == NodeType::MidiIn)
             {
                 needed[w] = true;
             }

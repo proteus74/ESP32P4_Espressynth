@@ -191,6 +191,19 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
     const float kInvSampleRate = 1.0f / kSampleRate;
     auto &s = inst.osc;
+    // "gate" (port 6): a rising edge from any wired source restarts the waveform - the same
+    // reset Graph.h's MidiGate route does for a MIDI note-on (which also writes this port's
+    // controlValue, so gatePrev stays consistent and a note never resets twice).
+    if (portIsFed(inst, 6))
+    {
+        const bool gateNow = portSample(inst, 6, 0) > cv::kGateThresholdVolts;
+        if (gateNow && !s.gatePrev && s.wave != WaveType::Noise && s.wave != WaveType::PinkNoise)
+        {
+            s.phaseGen.resetPhase();
+            s.feedbackSample = 0.0f;
+        }
+        s.gatePrev = gateNow;
+    }
     // pitchCv (port 1) and tune (port 2): a genuine DSP edge
     // (audioConnectedPortMask) now re-evaluates hz every sample below - true
     // audio-rate FM/vibrato (see the pitchAudioFed/tuneAudioFed branch

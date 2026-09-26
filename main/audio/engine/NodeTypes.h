@@ -73,6 +73,7 @@ enum class NodeType : uint8_t
     DigitalOut,
     MdaPiano,
     Wavetable,
+    RgbLed,
     Unknown,
 };
 
@@ -268,6 +269,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::DigitalIn;
     if (strcmp(typeStr, "digital-out") == 0)
         return NodeType::DigitalOut;
+    if (strcmp(typeStr, "rgb-led") == 0)
+        return NodeType::RgbLed;
     return NodeType::Unknown;
 }
 

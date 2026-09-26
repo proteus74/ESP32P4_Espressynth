@@ -191,4 +191,14 @@ inline void parsePresetGraphicEq(cJSON *p, WidgetParams &out)
     }
     out.geqOutputGain = presetparser::getFloat(p, "gain", 10.0f);
     out.geqBypass = presetparser::getBool(p, "bypass", false);
+    for (int i = 0; i < GraphicEqState::kBandCount; ++i)
+    {
+        char name[16];
+        snprintf(name, sizeof(name), "band%dMin", i + 1);
+        out.geqBandMin[i] = presetparser::getFloat(p, name, -15.0f);
+        snprintf(name, sizeof(name), "band%dMax", i + 1);
+        out.geqBandMax[i] = presetparser::getFloat(p, name, 15.0f);
+        snprintf(name, sizeof(name), "band%dCurve", i + 1);
+        out.geqBandLog[i] = strcmp(presetparser::getString(p, name, "linear"), "log") == 0;
+    }
 }

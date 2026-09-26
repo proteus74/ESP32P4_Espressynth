@@ -463,6 +463,68 @@ async function fetchGpioInfo() {
   }
 }
 
+// WS2812 string (Settings -> LED String). pin/count are the saved settings, activeCount what
+// the running firmware actually drives (settings only apply after a reboot). Carried by
+// /api/settings/device, see synth_web_api.hpp's device_settings_handler.
+const ledStripPinSelect = document.getElementById("ledStripPinSelect");
+const ledStripCountInput = document.getElementById("ledStripCountInput");
+const ledStripStatusText = document.getElementById("ledStripStatusText");
+let ledStripInfo = null;
+
+async function fetchLedStripInfo() {
+  try {
+    const res = await fetch("/api/settings/device");
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (typeof data.ledPin !== "number") return null;
+    return {
+      pin: data.ledPin,
+      count: data.ledCount || 0,
+      activeCount: data.ledActiveCount || 0,
+      maxCount: data.ledMaxCount || 256,
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
+// Free pins = valid range minus reserved (which already includes the saved LED pin itself -
+// re-added here) minus pins used in Settings -> GPIO.
+function renderLedStripSettings(gpioInfo) {
+  ledStripPinSelect.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "-1";
+  none.textContent = "Not connected";
+  ledStripPinSelect.appendChild(none);
+  if (!ledStripInfo) {
+    ledStripPinSelect.disabled = true;
+    ledStripCountInput.disabled = true;
+    ledStripStatusText.textContent = "LED string settings unavailable.";
+    return;
+  }
+  ledStripPinSelect.disabled = false;
+  ledStripCountInput.disabled = false;
+  const taken = new Set([
+    ...(Array.isArray(gpioInfo.reserved) ? gpioInfo.reserved : []),
+    ...(Array.isArray(gpioInfo.configured) ? gpioInfo.configured.map((e) => e.pin) : []),
+  ]);
+  taken.delete(ledStripInfo.pin);
+  for (let pin = gpioInfo.minPin || 0; pin <= (gpioInfo.maxPin ?? -1); ++pin) {
+    if (taken.has(pin)) continue;
+    const opt = document.createElement("option");
+    opt.value = String(pin);
+    opt.textContent = `GPIO${pin}`;
+    ledStripPinSelect.appendChild(opt);
+  }
+  ledStripPinSelect.value = String(ledStripInfo.pin);
+  if (ledStripPinSelect.value !== String(ledStripInfo.pin)) ledStripPinSelect.value = "-1";
+  ledStripCountInput.max = String(ledStripInfo.maxCount);
+  ledStripCountInput.value = String(ledStripInfo.count);
+  ledStripStatusText.textContent = ledStripInfo.activeCount > 0
+    ? `Running: ${ledStripInfo.activeCount} LEDs. Changes take effect after a reboot.`
+    : "Not running. Changes take effect after a reboot.";
+}
+
 const gpioAddRow = document.getElementById("gpioAddRow");
 const gpioAddDisabledHint = document.getElementById("gpioAddDisabledHint");
 const gpioAddDirectionIn = document.getElementById("gpioAddDirectionIn");
@@ -663,6 +725,12 @@ async function openSettings() {
   } catch (err) {
     appendLog(`Could not load GPIO settings: ${err.message}`);
   }
+  try {
+    ledStripInfo = await fetchLedStripInfo();
+    renderLedStripSettings(await fetchGpioInfo());
+  } catch (err) {
+    appendLog(`Could not load LED string settings: ${err.message}`);
+  }
   deviceNameInput.focus();
 }
 
@@ -811,7 +879,18 @@ wifiScanButton.addEventListener("click", async () => {
 });
 
 document.getElementById("settingsSave").addEventListener("click", () => {
-  sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
+  const deviceParams = { name: deviceNameInput.value.trim() };
+  if (ledStripInfo) {
+    const ledPin = parseInt(ledStripPinSelect.value, 10);
+    const ledCount = Math.max(0, Math.min(ledStripInfo.maxCount, parseInt(ledStripCountInput.value, 10) || 0));
+    if (ledPin !== ledStripInfo.pin || ledCount !== ledStripInfo.count) {
+      deviceParams.ledPin = Number.isFinite(ledPin) ? ledPin : -1;
+      deviceParams.ledCount = ledCount;
+      ledStripInfo = { ...ledStripInfo, pin: deviceParams.ledPin, count: ledCount };
+      showToast("LED string settings take effect after a reboot");
+    }
+  }
+  sendLiveParamUpdate("@deviceSettings", deviceParams);
   const loadSamples = loadSamplesSetting.checked;
   try {
     localStorage.setItem(LOAD_SAMPLES_KEY, loadSamples ? "1" : "0");
@@ -1276,6 +1355,14 @@ const WIDGET_TYPES = {
   "digital-out": {
     label: "Digital Out",
     icon: "🔲",
+    inputs: [{ id: "in", label: "In" }],
+    outputs: [],
+  },
+  // One LED of the WS2812 string (Settings -> LED String). The color is computed by the
+  // firmware and mirrored back via cvStatus - no client-side simulation, same as cv-out.
+  "rgb-led": {
+    label: "LED",
+    icon: "💡",
     inputs: [{ id: "in", label: "In" }],
     outputs: [],
   },
@@ -1838,7 +1925,7 @@ const WIDGET_CATEGORIES = [
   { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
-  { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out"] },
+  { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"] },
 ];
 
 
@@ -2250,7 +2337,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out"];
+const DUAL_PAGE_TYPES = ["annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"];
 
 
 
@@ -2954,6 +3041,14 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
+  if (type === "rgb-led") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      openRgbLedSettings(id);
+    });
+  }
+
   if (type === "mixer") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -3209,6 +3304,33 @@ function createWidget(type, label, x, y, forcedId) {
     label.textContent = "Not configured";
 
     body.appendChild(label);
+    el.appendChild(body);
+  }
+
+  if (type === "rgb-led") {
+    rgbLedStates.set(id, { ledIndex: 0, stops: defaultRgbLedStops(), lastRgb: 0 });
+
+    // Lamp + label are moved into the "In" port row once the ports are built (see the
+    // port-row loop below), so the input sits level with the LED - same trick as voltmeter.
+    const body = document.createElement("div");
+    body.className = "widget-instance-body rgb-led-body";
+
+    const group = document.createElement("div");
+    group.className = "rgb-led-group";
+    group.dataset.role = "rgb-led-group";
+
+    const lamp = document.createElement("div");
+    lamp.className = "rgb-led-lamp";
+    lamp.dataset.role = "rgb-led-lamp";
+
+    const label = document.createElement("div");
+    label.className = "cv-io-label rgb-led-label";
+    label.dataset.role = "rgb-led-label";
+    label.textContent = "LED 1";
+
+    group.appendChild(lamp);
+    group.appendChild(label);
+    body.appendChild(group);
     el.appendChild(body);
   }
 
@@ -4727,6 +4849,15 @@ function createWidget(type, label, x, y, forcedId) {
         const readout = el.querySelector('[data-role="voltmeter-readout"]');
         if (readout) row.appendChild(readout);
       }
+      if (type === "rgb-led" && port.id === "in") {
+        const group = el.querySelector('[data-role="rgb-led-group"]');
+        if (group) {
+          const emptyBody = group.parentElement;
+          row.classList.add("rgb-led-port-row");
+          row.appendChild(group);
+          if (emptyBody?.classList.contains("rgb-led-body")) emptyBody.remove();
+        }
+      }
       if ((type === "vu-meter" || type === "vu-meter-horizontal") && port.id === "in") {
         const readout = el.querySelector('[data-role="vu-readout"]');
         if (readout) row.appendChild(readout);
@@ -6013,6 +6144,7 @@ function removeWidget(id, force = false) {
   dxEnvelopeStates.delete(id);
   constStates.delete(id);
   voltmeterStates.delete(id);
+  rgbLedStates.delete(id);
   audioMonitorStates.delete(id);
   oscilloscopeStates.delete(id);
   annotationStates.delete(id);
@@ -7167,7 +7299,8 @@ function routeMidiToKnobs(data) {
     return;
   }
 
-  knobStates.forEach((state, widgetId) => {
+  // Following an incoming CC only updates the display - the device already applied it.
+  withDeviceSyncMuted(() => knobStates.forEach((state, widgetId) => {
     const bindings = knobLayer(state, 0);
     bindings.controls.slice(0, state.count).forEach((binding, index) => {
       if (binding.cc === data.control && binding.channel === data.channel) {
@@ -7175,7 +7308,7 @@ function routeMidiToKnobs(data) {
         markDirty();
       }
     });
-  });
+  }));
 }
 
 const knobSettingsOverlay = document.getElementById("knobSettingsOverlay");
@@ -7838,7 +7971,8 @@ function routeMidiToButtons(data) {
     return;
   }
 
-  buttonStates.forEach((state, widgetId) => {
+  // Following an incoming CC only updates the display - the device already applied it.
+  withDeviceSyncMuted(() => buttonStates.forEach((state, widgetId) => {
     const bindings = buttonLayer(state, 0);
     bindings.controls.slice(0, state.count).forEach((binding, buttonIndex) => {
       if (binding.cc !== data.control || binding.channel !== data.channel) return;
@@ -7852,7 +7986,7 @@ function routeMidiToButtons(data) {
       publishButtonValue(widgetId, buttonIndex);
       markDirty();
     });
-  });
+  }));
 }
 
 const buttonSettingsOverlay = document.getElementById("buttonSettingsOverlay");
@@ -8344,7 +8478,8 @@ function routeMidiToUpDownButtons(data) {
   
   
   
-  upDownButtonStates.forEach((state, widgetId) => {
+  // Following an incoming CC only updates the display - the device already applied it.
+  withDeviceSyncMuted(() => upDownButtonStates.forEach((state, widgetId) => {
     const matchedUp = state.ccUp !== null && state.ccUp === data.control && state.channelUp === data.channel;
     const matchedDown = state.ccDown !== null && state.ccDown === data.control && state.channelDown === data.channel;
     if (!matchedUp && !matchedDown) return;
@@ -8367,7 +8502,7 @@ function routeMidiToUpDownButtons(data) {
 
     publishUpDownButtonValue(widgetId);
     markDirty();
-  });
+  }));
 }
 
 const upDownButtonSettingsOverlay = document.getElementById("upDownButtonSettingsOverlay");
@@ -8539,11 +8674,12 @@ function routeMidiToSwitches(data) {
   
   
   
-  switchStates.forEach((state, widgetId) => {
+  // Following an incoming CC only updates the display - the device already applied it.
+  withDeviceSyncMuted(() => switchStates.forEach((state, widgetId) => {
     if (state.cc === null || state.cc !== data.control || state.channel !== data.channel) return;
     setSwitchSelectIn2(widgetId, data.value >= 64);
     markDirty();
-  });
+  }));
 }
 
 const switchSettingsOverlay = document.getElementById("switchSettingsOverlay");
@@ -8656,11 +8792,12 @@ function routeMidiToOutputSwitches(data) {
     return;
   }
 
-  outputSwitchStates.forEach((state, widgetId) => {
+  // Following an incoming CC only updates the display - the device already applied it.
+  withDeviceSyncMuted(() => outputSwitchStates.forEach((state, widgetId) => {
     if (state.cc === null || state.cc !== data.control || state.channel !== data.channel) return;
     setOutputSwitchSelectOut2(widgetId, data.value >= 64);
     markDirty();
-  });
+  }));
 }
 
 const outputSwitchSettingsOverlay = document.getElementById("outputSwitchSettingsOverlay");
@@ -11239,6 +11376,251 @@ document.getElementById("digitalOutSettingsSave").addEventListener("click", () =
   closeDigitalOutSettings();
 });
 
+// RGB LED (External Hardware) - one LED of the WS2812 string. The input voltage maps through a
+// stop list (sorted by volts) to a color: below the first / above the last stop that stop's
+// color holds, between stop i and i+1 the color fades if stop i has `fade`, else stays hard.
+// The firmware drives the real LED (nodes/RgbLedNode.h); the on-widget LED is computed here from
+// the browser preview engine exactly like the voltmeter (deliverToWidget /
+// tickDebugVoltmeterAudioSources) - rgbLedColorAt() mirrors the firmware's mapColor().
+const rgbLedStates = new Map();
+const RGB_LED_MAX_STOPS = 8;
+
+function defaultRgbLedStops() {
+  return [
+    { v: 0, c: "#ff0000", fade: true },
+    { v: 5, c: "#00ff00", fade: true },
+    { v: 10, c: "#0000ff", fade: false },
+  ];
+}
+
+function normalizeRgbLedStops(stops) {
+  return stops
+    .slice(0, RGB_LED_MAX_STOPS)
+    .map((stop) => ({
+      v: Number.isFinite(stop.v) ? stop.v : 0,
+      c: /^#[0-9a-f]{6}$/i.test(stop.c) ? stop.c.toLowerCase() : "#000000",
+      fade: stop.fade === true,
+    }))
+    .sort((a, b) => a.v - b.v);
+}
+
+function rgbLedColorAt(stops, volts) {
+  if (stops.length === 0) return 0;
+  const hex = (stop) => parseInt(stop.c.slice(1), 16);
+  if (volts <= stops[0].v) return hex(stops[0]);
+  const last = stops.length - 1;
+  if (volts >= stops[last].v) return hex(stops[last]);
+  let i = 0;
+  while (i + 1 < last && volts >= stops[i + 1].v) ++i;
+  const a = hex(stops[i]);
+  if (!stops[i].fade) return a;
+  const b = hex(stops[i + 1]);
+  const span = stops[i + 1].v - stops[i].v;
+  const t = span > 0 ? (volts - stops[i].v) / span : 0;
+  let out = 0;
+  for (const shift of [16, 8, 0]) {
+    const ca = (a >> shift) & 0xff;
+    const cb = (b >> shift) & 0xff;
+    out |= Math.round(ca + (cb - ca) * t) << shift;
+  }
+  return out;
+}
+
+// One-time fetch of the LED string length, so each widget can flag an out-of-range LED
+// position itself (red "!") without any recurring network traffic.
+fetchLedStripInfo().then((info) => {
+  if (info && !ledStripInfo) ledStripInfo = info;
+  rgbLedStates.forEach((_, id) => updateRgbLedDisplay(id));
+});
+
+function rgbToCss(rgb) {
+  return `#${(rgb >>> 0).toString(16).padStart(6, "0")}`;
+}
+
+function updateRgbLedDisplay(widgetId) {
+  const state = rgbLedStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const lamp = el.querySelector('[data-role="rgb-led-lamp"]');
+  const label = el.querySelector('[data-role="rgb-led-label"]');
+  if (lamp) {
+    const color = rgbToCss(state.lastRgb || 0);
+    lamp.style.backgroundColor = color;
+    lamp.style.boxShadow = state.lastRgb ? `0 0 12px 3px ${color}` : "none";
+  }
+  // "Not in string" is decided locally from the LED string settings (fetched once at page load,
+  // see ledStripInfoReady) - no per-widget status comes over the network.
+  const found = !ledStripInfo || state.ledIndex < ledStripInfo.activeCount;
+  if (label) {
+    label.textContent = `LED ${state.ledIndex + 1}`;
+    if (!found) {
+      const warn = document.createElement("span");
+      warn.className = "rgb-led-warn";
+      warn.textContent = " !";
+      label.appendChild(warn);
+    }
+    label.title = !found ? "This LED position is not in the configured LED string" : "";
+  }
+}
+
+const rgbLedSettingsOverlay = document.getElementById("rgbLedSettingsOverlay");
+const rgbLedIndexInput = document.getElementById("rgbLedIndexInput");
+const rgbLedIndexHint = document.getElementById("rgbLedIndexHint");
+const rgbLedModeSelect = document.getElementById("rgbLedModeSelect");
+const rgbLedStopList = document.getElementById("rgbLedStopList");
+const rgbLedAddStop = document.getElementById("rgbLedAddStop");
+const rgbLedPreview = document.getElementById("rgbLedPreview");
+let pendingRgbLedId = null;
+let pendingRgbLedStops = [];
+let pendingRgbLedCount = null; // configured string length, null = unknown (settings unreachable)
+
+function rgbLedModeOf(stops) {
+  // The last stop's fade flag has no segment to act on - ignore it.
+  const flags = stops.slice(0, -1).map((stop) => stop.fade);
+  if (flags.length === 0 || flags.every(Boolean)) return "gradient";
+  if (flags.every((f) => !f)) return "steps";
+  return "free";
+}
+
+function renderRgbLedPreview() {
+  const stops = normalizeRgbLedStops(pendingRgbLedStops);
+  const parts = [];
+  for (let step = 0; step <= 100; ++step) {
+    parts.push(`${rgbToCss(rgbLedColorAt(stops, step / 10))} ${step}%`);
+  }
+  rgbLedPreview.style.background = `linear-gradient(to right, ${parts.join(", ")})`;
+}
+
+function renderRgbLedStops() {
+  const free = rgbLedModeSelect.value === "free";
+  rgbLedStopList.replaceChildren();
+  pendingRgbLedStops.forEach((stop, idx) => {
+    const row = document.createElement("div");
+    row.className = "rgb-led-stop-row";
+
+    const volts = document.createElement("input");
+    volts.type = "number";
+    volts.step = "0.01";
+    volts.min = "-10";
+    volts.max = "10";
+    volts.value = String(stop.v);
+    volts.title = "Voltage";
+    volts.addEventListener("input", () => {
+      const v = parseFloat(volts.value);
+      if (Number.isFinite(v)) stop.v = v;
+      renderRgbLedPreview();
+    });
+    const unit = document.createElement("span");
+    unit.textContent = "V";
+
+    const color = document.createElement("input");
+    color.type = "color";
+    color.value = stop.c;
+    color.addEventListener("input", () => {
+      stop.c = color.value;
+      renderRgbLedPreview();
+    });
+
+    const fadeLabel = document.createElement("label");
+    fadeLabel.className = "rgb-led-stop-fade";
+    fadeLabel.hidden = !free;
+    const fade = document.createElement("input");
+    fade.type = "checkbox";
+    fade.checked = stop.fade;
+    fade.addEventListener("change", () => {
+      stop.fade = fade.checked;
+      renderRgbLedPreview();
+    });
+    fadeLabel.appendChild(fade);
+    fadeLabel.appendChild(document.createTextNode(" Fade to next"));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn-secondary";
+    remove.textContent = "✕";
+    remove.title = "Remove stop";
+    remove.disabled = pendingRgbLedStops.length <= 1;
+    remove.addEventListener("click", () => {
+      pendingRgbLedStops.splice(idx, 1);
+      renderRgbLedStops();
+    });
+
+    row.append(volts, unit, color, fadeLabel, remove);
+    rgbLedStopList.appendChild(row);
+  });
+  rgbLedAddStop.disabled = pendingRgbLedStops.length >= RGB_LED_MAX_STOPS;
+  renderRgbLedPreview();
+}
+
+rgbLedModeSelect.addEventListener("change", () => {
+  const mode = rgbLedModeSelect.value;
+  if (mode !== "free") pendingRgbLedStops.forEach((stop) => { stop.fade = mode === "gradient"; });
+  renderRgbLedStops();
+});
+
+rgbLedAddStop.addEventListener("click", () => {
+  if (pendingRgbLedStops.length >= RGB_LED_MAX_STOPS) return;
+  const last = pendingRgbLedStops[pendingRgbLedStops.length - 1];
+  pendingRgbLedStops.push({
+    v: last ? Math.min(10, last.v + 1) : 0,
+    c: "#ffffff",
+    fade: rgbLedModeSelect.value === "gradient",
+  });
+  renderRgbLedStops();
+});
+
+async function openRgbLedSettings(widgetId) {
+  const state = rgbLedStates.get(widgetId);
+  if (!state) return;
+  pendingRgbLedId = widgetId;
+  pendingRgbLedStops = state.stops.map((stop) => ({ ...stop }));
+
+  const info = await fetchLedStripInfo();
+  pendingRgbLedCount = info ? info.count : null;
+  if (pendingRgbLedCount === 0) {
+    rgbLedIndexInput.disabled = true;
+    rgbLedIndexInput.removeAttribute("max");
+    rgbLedIndexHint.textContent = "No LED string defined in Settings - set its pin and LED count there first.";
+  } else {
+    rgbLedIndexInput.disabled = false;
+    if (pendingRgbLedCount === null) rgbLedIndexInput.removeAttribute("max");
+    else rgbLedIndexInput.max = String(pendingRgbLedCount);
+    rgbLedIndexHint.textContent = pendingRgbLedCount === null
+      ? "Could not read the LED string settings."
+      : `The string has ${pendingRgbLedCount} LEDs (1-${pendingRgbLedCount}).`;
+  }
+  rgbLedIndexInput.value = String(state.ledIndex + 1);
+  rgbLedModeSelect.value = rgbLedModeOf(pendingRgbLedStops);
+  renderRgbLedStops();
+  rgbLedSettingsOverlay.classList.remove("hidden");
+}
+
+function closeRgbLedSettings() {
+  rgbLedSettingsOverlay.classList.add("hidden");
+  pendingRgbLedId = null;
+}
+
+document.getElementById("rgbLedSettingsCancel").addEventListener("click", closeRgbLedSettings);
+
+document.getElementById("rgbLedSettingsSave").addEventListener("click", () => {
+  if (!pendingRgbLedId) return;
+  const state = rgbLedStates.get(pendingRgbLedId);
+  if (!state) return;
+  if (!rgbLedIndexInput.disabled) {
+    const position = parseInt(rgbLedIndexInput.value, 10);
+    const max = pendingRgbLedCount ?? 256;
+    if (!Number.isInteger(position) || position < 1 || position > max) {
+      showToast(`LED position must be between 1 and ${max}`);
+      return;
+    }
+    state.ledIndex = position - 1;
+  }
+  state.stops = normalizeRgbLedStops(pendingRgbLedStops);
+  updateRgbLedDisplay(pendingRgbLedId);
+  savePresetNow();
+  closeRgbLedSettings();
+});
+
 async function fetchI2cDevices() {
   try {
     const res = await fetch("/api/system/i2c");
@@ -11435,8 +11817,8 @@ function updateCvStatusDisplay(entries) {
       .filter((connection) => connection.from.widgetId === entry[0] && connection.from.portId === "value")
       .forEach((connection) => {
         const target = document.getElementById(connection.to.widgetId);
-        if (target && (target.dataset.widgetType === "debug" || target.dataset.widgetType === "voltmeter")) {
-          deliverToWidget(connection.to.widgetId, connection.to.portId, entry[2]);
+        if (target && ["debug", "voltmeter", "rgb-led"].includes(target.dataset.widgetType)) {
+          withDeviceSyncMuted(() => deliverToWidget(connection.to.widgetId, connection.to.portId, entry[2]));
         }
       });
   });
@@ -12192,14 +12574,15 @@ function tickAudioMonitors() {
 
 function tickDebugVoltmeterAudioSources() {
   document
-    .querySelectorAll('.widget-instance[data-widget-type="debug"], .widget-instance[data-widget-type="voltmeter"]')
+    .querySelectorAll('.widget-instance[data-widget-type="debug"], .widget-instance[data-widget-type="voltmeter"], ' +
+      '.widget-instance[data-widget-type="rgb-led"]')
     .forEach((el) => {
       const conn = connections.find((c) => c.to.widgetId === el.id && c.to.portId === "in");
       if (!conn) return;
       if (getPortKind(conn.from.widgetId, conn.from.portId, "out") !== "audio") return;
       const value = audioEngine.getPortValue(conn.from.widgetId, conn.from.portId);
       if (value === null) return;
-      deliverToWidget(el.id, "in", value);
+      withDeviceSyncMuted(() => deliverToWidget(el.id, "in", value));
     });
 }
 setInterval(tickDebugVoltmeterAudioSources, 50);
@@ -18575,12 +18958,31 @@ function propagate(widgetId, portId, value, voiceIndex) {
       // sample paths and appear to flicker.
       if (sourceKind === "audio" && c.to.portId === "in") {
         const target = document.getElementById(c.to.widgetId);
-        if (target && (target.dataset.widgetType === "debug" || target.dataset.widgetType === "voltmeter")) {
+        if (target && ["debug", "voltmeter", "rgb-led"].includes(target.dataset.widgetType)) {
           return;
         }
       }
-      deliverToWidget(c.to.widgetId, c.to.portId, value, voiceIndex);
+      // Cable path: the device drives the target itself - see withDeviceSyncMuted().
+      withDeviceSyncMuted(() => deliverToWidget(c.to.widgetId, c.to.portId, value, voiceIndex));
     });
+}
+
+// The device is the leading engine and runs standalone: it wires every patch cable and
+// handles all MIDI itself. The browser therefore must never push values it merely derived -
+// from a patch cable (propagate()) or from MIDI the device mirrored to it - back to the
+// device. While such a derived update runs, sendLiveParamUpdate()/
+// sendLiveParamUpdateThrottled()/savePresetNow() are muted; direct user interaction (a
+// widget's own slider/toggle - which also goes through deliverToWidget() -, knob drag,
+// settings dialog, MIDI learn) still reaches the device.
+let deviceSyncMuteDepth = 0;
+
+function withDeviceSyncMuted(fn) {
+  deviceSyncMuteDepth++;
+  try {
+    return fn();
+  } finally {
+    deviceSyncMuteDepth--;
+  }
 }
 
 function deliverToWidget(widgetId, portId, value, voiceIndex) {
@@ -18640,6 +19042,15 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
     const needle = el.querySelector('[data-role="voltmeter-needle"]');
     if (needle) needle.style.transform = `rotate(${(displayVolts / CV_MAX_VOLTS) * 60}deg)`;
+  }
+
+  if (el.dataset.widgetType === "rgb-led") {
+    const state = rgbLedStates.get(widgetId);
+    const num = Number(value);
+    if (state) {
+      state.lastRgb = rgbLedColorAt(state.stops, Number.isNaN(num) ? 0 : num);
+      updateRgbLedDisplay(widgetId);
+    }
   }
 
   if (el.dataset.widgetType === "multiplier") {
@@ -20771,6 +21182,21 @@ const WIDGET_ENGINES = {
       updateGpioIoLabel(id);
     },
   },
+  "rgb-led": {
+    getParams: (id) => {
+      const state = rgbLedStates.get(id);
+      return state ? { ledIndex: state.ledIndex, stops: state.stops.map((stop) => ({ ...stop })) } : {};
+    },
+    applyParams: (id, params) => {
+      const state = rgbLedStates.get(id);
+      if (!state || !params) return;
+      state.ledIndex = Number.isInteger(params.ledIndex) && params.ledIndex >= 0 ? params.ledIndex : 0;
+      state.stops = Array.isArray(params.stops) && params.stops.length > 0
+        ? normalizeRgbLedStops(params.stops)
+        : defaultRgbLedStops();
+      updateRgbLedDisplay(id);
+    },
+  },
   "digital-out": {
     getParams: (id) => {
       const state = digitalOutStates.get(id);
@@ -21689,6 +22115,9 @@ async function savePresetNow() {
   
   
   if (restoringPreset) return;
+  // A cable-driven change (e.g. a CV into MIDI In's "voices") must not rewrite the preset on
+  // the device over and over - see deliverToWidget().
+  if (deviceSyncMuteDepth > 0) return;
   await saveToServer(currentPresetName);
 }
 
@@ -21823,6 +22252,7 @@ document.getElementById("panicBtn").addEventListener("click", () => {
 });
 
 function sendLiveParamUpdate(widgetId, params) {
+  if (deviceSyncMuteDepth > 0) return; // see deliverToWidget()
   wsSend({ type: "paramUpdate", widgetId, params });
 }
 
@@ -21833,6 +22263,7 @@ function sendLiveParamUpdate(widgetId, params) {
 const pendingLiveParams = new Map(); 
 let liveParamFlushScheduled = false;
 function sendLiveParamUpdateThrottled(widgetId, params) {
+  if (deviceSyncMuteDepth > 0) return; // see deliverToWidget()
   const existing = pendingLiveParams.get(widgetId) || {};
   pendingLiveParams.set(widgetId, Object.assign(existing, params));
   if (!liveParamFlushScheduled) {
