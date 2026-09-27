@@ -4,14 +4,18 @@ one after another as a clock pulses it forward. Great for classic arpeggio and s
 patterns without needing a DAW.</p>
 <h2>Inputs</h2>
 <ul>
-<li><span class="port-label">Clock</span> — advances to the next step on each pulse (patch from a Clock widget, or leave unpatched to use the internal Rate).</li>
+<li><span class="port-label">Trigger</span> — advances to the next step on each pulse (patch from a Clock widget, or leave unpatched to use BPM timing).</li>
+<li><span class="port-label">BPM</span> — accepts tempo directly (120 means 120 BPM), for example from Clock's BPM output. Without a cable, Master Clock supplies tempo. Generates four steps per beat while Trigger is unpatched; a connected Trigger controls individual steps.</li>
 <li><span class="port-label">Gate</span> — gates the sequencer on/off, e.g. from a held key.</li>
 <li><span class="port-label">Pitch</span> — an optional pitch CV added on top of the steps, useful for transposing the whole pattern by playing a key.</li>
 <li><span class="port-label">Direction</span> — picks Forward, Backward, Ping-Pong, or Random playback order.</li>
-<li><span class="port-label">Gate Out Time</span> — how long each step's gate output stays high.</li>
-<li><span class="port-label">Rate</span> — the built-in fallback clock speed, used only when nothing is patched into Clock.</li>
+<li><span class="port-label">Gate-Out-Time</span> — how long each step's gate output stays high.</li>
 <li><span class="port-label">Step 1–16</span> — the pitch value for each of the sixteen steps.</li>
 </ul>
+<h2>Skip on C0</h2>
+<p>Enable Skip on C0 in the widget settings to turn steps at 0 V into rests. Each rest consumes one trigger, keeps the previous CV and sends no Gate Out pulse. It also ends any Gate Out pulse still running from the previous step. The zero-value knob is dimmed but remains editable. Connected step CVs are evaluated before applying Pitch. The option is saved with the preset and defaults to off.</p>
+<h2>Snap to Semitones</h2>
+<p>Enable <strong>Snap to Semitones</strong> in settings to quantize all step values, including mouse movement, MIDI-controlled knobs and external step CVs. Without Pitch connected, the spacing is 1/12 V. With Pitch connected, spacing follows Max Pitch Offset. The ESP engine applies the same quantization during standalone playback, without a browser. The option is saved with the preset and defaults to off.</p>
 <h2>Outputs</h2>
 <ul>
 <li><span class="port-label">CV</span> — the current step's pitch, patch into an oscillator's Pitch.</li>

@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 
 #include "../CvConventions.h"
+#include "../MasterClock.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -32,7 +33,7 @@ constexpr int kDirectionPort = 3;
 constexpr int kStep1Port = 4;
 constexpr int kStepPortCount = 16;
 constexpr int kPulseTimePort = 20;
-// Internal fallback clock's own tempo CV - see render()'s clockPortWired
+// Direct BPM tempo input - see render()'s clockPortWired
 // branch. Only ever consulted while "clock" (port 0) itself is unwired.
 constexpr int kRatePort = 21;
 static_assert(kStep1Port + kStepPortCount <= static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
@@ -110,6 +111,8 @@ struct StepArpState
     // outright, staying continuously high - a legato feel, no retrigger.
     // See render()'s retriggerGapRemaining/pendingPulseSamples handling.
     bool retriggerGateOut = false;
+    bool skipOnC0 = false;
+    bool snapToSemitones = false;
     uint32_t retriggerGapRemaining = 0; // samples left in the forced-low gap, 0 = none pending
     uint32_t pendingPulseSamples = 0;   // pulse length to apply once the gap above reaches 0
     uint32_t rngState = 0x9e3779b9u; // never 0 - a 0 state would make xorshift32 stick at 0
@@ -119,14 +122,8 @@ struct StepArpState
     // zuletzt ausgegebene CV erhalten").
     float heldCv = 5.0f;
 
-    // Internal fallback clock generator - drives stepping off "rate" (Port-
-    // Index 21, local-slider-or-wired-CV, same split as pulseMs/pulseTime
-    // above) instead of the external "clock" cable whenever that cable is
-    // unwired (see render()'s clockPortWired branch). Phase accumulator,
-    // not a per-JS timer - mirrors nodes::clock::render()'s own
-    // ClockState::phaseSec exactly, just private to this node instead of a
-    // shared NodeState struct (nothing else needs it). minBpm is always 0
-    // here (no separate field, unlike Clock's own minBpm/maxBpm pair).
+    // Legacy preset parameters. Generated steps now use direct BPM or
+    // Master Clock; the private phase accumulator resyncs on Gate.
     float internalClockCvVolts = 0.0f;
     float internalClockMaxBpm = 120.0f;
     bool internalClockRoundBpm = false;
@@ -185,7 +182,18 @@ inline float stepCv(const NodeInstance &inst, const StepArpState &s, uint8_t idx
 {
     const int port = kStep1Port + idx;
     const bool wired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(port)) != 0;
-    return wired ? noderender::portSample(inst, port, i) : s.stepVolts[idx];
+    const float raw = wired ? noderender::portSample(inst, port, i) : s.stepVolts[idx];
+    if (!s.snapToSemitones) return raw;
+    const float volts = std::isfinite(raw) ? fmaxf(0.0f, fminf(cv::kMaxVolts, raw)) : 0.0f;
+    const bool pitchWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(kPitchPort)) != 0;
+    if (pitchWired && s.maxSemitoneOffset > 0.0f)
+    {
+        const float center = cv::kMaxVolts * 0.5f;
+        // floor(x + 0.5) matches browser Math.round(), including negative ties.
+        const float semitones = floorf((volts - center) * s.maxSemitoneOffset / center + 0.5f);
+        return fmaxf(0.0f, fminf(cv::kMaxVolts, center + semitones * center / s.maxSemitoneOffset));
+    }
+    return floorf(volts * 12.0f + 0.5f) / 12.0f;
 }
 
 // Plays s.currentStep (sample-and-holds its CV + starts the gateOut pulse,
@@ -200,6 +208,16 @@ inline void triggerStep(NodeInstance &inst, StepArpState &s, size_t i, float sam
 {
     using namespace noderender;
     const float stepVolts = stepCv(inst, s, s.currentStep, i);
+    if (s.skipOnC0 && stepVolts <= 0.0f)
+    {
+        // A rest consumes this step, preserves held CV and stops any overlapping gate.
+        s.pulseSamplesRemaining = 0;
+        s.pendingPulseSamples = 0;
+        s.retriggerGapRemaining = 0;
+        const Direction dir = directionFromCv(portSample(inst, kDirectionPort, i));
+        s.currentStep = nextStepIndex(s.currentStep, s.stepCount, dir, s.pingPongForward, s.rngState);
+        return;
+    }
     // "pitch" (Port-Index 2) - when wired, a step's own knob value is a
     // +/-N-semitone OFFSET from its own 5V center, added on top of the
     // incoming Pitch CV (0 Halbtoene at the knob's 5V default + a 5V Pitch
@@ -287,17 +305,13 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool clockPortWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
                                   synth::portBit(kClockPort)) != 0;
 
-    // Internal fallback clock's own tempo CV ("rate", Port-Index 21) - same
-    // wired-CV-or-local-slider split as "pulseTime" above. Only computed
-    // (and only matters) while clockPortWired is false.
-    const bool rateWired = (inst.audioConnectedPortMask & synth::portBit(kRatePort)) != 0;
-    const float internalCv = rateWired ? portSample(inst, kRatePort, 0) : s.internalClockCvVolts;
-    float internalBpm = (internalCv / cv::kMaxVolts) * s.internalClockMaxBpm;
-    if (s.internalClockRoundBpm)
-    {
-        internalBpm = roundf(internalBpm);
-    }
-    const float internalPeriodSec = internalBpm > 0.0f ? 60.0f / internalBpm : 0.0f;
+    // BPM accepts the connected tempo directly; Master Clock is the fallback.
+    const bool rateWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(kRatePort)) != 0;
+    const auto &mc = synth::masterClock();
+    const float tempo = rateWired ? portSample(inst, kRatePort, 0) : (mc.roundBpm ? roundf(mc.bpm) : mc.bpm);
+    float internalBpm = std::isfinite(tempo) ? fmaxf(0.0f, tempo) : 0.0f;
+    // A step is a 16th note (4 steps per beat), matching the drum sequencer.
+    const float internalPeriodSec = internalBpm > 0.0f ? 15.0f / internalBpm : 0.0f;
 
     for (size_t i = 0; i < frames; ++i)
     {
@@ -410,6 +424,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.pulseTimeMaxSec = p.stepArpPulseTimeMaxSec;
     s.maxSemitoneOffset = p.stepArpMaxSemitoneOffset;
     s.retriggerGateOut = p.stepArpRetriggerGateOut;
+    s.skipOnC0 = p.stepArpSkipOnC0;
+    s.snapToSemitones = p.stepArpSnapToSemitones;
     s.internalClockCvVolts = p.stepArpClockCvVolts;
     s.internalClockMaxBpm = p.stepArpClockMaxBpm;
     s.internalClockRoundBpm = p.stepArpClockRoundBpm;
@@ -428,7 +444,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.retriggerGapRemaining = 0;
     s.pendingPulseSamples = 0;
     s.rngState = 0x9e3779b9u;
-    s.heldCv = s.stepVolts[0];
+    s.heldCv = s.skipOnC0 && s.stepVolts[0] <= 0.0f ? 5.0f : s.stepVolts[0];
     s.internalPhaseSec = 0.0f;
 }
 
@@ -508,6 +524,16 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.stepArp->retriggerGateOut = value >= 0.5f;
         return true;
     }
+    if (strcmp(name, "skipOnC0") == 0)
+    {
+        inst.stepArp->skipOnC0 = value >= 0.5f;
+        return true;
+    }
+    if (strcmp(name, "snapToSemitones") == 0)
+    {
+        inst.stepArp->snapToSemitones = value >= 0.5f;
+        return true;
+    }
     if (strcmp(name, "direction") == 0)
     {
         // Local "direction" slider - see build()'s comment. A genuine cable
@@ -550,6 +576,8 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.stepArpMaxSemitoneOffset = presetparser::getFloat(p, "maxSemitoneOffset", 60.0f);
     out.stepArpDirectionVolts = presetparser::getFloat(p, "direction", 0.0f);
     out.stepArpRetriggerGateOut = presetparser::getBool(p, "retriggerGateOut", false);
+    out.stepArpSkipOnC0 = presetparser::getBool(p, "skipOnC0", false);
+    out.stepArpSnapToSemitones = presetparser::getBool(p, "snapToSemitones", false);
     out.stepArpClockCvVolts = presetparser::getFloat(p, "clockCvVolts", 0.0f);
     out.stepArpClockMaxBpm = presetparser::getFloat(p, "clockMaxBpm", 120.0f);
     out.stepArpClockRoundBpm = presetparser::getBool(p, "clockRoundBpm", false);

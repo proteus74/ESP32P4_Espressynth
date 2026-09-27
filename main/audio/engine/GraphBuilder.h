@@ -34,6 +34,7 @@
 #include "nodes/DigitalOutNode.h"
 #include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
+#include "nodes/MonoflopNode.h"
 #include "nodes/ConstNode.h"
 #include "features/io/i2c_bus_manager.hpp"
 #include "nodes/CurtisFilterNode.h"
@@ -436,7 +437,7 @@ inline void classifyIdleRendered(const PresetDoc &doc, const bool *voiced, bool 
 }
 
 inline void addEdge(Graph &g, uint16_t fromInstance, uint8_t fromPort, uint16_t toInstance, uint8_t toPort, float scale,
-             bool monitorTap = false)
+             bool monitorTap = false, const char *paramName = "in")
 {
     if (g.edgeCount >= synth::kMaxRuntimeEdges)
     {
@@ -450,12 +451,14 @@ inline void addEdge(Graph &g, uint16_t fromInstance, uint8_t fromPort, uint16_t 
     e.toPort = toPort;
     e.scale = scale;
     e.monitorTap = monitorTap;
+    snprintf(e.paramName, sizeof(e.paramName), "%s", paramName);
 }
 
 // Expands one logical (widget,port)->(widget,port) connection into the
 // concrete instance-level edges per the voiced/global fan-in/fan-out rules
 // (see plan). The 1/sqrt(N) fan-in compensation is resolved once here.
-inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint16_t toWidgetIdx, int toPort)
+inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint16_t toWidgetIdx, int toPort,
+                           const char *paramName = "in")
 {
     const WidgetSlot &fromW = g.widgets[fromWidgetIdx];
     const WidgetSlot &toW = g.widgets[toWidgetIdx];
@@ -465,7 +468,7 @@ inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint1
         for (uint16_t v = 0; v < fromW.instanceCount; ++v)
         {
             addEdge(g, fromW.instanceBase + v, static_cast<uint8_t>(fromPort), toW.instanceBase + v,
-                    static_cast<uint8_t>(toPort), 1.0f);
+                    static_cast<uint8_t>(toPort), 1.0f, false, paramName);
         }
     }
     else if (fromW.voiced && !toW.voiced)
@@ -482,7 +485,7 @@ inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint1
         for (uint16_t v = 0; v < fromW.instanceCount; ++v)
         {
             addEdge(g, fromW.instanceBase + v, static_cast<uint8_t>(fromPort), toW.instanceBase,
-                    static_cast<uint8_t>(toPort), scale, monitorTap);
+                    static_cast<uint8_t>(toPort), scale, monitorTap, paramName);
         }
     }
     else if (!fromW.voiced && toW.voiced)
@@ -490,13 +493,13 @@ inline void wireConnection(Graph &g, uint16_t fromWidgetIdx, int fromPort, uint1
         for (uint16_t v = 0; v < toW.instanceCount; ++v)
         {
             addEdge(g, fromW.instanceBase, static_cast<uint8_t>(fromPort), toW.instanceBase + v,
-                    static_cast<uint8_t>(toPort), 1.0f);
+                    static_cast<uint8_t>(toPort), 1.0f, false, paramName);
         }
     }
     else
     {
         addEdge(g, fromW.instanceBase, static_cast<uint8_t>(fromPort), toW.instanceBase, static_cast<uint8_t>(toPort),
-                1.0f);
+                1.0f, false, paramName);
     }
 }
 
@@ -669,6 +672,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::SampleHold:
         nodes::samplehold::build(inst, p);
+        break;
+    case NodeType::Monoflop:
+        nodes::monoflop::build(inst, p);
         break;
     case NodeType::Mixer:
         nodes::mixer::build(inst, p);
@@ -1251,7 +1257,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // (see there) - no more connection restriction.
         if (fromPort >= 0 && toPort >= 0)
         {
-            wireConnection(*g, static_cast<uint16_t>(fromIdx), fromPort, static_cast<uint16_t>(toIdx), toPort);
+            wireConnection(*g, static_cast<uint16_t>(fromIdx), fromPort, static_cast<uint16_t>(toIdx), toPort, cd.toPort);
             markDependency(static_cast<uint16_t>(fromIdx), static_cast<uint16_t>(toIdx));
 
             const WidgetSlot &targetSlot = g->widgets[toIdx];

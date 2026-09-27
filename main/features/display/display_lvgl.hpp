@@ -89,6 +89,10 @@ constexpr size_t FRAME_BUFFER_COUNT = 2;
 constexpr size_t FRAME_BUFFER_COUNT = 3;
 #endif
 static esp_lcd_panel_handle_t s_panel = nullptr;
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+static SemaphoreHandle_t s_dpi_copy_done = nullptr;
+static uint8_t* s_lvgl_second_buffer = nullptr;
+#endif
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 static SemaphoreHandle_t s_dpi_vsync = nullptr;
 static void* s_frame_buffers[FRAME_BUFFER_COUNT] = {};
@@ -102,6 +106,9 @@ static esp_lcd_touch_handle_t s_touch_handle = nullptr;
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
 static std::atomic<bool> s_splash_frame_pending{false};
 static std::atomic<TickType_t> s_splash_visible_since{0};
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+static std::atomic<bool> s_dma_splash_pending{false};
+#endif
 static lv_obj_t* s_splash_background = nullptr;
 static lv_obj_t* s_splash_image = nullptr;
 #endif
@@ -486,6 +493,24 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
+bool on_dpi_copy_done(esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_data_t*, void*) {
+#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+    if (s_dma_splash_pending.exchange(false, std::memory_order_acq_rel) &&
+        s_splash_frame_pending.exchange(false, std::memory_order_acq_rel)) {
+        s_splash_visible_since.store(xTaskGetTickCountFromISR(), std::memory_order_release);
+    }
+#endif
+    BaseType_t task_woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_dpi_copy_done, &task_woken);
+    return task_woken == pdTRUE;
+}
+
+void flush_wait_cb(lv_display_t*) {
+    // Yield while DMA2D reads the buffer; never reuse it before completion.
+    ESP_ERROR_CHECK(xSemaphoreTake(s_dpi_copy_done, pdMS_TO_TICKS(200)) == pdTRUE
+                        ? ESP_OK : ESP_ERR_TIMEOUT);
+}
+
 void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     // LV_DISPLAY_RENDER_MODE_PARTIAL: px_map holds only the [area] rectangle (a small,
     // internal-RAM-preferred strip buffer - see lv_display_set_buffers() below), not the
@@ -495,12 +520,17 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     // frame every redraw, regardless of how much of the screen actually changed).
     // Intentionally unsynchronized: faster page rebuilds at the cost of possible tearing.
 
+#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+    s_dma_splash_pending.store(s_dpi_copy_done != nullptr && lv_display_flush_is_last(display),
+                              std::memory_order_release);
+#endif
     const esp_err_t draw_result = esp_lcd_panel_draw_bitmap(
         s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
     if (draw_result != ESP_OK) {
         ESP_LOGE("FeatureLVGL", "Display frame switch failed: %s",
                  esp_err_to_name(draw_result));
     }
+    if (draw_result == ESP_OK && s_dpi_copy_done != nullptr) return;
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
     if (lv_display_flush_is_last(display) &&
@@ -943,6 +973,19 @@ inline esp_err_t init() {
 #endif
 
     s_panel = panel;
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+    s_dpi_copy_done = xSemaphoreCreateBinary();
+    if (s_dpi_copy_done != nullptr && esp_lcd_dpi_panel_enable_dma2d(panel) == ESP_OK) {
+        esp_lcd_dpi_panel_event_callbacks_t callbacks{};
+        callbacks.on_color_trans_done = on_dpi_copy_done;
+        ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_register_event_callbacks(panel, &callbacks, nullptr),
+                            TAG, "DMA2D callback registration failed");
+    } else {
+        if (s_dpi_copy_done != nullptr) vSemaphoreDelete(s_dpi_copy_done);
+        s_dpi_copy_done = nullptr;
+        ESP_LOGW(TAG, "DMA2D unavailable; using synchronous display copies");
+    }
+#endif
 #if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(
                             panel, FRAME_BUFFER_COUNT, &s_frame_buffers[0],
@@ -982,6 +1025,7 @@ inline esp_err_t init() {
     // creates (see app_core.hpp), so pin taskLVGL to MAIN_CORE like the rest of the UI/input
     // work instead of leaving it free to migrate.
     lvgl_config.task_affinity = App::MAIN_CORE;
+    lvgl_config.task_max_sleep_ms = 33;
     // PNG decoding and LittleFS/VFS calls need more stack than the port's 7 KB default.
     lvgl_config.task_stack = 16 * 1024;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_config), TAG, "LVGL port initialization failed");
@@ -1013,7 +1057,7 @@ inline esp_err_t init() {
     }
 
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
-    // Partial mode: a strip buffer (2/10 of screen height) instead of a full
+    // Partial mode: a strip buffer instead of a full
     // 1024x600x2B (~1.2MB) frame buffer. flush_cb() above now draws only the changed
     // rectangle via esp_lcd_panel_draw_bitmap()'s partial-rect support, so most UI updates
     // (a label, the touch popup, button feedback) write a small fraction of what a full
@@ -1021,8 +1065,9 @@ inline esp_err_t init() {
     // contention burst that was pushing the synth render task's block time over budget at
     // higher voice counts (see project notes). Only this board's flush_cb is partial-rect-
     // aware; other boards keep the full-frame path below untouched.
+    // PSRAM fallback: two strips repaint a whole page; small changes transfer only their rectangle.
     const size_t draw_buffer_size = CurrentBoard::DISPLAY_NATIVE_WIDTH *
-                                    (CurrentBoard::DISPLAY_NATIVE_HEIGHT / 5) *
+                                    (CurrentBoard::DISPLAY_NATIVE_HEIGHT / 2) *
                                     sizeof(lv_color16_t);
     const lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_PARTIAL;
 #else
@@ -1032,7 +1077,7 @@ inline esp_err_t init() {
     const lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_FULL;
 #endif
     s_lvgl_frame_buffer = static_cast<uint8_t*>(
-        heap_caps_malloc(draw_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        heap_caps_aligned_alloc(64, draw_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (s_lvgl_frame_buffer == nullptr) {
         s_lvgl_frame_buffer = static_cast<uint8_t*>(
             heap_caps_malloc(draw_buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -1043,7 +1088,17 @@ inline esp_err_t init() {
         return ESP_ERR_NO_MEM;
     }
 
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+    if (s_dpi_copy_done != nullptr) {
+        s_lvgl_second_buffer = static_cast<uint8_t*>(
+            heap_caps_aligned_alloc(64, draw_buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        lv_display_set_flush_wait_cb(display, flush_wait_cb);
+    }
+    lv_display_set_buffers(display, s_lvgl_frame_buffer, s_lvgl_second_buffer, draw_buffer_size, render_mode);
+#else
     lv_display_set_buffers(display, s_lvgl_frame_buffer, nullptr, draw_buffer_size, render_mode);
+#endif
+    ESP_LOGI(TAG, "LVGL draw buffer: %u KiB", static_cast<unsigned>(draw_buffer_size / 1024));
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(display, flush_cb);
 
@@ -1105,8 +1160,8 @@ inline esp_err_t init() {
     lv_indev_set_type(touch_indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(touch_indev, touch_read_cb);
     lv_indev_set_display(touch_indev, display);
-    lv_timer_set_period(lv_indev_get_read_timer(touch_indev), 50);
-    ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d, 20 polls/s)",
+    lv_timer_set_period(lv_indev_get_read_timer(touch_indev), 16);
+    ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d, 16 ms polling)",
              CurrentBoard::PIN_TOUCH_RST, CurrentBoard::PIN_TOUCH_INT);
 
 #if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \

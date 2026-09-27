@@ -236,6 +236,19 @@ inline void broadcast_status_tick() {
             if (core0_load > 100.0f) core0_load = 100.0f;
         }
     }
+    static configRUN_TIME_COUNTER_TYPE previous_task_runtime[3] = {};
+    const char *task_names[] = {"taskLVGL", "httpd", "main"};
+    float task_load[3] = {};
+    for (size_t i = 0; i < 3; ++i) {
+        const TaskHandle_t task = xTaskGetHandle(task_names[i]);
+        if (task == nullptr) continue;
+        TaskStatus_t status{};
+        vTaskGetInfo(task, &status, pdFALSE, eInvalid);
+        if (previous_sample_us != 0 && sample_us > previous_sample_us)
+            task_load[i] = 100.0f * static_cast<float>(status.ulRunTimeCounter - previous_task_runtime[i]) /
+                           static_cast<float>(sample_us - previous_sample_us);
+        previous_task_runtime[i] = status.ulRunTimeCounter;
+    }
     previous_idle_runtime = idle_runtime;
     previous_sample_us = sample_us;
 
@@ -258,7 +271,8 @@ inline void broadcast_status_tick() {
     // stack caused an immediate stack-protection reset loop.
     static char json[1536];
     const int json_length = snprintf(json, sizeof(json),
-             "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,\"peakUs\":%lu,\"budgetUs\":%lu,"
+             "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,"
+             "\"tasks\":{\"lvgl\":%.1f,\"httpd\":%.1f,\"main\":%.1f},\"peakUs\":%lu,\"budgetUs\":%lu,"
              "\"p50Us\":%lu,\"p95Us\":%lu,\"p99Us\":%lu,\"timingSamples\":%lu,"
              "\"underruns\":%lu,\"renderOverruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
              "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
@@ -272,6 +286,7 @@ inline void broadcast_status_tick() {
              "\"dx\":{\"holding\":%lu,\"ramping\":%lu,\"boundary\":%lu,\"shapeConfigured\":%lu},"
              "\"instances\":{\"total\":%lu,\"rendered\":%lu,\"idleForced\":%lu}}",
              static_cast<double>(core0_load), static_cast<double>(engine().audioCoreLoadPercent()),
+             static_cast<double>(task_load[0]), static_cast<double>(task_load[1]), static_cast<double>(task_load[2]),
              static_cast<unsigned long>(timing.peakUs), static_cast<unsigned long>(kBlockBudgetUs),
              static_cast<unsigned long>(timing.p50Us), static_cast<unsigned long>(timing.p95Us),
              static_cast<unsigned long>(timing.p99Us), static_cast<unsigned long>(timing.sampleCount),

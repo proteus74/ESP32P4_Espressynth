@@ -49,6 +49,9 @@ void tick_screen_main();
 void create_screen_page_preset_list();
 void tick_screen_page_preset_list();
 
+void create_user_widget_knob(lv_obj_t *parent_obj, int startWidgetIndex);
+void tick_user_widget_knob(int startWidgetIndex);
+
 void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);
 

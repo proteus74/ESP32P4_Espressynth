@@ -414,6 +414,18 @@ button:hover {
   background: linear-gradient(to bottom, #334357, var(--card));
 }
 
+.page-tab.dragging {
+  opacity: 0.5;
+}
+
+.page-tab.drop-before {
+  border-left-color: var(--accent);
+}
+
+.page-tab.drop-after {
+  border-right-color: var(--accent);
+}
+
 /* Active tab "pops forward": background matches the canvas behind it and
    its own bottom border is painted the same color as that canvas, erasing
    the bar's dividing line right under it - the tab visually fuses with the
@@ -1167,6 +1179,10 @@ body.show-node-cpu .widget-cpu-badge {
   min-width: 240px;
 }
 
+.widget-instance[data-widget-type="step-arpeggiator"] {
+  width: max-content;
+}
+
 .widget-instance[data-widget-type="step-arpeggiator"] .widget-ports {
   padding-bottom: 0;
 }
@@ -1224,11 +1240,10 @@ body.show-node-cpu .widget-cpu-badge {
 /* Dense row of small round step knobs, their own dots flush against the
    widget's bottom edge (see renderStepArpPorts/updateStepArpKnobVisual in
    main.js) - deliberately a custom flex row, not the usual vertical
-   .port-row-in list. flex-wrap is a defensive fallback for a narrow
-   viewport (this codebase has no @media breakpoints elsewhere to match). */
+   .port-row-in list. Keep one row at every canvas position. */
 .step-arp-steps-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.15rem;
   padding: 0.3rem 0.4rem 0;
   justify-content: center;
@@ -1261,6 +1276,11 @@ body.show-node-cpu .widget-cpu-badge {
   opacity: 0.45;
   cursor: default;
   pointer-events: none;
+}
+
+.step-arp-cell-skipped .step-arp-knob {
+  opacity: 0.45;
+  filter: grayscale(1);
 }
 
 .step-arp-knob-indicator {
@@ -1345,9 +1365,8 @@ body.show-node-cpu .widget-cpu-badge {
   margin-left: -0.9rem;
 }
 
-.drum-sequencer-rate,
-.drum-sequencer-pattern-select {
-  margin-left: 0.4rem;
+.drum-sequencer-port-in > .port-label {
+  flex: 0 0 96px;
 }
 
 .drum-sequencer-pattern-menu-btn {

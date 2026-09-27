@@ -155,65 +155,57 @@ inline void log_p0_baseline_tick() {
 
 inline void log_midi_cc_debug_tick()
 {
-    static uint32_t lastSequence = 0;
-    static int64_t lastLogUs = 0;
-    constexpr int64_t kMinimumIntervalUs = 250000;
-    constexpr size_t kMessageSize = 2048;
-
     static MidiCcDebugSnapshot snapshot{};
-    if (!engine().readMidiCcDebugSnapshot(snapshot) || snapshot.sequence == lastSequence)
+    static auto *pending = static_cast<MidiCcDebugSnapshot *>(
+        heap_caps_calloc(16, sizeof(MidiCcDebugSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    static int64_t previous_log_us = 0;
+    const int64_t now_us = esp_timer_get_time();
+    if (pending == nullptr || now_us - previous_log_us < 200000) return;
+    previous_log_us = now_us;
+    const uint32_t dropped = engine().takeControlDebugDropped();
+    if (dropped != 0)
+        ESP_LOGW("control", "%lu console log packets dropped (controls still applied)", static_cast<unsigned long>(dropped));
+    // Collapse intermediate knob positions before formatting or writing to USB/UART.
+    // Switch/button events and distinct fan-out pages retain their own packets.
+    uint8_t count = 0;
+    for (uint8_t packet = 0; packet < 16 && engine().readMidiCcDebugSnapshot(snapshot); ++packet)
     {
-        return;
+        uint8_t index = count;
+        if (snapshot.isKnob)
+            for (uint8_t i = 0; i < count; ++i)
+                if (pending[i].isKnob && pending[i].controlIndex == snapshot.controlIndex &&
+                    pending[i].fromUi == snapshot.fromUi &&
+                    pending[i].continuation == snapshot.continuation &&
+                    strcmp(pending[i].sourceId, snapshot.sourceId) == 0 &&
+                    strcmp(pending[i].targets[0].targetId, snapshot.targets[0].targetId) == 0 &&
+                    strcmp(pending[i].targets[0].paramName, snapshot.targets[0].paramName) == 0)
+                {
+                    index = i;
+                    break;
+                }
+        pending[index] = snapshot;
+        if (index == count) ++count;
     }
-    lastSequence = snapshot.sequence;
-
-    const int64_t nowUs = esp_timer_get_time();
-    if (lastLogUs != 0 && nowUs - lastLogUs < kMinimumIntervalUs)
+    for (uint8_t packet = 0; packet < count; ++packet)
     {
-        return;
-    }
-
-    static char message[kMessageSize] = {};
-    message[0] = '\0';
-    int used = snprintf(message, sizeof(message), "MIDI CC channel=%u cc=%u raw=%u",
-                        static_cast<unsigned>(snapshot.channel + 1), static_cast<unsigned>(snapshot.cc),
-                        static_cast<unsigned>(snapshot.rawValue));
-    if (used < 0)
-    {
-        return;
-    }
-    if (used >= static_cast<int>(sizeof(message)))
-    {
-        used = static_cast<int>(sizeof(message)) - 1;
-    }
-
-    for (uint8_t i = 0; i < snapshot.targetCount && used < static_cast<int>(sizeof(message)) - 1; ++i)
-    {
-        const MidiCcDebugTarget &target = snapshot.targets[i];
-        const char *unit = target.raw ? " raw" : " V";
-        const int remaining = static_cast<int>(sizeof(message)) - used;
-        const int written = snprintf(message + used, remaining, " | %s: %s.%s=%.3f%s",
-                                     target.sourceLabel, target.targetLabel, target.paramName,
-                                     static_cast<double>(target.value), unit);
-        if (written < 0)
+        snapshot = pending[packet];
+        if (!snapshot.continuation)
         {
-            break;
+            if (snapshot.fromUi)
+                ESP_LOGI("control", "Bildschirm: %s = %.3f V", snapshot.sourceLabel, static_cast<double>(snapshot.sourceValue));
+            else
+                ESP_LOGI("control", "MIDI: %s = %.3f V | channel=%u cc=%u raw=%u", snapshot.sourceLabel,
+                         static_cast<double>(snapshot.sourceValue), static_cast<unsigned>(snapshot.channel + 1),
+                         static_cast<unsigned>(snapshot.cc), static_cast<unsigned>(snapshot.rawValue));
+            if (snapshot.targetCount == 0) ESP_LOGI("control", "  keine verbundenen Ziele");
         }
-        if (written >= remaining)
+        for (uint8_t i = 0; i < snapshot.targetCount; ++i)
         {
-            used = static_cast<int>(sizeof(message)) - 1;
-            break;
+            const auto &target = snapshot.targets[i];
+            ESP_LOGI("control", "  verbunden mit %s.%s = %.3f%s", target.targetLabel, target.paramName,
+                     static_cast<double>(target.value), target.raw ? " raw" : " (Eingangswert)");
         }
-        used += written;
     }
-    if (snapshot.omittedTargets > 0 && used < static_cast<int>(sizeof(message)) - 1)
-    {
-        snprintf(message + used, sizeof(message) - used, " | +%u weitere Ziele",
-                 static_cast<unsigned>(snapshot.omittedTargets));
-    }
-
-    ESP_LOGI("midi_cc", "%s", message);
-    lastLogUs = nowUs;
 }
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)

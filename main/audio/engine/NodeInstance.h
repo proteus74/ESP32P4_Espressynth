@@ -269,6 +269,8 @@ struct NodeInstance
         ClockState clock;
         BurstGeneratorState burstGenerator;
         SampleHoldState sampleHold;
+        CounterState counter;
+        MonoflopState monoflop;
         OutputSwitchState outputSwitch;
         CvInState cvIn;
         CvOutState cvOut;
@@ -438,6 +440,12 @@ struct NodeInstance
             break;
         case NodeType::SampleHold:
             new (&sampleHold) SampleHoldState();
+            break;
+        case NodeType::Counter:
+            new (&counter) CounterState();
+            break;
+        case NodeType::Monoflop:
+            new (&monoflop) MonoflopState();
             break;
         case NodeType::OutputSwitch:
             new (&outputSwitch) OutputSwitchState();

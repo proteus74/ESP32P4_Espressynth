@@ -76,6 +76,8 @@ enum class NodeType : uint8_t
     RgbLed,
     CombFilter,
     MidiFilter,
+    Counter,
+    Monoflop,
     Unknown,
 };
 
@@ -253,6 +255,10 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::BurstGenerator;
     if (strcmp(typeStr, "sample-hold") == 0)
         return NodeType::SampleHold;
+    if (strcmp(typeStr, "counter") == 0)
+        return NodeType::Counter;
+    if (strcmp(typeStr, "monoflop") == 0)
+        return NodeType::Monoflop;
     if (strcmp(typeStr, "hammond") == 0)
         return NodeType::Hammond;
     if (strcmp(typeStr, "multiplexer") == 0)

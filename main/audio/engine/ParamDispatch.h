@@ -22,6 +22,7 @@
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
 #include "nodes/SampleHoldNode.h"
+#include "nodes/MonoflopNode.h"
 #include "nodes/ConstNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
@@ -111,6 +112,8 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::SampleHold:
         return nodes::samplehold::setParam(inst, name, value);
+    case NodeType::Monoflop:
+        return nodes::monoflop::setParam(inst, name, value);
 
     case NodeType::WavePlayer:
         if (paramDispatchIs(name, "gain"))

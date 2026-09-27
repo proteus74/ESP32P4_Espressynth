@@ -446,6 +446,20 @@ struct SampleHoldState
     bool triggerWasAbove = false;
 };
 
+struct CounterState
+{
+    uint32_t count = 0;
+    bool countWasHigh = false;
+};
+
+struct MonoflopState
+{
+    float threshold = 5.0f;
+    float pulseMs = 10.0f;
+    uint32_t samplesLeft = 0;
+    bool wasAbove = false;
+};
+
 struct MixerState
 {
     float inputGain[8] = {1, 1, 1, 1, 1, 1, 1, 1};

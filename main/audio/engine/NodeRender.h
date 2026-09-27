@@ -29,6 +29,8 @@
 #include "nodes/MidiInNode.h"
 #include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
+#include "nodes/CounterNode.h"
+#include "nodes/MonoflopNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/CombFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -108,6 +110,12 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::SampleHold:
         nodes::samplehold::render(inst, frames);
+        break;
+    case NodeType::Counter:
+        nodes::counter::render(inst, frames);
+        break;
+    case NodeType::Monoflop:
+        nodes::monoflop::render(inst, frames);
         break;
     case NodeType::Detune:
         nodes::detune::render(inst, frames);

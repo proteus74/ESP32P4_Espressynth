@@ -60,7 +60,7 @@ void create_screen_main() {
             // btn_next_preset
             lv_obj_t *obj = lv_button_create(parent_obj);
             objects.btn_next_preset = obj;
-            lv_obj_set_pos(obj, 836, 422);
+            lv_obj_set_pos(obj, 851, 422);
             lv_obj_set_size(obj, 177, 133);
             {
                 lv_obj_t *parent_obj = obj;
@@ -191,7 +191,7 @@ void create_screen_main() {
             // lbl_ip_address
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.lbl_ip_address = obj;
-            lv_obj_set_pos(obj, 885, 579);
+            lv_obj_set_pos(obj, 896, 569);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "lbl_ip_address");
@@ -258,6 +258,70 @@ void create_screen_page_preset_list() {
 }
 
 void tick_screen_page_preset_list() {
+}
+
+void create_user_widget_knob(lv_obj_t *parent_obj, int startWidgetIndex) {
+    (void)startWidgetIndex;
+    lv_obj_t *obj = parent_obj;
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            // arcKnob
+            lv_obj_t *obj = lv_arc_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 150, 150);
+            lv_arc_set_value(obj, 25);
+        }
+        {
+            // lblknobvalue
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
+            lv_obj_set_pos(obj, 0, 53);
+            lv_obj_set_size(obj, 150, 37);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_36, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblknobvalue");
+        }
+        {
+            // lblknobdevice
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
+            lv_obj_set_pos(obj, 1, 159);
+            lv_obj_set_size(obj, 149, 17);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblknobdevice");
+        }
+        {
+            // lblknobport
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 3] = obj;
+            lv_obj_set_pos(obj, 2, 177);
+            lv_obj_set_size(obj, 148, 17);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblknobport");
+        }
+        {
+            // lblknobname
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 4] = obj;
+            lv_obj_set_pos(obj, 1, 134);
+            lv_obj_set_size(obj, 149, 17);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblknobname");
+        }
+    }
+}
+
+void tick_user_widget_knob(int startWidgetIndex) {
+    (void)startWidgetIndex;
 }
 
 typedef void (*tick_screen_func_t)();

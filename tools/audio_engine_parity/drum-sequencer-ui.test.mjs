@@ -133,30 +133,18 @@ try {
   assert.deepEqual(result.retriggerDurations, [125, 25, 50]);
   assert.equal(result.pulseRightOfTrack, true);
   assert.equal(result.pulseAlignedWithTrack, true);
-  assert.deepEqual(result.classes, [true, true]);
+  assert.deepEqual(result.classes, [true]);
   for (const style of result.styles) assert.deepEqual(style, result.referenceStyle);
   assert.deepEqual(result.restored, [125, 25, 50, 50, 50, 50, 50, 50]);
   assert.deepEqual(result.legacy, new Array(8).fill(12.5));
   assert.deepEqual(result.partial, [33, 12.5, 0.1, 60000, 12.5, 12.5, 12.5, 12.5]);
   assert.deepEqual(result.live.at(-1).params.trackPulseMs.slice(0, 3), [125, 25, 50]);
 
-  const rate = page.locator(`#${id} [data-role="drum-sequencer-rate"]`);
-  await page.evaluate((id) => { document.getElementById(id).style.zIndex = "100"; }, id);
-  await rate.dblclick();
-  await page.locator("#numericEditInput").fill("2.5");
-  await page.locator("#numericEditSave").click();
-  assert.equal(await rate.inputValue(), "2.5");
-  await page.evaluate((id) => {
-    const t = window.__drumTest;
-    t.wireRate(id, t.createWidget("const", "Rate CV", 850, 300).id);
-  }, id);
-  assert.equal(await rate.isDisabled(), true);
-  await rate.dblclick({ force: true });
-  assert.equal(await page.locator("#numericEditOverlay").isVisible(), false);
-  await page.evaluate((id) => { window.__drumTest.clearConnections(); window.__drumTest.updateDrumSequencerVisual(id); }, id);
+  assert.equal(await page.locator(`#${id} [data-port-id="rate"] input`).count(), 0);
+  assert.deepEqual(await page.locator(`#${id} .drum-sequencer-port-in .port-label`).allTextContents(), ['Trigger', 'BPM', 'Gate', 'Pattern', 'Switch at End']);
   if (process.env.SCREENSHOT_PATH) await page.locator(`#${id}`).screenshot({ path: process.env.SCREENSHOT_PATH });
   assert.deepEqual(errors, []);
-  console.log("PASS drum sequencer: per-track timing/retrigger, 50ms defaults, click popup, cancel/bounds, live params, preset migration/round-trip, slider style/editing/CV override");
+  console.log("PASS drum sequencer: per-track timing/retrigger, 50ms defaults, click popup, cancel/bounds, live params, preset migration/round-trip, pattern slider style, BPM port order without slider");
 } finally {
   await browser.close();
 }

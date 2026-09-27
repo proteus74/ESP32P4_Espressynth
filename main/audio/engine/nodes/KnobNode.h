@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -22,6 +23,7 @@ namespace nodes::knob
 
 struct KnobControl
 {
+    char label[48] = {};
     int16_t cc = -1;      // -1 = unlearned (JS: cc === null)
     int8_t channel = -1;  // -1 = unlearned; 0-based MIDI channel (JS: channel === null)
     // Some controllers reuse the same CC number across several physical
@@ -104,6 +106,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
             const uint8_t index = KnobState::controlIndex(knobIndex, layerIndex);
             KnobControl &control = inst.knob->controls[index];
             const WidgetParams::KnobControlParams &source = p.knobs[index];
+            memcpy(control.label, source.label, sizeof(control.label));
             control.cc = source.cc;
             control.channel = source.channel;
             control.point1In = source.point1In;
@@ -261,6 +264,16 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
         control.valueListCount = presetparser::getFloatArray(item, "valueList", control.valueList, static_cast<uint8_t>(synth::kValueListMax));
     };
 
+    auto parseLabels = [](cJSON *layer, WidgetParams::KnobControlParams *controls, uint8_t count)
+    {
+        cJSON *labels = layer != nullptr ? cJSON_GetObjectItemCaseSensitive(layer, "labels") : nullptr;
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            cJSON *label = cJSON_IsArray(labels) ? cJSON_GetArrayItem(labels, i) : nullptr;
+            if (cJSON_IsString(label))
+                snprintf(controls[i].label, sizeof(controls[i].label), "%s", label->valuestring);
+        }
+    };
     cJSON *controls = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "knobs") : nullptr;
     if (cJSON_IsArray(controls))
     {
@@ -272,6 +285,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
         }
     }
 
+    parseLabels(p, out.knobs, out.knobCount);
     cJSON *layers = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "layers") : nullptr;
     if (cJSON_IsArray(layers) && cJSON_GetArraySize(layers) > 0)
     {
@@ -293,6 +307,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
                 const uint8_t index = static_cast<uint8_t>(layerIndex * synth::kKnobControlMax + knobIndex);
                 parseControl(cJSON_GetArrayItem(layerControls, knobIndex), out.knobs[index]);
             }
+            parseLabels(layer, out.knobs + layerIndex * synth::kKnobControlMax, out.knobCount);
         }
     }
 

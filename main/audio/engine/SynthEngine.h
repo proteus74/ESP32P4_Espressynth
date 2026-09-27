@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
@@ -24,6 +25,7 @@
 #include "Graph.h"
 #include "GraphBuilder.h"
 #include "LiveParamMsg.h"
+#include "KnobActivity.h"
 #include "MasterClock.h"
 #include "MemoryDiagnostics.h"
 #include "PresetChangedMsg.h"
@@ -302,14 +304,14 @@ public:
 
     bool readMidiCcDebugSnapshot(MidiCcDebugSnapshot &out) const
     {
-        const uint32_t sequence = midiCcDebugSequence_.load(std::memory_order_acquire);
-        if (sequence == 0)
-        {
-            return false;
-        }
-        out = midiCcDebugSnapshot_;
-        out.sequence = sequence;
-        return true;
+        return midiCcDebugQueue_ != nullptr && xQueueReceive(midiCcDebugQueue_, &out, 0) == pdTRUE;
+    }
+
+    uint32_t takeControlDebugDropped() { return controlDebugDropped_.exchange(0, std::memory_order_relaxed); }
+
+    bool readKnobActivity(KnobActivity &out) const
+    {
+        return knobActivityQueue_ != nullptr && xQueueReceive(knobActivityQueue_, &out, 0) == pdTRUE;
     }
 
     // Set whenever a build (see buildFromFile) had to use fewer voices than
@@ -596,12 +598,42 @@ private:
 
     void publishMidiCcDebugSnapshot(const MidiCcDebugSnapshot &snapshot)
     {
-        if (snapshot.targetCount == 0)
+        if (midiCcDebugQueue_ == nullptr || xQueueSend(midiCcDebugQueue_, &snapshot, 0) != pdTRUE)
         {
-            return;
+            // Diagnostic backpressure must retain the newest value, not replay an old turn.
+            MidiCcDebugSnapshot discarded{};
+            if (midiCcDebugQueue_ != nullptr)
+                xQueueReceive(midiCcDebugQueue_, &discarded, 0);
+            if (!discarded.isKnob)
+                controlDebugDropped_.fetch_add(1, std::memory_order_relaxed);
+            if (midiCcDebugQueue_ != nullptr)
+                xQueueSend(midiCcDebugQueue_, &snapshot, 0);
         }
-        midiCcDebugSnapshot_ = snapshot;
-        midiCcDebugSequence_.fetch_add(1, std::memory_order_release);
+        if (!snapshot.isKnob || knobActivityQueue_ == nullptr) return;
+        KnobActivity activity{};
+        activity.updatedUs = esp_timer_get_time();
+        activity.presetSequence = presetChangeSequence();
+        activity.controlIndex = snapshot.controlIndex;
+        activity.raw = snapshot.rawValue;
+        memcpy(activity.sourceId, snapshot.sourceId, sizeof(activity.sourceId));
+        memcpy(activity.name, snapshot.knobName, sizeof(activity.name));
+        const uint8_t count = snapshot.targetCount > 0 ? snapshot.targetCount : 1;
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            if (snapshot.targetCount > 0)
+            {
+                const auto &target = snapshot.targets[i];
+                memcpy(activity.targetId, target.targetId, sizeof(activity.targetId));
+                memcpy(activity.device, target.targetLabel, sizeof(activity.device));
+                memcpy(activity.port, target.paramName, sizeof(activity.port));
+            }
+            if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
+            {
+                KnobActivity discarded{};
+                xQueueReceive(knobActivityQueue_, &discarded, 0);
+                xQueueSend(knobActivityQueue_, &activity, 0);
+            }
+        }
     }
 
     static void taskEntry(void *arg);
@@ -778,9 +810,10 @@ private:
     std::atomic<float> midiControlRaw_{0.0f};
     std::atomic<float> midiControlValue_{0.0f};
     std::atomic<uint32_t> midiControlSequence_{0};
-    MidiCcDebugSnapshot midiCcDebugSnapshot_{};
+    QueueHandle_t midiCcDebugQueue_ = nullptr;
+    QueueHandle_t knobActivityQueue_ = nullptr;
     MidiCcDebugSnapshot midiCcDebugScratch_{};
-    std::atomic<uint32_t> midiCcDebugSequence_{0};
+    std::atomic<uint32_t> controlDebugDropped_{0};
     std::atomic<uint32_t> voicesCapEventId_{0};
     std::atomic<uint16_t> voicesCapRequested_{0};
     std::atomic<uint16_t> voicesCapEffective_{0};
@@ -1020,6 +1053,12 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     snprintf(loaderKnownPresetPath_, sizeof(loaderKnownPresetPath_), "%s", initialPresetPath);
 
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
+    midiCcDebugQueue_ = xQueueCreateWithCaps(16, sizeof(MidiCcDebugSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#if defined(CONFIG_APP_ENABLE_LVGL)
+    knobActivityQueue_ = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (knobActivityQueue_ == nullptr) ESP_LOGE(kSynthEngineTag, "Knob display queue allocation failed");
+#endif
+    if (midiCcDebugQueue_ == nullptr) ESP_LOGE(kSynthEngineTag, "Control console log queue allocation failed");
     liveWavetableQueue_ = xQueueCreate(4, sizeof(LiveWavetableMsg));
     builtGraphQueue_ = xQueueCreate(1, sizeof(BuiltGraphMsg));
     retiredGraphQueue_ = xQueueCreate(2, sizeof(Graph *));
@@ -1341,11 +1380,7 @@ inline void SynthEngine::taskLoop()
             }
             while (midiEventQueue_ != nullptr && xQueueReceive(midiEventQueue_, &event, 0) == pdTRUE)
             {
-                liveGraph_->handleMidiEvent(event, &midiCcDebugScratch_);
-                if (event.codeIndex == 0xB)
-                {
-                    publishMidiCcDebugSnapshot(midiCcDebugScratch_);
-                }
+                liveGraph_->handleMidiEvent(event);
                 handleMasterClockMidi(event);
                 publishMidiControlActivity(event);
                 ++midiEventCount;
@@ -1377,6 +1412,15 @@ inline void SynthEngine::taskLoop()
         liveGraph_->renderBlock(gout, synth::kBlockSize);
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
         const int64_t renderUs = esp_timer_get_time() - renderStartUs;
+        liveGraph_->flushControlDebug(midiCcDebugScratch_, [](const MidiCcDebugSnapshot &snapshot, void *context)
+        {
+            static_cast<SynthEngine *>(context)->publishMidiCcDebugSnapshot(snapshot);
+        }, this);
+        if (liveGraph_->controlDebugDropped != 0)
+        {
+            controlDebugDropped_.fetch_add(liveGraph_->controlDebugDropped, std::memory_order_relaxed);
+            liveGraph_->controlDebugDropped = 0;
+        }
 
         // Publish once per completed profiling sweep instead of copying every
         // widget ID and atomic value on every audio block.

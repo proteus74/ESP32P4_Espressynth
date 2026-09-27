@@ -401,6 +401,14 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "trigger")) return 1;
         if (is(portName, "threshold")) return 2;
         return -1;
+    case NodeType::Counter:
+        if (is(portName, "count")) return 0;
+        if (is(portName, "reset")) return 1;
+        return -1;
+    case NodeType::Monoflop:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "threshold")) return 1;
+        return -1;
     case NodeType::Chorus:
         // "bypass" (gate) and "rate"/"depth"/"offset" are control-only CV ports - a wired
         // source overrides the widget's own setting (see nodes/ChorusNode.h).
@@ -591,10 +599,8 @@ inline int audioInIndex(NodeType type, const char *portName)
         // setParam()) remains the fallback otherwise.
         if (is(portName, "pulseTime"))
             return 20;
-        // "rate" (index 21) - the internal fallback clock's own tempo CV,
-        // used only while "clock" (index 0) itself is unwired - same
-        // wired-CV-or-local-slider split as "pulseTime" above (see
-        // StepArpeggiatorNode.h's render()).
+        // "rate" (index 21, shown as BPM) accepts tempo directly. Unwired,
+        // Master Clock supplies tempo; Trigger overrides generated steps.
         if (is(portName, "rate"))
             return 21;
         if (strncmp(portName, "step", 4) == 0)
@@ -742,6 +748,10 @@ inline int audioOutIndex(NodeType type, const char *portName)
             return 1;
         return -1;
     case NodeType::SampleHold:
+        return is(portName, "out") ? 0 : -1;
+    case NodeType::Counter:
+        return is(portName, "out") ? 0 : -1;
+    case NodeType::Monoflop:
         return is(portName, "out") ? 0 : -1;
     case NodeType::Chorus:
         if (is(portName, "left"))
@@ -900,6 +910,10 @@ inline int audioInPortCount(NodeType type)
         return 2; // "in" + "pan"
     case NodeType::SampleHold:
         return 3; // "in" + "trigger" + "threshold", all audio-rate
+    case NodeType::Counter:
+        return 2; // "count" + "reset", both audio-rate
+    case NodeType::Monoflop:
+        return 2; // "in" + "threshold", both audio-rate
     case NodeType::Chorus:
         return 5; // "in" + "bypass" + "rate" + "depth" + "offset"
     case NodeType::Delay:

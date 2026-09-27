@@ -103,6 +103,14 @@ void update_preset_position(EezSynthStatus *status) {
 } // namespace
 #endif
 
+extern "C" bool eez_read_knob_activity(KnobActivity *activity) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    return activity != nullptr && Feature::Synth::engine().readKnobActivity(*activity);
+#else
+    return false;
+#endif
+}
+
 extern "C" bool eez_synth_status(EezSynthStatus *status) {
     if (status == nullptr) return false;
     *status = {};
@@ -112,6 +120,7 @@ extern "C" bool eez_synth_status(EezSynthStatus *status) {
     status->active_voices = voices.active;
     status->maximum_voices = voices.maximum;
     status->underruns = Feature::Synth::dma_underrun_count();
+    status->preset_change_sequence = Feature::Synth::engine().presetChangeSequence();
     status->preset_load_active = Feature::Synth::engine().presetLoadActive();
     status->preset_load_progress = Feature::Synth::engine().presetLoadProgress();
     Feature::Synth::engine().readCurrentPresetName(status->preset_name, sizeof(status->preset_name));

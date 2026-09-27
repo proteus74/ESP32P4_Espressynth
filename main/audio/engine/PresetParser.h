@@ -219,6 +219,7 @@ struct WidgetParams
     bool rgbStopFade[8] = {};
     // sample-hold - manual threshold, overridden by a connected Threshold CV.
     float sampleHoldThreshold = 5.0f;
+    float monoflopThreshold = 5.0f, monoflopPulseMs = 10.0f;
     // midi-in
     int8_t channel = -1;
     uint8_t voices = 1;
@@ -238,6 +239,7 @@ struct WidgetParams
     // knob
     struct KnobControlParams
     {
+        char label[48] = {};
         int16_t cc = -1;
         int8_t channel = -1;
         float raw = 0.0f;
@@ -365,6 +367,8 @@ struct WidgetParams
     // Settings-dialog toggle - see nodes/StepArpeggiatorNode.h's
     // StepArpState::retriggerGateOut comment.
     bool stepArpRetriggerGateOut = false;
+    bool stepArpSkipOnC0 = false;
+    bool stepArpSnapToSemitones = false;
     // Internal fallback clock generator (Port-Index 21, "rate") - used only
     // while the "clock" port itself is unwired (see
     // nodes/StepArpeggiatorNode.h's render()). Same cvVolts/maxBpm/roundBpm

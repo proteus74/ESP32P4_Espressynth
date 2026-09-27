@@ -4092,6 +4092,45 @@ export class AudioEngine {
         };
         return entry;
       }
+      case "monoflop":
+      case "counter": {
+        const inputMerger = ctx.createChannelMerger(2);
+        const processor = ctx.createScriptProcessor(256, 2, 1);
+        const controlSources = [0, 1].map((index) => {
+          const source = ctx.createConstantSource();
+          source.offset.value = type === "monoflop" && index === 1 ? clampRange(Number.isFinite(Number(params.threshold)) ? Number(params.threshold) : 5, 0, CV_MAX_VOLTS) : 0;
+          source.connect(inputMerger, 0, index);
+          source.start();
+          return source;
+        });
+        inputMerger.connect(processor);
+        const entry = { type, inputMerger, processor, controlSources, extraSources: controlSources, extraNodes: [inputMerger], controlConnectionCounts: [0, 0], count: 0, countWasHigh: false };
+        entry.threshold = controlSources[1].offset.value;
+        entry.pulseMs = clampRange(Number.isFinite(Number(params.pulseMs)) ? Number(params.pulseMs) : 10, 1, 60000);
+        entry.samplesLeft = 0;
+        processor.onaudioprocess = (event) => {
+          const count = event.inputBuffer.getChannelData(0);
+          const reset = event.inputBuffer.getChannelData(1);
+          const output = event.outputBuffer.getChannelData(0);
+          for (let i = 0; i < output.length; i += 1) {
+            if (type === "monoflop") {
+              const threshold = clampRange(Number.isFinite(reset[i]) ? reset[i] : 5, 0, CV_MAX_VOLTS);
+              const above = count[i] > threshold;
+              if (above && !entry.countWasHigh && entry.samplesLeft === 0) entry.samplesLeft = Math.ceil(entry.pulseMs * (ctx.sampleRate / 1000));
+              output[i] = entry.samplesLeft > 0 ? CV_MAX_VOLTS : 0;
+              if (entry.samplesLeft > 0) entry.samplesLeft -= 1;
+              entry.countWasHigh = above;
+              continue;
+            }
+            const countHigh = count[i] >= GATE_THRESHOLD_VOLTS;
+            if (reset[i] >= GATE_THRESHOLD_VOLTS) entry.count = 0;
+            else if (countHigh && !entry.countWasHigh && entry.count < 0xffffffff) entry.count += 1;
+            entry.countWasHigh = countHigh;
+            output[i] = entry.count;
+          }
+        };
+        return entry;
+      }
       case "sample-hold": {
         // ChannelMerger keeps In, Trigger and Threshold independent. A
         // ScriptProcessor has just one input, so connecting directly to it
@@ -5850,6 +5889,21 @@ export class AudioEngine {
         }
         break;
       }
+      case "monoflop":
+      case "counter": {
+        if (entry.type === "monoflop" && paramName === "pulseMs") {
+          entry.pulseMs = clampRange(Number.isFinite(Number(value)) ? Number(value) : 10, 1, 60000);
+          break;
+        }
+        if (entry.type === "monoflop" && paramName === "threshold") {
+          entry.threshold = clampRange(Number.isFinite(Number(value)) ? Number(value) : 5, 0, CV_MAX_VOLTS);
+          if (entry.controlConnectionCounts[1] === 0) entry.controlSources[1].offset.value = entry.threshold;
+          break;
+        }
+        const index = (entry.type === "monoflop" ? { in: 0, thresholdCv: 1 } : { count: 0, reset: 1 })[paramName];
+        if (index !== undefined) entry.controlSources[index].offset.value = Number.isFinite(Number(value)) ? Number(value) : 0;
+        break;
+      }
       case "const":
       case "up-down-button":
         if (paramName === "value") applyRamp(entry.constant.offset);
@@ -6234,6 +6288,7 @@ export class AudioEngine {
     if (entry.type === "logic-xor" && port === "value") return entry.output;
     if (entry.type === "logic-not" && port === "value") return entry.waveShaper;
     if (entry.type === "value-mapper" && port === "out") return entry.processor;
+    if (["counter", "monoflop"].includes(entry.type) && port === "out") return entry.processor;
     if (entry.type === "detune" && port === "out") return entry.out;
     if (entry.type === "adsr" && port === "out") return entry.output;
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
@@ -6356,6 +6411,8 @@ export class AudioEngine {
     if (entry.type === "burst-generator" && ["in", "mode", "count", "time", "decay"].includes(port)) return entry.inputMerger;
     if (entry.type === "pan" && (port === "in" || port === "pan")) return entry.inputMerger;
     if (entry.type === "sample-hold" && (port === "in" || port === "trigger" || port === "threshold")) return entry.inputMerger;
+    if (entry.type === "counter" && (port === "count" || port === "reset")) return entry.inputMerger;
+    if (entry.type === "monoflop" && (port === "in" || port === "threshold")) return entry.inputMerger;
     if (entry.type === "chorus" && port === "in") return entry.inputNode;
     if (entry.type === "delay") {
       if (port === "inL") return entry.inputL;
@@ -6427,6 +6484,21 @@ export class AudioEngine {
         if (inputIndex > 0 && --toEntry.controlConnectionCounts[inputIndex - 1] <= 0) {
           toEntry.controlConnectionCounts[inputIndex - 1] = 0;
           toEntry.controlSources[inputIndex - 1].connect(toEntry.inputMerger, 0, inputIndex);
+        }
+      }
+      return;
+    }
+    if (toEntry && ["counter", "monoflop"].includes(toEntry.type)) {
+      const index = (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (!from || index === undefined) return;
+      try {
+        if (toEntry.controlConnectionCounts[index]++ === 0) toEntry.controlSources[index].disconnect(toEntry.inputMerger, 0, index);
+        from.connect(toEntry.inputMerger, 0, index);
+      } catch (err) {
+        if (--toEntry.controlConnectionCounts[index] <= 0) {
+          toEntry.controlConnectionCounts[index] = 0;
+          toEntry.controlSources[index].connect(toEntry.inputMerger, 0, index);
         }
       }
       return;
@@ -6696,6 +6768,21 @@ export class AudioEngine {
   }
 
   _disconnectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
+    if (toEntry && ["counter", "monoflop"].includes(toEntry.type)) {
+      const index = (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
+      const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
+      if (!from || index === undefined) return;
+      try {
+        from.disconnect(toEntry.inputMerger, 0, index);
+        if (--toEntry.controlConnectionCounts[index] <= 0) {
+          toEntry.controlConnectionCounts[index] = 0;
+          toEntry.controlSources[index].offset.value = toEntry.type === "monoflop" && index === 1 ? toEntry.threshold : 0;
+          toEntry.controlSources[index].connect(toEntry.inputMerger, 0, index);
+        }
+      } catch (err) {
+      }
+      return;
+    }
     if (toEntry?.type === "comb-filter" && COMB_FILTER_PORTS.includes(toPort)) {
       this._wireCombFilterInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
       return;

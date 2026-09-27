@@ -83,7 +83,7 @@ constexpr size_t kMaxMidiCcDebugTargets = 16;
 
 struct MidiCcDebugTarget
 {
-    char sourceLabel[48] = {};
+    char targetId[24] = {};
     char targetLabel[48] = {};
     char paramName[16] = {};
     float value = 0.0f;
@@ -92,13 +92,29 @@ struct MidiCcDebugTarget
 
 struct MidiCcDebugSnapshot
 {
-    uint32_t sequence = 0;
+    char sourceId[24] = {};
+    char knobName[48] = {};
+    bool isKnob = false;
+    uint8_t controlIndex = 0;
+    char sourceLabel[96] = {};
+    bool fromUi = false;
+    bool continuation = false;
+    float sourceValue = 0.0f;
     uint8_t channel = 0;
     uint8_t cc = 0;
     uint8_t rawValue = 0;
     uint8_t targetCount = 0;
-    uint8_t omittedTargets = 0;
     MidiCcDebugTarget targets[kMaxMidiCcDebugTargets];
+};
+
+struct ControlDebugEvent
+{
+    uint16_t widget = 0;
+    uint8_t side = 0;
+    uint8_t channel = 0;
+    uint8_t cc = 0;
+    uint8_t raw = 0;
+    bool fromUi = false;
 };
 
 struct Edge
@@ -109,6 +125,7 @@ struct Edge
     uint8_t toPort = 0;
     float scale = 1.0f; // 1/sqrt(N) for voiced->global fan-in, else 1.0
     bool monitorTap = false;
+    char paramName[16] = {};
 };
 
 // A non-audio-rate connection resolved at build time into a direct
@@ -200,7 +217,11 @@ public:
     };
 
     void renderBlock(Outputs &out, size_t frames);
-    void handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapshot *debugOut = nullptr);
+    void handleMidiEvent(const UsbMidiEvent &event);
+    void recordControlDebug(uint16_t widget, uint8_t side, bool fromUi, uint8_t channel = 0,
+                            uint8_t cc = 0, uint8_t raw = 0);
+    void flushControlDebug(MidiCcDebugSnapshot &scratch,
+                          void (*emit)(const MidiCcDebugSnapshot &, void *), void *context);
     uint16_t activeSoundFontVoiceCount() const;
     void midiVoiceUsage(uint16_t &active, uint16_t &maximum) const;
 
@@ -282,6 +303,9 @@ public:
 
     ControlRoute controlRoutes[synth::kMaxConnections];
     uint16_t controlRouteCount = 0;
+    ControlDebugEvent controlDebugEvents[32] = {};
+    uint8_t controlDebugEventCount = 0;
+    uint32_t controlDebugDropped = 0;
 
     uint16_t renderOrder[synth::kMaxWidgets];
     uint16_t renderOrderCount = 0;
@@ -377,45 +401,6 @@ inline void copyMidiCcDebugText(char *destination, size_t destinationSize, const
         }
     }
     destination[length] = '\0';
-}
-
-inline void appendMidiCcDebugTargets(const Graph &graph, uint16_t sourceWidget, uint8_t sourceSide,
-                                     float mappedValue, float rawValue, MidiCcDebugSnapshot *debugOut)
-{
-    if (debugOut == nullptr)
-    {
-        return;
-    }
-
-    const WidgetSlot &source = graph.widgets[sourceWidget];
-    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
-    {
-        const ControlRoute &route = graph.controlRoutes[r];
-        if (route.sourceWidget != sourceWidget || route.side != sourceSide ||
-            (route.kind != ControlRoute::Kind::Knob && route.kind != ControlRoute::Kind::KnobCc))
-        {
-            continue;
-        }
-
-        if (debugOut->targetCount >= kMaxMidiCcDebugTargets)
-        {
-            if (debugOut->omittedTargets < 0xFF)
-            {
-                ++debugOut->omittedTargets;
-            }
-            continue;
-        }
-
-        const WidgetSlot &target = graph.widgets[route.targetWidget];
-        MidiCcDebugTarget &entry = debugOut->targets[debugOut->targetCount++];
-        copyMidiCcDebugText(entry.sourceLabel, sizeof(entry.sourceLabel),
-                            source.label[0] != '\0' ? source.label : source.id);
-        copyMidiCcDebugText(entry.targetLabel, sizeof(entry.targetLabel),
-                            target.label[0] != '\0' ? target.label : target.id);
-        copyMidiCcDebugText(entry.paramName, sizeof(entry.paramName), route.paramName);
-        entry.raw = route.kind == ControlRoute::Kind::KnobCc;
-        entry.value = entry.raw ? rawValue : mappedValue;
-    }
 }
 
 // Delivers one note-on/off event's control routes from `sourceWidget` to
@@ -1107,13 +1092,128 @@ inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &ev
     path[source] = false;
 }
 
-inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapshot *debugOut)
+inline void Graph::recordControlDebug(uint16_t widget, uint8_t side, bool fromUi,
+                                     uint8_t channel, uint8_t cc, uint8_t raw)
 {
-    if (debugOut != nullptr && event.codeIndex == 0xB)
+    // Coalesce successive positions of the same control within one audio block.
+    for (uint8_t i = 0; i < controlDebugEventCount; ++i)
     {
-        *debugOut = {};
+        auto &event = controlDebugEvents[i];
+        if (event.widget == widget && event.side == side && event.fromUi == fromUi)
+        {
+            event = {widget, side, channel, cc, raw, fromUi};
+            return;
+        }
     }
+    if (controlDebugEventCount < 32)
+        controlDebugEvents[controlDebugEventCount++] = {widget, side, channel, cc, raw, fromUi};
+    else
+        ++controlDebugDropped;
+}
 
+inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
+                                     void (*emit)(const MidiCcDebugSnapshot &, void *), void *context)
+{
+    for (uint8_t i = 0; i < controlDebugEventCount; ++i)
+    {
+        const auto &event = controlDebugEvents[i];
+        const auto &source = widgets[event.widget];
+        const auto &inst = instances[source.instanceBase];
+        snapshot = {};
+        snapshot.fromUi = event.fromUi;
+        snapshot.channel = event.channel;
+        snapshot.cc = event.cc;
+        snapshot.rawValue = event.raw;
+        copyMidiCcDebugText(snapshot.sourceId, sizeof(snapshot.sourceId), source.id);
+        snapshot.controlIndex = event.side;
+        snapshot.isKnob = source.type == NodeType::Knob;
+        const char *label = source.label[0] ? source.label : source.id;
+        const char *kind = source.type == NodeType::Knob ? "Knob" : source.type == NodeType::Button ? "Button" :
+                           source.type == NodeType::Switch ? "Switch" : "Output Switch";
+        if (snapshot.isKnob)
+        {
+            const auto &control = inst.knob->controls[event.side];
+            const float raw = std::isfinite(control.raw) ? control.raw : 0.0f;
+            snapshot.rawValue = static_cast<uint8_t>(raw < 0.0f ? 0.0f : raw > 127.0f ? 127.0f : raw + 0.5f);
+            if (control.label[0])
+                copyMidiCcDebugText(snapshot.knobName, sizeof(snapshot.knobName), control.label);
+            else
+                snprintf(snapshot.knobName, sizeof(snapshot.knobName), "%s %u", label,
+                         static_cast<unsigned>(event.side % synth::kKnobControlMax + 1));
+        }
+        if (source.type == NodeType::Knob || source.type == NodeType::Button)
+        {
+            const uint8_t width = source.type == NodeType::Knob ? synth::kKnobControlMax : synth::kButtonControlMax;
+            snprintf(snapshot.sourceLabel, sizeof(snapshot.sourceLabel), "%s [%s] %s %u Layer %u", label,
+                     source.id, kind, event.side % width + 1, event.side / width + 1);
+            snapshot.sourceValue = source.type == NodeType::Knob ? inst.knob->controls[event.side].currentValue :
+                                   inst.button->controls[event.side].currentValue;
+        }
+        else
+        {
+            const bool selected = source.type == NodeType::Switch ? inst.switchState.selectIn2 : inst.outputSwitch.selectOut2;
+            snprintf(snapshot.sourceLabel, sizeof(snapshot.sourceLabel), "%s [%s] %s %s %u", label, source.id, kind,
+                     source.type == NodeType::Switch ? "In" : "Out", selected ? 2 : 1);
+            const float *buffer = outputPortBuffer(const_cast<NodeInstance &>(inst), selected && source.type == NodeType::OutputSwitch ? 1 : 0);
+            snapshot.sourceValue = buffer ? buffer[synth::kBlockSize - 1] : 0.0f;
+        }
+
+        bool reported[synth::kMaxWidgets][synth::kMaxAudioInPorts] = {};
+        auto append = [&](uint16_t targetWidget, int port, const char *paramName, float value, bool raw)
+        {
+            if (port >= 0 && reported[targetWidget][port]) return;
+            if (port >= 0) reported[targetWidget][port] = true;
+            if (snapshot.targetCount == kMaxMidiCcDebugTargets)
+            {
+                emit(snapshot, context);
+                snapshot.targetCount = 0;
+                snapshot.continuation = true;
+            }
+            auto &entry = snapshot.targets[snapshot.targetCount++];
+            const auto &target = widgets[targetWidget];
+            copyMidiCcDebugText(entry.targetId, sizeof(entry.targetId), target.id);
+            copyMidiCcDebugText(entry.targetLabel, sizeof(entry.targetLabel), target.label[0] ? target.label : target.id);
+            copyMidiCcDebugText(entry.paramName, sizeof(entry.paramName), paramName);
+            entry.value = value;
+            entry.raw = raw;
+        };
+        for (uint16_t r = 0; r < controlRouteCount; ++r)
+        {
+            const auto &route = controlRoutes[r];
+            if (route.sourceWidget != event.widget || route.side != event.side) continue;
+            if (route.kind != ControlRoute::Kind::Knob && route.kind != ControlRoute::Kind::KnobCc &&
+                route.kind != ControlRoute::Kind::Button) continue;
+            const auto &target = instances[widgets[route.targetWidget].instanceBase];
+            float value = snapshot.sourceValue;
+            const bool raw = route.kind == ControlRoute::Kind::KnobCc;
+            if (raw) value = inst.knob->controls[route.side].raw;
+            if (route.targetPort >= 0)
+                value = widgets[route.targetWidget].needed &&
+                        (target.audioConnectedPortMask & synth::portBit(route.targetPort)) != 0 ?
+                        noderender::portSample(target, route.targetPort, synth::kBlockSize - 1) :
+                        target.controlValue[route.targetPort];
+            append(route.targetWidget, route.targetPort, route.paramName, value, raw);
+        }
+        for (uint16_t e = 0; e < edgeCount; ++e)
+        {
+            const auto &edge = edges[e];
+            if (instances[edge.fromInstance].widgetIndex != event.widget) continue;
+            // Both outputs of Output Switch change, including the now-zero branch.
+            const auto &targetInst = instances[edge.toInstance];
+            const uint16_t targetWidget = targetInst.widgetIndex;
+            const auto &target = widgets[targetWidget];
+            const uint16_t voice = target.voiced && monitorVoiceIndex < target.instanceCount ? monitorVoiceIndex : 0;
+            if (edge.toInstance != target.instanceBase + voice) continue;
+            append(targetWidget, edge.toPort, edge.paramName,
+                   noderender::portSample(targetInst, edge.toPort, synth::kBlockSize - 1), false);
+        }
+        emit(snapshot, context);
+    }
+    controlDebugEventCount = 0;
+}
+
+inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
+{
     bool filtered[synth::kMaxWidgets] = {};
     UsbMidiEvent filterEvents[synth::kMaxWidgets] = {};
     bool path[synth::kMaxWidgets] = {};
@@ -1134,13 +1234,6 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
         const uint8_t ccValue = event.data2;
         const uint8_t ccChannel0 = event.status & 0x0F;
 
-        if (debugOut != nullptr)
-        {
-            debugOut->channel = ccChannel0;
-            debugOut->cc = ccNumber;
-            debugOut->rawValue = ccValue;
-        }
-
         for (uint16_t w = 0; w < widgetCount; ++w)
         {
             if (widgets[w].type == NodeType::Knob)
@@ -1160,7 +1253,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                     k.currentValue = k.mappedValue();
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
-                    appendMidiCcDebugTargets(*this, w, controlIndex, k.currentValue, k.raw, debugOut);
+                    recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
                 }
             }
             else if (widgets[w].type == NodeType::Button)
@@ -1183,6 +1276,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                     control.currentValue = control.currentOutput();
 
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Button, control.currentValue, controlIndex);
+                    recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
                 }
             }
             else if (widgets[w].type == NodeType::UpDownButton)
@@ -1249,6 +1343,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                 // mapping in this codebase), so an on/off-style controller
                 // works as expected instead of needing a momentary press.
                 sw.selectIn2 = ccValue >= 64;
+                recordControlDebug(w, 0, false, ccChannel0, ccNumber, ccValue);
             }
             else if (widgets[w].type == NodeType::OutputSwitch)
             {
@@ -1265,6 +1360,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event, MidiCcDebugSnapsho
                 // Same direct CC-to-output mapping as Switch's own
                 // selectIn2 above, just picking the output side instead.
                 os.selectOut2 = ccValue >= 64;
+                recordControlDebug(w, 0, false, ccChannel0, ccNumber, ccValue);
             }
             else if (widgets[w].type == NodeType::MidiIn ||
                      (widgets[w].type == NodeType::MidiFilter && filtered[w]))
@@ -1631,6 +1727,16 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             (strcmp(key, "buttonIndex") == 0 || strcmp(key, "buttonCount") == 0 ||
              strcmp(key, "layerCount") == 0 || strcmp(key, "activeLayer") == 0))
             continue;
+
+        if (slot.type == NodeType::Knob && strcmp(key, "label") == 0 && cJSON_IsString(item))
+        {
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                auto &control = instances[slot.instanceBase + v].knob->controls[knobControlIndex];
+                snprintf(control.label, sizeof(control.label), "%s", item->valuestring);
+            }
+            continue;
+        }
 
         if (slot.type == NodeType::MidiIn && strcmp(key, "glide") == 0 && cJSON_IsBool(item))
         {
@@ -2236,6 +2342,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                                   control.currentValue, knobControlIndex);
             pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::KnobCc,
                                   control.raw, knobControlIndex);
+            recordControlDebug(static_cast<uint16_t>(widgetIdx), knobControlIndex, true);
         }
         // Mirror this control's new value back to whatever hardware CC it's
         // learned to (see SynthEngine::MidiCcOut) - a change made from the
@@ -2278,8 +2385,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                                   cJSON_GetObjectItemCaseSensitive(paramsObj, "wasAbove") != nullptr ||
                                   cJSON_GetObjectItemCaseSensitive(paramsObj, "valueList") != nullptr;
         if (activeControl && valueChanged)
+        {
             pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Button,
                                   control.currentValue, buttonControlIndex);
+            recordControlDebug(static_cast<uint16_t>(widgetIdx), buttonControlIndex, true);
+        }
     }
     else if (slot.type == NodeType::UpDownButton)
     {
@@ -2290,6 +2400,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     {
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Const,
                                instances[slot.instanceBase].constant.value);
+    }
+    else if ((slot.type == NodeType::Switch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectIn2"))) ||
+             (slot.type == NodeType::OutputSwitch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectOut2"))))
+    {
+        recordControlDebug(static_cast<uint16_t>(widgetIdx), 0, true);
     }
 }
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260927-drum-pulse-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20260927-step-arp-skip-1">
 </head>
 <body>
 
@@ -28,6 +28,8 @@
     <span>Edit</span>
     <div class="dropdown">
       <button id="menuAddPage">Add Page</button>
+      <button id="menuCopyPage" title="Copy the current sound page">Copy Page</button>
+      <button id="menuPastePage" disabled>Paste Page</button>
       <button>Undo</button>
       <button>Copy</button>
       <button id="menuPresetDescription">Preset Description</button>
@@ -774,11 +776,25 @@
   </div>
 </div>
 
+<div id="monoflopSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Monoflop Settings</h3>
+    <label class="modal-field">
+      <span>Trigger Duration (ms, 1–60000)</span>
+      <input type="text" inputmode="decimal" id="monoflopPulseMsInput" value="10">
+    </label>
+    <div class="modal-actions">
+      <button id="monoflopSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="monoflopSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="clockSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Clock Settings</h3>
     <label class="modal-field">
-      <span>Pulse Duration (ms)</span>
+      <span>Trigger Duration (ms)</span>
       <input type="text" inputmode="decimal" id="clockPulseMsInput" value="100">
     </label>
     <div class="modal-actions">
@@ -837,21 +853,23 @@
       <span>Retrigger Gate Out on overlapping steps</span>
     </label>
     <p class="modal-hint">If a step's Gate Out pulse is still running when the next step triggers: checked briefly resets it low first (retriggers a downstream envelope); unchecked just lets the next step play through it.</p>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="stepArpSkipOnC0Input">
+      <span>Skip on C0</span>
+    </label>
+    <p class="modal-hint">Steps at 0 V produce no Gate Out pulse and keep the previous CV. Dimmed knobs remain editable.</p>
+    <label class="modal-field modal-field-checkbox">
+      <input type="checkbox" id="stepArpSnapToSemitonesInput">
+      <span>Snap to Semitones</span>
+    </label>
+    <p class="modal-hint">Step values snap to whole semitones, including MIDI/CV control and standalone ESP playback. With Pitch connected, snapping follows Max Pitch Offset.</p>
     <p class="modal-hint">Reducing to 8 Steps removes any cables on Step 9–16.</p>
     <label class="modal-field">
       <span>Max Pitch Offset (semitones, when Pitch is wired)</span>
       <input type="number" min="0" max="60" step="1" inputmode="numeric" id="stepArpMaxSemitoneOffsetInput" value="60">
     </label>
     <p class="modal-hint">Caps how far a step knob can shift a note up/down from Pitch (±N semitones); the offset is always rounded to a whole semitone so notes stay in tune.</p>
-    <label class="modal-field">
-      <span>Rate Maximum BPM at 10 V</span>
-      <input type="number" min="0" step="0.1" inputmode="decimal" id="stepArpClockMaxBpmInput" value="120">
-    </label>
-    <label class="modal-field modal-field-checkbox">
-      <input type="checkbox" id="stepArpClockRoundBpmInput">
-      <span>Whole BPM only</span>
-    </label>
-    <p class="modal-hint">Rate slider on the node body drives an internal clock, used only while nothing is cabled into Clock - it always resyncs to Gate.</p>
+    <p class="modal-hint">BPM accepts a direct tempo value. Without a BPM cable, Master Clock supplies the tempo. The internal clock runs only while Trigger is unpatched and resyncs to Gate.</p>
     <div class="modal-actions">
       <button id="stepArpSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="stepArpSettingsSave">Save</button>
@@ -874,14 +892,6 @@
     <label class="modal-field">
       <span>Tracks</span>
       <input id="drumSequencerTrackCountInput" type="number" min="1" max="8" step="1" value="1">
-    </label>
-    <label class="modal-field">
-      <span>Rate Maximum BPM at 10 V</span>
-      <input id="drumSequencerClockMaxBpmInput" type="number" min="0.1" max="10000" step="0.1" value="120">
-    </label>
-    <label class="modal-field modal-field-checkbox">
-      <input type="checkbox" id="drumSequencerClockRoundBpmInput">
-      <span>Whole BPM only</span>
     </label>
     <p class="modal-hint">Reducing Steps or Tracks permanently deletes removed pattern data. Removed Track cables are disconnected.</p>
     <div class="modal-actions">
@@ -1368,6 +1378,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260927-drum-pulse-1"></script>
+<script type="module" src="/static/js/main.js?v=20260927-knob-overlay-1"></script>
 </body>
 </html>

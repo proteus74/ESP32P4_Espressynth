@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "features/synth/KnobActivity.h"
 
 #define EEZ_PRESET_CAPACITY 32
 
@@ -14,6 +15,7 @@ typedef struct EezSynthStatus {
     uint8_t preset_load_progress;
     bool preset_load_active;
     uint32_t underruns;
+    uint32_t preset_change_sequence;
     char preset_name[64];
     char midi_name[32];
 } EezSynthStatus;
@@ -35,6 +37,7 @@ extern "C" {
 #endif
 
 bool eez_synth_status(EezSynthStatus *status);
+bool eez_read_knob_activity(KnobActivity *activity);
 void eez_network_ip(char *out, size_t out_size);
 bool eez_list_presets(EezPresetList *list);
 bool eez_synth_load_preset(const char *name);

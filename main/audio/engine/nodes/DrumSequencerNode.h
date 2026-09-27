@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 
 #include "../CvConventions.h"
+#include "../MasterClock.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
@@ -162,7 +163,8 @@ inline void render(NodeInstance &inst, size_t frames)
                              synth::portBit(kClockPort)) != 0;
     const bool rateWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
                             synth::portBit(kRatePort)) != 0;
-    const float rawRateCv = rateWired ? portSample(inst, kRatePort, 0) : s.internalClockCvVolts;
+    const auto &mc = synth::masterClock();
+    const float tempo = rateWired ? portSample(inst, kRatePort, 0) : (mc.roundBpm ? roundf(mc.bpm) : mc.bpm);
 
     // "pattern" is control-only (see PortTables::isControlOnlyInput) - read once
     // per render block, not per sample, matching Multiplexer's "select".
@@ -192,9 +194,7 @@ inline void render(NodeInstance &inst, size_t frames)
             s.pendingPattern = 0xFF;
         }
     }
-    const float rateCv = rawRateCv < 0.0f ? 0.0f : (rawRateCv > cv::kMaxVolts ? cv::kMaxVolts : rawRateCv);
-    float bpm = (rateCv / cv::kMaxVolts) * s.internalClockMaxBpm;
-    if (s.internalClockRoundBpm) bpm = roundf(bpm);
+    float bpm = std::isfinite(tempo) ? fmaxf(0.0f, tempo) : 0.0f;
     // A step is a 16th note (4 steps per beat), not one beat itself - a
     // 16-step pattern is one 4/4 bar. 120 BPM must trigger 8 steps/sec.
     const float periodSec = bpm > 0.0f ? 15.0f / bpm : 0.0f;

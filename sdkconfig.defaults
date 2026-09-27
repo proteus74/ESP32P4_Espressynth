@@ -95,8 +95,12 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y
+# Refresh animations at approximately 30 Hz; touch uses its own faster polling timer.
+CONFIG_LV_DEF_REFR_PERIOD=33
 CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_30=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
 
 # --- Boot splash screen (main/features/display/display_lvgl.hpp): the embedded splash PNG is
 # decoded via LVGL's bundled lodepng, read through a stdio-backed LVGL filesystem driver

@@ -28,6 +28,7 @@
 #include "nodes/DigitalOutNode.h"
 #include "nodes/RgbLedNode.h"
 #include "nodes/SampleHoldNode.h"
+#include "nodes/MonoflopNode.h"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/CombFilterNode.h"
 #include "nodes/ConstNode.h"
@@ -148,6 +149,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::SampleHold:
         nodes::samplehold::parsePreset(p, out);
+        break;
+    case NodeType::Monoflop:
+        nodes::monoflop::parsePreset(p, out);
         break;
     case NodeType::Mixer:
         nodes::mixer::parsePreset(p, out);

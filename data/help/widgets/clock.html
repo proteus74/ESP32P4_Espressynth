@@ -4,8 +4,8 @@ the tab bar's Master Clock). Use it to drive sequencers, arpeggiators, clocked L
 else that needs to stay in time with your song.</p>
 <h2>Outputs</h2>
 <ul>
-<li><span class="port-label">Pulse</span> — a trigger that fires on every clock step, patch into a Step Arpeggiator's or Drum Sequencer's Clock input.</li>
-<li><span class="port-label">Frequency</span> — the clock's current tempo expressed as a CV, in case you want to react to tempo elsewhere in the patch.</li>
+<li><span class="port-label">Trigger</span> — four triggers per BPM beat (sixteenth notes): at 60 BPM, four triggers per second. Patch into a Step Arpeggiator's or Drum Sequencer's Trigger input. The connected output flashes green on each trigger.</li>
+<li><span class="port-label">BPM</span> — the current Master Clock tempo as a direct numeric value (120 means 120 BPM). Patch into a Step Arpeggiator's or Drum Sequencer's BPM input; this output is not scaled to 0–10 V.</li>
 </ul>
-<p>This widget owns only its own pulse width — the tempo itself comes from the shared Master Clock,
+<p>Trigger Duration sets the pulse width, capped at half the trigger interval so each trigger has a separate rising edge. The tempo itself comes from the shared Master Clock,
 so every Clock widget in your patch stays in sync.</p>

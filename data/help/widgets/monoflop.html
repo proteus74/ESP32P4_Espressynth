@@ -1,0 +1,11 @@
+<h2>What it's for</h2>
+<p>Converts a threshold crossing into one fixed-length 10 V trigger. A held-high input fires only once. The input must return to or below the threshold before it can fire again.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — fires when the signal rises above the threshold.</li>
+<li><span class="port-label">Threshold</span> — 0–10 V CV sets the threshold directly. Without a cable, the slider sets it (default 5 V).</li>
+</ul>
+<h2>Output</h2>
+<p><span class="port-label">Trigger</span> — 10 V during the trigger, otherwise 0 V.</p>
+<h2>Settings</h2>
+<p>Double-click the widget body to set Trigger Duration from 1 to 60000 ms (default 10 ms). Crossings during an active trigger are ignored; they do not extend its duration. Duration changes apply to the next trigger. Settings are saved with the preset.</p>

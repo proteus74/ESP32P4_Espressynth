@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "lvgl.h"
+#include "KnobActivityOverlay.h"
 
 extern "C" {
 #include "actions.h"
@@ -22,6 +23,8 @@ namespace {
 
 lv_timer_t *s_timer = nullptr;
 EezPresetList s_preset_list{};
+KnobActivityOverlay s_knob_overlay;
+uint32_t s_knob_preset_sequence = 0;
 
 void action_open_preset_list(lv_event_t *)
 {
@@ -66,6 +69,20 @@ void update_runtime_labels()
 {
     EezSynthStatus synth{};
     eez_synth_status(&synth);
+    if (s_knob_preset_sequence != synth.preset_change_sequence)
+    {
+        s_knob_overlay.clear();
+        s_knob_preset_sequence = synth.preset_change_sequence;
+    }
+    const int64_t activityNowUs = esp_timer_get_time();
+    KnobActivity activity{};
+    for (uint16_t i = 0; i < 512 && eez_read_knob_activity(&activity); ++i)
+    {
+        if (activity.presetSequence == synth.preset_change_sequence &&
+            activityNowUs - activity.updatedUs < 1000000)
+            s_knob_overlay.update(activity, true);
+    }
+    s_knob_overlay.tick(activityNowUs);
     set_label_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
 
     // Preset loader bar: every timer tick, so the progress animation stays smooth.
@@ -188,7 +205,7 @@ void start()
 {
     if (s_timer != nullptr) return;
     update_runtime_labels();
-    s_timer = lv_timer_create(timer_callback, 100, nullptr);
+    s_timer = lv_timer_create(timer_callback, 33, nullptr);
 }
 
 } // namespace Feature::EEZUI
