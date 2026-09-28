@@ -202,9 +202,9 @@ int main()
         inst.outL = cv;
         inst.outR = gate;
         arp.pulseMs = 1000;
-        arp.stepVolts[0] = 6;
-        arp.stepVolts[1] = 0;
-        arp.stepVolts[2] = 7;
+        arp.stepVolts[0][0] = 6;
+        arp.stepVolts[0][1] = 0;
+        arp.stepVolts[0][2] = 7;
         const auto tick = [&]() {
             inst.controlValue[0] = 0;
             nodes::steparp::render(inst, 1);
@@ -230,14 +230,14 @@ int main()
         tick();
         assert(cv[0] == 7 && gate[0] == 10 && arp.currentStep == 3);
         // An external step CV of zero wins over a nonzero knob, before Pitch.
-        arp.stepVolts[3] = 9;
+        arp.stepVolts[0][3] = 9;
         inst.controlConnectedPortMask |= synth::portBit(7) | synth::portBit(2);
         inst.controlValue[7] = 0;
         inst.controlValue[2] = 9;
         tick();
         assert(cv[0] == 7 && gate[0] == 0 && arp.currentStep == 4);
         // An all-zero pattern advances normally, with no gate or CV changes.
-        for (float &value : arp.stepVolts) value = 0;
+        for (float &value : arp.stepVolts[0]) value = 0;
         inst.controlConnectedPortMask = synth::portBit(0);
         for (int i = 0; i < 16; ++i) {
             tick();
@@ -325,4 +325,49 @@ int main()
         assert(trigger() == previous && gate[0] == 0);
     }
     std::puts("PASS native Snap to Semitones: persisted flag/build/live toggle, all 128 MIDI values, audio/CV control, local values, Pitch ranges, free mode, Skip on C0; no JavaScript");
+    {
+        NodeInstance inst;
+        nodes::steparp::StepArpState arp;
+        inst.stepArp = &arp;
+        float cv[1], gate[1];
+        inst.outL = cv;
+        inst.outR = gate;
+        arp.patternCount = 2;
+        arp.stepCount = 8;
+        for (int i = 0; i < 16; ++i) arp.stepVolts[1][i] = 8;
+        inst.controlConnectedPortMask = synth::portBit(0);
+        const auto tick = [&]() {
+            inst.controlValue[0] = 0;
+            nodes::steparp::render(inst, 1);
+            inst.controlValue[0] = 10;
+            nodes::steparp::render(inst, 1);
+        };
+        // Gate low: a new selection applies at once, and step edits go to it.
+        nodes::steparp::setParam(inst, "activePatternIndex", 1);
+        nodes::steparp::render(inst, 1);
+        assert(arp.activePattern == 1);
+        nodes::steparp::setParam(inst, "step1", 9);
+        assert(arp.stepVolts[1][0] == 9 && arp.stepVolts[0][0] == 5);
+        nodes::steparp::setParam(inst, "activePatternIndex", 0);
+        // Switch at End while running: pattern 2 waits until step 8 has played.
+        nodes::steparp::setParam(inst, "switchAtEnd", 1);
+        inst.controlValue[1] = 10; // gate high plays step 1
+        nodes::steparp::render(inst, 1);
+        assert(arp.activePattern == 0 && cv[0] == 5);
+        nodes::steparp::setParam(inst, "activePatternIndex", 1);
+        assert(arp.activePattern == 0 && arp.pendingPattern == 1);
+        for (int step = 2; step <= 7; ++step) tick();
+        assert(arp.activePattern == 0 && cv[0] == 5);
+        tick(); // step 8, back at step 1
+        assert(arp.activePattern == 1 && arp.pendingPattern == nodes::steparp::kNoPendingPattern);
+        tick();
+        assert(cv[0] == 9);
+        // Wired "pattern" CV (control-only) picks by equal bands and wins over the local choice.
+        nodes::steparp::setParam(inst, "switchAtEnd", 0);
+        inst.controlConnectedPortMask |= synth::portBit(nodes::steparp::kPatternPort);
+        inst.controlValue[nodes::steparp::kPatternPort] = 2;
+        nodes::steparp::render(inst, 1);
+        assert(arp.activePattern == 0);
+    }
+    std::puts("PASS native Step Arp patterns: immediate switch, per-pattern edits, Switch at End on the sequence end, wired Pattern CV");
 }

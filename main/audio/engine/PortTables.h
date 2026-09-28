@@ -603,6 +603,12 @@ inline int audioInIndex(NodeType type, const char *portName)
         // Master Clock supplies tempo; Trigger overrides generated steps.
         if (is(portName, "rate"))
             return 21;
+        // "pattern" (22) + "switchAtEnd" (23) - control-only, same meaning as
+        // the Drum Sequencer's ports of the same name.
+        if (is(portName, "pattern"))
+            return 22;
+        if (is(portName, "switchAtEnd"))
+            return 23;
         if (strncmp(portName, "step", 4) == 0)
         {
             // "step1".."step16" (1-based in the name, 0-based return) - same
@@ -958,7 +964,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::DxEnvelope:
         return 10; // four level plus four time CV inputs, plus "gate" and "velocity" (CV)
     case NodeType::StepArpeggiator:
-        return 22; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate" + "step1".."step16" (CV)
+        return 24; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate"+"pattern"+"switchAtEnd" + "step1".."step16" (CV)
     case NodeType::DrumSequencer:
         return 5; // "clock" + "gate" + "pattern" (control-only) + internal-fallback "rate" + "switchAtEnd" (control-only)
     case NodeType::Knob:
@@ -1110,6 +1116,8 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         return true; // "layer" is a discrete selector
     case NodeType::DrumSequencer:
         return portIdx == 2 || portIdx == 4; // "pattern" (discrete pick) + "switchAtEnd" (on/off, same reasoning as LFO's oneShot/global)
+    case NodeType::StepArpeggiator:
+        return portIdx == 22 || portIdx == 23; // "pattern" + "switchAtEnd", same as DrumSequencer
     case NodeType::Adsr:
         return true; // "att"/"dec"/"sus"/"rel"/"gate"/"velocity" - all six
     case NodeType::DxEnvelope:

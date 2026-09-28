@@ -1710,6 +1710,8 @@ const WIDGET_TYPES = {
       { id: "pitch", label: "Pitch" },
       { id: "direction", label: "Direction" },
       { id: "pulseTime", label: "Gate-Out-Time" },
+      { id: "pattern", label: "Pattern" },
+      { id: "switchAtEnd", label: "Switch at End" },
       ...Array.from({ length: 16 }, (_, i) => ({ id: `step${i + 1}`, label: `Step ${i + 1}` })),
     ],
     outputs: [
@@ -2088,7 +2090,7 @@ const AUDIO_PORTS = {
   adsr: { in: ["gate"], out: ["out"] },
   "dx-envelope": { in: ["gate"], out: ["out"] },
   "step-arpeggiator": {
-    in: ["clock", "gate", "pitch", "direction", "pulseTime", "rate", ...Array.from({ length: 16 }, (_, i) => `step${i + 1}`)],
+    in: ["clock", "gate", "pitch", "direction", "pulseTime", "rate", "pattern", "switchAtEnd", ...Array.from({ length: 16 }, (_, i) => `step${i + 1}`)],
     // "cv"/"gateOut" are genuine audio-rate outputs in the C++ engine, but
     // deliberately left OUT of this list - same reasoning as Clock's own
     // "pulse" (also absent here): propagate()'s Voltmeter/Debug delivery
@@ -3793,8 +3795,17 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "step-arpeggiator") {
+    const firstPattern = { steps: new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS) };
     const stepArpState = {
-      steps: new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS),
+      // Same multi-pattern model as the drum sequencer. `steps` always
+      // aliases the active pattern's array (see stepArpSelectPattern), so
+      // every step reader/writer keeps working on the pattern being played.
+      patterns: [firstPattern],
+      steps: firstPattern.steps,
+      activePatternIndex: 0,
+      pendingPatternIndex: -1,
+      switchAtEnd: false,
+      randomStepsInCycle: 0,
       stepCount: STEP_ARP_MAX_STEPS,
       // "pulseTime" local knob - pulseMs is the resolved value (already in
       // ms, matches nodes/StepArpeggiatorNode.h's own local fallback field
@@ -3816,8 +3827,10 @@ function createWidget(type, label, x, y, forcedId) {
       // "clock" branch of deliverToWidget below) purely so the editor's own
       // gateOut LED/propagate() simulation shows the same brief reset gap.
       retriggerGateOut: false,
-      skipOnC0: false,
-      snapToSemitones: false,
+      // A freshly placed widget starts with both on; presets without these
+      // keys still load them as off (see applyParams).
+      skipOnC0: true,
+      snapToSemitones: true,
       // Client-side-simulated sequencing (mirrors nodes/StepArpeggiatorNode.h's
       // play-then-advance model exactly - see stepArpNextIndex below), driven
       // by incoming clock/gate cable values via propagate()/deliverToWidget,
@@ -3840,6 +3853,18 @@ function createWidget(type, label, x, y, forcedId) {
       clockTickTimer: null,
     };
     stepArpStates.set(id, stepArpState);
+
+    const patternMenuBtn = document.createElement("button");
+    patternMenuBtn.type = "button";
+    patternMenuBtn.className = "drum-sequencer-pattern-menu-btn";
+    patternMenuBtn.textContent = "⋮";
+    patternMenuBtn.title = "Pattern actions";
+    patternMenuBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    patternMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDrumPatternMenu(id, patternMenuBtn);
+    });
+    header.insertBefore(patternMenuBtn, header.querySelector(".widget-instance-close"));
     // No audioEngine.createNode() call - like Clock, this widget is a pure
     // CV/gate generator with no browser Web Audio preview counterpart (see
     // audio-engine.js: neither "clock" nor "step-arpeggiator" is handled
@@ -13325,6 +13350,7 @@ const HAMMOND_FOOTAGES = ["16′", "5⅓′", "8′", "4′", "2⅔′", "2′",
 // Mixer's fixed 8-slot "gains" array, see renderMixerPorts).
 const stepArpStates = new Map();
 const STEP_ARP_MAX_STEPS = 16;
+const STEP_ARP_MAX_PATTERNS = 8; // matches synth::kStepArpMaxPatterns
 // Hardcoded (not CV_MAX_VOLTS / 2): CV_MAX_VOLTS itself is declared much
 // later in this file as a top-level const - fine to forward-reference from
 // inside a function body (evaluated lazily at call time, same pattern
@@ -15943,6 +15969,41 @@ function buildStepArpIoLine(widgetId, port, direction) {
     valueSpan.textContent = formatStepArpPulseTime(widgetId);
     row.appendChild(valueSpan);
   }
+  if (port.id === "pattern" && state) {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(Math.max(0, state.patterns.length - 1));
+    slider.step = "1";
+    slider.value = String(state.activePatternIndex);
+    slider.dataset.role = "step-arp-pattern-select";
+    slider.addEventListener("mousedown", (e) => e.stopPropagation());
+    slider.addEventListener("click", (e) => e.stopPropagation());
+    slider.addEventListener("input", () => setStepArpActivePattern(widgetId, Number(slider.value)));
+    row.appendChild(slider);
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "port-value";
+    valueSpan.dataset.role = "step-arp-pattern-value";
+    row.appendChild(valueSpan);
+  }
+  if (port.id === "switchAtEnd" && state) {
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "switch";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = state.switchAtEnd === true;
+    toggle.dataset.role = "step-arp-switch-at-end";
+    toggle.addEventListener("mousedown", (e) => e.stopPropagation());
+    toggle.addEventListener("click", (e) => e.stopPropagation());
+    toggle.addEventListener("change", () => setStepArpSwitchAtEnd(widgetId, toggle.checked));
+    const track = document.createElement("span");
+    track.className = "switch-track";
+    toggleLabel.appendChild(toggle);
+    toggleLabel.appendChild(track);
+    row.appendChild(toggleLabel);
+  }
   if (port.id === "rate" && state) {
     const valueSpan = document.createElement("span");
     valueSpan.className = "port-value";
@@ -16130,15 +16191,20 @@ function renderStepArpPorts(widgetId, portsEl) {
       ".port-dot"
     );
 
-    const knob = document.createElement("div");
-    knob.className = "step-arp-knob";
+    const knob = document.createElement("input");
+    knob.type = "range";
+    knob.className = "port-slider step-arp-slider";
+    knob.min = "0";
+    knob.max = String(CV_MAX_VOLTS);
+    knob.step = "0.01";
+    knob.value = String(state.steps[i]);
     knob.dataset.role = `step-arp-knob-${i + 1}`;
     knob.title = `Step ${i + 1}`;
-    const indicator = document.createElement("div");
-    indicator.className = "step-arp-knob-indicator";
-    indicator.dataset.role = `step-arp-knob-${i + 1}-indicator`;
-    knob.appendChild(indicator);
-    knob.addEventListener("mousedown", (e) => startStepArpKnobDrag(e, widgetId, i));
+    knob.addEventListener("mousedown", (e) => e.stopPropagation());
+    knob.addEventListener("click", (e) => e.stopPropagation());
+    knob.addEventListener("input", () => setStepArpValue(widgetId, i, parseFloat(knob.value)));
+    knob.addEventListener("change", () => markDirty());
+    knob.addEventListener("wheel", (e) => adjustStepArpValueByWheel(e, widgetId, i), { passive: false });
     // Double-click resets this step back to its 5V default - same shortcut
     // convention as the widget-level dblclick opening settings, just
     // stopped from bubbling there since this one means something else here.
@@ -16176,33 +16242,6 @@ function renderStepArpPorts(widgetId, portsEl) {
   stepArpRestartInternalClock(widgetId);
 }
 
-// Same vertical-drag-to-value math as startKnobDrag (main.js), just
-// operating directly in the 0-10V CV domain instead of a 0-127 raw+mapping
-// indirection - these step knobs ARE already the pitch-CV value, no
-// separate output-range mapping is needed.
-function startStepArpKnobDrag(e, widgetId, index) {
-  e.preventDefault();
-  e.stopPropagation();
-  const state = stepArpStates.get(widgetId);
-  if (!state) return;
-  const startY = e.clientY;
-  const startVolts = state.steps[index];
-  let moved = false;
-
-  function onMove(ev) {
-    const dy = startY - ev.clientY;
-    if (Math.abs(dy) > 2) moved = true;
-    setStepArpValue(widgetId, index, startVolts + (dy / 254) * CV_MAX_VOLTS);
-  }
-  function onUp() {
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-    if (moved) markDirty();
-  }
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-}
-
 // Local knob drag AND a live cable both land here via deliverToWidget's
 // step-arpeggiator branch - same pattern as Hammond's drawbarN (see
 // renderHammondPorts above).
@@ -16219,6 +16258,25 @@ function quantizeStepArpValue(widgetId, volts) {
   return Math.round(clamped * 12) / 12;
 }
 
+// Mouse wheel over a step slider: 0.1V per notch (like the drum sequencer's
+// velocity cells), or exactly one semitone when Snap to Semitones is on - 1/12V
+// absolute, or one offset step (5V / maxSemitoneOffset) while Pitch is wired.
+function adjustStepArpValueByWheel(e, widgetId, index) {
+  e.preventDefault();
+  e.stopPropagation();
+  const state = stepArpStates.get(widgetId);
+  if (!state || e.currentTarget.disabled) return;
+  let step = 0.1;
+  if (state.snapToSemitones) {
+    const pitchWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pitch");
+    step = pitchWired && state.maxSemitoneOffset > 0 ? (CV_MAX_VOLTS / 2) / state.maxSemitoneOffset : 1 / 12;
+  }
+  const current = quantizeStepArpValue(widgetId, state.steps[index]);
+  const next = current + (e.deltaY < 0 ? step : -step);
+  setStepArpValue(widgetId, index, state.snapToSemitones ? next : Math.round(next * 100) / 100);
+  markDirty();
+}
+
 function setStepArpValue(widgetId, index, volts) {
   const state = stepArpStates.get(widgetId);
   if (!state) return;
@@ -16233,8 +16291,6 @@ function updateStepArpKnobVisual(widgetId, index) {
   const el = document.getElementById(widgetId);
   if (!state || !el) return;
   const volts = quantizeStepArpValue(widgetId, state.steps[index]);
-  const indicator = el.querySelector(`[data-role="step-arp-knob-${index + 1}-indicator"]`);
-  if (indicator) indicator.style.transform = `rotate(${-135 + (volts / CV_MAX_VOLTS) * 270}deg)`;
   // Unlike the direction/pulseTime local-slider-override checks elsewhere in
   // this file, "pitch" has no local knob to override - ANY cable here
   // (regardless of source kind) already changes what actually sounds, so the
@@ -16269,7 +16325,8 @@ function updateStepArpKnobVisual(widgetId, index) {
   );
   const knob = el.querySelector(`[data-role="step-arp-knob-${index + 1}"]`);
   if (knob) {
-    knob.classList.toggle("step-arp-knob-disabled", audioConnected);
+    knob.value = String(volts);
+    knob.disabled = audioConnected;
     const skipped = state.skipOnC0 === true && volts <= 0;
     knob.closest(".step-arp-cell")?.classList.toggle("step-arp-cell-skipped", skipped);
     knob.title = `Step ${index + 1}${skipped ? " (Skip on C0)" : ""}`;
@@ -16285,6 +16342,77 @@ function updateStepArpVisual(widgetId) {
   updateStepArpDirectionVisual(widgetId);
   updateStepArpPulseTimeVisual(widgetId);
   updateStepArpRateVisual(widgetId);
+  updateStepArpPatternVisual(widgetId);
+}
+
+function updateStepArpPatternVisual(widgetId) {
+  const el = document.getElementById(widgetId);
+  const state = stepArpStates.get(widgetId);
+  if (!el || !state) return;
+  const slider = el.querySelector('[data-role="step-arp-pattern-select"]');
+  if (slider) {
+    slider.max = String(Math.max(0, state.patterns.length - 1));
+    slider.value = String(state.activePatternIndex);
+    slider.disabled = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pattern");
+  }
+  const valueSpan = el.querySelector('[data-role="step-arp-pattern-value"]');
+  if (valueSpan) valueSpan.textContent = `${state.activePatternIndex + 1}/${state.patterns.length}`;
+  const toggle = el.querySelector('[data-role="step-arp-switch-at-end"]');
+  if (toggle) toggle.checked = state.switchAtEnd === true;
+}
+
+// Makes `index` the played/edited pattern; `steps` aliases its array.
+function stepArpSelectPattern(state, index) {
+  state.activePatternIndex = index;
+  state.pendingPatternIndex = -1;
+  state.steps = state.patterns[index].steps;
+}
+
+// Local slider or wired CV - same quantize-while-running rule as
+// setDrumSequencerActivePattern / nodes/StepArpeggiatorNode.h's render().
+function requestStepArpPattern(widgetId, index) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  const clamped = clamp(Math.round(index), 0, state.patterns.length - 1);
+  if (state.switchAtEnd && state.gatePrev) {
+    if (clamped !== state.activePatternIndex) state.pendingPatternIndex = clamped;
+  } else if (clamped !== state.activePatternIndex) {
+    stepArpSelectPattern(state, clamped);
+    updateStepArpVisual(widgetId);
+  }
+}
+
+function setStepArpActivePattern(widgetId, index) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  requestStepArpPattern(widgetId, index);
+  sendLiveParamUpdateThrottled(widgetId, { activePatternIndex: clamp(Math.round(index), 0, state.patterns.length - 1) });
+}
+
+function setStepArpSwitchAtEnd(widgetId, on) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  state.switchAtEnd = on === true;
+  sendLiveParamUpdate(widgetId, { switchAtEnd: state.switchAtEnd ? 1 : 0 });
+}
+
+// Advances state.currentStep and applies a Switch-at-End pattern change once
+// the sequence has run through - JS mirror of advanceStep() in
+// nodes/StepArpeggiatorNode.h (back at step 1, or stepCount steps for Random).
+function stepArpAdvance(widgetId, state) {
+  state.currentStep = stepArpNextIndex(state);
+  let cycleEnd;
+  if (stepArpDirectionFromCv(state.directionVolts) === "random") {
+    state.randomStepsInCycle += 1;
+    cycleEnd = state.randomStepsInCycle >= state.stepCount;
+    if (cycleEnd) state.randomStepsInCycle = 0;
+  } else {
+    cycleEnd = state.currentStep === 0;
+  }
+  if (cycleEnd && state.pendingPatternIndex !== -1) {
+    stepArpSelectPattern(state, state.pendingPatternIndex);
+    updateStepArpVisual(widgetId);
+  }
 }
 
 // Highlights the cell of the step currently held at the "cv" output (see
@@ -16357,7 +16485,7 @@ function stepArpTriggerStep(widgetId, state, el) {
     setLedActive(el.querySelector('.port-dot[data-port-id="gateOut"][data-port-dir="out"]'), false, 0);
     propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
     updateStepArpActiveHighlight(widgetId);
-    state.currentStep = stepArpNextIndex(state);
+    stepArpAdvance(widgetId, state);
     return;
   }
   // "pitch" - when wired, a step's own knob value is a +/-N-semitone offset
@@ -16386,7 +16514,7 @@ function stepArpTriggerStep(widgetId, state, el) {
     propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
   }, state.pulseMs);
 
-  state.currentStep = stepArpNextIndex(state);
+  stepArpAdvance(widgetId, state);
 }
 
 let drumPaintSession = null;
@@ -16820,6 +16948,55 @@ function setDrumSequencerSwitchAtEnd(widgetId, on) {
 }
 
 let drumPatternClipboard = null;
+let stepArpPatternClipboard = null;
+
+// Step Arpeggiator pattern actions - same behavior as the drum versions
+// below; structural changes go out as a full preset save, like the drums.
+function stepArpPatternsChanged(widgetId) {
+  const portsEl = document.getElementById(widgetId)?.querySelector(".widget-ports");
+  if (portsEl) renderStepArpPorts(widgetId, portsEl);
+  markDirty();
+  savePresetNow();
+}
+
+function addStepArpPattern(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state || state.patterns.length >= STEP_ARP_MAX_PATTERNS) return;
+  pushHistorySnapshot();
+  state.patterns.push({ steps: new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS) });
+  stepArpSelectPattern(state, state.patterns.length - 1);
+  stepArpPatternsChanged(widgetId);
+}
+
+function deleteStepArpPattern(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state || state.patterns.length <= 1) return;
+  pushHistorySnapshot();
+  state.patterns.splice(state.activePatternIndex, 1);
+  stepArpSelectPattern(state, Math.min(state.activePatternIndex, state.patterns.length - 1));
+  stepArpPatternsChanged(widgetId);
+}
+
+function copyStepArpPattern(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (state) stepArpPatternClipboard = [...state.steps];
+}
+
+function pasteStepArpPattern(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state || !stepArpPatternClipboard) return;
+  pushHistorySnapshot();
+  state.steps.splice(0, STEP_ARP_MAX_STEPS, ...stepArpPatternClipboard);
+  stepArpPatternsChanged(widgetId);
+}
+
+function clearStepArpPattern(widgetId) {
+  const state = stepArpStates.get(widgetId);
+  if (!state) return;
+  pushHistorySnapshot();
+  state.steps.fill(STEP_ARP_DEFAULT_VOLTS);
+  stepArpPatternsChanged(widgetId);
+}
 let drumPatternMenuTargetId = null;
 const drumPatternContextMenu = document.getElementById("drumPatternContextMenu");
 
@@ -16828,17 +17005,20 @@ function closeDrumPatternMenu() {
   drumPatternMenuTargetId = null;
 }
 
+// Shared by the Drum Sequencer and the Step Arpeggiator - each keeps its own
+// clipboard, since their patterns hold different data.
 function openDrumPatternMenu(widgetId, anchorBtn) {
   if (!drumPatternContextMenu) return;
-  const state = drumSequencerStates.get(widgetId);
+  const isStepArp = stepArpStates.has(widgetId);
+  const state = isStepArp ? stepArpStates.get(widgetId) : drumSequencerStates.get(widgetId);
   if (!state) return;
   drumPatternMenuTargetId = widgetId;
   const deleteBtn = drumPatternContextMenu.querySelector('[data-action="delete"]');
   if (deleteBtn) deleteBtn.disabled = state.patterns.length <= 1;
   const pasteBtn = drumPatternContextMenu.querySelector('[data-action="paste"]');
-  if (pasteBtn) pasteBtn.disabled = !drumPatternClipboard;
+  if (pasteBtn) pasteBtn.disabled = !(isStepArp ? stepArpPatternClipboard : drumPatternClipboard);
   const addBtn = drumPatternContextMenu.querySelector('[data-action="add"]');
-  if (addBtn) addBtn.disabled = state.patterns.length >= DRUM_MAX_PATTERNS;
+  if (addBtn) addBtn.disabled = state.patterns.length >= (isStepArp ? STEP_ARP_MAX_PATTERNS : DRUM_MAX_PATTERNS);
   drumPatternContextMenu.classList.remove("hidden");
   const anchorRect = anchorBtn.getBoundingClientRect();
   const menuRect = drumPatternContextMenu.getBoundingClientRect();
@@ -16903,6 +17083,15 @@ if (drumPatternContextMenu) {
     const widgetId = drumPatternMenuTargetId;
     closeDrumPatternMenu();
     if (!widgetId || !action) return;
+    if (stepArpStates.has(widgetId)) {
+      if (action === "add") addStepArpPattern(widgetId);
+      if (action === "delete") deleteStepArpPattern(widgetId);
+      if (action === "copy") copyStepArpPattern(widgetId);
+      if (action === "paste") pasteStepArpPattern(widgetId);
+      if (action === "clear") clearStepArpPattern(widgetId);
+      if (action === "settings") openStepArpSettings(widgetId);
+      return;
+    }
     if (action === "add") addDrumPattern(widgetId);
     if (action === "delete") deleteDrumPattern(widgetId);
     if (action === "copy") copyDrumPattern(widgetId);
@@ -20189,6 +20378,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         // stepArpTriggerStep/nodes/StepArpeggiatorNode.h's triggerStep().
         state.currentStep = 0;
         state.pingPongForward = true;
+        state.randomStepsInCycle = 0;
         // The internal fallback clock always resyncs to Gate too, whether
         // or not it is actually driving playback right now (see
         // nodes/StepArpeggiatorNode.h's render() - same rule): its next
@@ -20204,6 +20394,11 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         state.gateOutTimer = null;
         setLedActive(el.querySelector('[data-port-id="gateOut"][data-port-dir="out"]'), false);
         propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
+        // No running sequence left to quantize a pending switch against.
+        if (state.pendingPatternIndex !== -1) {
+          stepArpSelectPattern(state, state.pendingPatternIndex);
+          updateStepArpVisual(widgetId);
+        }
       }
       state.gateVolts = Number(value) || 0;
       state.gatePrev = gateOn;
@@ -20231,6 +20426,11 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
       state.bpmInput = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
       updateStepArpRateVisual(widgetId);
       stepArpRestartInternalClock(widgetId);
+    } else if (state && portId === "pattern") {
+      requestStepArpPattern(widgetId, drumPatternIndexFromCv(clamp(Number(value) || 0, 0, CV_MAX_VOLTS), state.patterns.length));
+    } else if (state && portId === "switchAtEnd") {
+      state.switchAtEnd = Number(value) >= GATE_THRESHOLD_VOLTS;
+      updateStepArpPatternVisual(widgetId);
     }
   }
 
@@ -22294,7 +22494,9 @@ const WIDGET_ENGINES = {
       const state = stepArpStates.get(id);
       return state
         ? {
-            steps: [...state.steps],
+            patterns: state.patterns.map((pattern) => ({ steps: [...pattern.steps] })),
+            activePatternIndex: state.activePatternIndex,
+            switchAtEnd: state.switchAtEnd === true,
             stepCount: state.stepCount,
             pulseMs: state.pulseMs,
             pulseTimeMinSec: state.pulseTimeMinSec,
@@ -22313,10 +22515,18 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => {
       const state = stepArpStates.get(id);
       if (!state || !params) return;
-      state.steps =
-        Array.isArray(params.steps) && params.steps.length === STEP_ARP_MAX_STEPS
-          ? params.steps.map((v) => clamp(Number(v) || 0, 0, CV_MAX_VOLTS))
+      const readSteps = (steps) =>
+        Array.isArray(steps) && steps.length === STEP_ARP_MAX_STEPS
+          ? steps.map((v) => clamp(Number(v) || 0, 0, CV_MAX_VOLTS))
           : new Array(STEP_ARP_MAX_STEPS).fill(STEP_ARP_DEFAULT_VOLTS);
+      // Presets saved before multi-pattern support have one top-level "steps" array.
+      const patternsIn = Array.isArray(params.patterns) && params.patterns.length > 0
+        ? params.patterns.slice(0, STEP_ARP_MAX_PATTERNS)
+        : [{ steps: params.steps }];
+      state.patterns = patternsIn.map((pattern) => ({ steps: readSteps(pattern?.steps) }));
+      stepArpSelectPattern(state, clamp(parseInt(params.activePatternIndex, 10) || 0, 0, state.patterns.length - 1));
+      state.switchAtEnd = params.switchAtEnd === true;
+      state.randomStepsInCycle = 0;
       state.stepCount = Number(params.stepCount) <= 8 ? 8 : STEP_ARP_MAX_STEPS;
       const pulseMs = Number(params.pulseMs);
       state.pulseMs = Number.isFinite(pulseMs) && pulseMs > 0 ? pulseMs : 10;

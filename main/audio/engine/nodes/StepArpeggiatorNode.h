@@ -36,6 +36,12 @@ constexpr int kPulseTimePort = 20;
 // Direct BPM tempo input - see render()'s clockPortWired
 // branch. Only ever consulted while "clock" (port 0) itself is unwired.
 constexpr int kRatePort = 21;
+// "pattern" / "switchAtEnd" - control-only, same semantics as the Drum
+// Sequencer's ports of the same name (see DrumSequencerNode.h).
+constexpr int kPatternPort = 22;
+constexpr int kSwitchAtEndPort = 23;
+constexpr uint8_t kNoPendingPattern = 0xFF;
+static_assert(kSwitchAtEndPort < static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
 static_assert(kStep1Port + kStepPortCount <= static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
 static_assert(kPulseTimePort < static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
 static_assert(kRatePort < static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
@@ -78,7 +84,15 @@ struct StepArpState
     // only consulted while the matching "stepN" port has neither a genuine
     // audio-rate edge nor a ControlRoute targeting it (see stepCv() below) -
     // a wired step port always wins outright, never blended.
-    float stepVolts[kStepPortCount] = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+    // One row per pattern; activePattern is the one played (and edited).
+    float stepVolts[synth::kStepArpMaxPatterns][kStepPortCount] = {
+        {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5}};
+    uint8_t patternCount = 1;
+    uint8_t activePattern = 0;
+    uint8_t manualPatternSelect = 0;            // local slider / live param
+    uint8_t pendingPattern = kNoPendingPattern; // armed by Switch at End
+    bool switchAtEnd = false;
+    uint8_t randomStepsInCycle = 0;             // Random has no natural end - count stepCount steps
     uint8_t stepCount = 16; // 8 or 16 - the "8/16 steps" switch
     // gateOut pulse width - local knob fallback, already in its final real-
     // world unit (ms), same "local value pre-mapped, wired CV mapped fresh
@@ -172,6 +186,47 @@ inline uint8_t nextStepIndex(uint8_t current, uint8_t stepCount, Direction dir, 
     }
 }
 
+// Splits 0-10V into `count` equal bands - same as the Drum Sequencer's
+// patternIndexFromCv, so both widgets pick patterns identically.
+inline uint8_t patternIndexFromCv(float volts, uint8_t count)
+{
+    if (count <= 1) return 0;
+    int idx = static_cast<int>(volts / (cv::kMaxVolts / static_cast<float>(count)));
+    if (idx < 0) idx = 0;
+    if (idx > count - 1) idx = count - 1;
+    return static_cast<uint8_t>(idx);
+}
+
+inline uint8_t clampPatternIndex(int idx, uint8_t count)
+{
+    if (count == 0 || idx < 0) return 0;
+    return static_cast<uint8_t>(idx > count - 1 ? count - 1 : idx);
+}
+
+// Moves s.currentStep on per `dir` and, when that completes one pass through
+// the sequence, applies a pattern switch armed by Switch at End. A pass ends
+// when playback is back at step 1 (Forward, Backward and Ping-Pong all start
+// there after a Gate reset); Random ends after stepCount steps.
+inline void advanceStep(StepArpState &s, Direction dir)
+{
+    s.currentStep = nextStepIndex(s.currentStep, s.stepCount, dir, s.pingPongForward, s.rngState);
+    bool cycleEnd;
+    if (dir == Direction::Random)
+    {
+        cycleEnd = ++s.randomStepsInCycle >= s.stepCount;
+        if (cycleEnd) s.randomStepsInCycle = 0;
+    }
+    else
+    {
+        cycleEnd = s.currentStep == 0;
+    }
+    if (cycleEnd && s.pendingPattern != kNoPendingPattern)
+    {
+        s.activePattern = s.pendingPattern;
+        s.pendingPattern = kNoPendingPattern;
+    }
+}
+
 // Resolves one step's pitch-CV: a genuine audio-rate edge OR a ControlRoute
 // (e.g. a Knob cabled straight into "stepN") both win outright over the
 // local knob - portSample() already implements exactly that fallback chain
@@ -182,7 +237,7 @@ inline float stepCv(const NodeInstance &inst, const StepArpState &s, uint8_t idx
 {
     const int port = kStep1Port + idx;
     const bool wired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(port)) != 0;
-    const float raw = wired ? noderender::portSample(inst, port, i) : s.stepVolts[idx];
+    const float raw = wired ? noderender::portSample(inst, port, i) : s.stepVolts[s.activePattern][idx];
     if (!s.snapToSemitones) return raw;
     const float volts = std::isfinite(raw) ? fmaxf(0.0f, fminf(cv::kMaxVolts, raw)) : 0.0f;
     const bool pitchWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) & synth::portBit(kPitchPort)) != 0;
@@ -214,8 +269,7 @@ inline void triggerStep(NodeInstance &inst, StepArpState &s, size_t i, float sam
         s.pulseSamplesRemaining = 0;
         s.pendingPulseSamples = 0;
         s.retriggerGapRemaining = 0;
-        const Direction dir = directionFromCv(portSample(inst, kDirectionPort, i));
-        s.currentStep = nextStepIndex(s.currentStep, s.stepCount, dir, s.pingPongForward, s.rngState);
+        advanceStep(s, directionFromCv(portSample(inst, kDirectionPort, i)));
         return;
     }
     // "pitch" (Port-Index 2) - when wired, a step's own knob value is a
@@ -271,8 +325,7 @@ inline void triggerStep(NodeInstance &inst, StepArpState &s, size_t i, float sam
         s.retriggerGapRemaining = 0;
     }
 
-    const Direction dir = directionFromCv(portSample(inst, kDirectionPort, i));
-    s.currentStep = nextStepIndex(s.currentStep, s.stepCount, dir, s.pingPongForward, s.rngState);
+    advanceStep(s, directionFromCv(portSample(inst, kDirectionPort, i)));
 }
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -287,6 +340,31 @@ inline void render(NodeInstance &inst, size_t frames)
     if (s.currentStep >= s.stepCount)
     {
         s.currentStep = static_cast<uint8_t>(s.stepCount - 1);
+    }
+
+    // "pattern"/"switchAtEnd" are control-only - read once per block, same
+    // rules as DrumSequencerNode.h's render().
+    const bool patternWired = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
+                               synth::portBit(kPatternPort)) != 0;
+    const uint8_t requestedPattern = patternWired
+        ? patternIndexFromCv(portSample(inst, kPatternPort, 0), s.patternCount)
+        : clampPatternIndex(s.manualPatternSelect, s.patternCount);
+    const bool switchAtEndFed = ((inst.audioConnectedPortMask | inst.controlConnectedPortMask) &
+                                 synth::portBit(kSwitchAtEndPort)) != 0;
+    const bool switchAtEndOn = switchAtEndFed
+        ? portSample(inst, kSwitchAtEndPort, 0) >= cv::kGateThresholdVolts
+        : s.switchAtEnd;
+    if (requestedPattern != s.activePattern && requestedPattern != s.pendingPattern)
+    {
+        // Quantize only while running (gate high) - otherwise there is no
+        // upcoming sequence end to wait for.
+        if (switchAtEndOn && s.gatePrev)
+            s.pendingPattern = requestedPattern;
+        else
+        {
+            s.activePattern = requestedPattern;
+            s.pendingPattern = kNoPendingPattern;
+        }
     }
 
     const float sampleRate = static_cast<float>(synth::kSampleRate);
@@ -342,6 +420,7 @@ inline void render(NodeInstance &inst, size_t frames)
             // pulse directly, same as DxEnvelope/AdsrNode's own gate-reset.
             s.currentStep = 0;
             s.pingPongForward = true;
+            s.randomStepsInCycle = 0;
             s.pulseSamplesRemaining = 0;
             s.retriggerGapRemaining = 0;
             // The internal clock always resyncs to Gate, whether or not it
@@ -360,6 +439,12 @@ inline void render(NodeInstance &inst, size_t frames)
             // the Gate that armed it.
             s.pulseSamplesRemaining = 0;
             s.retriggerGapRemaining = 0;
+            // No running sequence left to quantize against.
+            if (s.pendingPattern != kNoPendingPattern)
+            {
+                s.activePattern = s.pendingPattern;
+                s.pendingPattern = kNoPendingPattern;
+            }
         }
         s.gatePrev = gateNow;
 
@@ -414,10 +499,15 @@ inline void render(NodeInstance &inst, size_t frames)
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
     auto &s = *inst.stepArp;
-    for (int k = 0; k < kStepPortCount; ++k)
-    {
-        s.stepVolts[k] = p.stepArpValue[k];
-    }
+    s.patternCount = p.stepArpPatternCount < 1 ? 1
+        : (p.stepArpPatternCount > synth::kStepArpMaxPatterns ? static_cast<uint8_t>(synth::kStepArpMaxPatterns)
+                                                              : p.stepArpPatternCount);
+    memcpy(s.stepVolts, p.stepArpPatterns, sizeof(s.stepVolts));
+    s.manualPatternSelect = clampPatternIndex(p.stepArpActivePatternIndex, s.patternCount);
+    s.activePattern = s.manualPatternSelect;
+    s.pendingPattern = kNoPendingPattern;
+    s.switchAtEnd = p.stepArpSwitchAtEnd;
+    s.randomStepsInCycle = 0;
     s.stepCount = p.stepArpStepCount <= 8 ? 8 : 16;
     s.pulseMs = p.stepArpPulseMs;
     s.pulseTimeMinSec = p.stepArpPulseTimeMinSec;
@@ -444,7 +534,8 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.retriggerGapRemaining = 0;
     s.pendingPulseSamples = 0;
     s.rngState = 0x9e3779b9u;
-    s.heldCv = s.skipOnC0 && s.stepVolts[0] <= 0.0f ? 5.0f : s.stepVolts[0];
+    const float firstStep = s.stepVolts[s.activePattern][0];
+    s.heldCv = s.skipOnC0 && firstStep <= 0.0f ? 5.0f : firstStep;
     s.internalPhaseSec = 0.0f;
 }
 
@@ -496,7 +587,28 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     const int idx = stepFieldIndex(name);
     if (idx >= 0)
     {
-        inst.stepArp->stepVolts[idx] = value;
+        // Step edits target the pattern the widget shows, which the
+        // frontend keeps in lockstep with activePattern.
+        inst.stepArp->stepVolts[inst.stepArp->activePattern][idx] = value;
+        return true;
+    }
+    if (strcmp(name, "activePatternIndex") == 0)
+    {
+        auto &s = *inst.stepArp;
+        const uint8_t pattern = clampPatternIndex(static_cast<int>(value + 0.5f), s.patternCount);
+        s.manualPatternSelect = pattern;
+        if (s.switchAtEnd && s.gatePrev)
+            s.pendingPattern = pattern;
+        else
+        {
+            s.activePattern = pattern;
+            s.pendingPattern = kNoPendingPattern;
+        }
+        return true;
+    }
+    if (strcmp(name, "switchAtEnd") == 0)
+    {
+        inst.stepArp->switchAtEnd = value >= 0.5f;
         return true;
     }
     if (strcmp(name, "pulseMs") == 0)
@@ -562,12 +674,27 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    float values[kStepPortCount] = {};
-    const uint8_t count = presetparser::getFloatArray(p, "steps", values, static_cast<uint8_t>(kStepPortCount));
-    for (uint8_t k = 0; k < count; ++k)
+    for (auto &pattern : out.stepArpPatterns)
+        for (float &volts : pattern) volts = 5.0f;
+    cJSON *patterns = p == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(p, "patterns");
+    uint8_t patternCount = 0;
+    cJSON *patternItem = nullptr;
+    cJSON_ArrayForEach(patternItem, patterns)
     {
-        out.stepArpValue[k] = values[k];
+        if (patternCount >= synth::kStepArpMaxPatterns) break;
+        presetparser::getFloatArray(patternItem, "steps", out.stepArpPatterns[patternCount],
+                                    static_cast<uint8_t>(kStepPortCount));
+        ++patternCount;
     }
+    if (patternCount == 0)
+    {
+        // Presets saved before multi-pattern support have one top-level "steps" array.
+        presetparser::getFloatArray(p, "steps", out.stepArpPatterns[0], static_cast<uint8_t>(kStepPortCount));
+        patternCount = 1;
+    }
+    out.stepArpPatternCount = patternCount;
+    out.stepArpActivePatternIndex = clampPatternIndex(presetparser::getInt(p, "activePatternIndex", 0), patternCount);
+    out.stepArpSwitchAtEnd = presetparser::getBool(p, "switchAtEnd", false);
     const int stepCount = presetparser::getInt(p, "stepCount", 16);
     out.stepArpStepCount = static_cast<uint8_t>(stepCount <= 8 ? 8 : 16);
     out.stepArpPulseMs = presetparser::getFloat(p, "pulseMs", 10.0f);

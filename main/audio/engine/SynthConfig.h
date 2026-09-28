@@ -25,11 +25,12 @@ constexpr size_t kLinkBusCount = 8;
 // is the correct worst-case margin, not SYNTH_VOICE_COUNT-scaled like the
 // preset connections above.
 constexpr size_t kMaxRuntimeEdges = kMaxConnections * SYNTH_VOICE_COUNT + kLinkBusCount + kMaxWidgets;
-// CV Step-Arpeggiator has 6 fixed CV inputs (clock/gate/pitch/direction/
-// pulseTime/rate) plus 16 per-step CV inputs = 22 slots - the current widest
-// node type (previously Multiplexer's 16 audio inputs + 1 control input =
-// 17). Keep one bit per slot in NodeInstance's connection masks.
-constexpr size_t kMaxAudioInPorts = 22;
+// CV Step-Arpeggiator has 8 fixed CV inputs (clock/gate/pitch/direction/
+// pulseTime/rate/pattern/switchAtEnd) plus 16 per-step CV inputs = 24 slots -
+// the current widest node type (previously Multiplexer's 16 audio inputs + 1
+// control input = 17). Keep one bit per slot in NodeInstance's connection masks.
+constexpr size_t kMaxAudioInPorts = 24;
+constexpr size_t kStepArpMaxPatterns = 8;
 constexpr size_t kDrumSequencerMaxSteps = 16;
 constexpr size_t kDrumSequencerMaxTracks = 8;
 constexpr size_t kDrumSequencerMaxCells = kDrumSequencerMaxSteps * kDrumSequencerMaxTracks;

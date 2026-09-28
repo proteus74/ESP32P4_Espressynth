@@ -1257,51 +1257,45 @@ body.show-node-cpu .widget-cpu-badge {
   width: 40px;
 }
 
-.step-arp-knob {
-  width: 29px;
-  height: 29px;
-  border-radius: 50%;
-  position: relative;
-  cursor: pointer;
-  border: 2px solid #ece8df;
-  background: radial-gradient(circle at 34% 27%, #fffefa 0 8%, #eeeae1 48%, #cbc6bb 100%);
-  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.9), 0 1px 2px rgba(0, 0, 0, 0.6);
+/* Vertical step slider - same 128px travel as the horizontal .port-slider
+   rows, turned upright (writing-mode, like .scope-trigger-slider) and with a
+   wider track/thumb so the 16 narrow columns stay easy to grab. */
+.step-arp-cell .step-arp-slider {
+  flex: 0 0 128px;
+  width: 8px;
+  height: 128px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  border-radius: 3px;
 }
 
-.step-arp-knob:hover {
-  filter: brightness(1.05);
+.step-arp-cell .step-arp-slider::-webkit-slider-thumb {
+  width: 26px;
+  height: 12px;
 }
 
-.step-arp-knob-disabled {
-  opacity: 0.45;
-  cursor: default;
-  pointer-events: none;
+.step-arp-cell .step-arp-slider::-moz-range-thumb {
+  width: 26px;
+  height: 12px;
 }
 
-.step-arp-cell-skipped .step-arp-knob {
+.step-arp-cell .step-arp-slider::-moz-range-track {
+  width: 8px;
+  height: auto;
+}
+
+.step-arp-cell-skipped .step-arp-slider {
   opacity: 0.45;
   filter: grayscale(1);
-}
-
-.step-arp-knob-indicator {
-  position: absolute;
-  left: 50%;
-  top: 4px;
-  width: 3px;
-  height: 11px;
-  margin-left: -1.5px;
-  border-radius: 1px;
-  background: #a59e00;
-  transform-origin: 50% 11px;
 }
 
 /* Currently-held step (see updateStepArpActiveHighlight in main.js) -
    client-side-simulated from incoming clock/gate cable values, same
    mechanism Clock's own pulse dot/propagate() already uses for every other
    generator widget's live editor preview. */
-.step-arp-cell.step-arp-cell-active .step-arp-knob {
+.step-arp-cell.step-arp-cell-active .step-arp-slider {
   border-color: var(--ok);
-  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.9), 0 0 6px 1px var(--ok);
+  box-shadow: 0 0 6px 1px var(--ok);
 }
 
 .step-arp-value {

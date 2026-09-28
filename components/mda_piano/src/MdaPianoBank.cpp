@@ -5,6 +5,9 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_rom_crc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace mdapiano
 {
@@ -42,16 +45,35 @@ void *gData = nullptr;
 Instrument gInstruments[kInstrumentCount]{};
 bool gLoadAttempted = false;
 
+// Loading runs on the low-priority preset loader task (core 0). The pack is
+// several MB, so both the read and the CRC work in chunks that yield between
+// them - one uninterrupted pass starved core 0's idle task long enough to trip
+// the task watchdog.
+constexpr size_t kChunkBytes = 64 * 1024;
+
+// Same IEEE CRC-32 as before, via the ROM's table-driven routine instead of a
+// bit-by-bit loop.
 uint32_t crc32(const uint8_t *data, size_t length)
 {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < length; ++i)
+    uint32_t crc = 0;
+    for (size_t done = 0; done < length; done += kChunkBytes)
     {
-        crc ^= data[i];
-        for (int bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        const size_t chunk = length - done < kChunkBytes ? length - done : kChunkBytes;
+        crc = esp_rom_crc32_le(crc, data + done, static_cast<uint32_t>(chunk));
+        vTaskDelay(1);
     }
-    return ~crc;
+    return crc;
+}
+
+bool readChunked(FILE *file, uint8_t *data, size_t length)
+{
+    for (size_t done = 0; done < length; done += kChunkBytes)
+    {
+        const size_t chunk = length - done < kChunkBytes ? length - done : kChunkBytes;
+        if (fread(data + done, 1, chunk, file) != chunk) return false;
+        vTaskDelay(1);
+    }
+    return true;
 }
 
 bool rangeValid(uint32_t offset, uint64_t bytes, uint32_t totalSize)
@@ -90,8 +112,9 @@ bool loadBank(const char *path)
         fclose(file);
         return false;
     }
+    const TickType_t startTicks = xTaskGetTickCount();
     rewind(file);
-    const bool readOk = fread(data, 1, header.totalSize, file) == header.totalSize;
+    const bool readOk = readChunked(file, static_cast<uint8_t *>(data), header.totalSize);
     fclose(file);
     if (!readOk)
     {
@@ -135,7 +158,8 @@ bool loadBank(const char *path)
         instrument.keygroupCount = entry.keygroupCount;
     }
     gData = data;
-    ESP_LOGI(kTag, "Loaded %lu-byte six-instrument pack", static_cast<unsigned long>(header.totalSize));
+    ESP_LOGI(kTag, "Loaded %lu-byte six-instrument pack in %lu ms", static_cast<unsigned long>(header.totalSize),
+             static_cast<unsigned long>(pdTICKS_TO_MS(xTaskGetTickCount() - startTicks)));
     return true;
 }
 

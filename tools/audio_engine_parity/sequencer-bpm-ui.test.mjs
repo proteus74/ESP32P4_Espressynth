@@ -51,7 +51,7 @@ try {
   });
   const labels = (id, selector) => page.locator(`#${id} ${selector}`).allTextContents();
   assert.deepEqual(await labels(ids.clock, '.port-row-out .port-label'), ['Trigger', 'BPM']);
-  assert.deepEqual(await labels(ids.arp, '.step-arp-io-line-in .port-label'), ['Trigger', 'BPM', 'Gate', 'Pitch', 'Direction', 'Gate-Out-Time']);
+  assert.deepEqual(await labels(ids.arp, '.step-arp-io-line-in .port-label'), ['Trigger', 'BPM', 'Gate', 'Pitch', 'Direction', 'Gate-Out-Time', 'Pattern', 'Switch at End']);
   assert.deepEqual(await labels(ids.drum, '.drum-sequencer-port-in .port-label'), ['Trigger', 'BPM', 'Gate', 'Pattern', 'Switch at End']);
   assert.equal(await page.locator(`#${ids.arp} [data-port-id="rate"] input`).count(), 0);
   assert.equal(await page.locator(`#${ids.drum} [data-port-id="rate"] input`).count(), 0);
@@ -114,6 +114,14 @@ try {
     return [t.stepArpRateBpm(ids.arp), t.drumSequencerBpm(t.drumSequencerStates.get(ids.drum), ids.drum)];
   }, ids), [60, 60]);
   assert.equal(saved.pages.generator.connections.filter((c) => c.from.portId === 'frequency' && c.to.portId === 'rate').length, 2);
+  // A freshly placed widget starts with Skip on C0 and Snap to Semitones on;
+  // switch both off here so the checks below exercise turning them on.
+  assert.deepEqual(await page.evaluate((id) => {
+    const state = window.__bpmTest.stepArpStates.get(id);
+    const defaults = [state.skipOnC0, state.snapToSemitones];
+    state.skipOnC0 = state.snapToSemitones = false;
+    return defaults;
+  }, ids.arp), [true, true]);
   // Settings, editor playback and appearance must match the native rest behavior.
   assert.equal(await page.evaluate((id) => window.__bpmTest.stepArpStates.get(id).skipOnC0, ids.arp), false);
   await page.evaluate((id) => window.__bpmTest.openStepArpSettings(id), ids.arp);
@@ -164,10 +172,10 @@ try {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 25, { steps: 5 });
   await page.mouse.up();
   assert.equal(await knob.evaluate((knob) => Number(getComputedStyle(knob).opacity)), 1);
-  await page.evaluate((id) => { const t = window.__bpmTest; t.setStepArpValue(id, 0, 0); t.select(id); }, ids.arp);
+  await page.evaluate((id) => { const t = window.__bpmTest; document.activeElement?.blur(); t.setStepArpValue(id, 0, 0); t.select(id); }, ids.arp);
   await page.keyboard.press('Control+c');
   await page.keyboard.press('Control+v');
-  await page.mouse.click(1000, 1050);
+  await page.mouse.click(1580, 1190);
   const skipPreset = await page.evaluate(() => window.__bpmTest.serializePreset());
   const arps = skipPreset.pages.generator.widgets.filter((widget) => widget.type === 'step-arpeggiator');
   assert.equal(arps.length, 2);
@@ -192,26 +200,25 @@ try {
   await page.locator('#stepArpSnapToSemitonesInput').check();
   await page.locator('#stepArpSettingsSave').click();
   await page.waitForFunction((id) => window.__wsMessages?.some((message) => message.widgetId === id && message.params?.snapToSemitones === 1), ids.arp);
-  const dragStep = async (dy) => {
+  // One mouse-wheel notch over a step slider: one semitone while snapping, else 0.1 V.
+  const wheelStep = async (up) => {
     const rect = await page.locator(`#${ids.arp} [data-role="step-arp-knob-1"]`).boundingBox();
     await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2 - dy, { steps: 4 });
-    await page.mouse.up();
+    await page.mouse.wheel(0, up ? -100 : 100);
     return page.evaluate((id) => window.__bpmTest.stepArpStates.get(id).steps[0], ids.arp);
   };
   await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 5), ids.arp);
-  assert.equal(await dragStep(7), 5.25);
-  await page.waitForFunction((id) => window.__wsMessages?.some((message) => message.widgetId === id && message.params?.step1 === 5.25), ids.arp);
+  assert.ok(Math.abs(await wheelStep(true) - (5 + 1 / 12)) < 1e-8);
+  await page.waitForFunction((id) => window.__wsMessages?.some((message) => message.widgetId === id && Math.abs(message.params?.step1 - (5 + 1 / 12)) < 1e-8), ids.arp);
   await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 0), ids.arp);
-  assert.equal(await dragStep(-7), 0);
+  assert.equal(await wheelStep(false), 0);
   await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 10), ids.arp);
-  assert.equal(await dragStep(7), 10);
+  assert.equal(await wheelStep(true), 10);
   await page.evaluate((id) => window.__bpmTest.openStepArpSettings(id), ids.arp);
   await page.locator('#stepArpSnapToSemitonesInput').uncheck();
   await page.locator('#stepArpSettingsSave').click();
   await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 5), ids.arp);
-  assert.ok(Math.abs(await dragStep(7) - (5 + 70 / 254)) < 1e-8);
+  assert.ok(Math.abs(await wheelStep(true) - 5.1) < 1e-8);
   await page.evaluate((id) => window.__bpmTest.openStepArpSettings(id), ids.arp);
   await page.locator('#stepArpSnapToSemitonesInput').check();
   await page.locator('#stepArpMaxSemitoneOffsetInput').fill('12');
@@ -222,7 +229,7 @@ try {
     t.deliverToWidget(ids.arp, 'pitch', 6);
     t.setStepArpValue(ids.arp, 0, 5);
   }, ids);
-  assert.ok(Math.abs(await dragStep(7) - (5 + 5 / 12)) < 1e-8);
+  assert.ok(Math.abs(await wheelStep(true) - (5 + 5 / 12)) < 1e-8);
   const snappedCv = await page.evaluate((id) => {
     const t = window.__bpmTest, state = t.stepArpStates.get(id);
     state.currentStep = 0;
@@ -235,7 +242,7 @@ try {
   await page.evaluate((id) => window.__bpmTest.select(id), ids.arp);
   await page.keyboard.press('Control+c');
   await page.keyboard.press('Control+v');
-  await page.mouse.click(1000, 1000);
+  await page.mouse.click(1580, 1190);
   const snapPreset = await page.evaluate(() => window.__bpmTest.serializePreset());
   assert.equal(snapPreset.pages.generator.widgets.filter((widget) => widget.type === 'step-arpeggiator' && widget.params.snapToSemitones).length, 2);
   await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), snapPreset);
@@ -245,8 +252,62 @@ try {
   for (const widget of snapPreset.pages.generator.widgets) if (widget.type === 'step-arpeggiator') delete widget.params.snapToSemitones;
   await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), snapPreset);
   assert.equal(await page.evaluate((id) => window.__bpmTest.stepArpStates.get(id).snapToSemitones, ids.arp), false);
+
+  // Patterns: shared context menu, per-pattern steps, Switch at End, presets.
+  const patternMenu = async (action) => {
+    await page.locator(`#${ids.arp} .drum-sequencer-pattern-menu-btn`).click();
+    await page.locator(`#drumPatternContextMenu [data-action="${action}"]`).click();
+  };
+  const arpInfo = () => page.evaluate((id) => {
+    const state = window.__bpmTest.stepArpStates.get(id);
+    return { count: state.patterns.length, active: state.activePatternIndex, pending: state.pendingPatternIndex, step1: state.steps[0],
+      label: document.querySelector(`#${id} [data-role="step-arp-pattern-value"]`).textContent };
+  }, ids.arp);
+  await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 3), ids.arp);
+  await patternMenu('copy');
+  await patternMenu('add');
+  assert.deepEqual(await arpInfo(), { count: 2, active: 1, pending: -1, step1: 5, label: '2/2' });
+  await patternMenu('paste');
+  assert.equal((await arpInfo()).step1, 3);
+  await page.evaluate((id) => window.__bpmTest.setStepArpValue(id, 0, 7), ids.arp);
+  await page.locator(`#${ids.arp} [data-role="step-arp-pattern-select"]`).fill('0');
+  assert.deepEqual(await arpInfo(), { count: 2, active: 0, pending: -1, step1: 3, label: '1/2' });
+  await page.waitForFunction((id) => window.__wsMessages?.some((message) => message.widgetId === id && message.params?.activePatternIndex === 0), ids.arp);
+  const quantized = await page.evaluate((ids) => {
+    const t = window.__bpmTest, state = t.stepArpStates.get(ids.arp), widget = document.getElementById(ids.arp);
+    t.unwire(ids.arp, 'pitch');
+    state.directionVolts = 0;
+    state.stepCount = 8;
+    state.switchAtEnd = true;
+    t.deliverToWidget(ids.arp, 'gate', 10); // plays step 1, next is step 2
+    t.deliverToWidget(ids.arp, 'pattern', 10);
+    const armed = [state.activePatternIndex, state.pendingPatternIndex];
+    for (let step = 0; step < 6; step++) t.stepArpTriggerStep(ids.arp, state, widget);
+    const beforeEnd = state.activePatternIndex;
+    t.stepArpTriggerStep(ids.arp, state, widget); // step 8 played, back at step 1
+    const result = { armed, beforeEnd, afterEnd: state.activePatternIndex, pending: state.pendingPatternIndex, step1: state.steps[0] };
+    t.deliverToWidget(ids.arp, 'gate', 0);
+    return result;
+  }, ids);
+  assert.deepEqual(quantized, { armed: [0, 1], beforeEnd: 0, afterEnd: 1, pending: -1, step1: 7 });
+  const patternPreset = await page.evaluate(() => window.__bpmTest.serializePreset());
+  const arpParams = patternPreset.pages.generator.widgets.find((widget) => widget.id === ids.arp).params;
+  assert.deepEqual([arpParams.patterns.length, arpParams.patterns[0].steps[0], arpParams.patterns[1].steps[0], arpParams.activePatternIndex, arpParams.switchAtEnd],
+    [2, 3, 7, 1, true]);
+  await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), patternPreset);
+  assert.deepEqual(await arpInfo(), { count: 2, active: 1, pending: -1, step1: 7, label: '2/2' });
+  await patternMenu('delete');
+  assert.deepEqual(await arpInfo(), { count: 1, active: 0, pending: -1, step1: 3, label: '1/1' });
+  // Presets from before multi-pattern support keep their single "steps" array.
+  arpParams.steps = Array.from({ length: 16 }, (_, i) => i / 2);
+  delete arpParams.patterns;
+  delete arpParams.activePatternIndex;
+  await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), patternPreset);
+  assert.deepEqual(await arpInfo(), { count: 1, active: 0, pending: -1, step1: 0, label: '1/1' });
+  assert.equal(await page.evaluate((id) => window.__bpmTest.stepArpStates.get(id).steps[15], ids.arp), 7.5);
   assert.deepEqual(errors, []);
   console.log('PASS BPM UI: labels/order, removed sliders, direct Clock tempo, live changes, Master fallback, arbitrary external BPM, zero stop, trigger priority, legacy IDs, preset reload');
-  console.log('PASS Skip on C0: checkbox/save/cancel/live update, CV hold, silent gate, overlap cancellation, all-zero pattern, dimmed editable knobs, copy/paste, preset reload, default off');
-  console.log('PASS Snap to Semitones: settings/save/cancel, absolute 1/12 V steps, bounds, free mode, Pitch-offset grid, live flag/value, MIDI/CV quantization, copy/paste, preset reload, default off');
+  console.log('PASS Skip on C0: checkbox/save/cancel/live update, CV hold, silent gate, overlap cancellation, all-zero pattern, dimmed editable knobs, copy/paste, preset reload, on for new widgets');
+  console.log('PASS Snap to Semitones: settings/save/cancel, wheel semitone steps, bounds, free 0.1 V mode, Pitch-offset grid, live flag/value, MIDI/CV quantization, copy/paste, preset reload, on for new widgets');
+  console.log('PASS Step Arp patterns: menu add/copy/paste/delete, slider select, live param, Switch at End at sequence end, preset round-trip, legacy steps');
 } finally { await browser.close(); }

@@ -31,8 +31,8 @@ struct NodeInstance {
   nodes::steparp::StepArpState *stepArp = nullptr;
   DrumSequencerState *drumSequencer = nullptr;
   uint32_t audioConnectedPortMask = 0, controlConnectedPortMask = 0;
-  const float *inPorts[22] = {};
-  float controlValue[22] = {};
+  const float *inPorts[24] = {};
+  float controlValue[24] = {};
   float *outL = nullptr;
   float *outR = nullptr;
 };
@@ -48,14 +48,17 @@ const cvSource = readFileSync(path.join(root, "main/audio/engine/CvConventions.h
 const cvToRange = cvSource.slice(cvSource.indexOf("inline float cvToRange("), cvSource.indexOf("// LUT-accelerated"));
 writeFileSync(path.join(temporary, "CvConventions.h"), `#pragma once\n#include <cmath>\nnamespace cv { constexpr float kGateThresholdVolts = 5.0f, kGateOnVolts = 10.0f, kGateOffVolts = 0.0f, kMaxVolts = 10.0f, kInvMaxVolts = 0.1f; ${cvToRange} }\n`);
 writeFileSync(path.join(temporary, "MasterClock.h"), "#pragma once\nnamespace synth { struct MasterClock { float bpm = 60, maxBpm = 240; bool roundBpm = false; }; inline MasterClock &masterClock() { static MasterClock value; return value; } }\n");
-writeFileSync(path.join(temporary, "SynthConfig.h"), "#pragma once\nnamespace synth { constexpr int kSampleRate = 48000, kMaxAudioInPorts = 22, kDrumSequencerMaxSteps = 16, kDrumSequencerMaxTracks = 8, kDrumSequencerMaxCells = 128, kDrumSequencerMaxPatterns = 8; }\n");
+writeFileSync(path.join(temporary, "SynthConfig.h"), "#pragma once\nnamespace synth { constexpr int kSampleRate = 48000, kMaxAudioInPorts = 24, kStepArpMaxPatterns = 8, kDrumSequencerMaxSteps = 16, kDrumSequencerMaxTracks = 8, kDrumSequencerMaxCells = 128, kDrumSequencerMaxPatterns = 8; }\n");
 const stepParams = readFileSync(path.join(root, "main/audio/engine/PresetParser.h"), "utf8").split(/\r?\n/).filter((line) => /^\s+(float|bool|uint8_t)\s+stepArp/.test(line)).join("\n");
 writeFileSync(path.join(temporary, "PresetParser.h"), `#pragma once
 #include <cstring>
+#include "SynthConfig.h"
 struct cJSON { double valuedouble = 0; bool snapToSemitones = false; };
 inline bool cJSON_IsArray(cJSON *) { return false; }
 inline bool cJSON_IsNumber(const cJSON *) { return false; }
 inline cJSON *cJSON_GetArrayItem(cJSON *, int) { return nullptr; }
+inline cJSON *cJSON_GetObjectItemCaseSensitive(cJSON *, const char *) { return nullptr; }
+#define cJSON_ArrayForEach(element, array) for (element = nullptr; element != nullptr;)
 struct WidgetParams { float clockPulseMs = 100, monoflopThreshold = 5, monoflopPulseMs = 10; ${stepParams} };
 namespace presetparser {
 inline float getFloat(cJSON *, const char *, float fallback) { return fallback; }

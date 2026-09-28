@@ -346,7 +346,12 @@ struct WidgetParams
     // stepCount is 8 or 16 (the "8/16 steps" switch); values beyond it stay
     // stored but unplayed. pulseMs is gateOut's pulse width, same convention
     // as Clock's pulseMs.
-    float stepArpValue[16] = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+    // One row of sixteen step values per pattern (see the Drum Sequencer's
+    // drumPatterns for the same multi-pattern model).
+    float stepArpPatterns[synth::kStepArpMaxPatterns][16];
+    uint8_t stepArpPatternCount = 1;
+    uint8_t stepArpActivePatternIndex = 0;
+    bool stepArpSwitchAtEnd = false;
     uint8_t stepArpStepCount = 16;
     // Local knob fallback (0-10V) for the "pulseTime" port - only consulted
     // while unwired (see StepArpeggiatorNode.h); already in the final,
