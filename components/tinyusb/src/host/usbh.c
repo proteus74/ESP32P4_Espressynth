@@ -1779,8 +1779,12 @@ static void process_enumeration(tuh_xfer_t* xfer) {
 
     case ENUM_SET_CONFIG: {
       uint8_t config_idx = (uint8_t) tu_le16toh(xfer->setup->wIndex);
-      if (tuh_enum_descriptor_configuration_cb(daddr, config_idx, (const tusb_desc_configuration_t*) _usbh_epbuf.ctrl)) {
-        TU_ASSERT(tuh_configuration_set(daddr, config_idx+1, process_enumeration, ENUM_CONFIG_DRIVER),);
+      const tusb_desc_configuration_t* desc_config = (const tusb_desc_configuration_t*) _usbh_epbuf.ctrl;
+      if (tuh_enum_descriptor_configuration_cb(daddr, config_idx, desc_config)) {
+        // jola-synth-Patch: SET_CONFIGURATION must use the descriptor's bConfigurationValue, not
+        // index+1. Most devices use 1 anyway, but e.g. the Akai MPK249 reports 13; with 1 it stays
+        // unconfigured and NAKs its MIDI bulk IN endpoint forever while still answering EP0.
+        TU_ASSERT(tuh_configuration_set(daddr, desc_config->bConfigurationValue, process_enumeration, ENUM_CONFIG_DRIVER),);
       } else {
         config_idx++;
         TU_ASSERT(config_idx < dev->bNumConfigurations,);

@@ -11,6 +11,8 @@
 #include "freertos/task.h"
 #include "host/usbh.h"
 #include "class/midi/midi_host.h"
+#include "host/usbh_pvt.h"
+#include <atomic>
 
 namespace Feature::MIDI {
 
@@ -31,6 +33,27 @@ inline Feature::MIDI::EventCallback event_callback = nullptr;
 inline uint8_t connected_idx = 0;
 inline uint8_t connected_address = 0;
 inline bool connected = false;
+
+// Outgoing messages: TinyUSB host is not thread-safe, so send() (called from httpd, the synth
+// engine, ...) only queues; tx_drain() runs inside the USB host task via usbh_defer_func().
+// Calling tuh_midi_stream_write() directly from other tasks raced the host stack and HCD ISR
+// and wedged the whole USB host after a few web-UI knob turns.
+struct tx_message_t { uint8_t cable; uint8_t length; uint8_t data[3]; };
+inline QueueHandle_t tx_queue = nullptr;
+inline std::atomic<bool> tx_drain_pending{false};
+
+inline void tx_drain(void*) {
+    tx_drain_pending = false;
+    tx_message_t message{};
+    while (xQueueReceive(tx_queue, &message, 0) == pdTRUE) {
+        if (connected && tuh_midi_mounted(connected_idx)) {
+            tuh_midi_stream_write(connected_idx, message.cable, message.data, message.length);
+        }
+    }
+    if (connected && tuh_midi_mounted(connected_idx)) {
+        tuh_midi_write_flush(connected_idx);
+    }
+}
 
 inline void midi_task(void*) {
     midi_packet_t packet{};
@@ -77,10 +100,19 @@ inline uint8_t connected_device_address() {
  */
 inline esp_err_t send(const uint8_t* bytes, size_t length, uint8_t cable = 0) {
     if (bytes == nullptr || length == 0) return ESP_ERR_INVALID_ARG;
-    if (!is_connected()) return ESP_ERR_INVALID_STATE;
-    const uint32_t written = tuh_midi_stream_write(connected_idx, cable, bytes,
-                                                     static_cast<uint32_t>(length));
-    return written == length ? ESP_OK : ESP_FAIL;
+    if (length > sizeof(tx_message_t::data)) return ESP_ERR_INVALID_SIZE;
+    if (!is_connected() || tx_queue == nullptr) return ESP_ERR_INVALID_STATE;
+    tx_message_t message{};
+    message.cable = cable;
+    message.length = static_cast<uint8_t>(length);
+    std::memcpy(message.data, bytes, length);
+    if (xQueueSend(tx_queue, &message, 0) != pdTRUE) return ESP_ERR_NO_MEM;
+    // At most one drain request in the USB host event queue at a time, so a fast-turning
+    // knob can't flood it.
+    if (!tx_drain_pending.exchange(true)) {
+        usbh_defer_func(tx_drain, nullptr, false);
+    }
+    return ESP_OK;
 }
 
 } // namespace Feature::MIDI
@@ -88,6 +120,7 @@ inline esp_err_t send(const uint8_t* bytes, size_t length, uint8_t cable = 0) {
 extern "C" __attribute__((used)) void usb_midi_host_start() {
     using namespace Feature::MIDI;
     queue = xQueueCreate(64, sizeof(midi_packet_t));
+    tx_queue = xQueueCreate(64, sizeof(tx_message_t));
     // MIDI is sound data, so this relay task runs on the audio core (see app_core.hpp),
     // separate from the mixed USB Host task (HID + raw MIDI byte parsing) that feeds it.
     // 2048: measured peak usage (CLI "top") is ~1170B - each loop iteration just decodes one

@@ -38,6 +38,7 @@
 #include "host/hcd.h"
 #include "host/usbh.h"
 #include "dwc2_common.h"
+#include "esp_rom_sys.h"
 
 // Max number of endpoints application can open, can be larger than DWC2_CHANNEL_COUNT_MAX
 #ifndef CFG_TUH_DWC2_ENDPOINT_MAX
@@ -202,14 +203,18 @@ TU_ATTR_ALWAYS_INLINE static inline void channel_dealloc(dwc2_regs_t* dwc2, uint
 // erneut versuchte. Root cause des "bei normalem Log-Level enumeriert nichts mehr"-Bugs.
 // Kurzes Busy-Poll-Retry statt Assert behebt das, da die HW-Queue innerhalb weniger
 // Mikrosekunden (naechster geplanter Transfer) wieder frei wird.
+// Bei Full-Speed-Geraeten leert der Core die periodische Queue aber nur einmal pro 1-ms-Frame;
+// 1000 reine Registerlesezugriffe (~100 us) reichten dafuer nicht (ASSERT beim Anstecken eines
+// FS-MIDI-Keyboards, dessen IN-Kanal danach nie Daten lieferte). Daher zeitbasiert bis 2 ms warten.
 TU_ATTR_ALWAYS_INLINE static inline bool req_queue_wait_avail(const dwc2_regs_t* dwc2, bool is_period) {
-  enum { REQ_QUEUE_RETRY_MAX = 1000 };
-  for (int retry = 0; retry < REQ_QUEUE_RETRY_MAX; retry++) {
+  enum { REQ_QUEUE_WAIT_MAX_US = 2000 };
+  for (int us = 0; us < REQ_QUEUE_WAIT_MAX_US; us++) {
     if (req_queue_avail(dwc2, is_period)) {
       return true;
     }
+    esp_rom_delay_us(1);
   }
-  return false;
+  return req_queue_avail(dwc2, is_period);
 }
 
 TU_ATTR_ALWAYS_INLINE static inline bool channel_disable(const dwc2_regs_t* dwc2, dwc2_channel_t* channel) {
