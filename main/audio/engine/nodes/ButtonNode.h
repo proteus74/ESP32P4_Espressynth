@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -19,16 +20,31 @@ namespace nodes::button
 {
 
 // Same 2-point-map/value-list machinery as KnobState's mappedValue(), minus
-// the CC-learn identity (cc/channel/raw) - a MIDI momentary switch. As soon
+// the CC-learn identity (cc/channel/raw). As soon
 // as valueList has >=2 entries it automatically wins over the fixed
-// value0/value127 (no separate mode switch - the list "wins" on its own,
+// value0/value127 (the list "wins" on its own,
 // matching main.js's buttonCurrentOutput()). Fixed: value0/value127 selected
 // by whether the incoming CC value is below/at-or-above the halfway point
-// (63/64). List: listIndex advances once per press edge (wasAbove flips
-// false->true) rather than being derived from the raw value directly -
-// ported from main.js's buttonStates entries.
+// (63/64). By default, the list advances on a rising CC edge. With
+// switchMode, every high CC message toggles the fixed output or advances
+// the list, including controllers that never send a release.
+// Which MIDI message a learned button binding reacts to; `cc` then holds the
+// CC, note or program number (preset/JSON: bindings[].midiType "cc"/"note"/"program").
+constexpr uint8_t kButtonMidiCc = 0;
+constexpr uint8_t kButtonMidiNote = 1;
+constexpr uint8_t kButtonMidiProgram = 2;
+
+inline uint8_t buttonMidiTypeFromString(const char *name)
+{
+    if (name != nullptr && strcmp(name, "note") == 0) return kButtonMidiNote;
+    if (name != nullptr && strcmp(name, "program") == 0) return kButtonMidiProgram;
+    return kButtonMidiCc;
+}
+
 struct ButtonControl
 {
+    char label[48] = {};
+    uint8_t midiType = kButtonMidiCc;
     int16_t cc = -1;
     int8_t channel = -1;
     float value0 = 0.0f;
@@ -37,6 +53,7 @@ struct ButtonControl
     uint8_t valueListCount = 0;
     uint8_t listIndex = 0;
     bool wasAbove = false;
+    bool switchMode = false;
     float currentValue = 0.0f;
 
     float currentOutput() const
@@ -128,6 +145,8 @@ inline void buildButton(NodeInstance &inst, const WidgetParams &p)
     {
         const WidgetParams::ButtonControlParams &source = p.buttons[controlIndex];
         ButtonControl &control = button.controls[controlIndex];
+        memcpy(control.label, source.label, sizeof(control.label));
+        control.midiType = source.midiType;
         control.cc = source.cc;
         control.channel = source.channel;
         control.value0 = source.value0;
@@ -137,6 +156,7 @@ inline void buildButton(NodeInstance &inst, const WidgetParams &p)
             control.valueList[i] = source.valueList[i];
         control.listIndex = source.listIndex < source.valueListCount ? source.listIndex : 0;
         control.wasAbove = source.wasAbove;
+        control.switchMode = source.switchMode;
         control.currentValue = control.currentOutput();
     }
 }
@@ -287,10 +307,15 @@ inline void parsePresetButton(cJSON *p, WidgetParams &out)
     {
         cJSON *layer = cJSON_IsArray(layers) ? cJSON_GetArrayItem(layers, layerIndex) : nullptr;
         cJSON *buttons = cJSON_IsObject(layer) ? cJSON_GetObjectItemCaseSensitive(layer, "buttons") : nullptr;
+        cJSON *labels = cJSON_IsObject(layer) ? cJSON_GetObjectItemCaseSensitive(layer, "labels") : nullptr;
         for (uint8_t buttonIndex = 0; buttonIndex < out.buttonCount; ++buttonIndex)
         {
             cJSON *item = cJSON_IsArray(buttons) ? cJSON_GetArrayItem(buttons, buttonIndex) : nullptr;
-            parseControl(item, out.buttons[ButtonState::controlIndex(buttonIndex, layerIndex)]);
+            WidgetParams::ButtonControlParams &control = out.buttons[ButtonState::controlIndex(buttonIndex, layerIndex)];
+            parseControl(item, control);
+            cJSON *label = cJSON_IsArray(labels) ? cJSON_GetArrayItem(labels, buttonIndex) : nullptr;
+            if (cJSON_IsString(label))
+                snprintf(control.label, sizeof(control.label), "%s", label->valuestring);
         }
     }
 
@@ -300,11 +325,15 @@ inline void parsePresetButton(cJSON *p, WidgetParams &out)
         cJSON *binding = cJSON_IsArray(bindings) ? cJSON_GetArrayItem(bindings, buttonIndex) : nullptr;
         cJSON *cc = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "cc") : nullptr;
         cJSON *channel = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "channel") : nullptr;
+        cJSON *switchMode = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "switchMode") : nullptr;
+        cJSON *midiType = cJSON_IsObject(binding) ? cJSON_GetObjectItemCaseSensitive(binding, "midiType") : nullptr;
         for (uint8_t layerIndex = 0; layerIndex < out.buttonLayerCount; ++layerIndex)
         {
             WidgetParams::ButtonControlParams &control = out.buttons[ButtonState::controlIndex(buttonIndex, layerIndex)];
             control.cc = cJSON_IsNumber(cc) ? static_cast<int16_t>(cc->valueint) : -1;
             control.channel = cJSON_IsNumber(channel) ? static_cast<int8_t>(channel->valueint) : -1;
+            control.switchMode = cJSON_IsTrue(switchMode);
+            control.midiType = buttonMidiTypeFromString(cJSON_IsString(midiType) ? midiType->valuestring : nullptr);
         }
     }
 }

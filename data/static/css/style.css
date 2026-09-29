@@ -4422,9 +4422,9 @@ body.show-oscilloscopes .oscilloscope-only-body {
 .button-settings-head,
 .button-settings-card {
   display: grid;
-  grid-template-columns: 32px 110px 150px 180px 80px 80px 102px;
+  grid-template-columns: 32px 110px 40px 150px 180px 80px 80px 102px;
   column-gap: 0.35rem;
-  min-width: 760px;
+  min-width: 820px;
 }
 
 .button-settings-head {
@@ -4448,6 +4448,14 @@ body.show-oscilloscopes .oscilloscope-only-body {
   min-width: 0;
   padding: 0.35rem 0.4rem;
   font-size: 0.76rem;
+}
+
+.button-settings-card input[data-button-field="switchMode"] {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  justify-self: center;
+  accent-color: var(--accent);
 }
 
 .button-add-control::after { content: "+"; }

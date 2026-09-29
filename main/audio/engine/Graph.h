@@ -86,6 +86,7 @@ struct MidiCcDebugTarget
     char targetId[24] = {};
     char targetLabel[48] = {};
     char paramName[16] = {};
+    NodeType targetType = NodeType::Unknown;
     float value = 0.0f;
     bool raw = false;
 };
@@ -95,6 +96,7 @@ struct MidiCcDebugSnapshot
     char sourceId[24] = {};
     char knobName[48] = {};
     bool isKnob = false;
+    bool isButton = false; // knobName then holds the button's name
     uint8_t controlIndex = 0;
     char sourceLabel[96] = {};
     bool fromUi = false;
@@ -1141,6 +1143,16 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
                 snprintf(snapshot.knobName, sizeof(snapshot.knobName), "%s %u", label,
                          static_cast<unsigned>(event.side % synth::kKnobControlMax + 1));
         }
+        snapshot.isButton = source.type == NodeType::Button;
+        if (snapshot.isButton)
+        {
+            const auto &control = inst.button->controls[event.side];
+            if (control.label[0])
+                copyMidiCcDebugText(snapshot.knobName, sizeof(snapshot.knobName), control.label);
+            else
+                snprintf(snapshot.knobName, sizeof(snapshot.knobName), "%s %u", label,
+                         static_cast<unsigned>(event.side % synth::kButtonControlMax + 1));
+        }
         if (source.type == NodeType::Knob || source.type == NodeType::Button)
         {
             const uint8_t width = source.type == NodeType::Knob ? synth::kKnobControlMax : synth::kButtonControlMax;
@@ -1174,8 +1186,16 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
             copyMidiCcDebugText(entry.targetId, sizeof(entry.targetId), target.id);
             copyMidiCcDebugText(entry.targetLabel, sizeof(entry.targetLabel), target.label[0] ? target.label : target.id);
             copyMidiCcDebugText(entry.paramName, sizeof(entry.paramName), paramName);
+            entry.targetType = target.type;
             entry.value = value;
             entry.raw = raw;
+            // "layer" is a discrete selector: report the resulting 1-based layer, not the input volts.
+            if (strcmp(paramName, "layer") == 0 && (target.type == NodeType::Knob || target.type == NodeType::Button))
+            {
+                const auto &targetInst = instances[target.instanceBase];
+                entry.value = 1.0f + (target.type == NodeType::Knob ? targetInst.knob->activeLayer : targetInst.button->activeLayer);
+                entry.raw = true;
+            }
         };
         for (uint16_t r = 0; r < controlRouteCount; ++r)
         {
@@ -1225,6 +1245,68 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         deliverRawMidi(*this, w, event, filtered, filterEvents, path);
     }
 
+    // Button MIDI learn: CC, Note On/Off or Program Change (ButtonControl::midiType;
+    // its `cc` field holds the CC/note/program number). CC >= 64 and Note On
+    // (velocity > 0) press, CC < 64 and Note Off release. Program Change has no
+    // release: the matching program presses, any other program on the same
+    // channel releases - so a PC-bound button follows the selected program.
+    uint8_t buttonMidiType = 0xFF;
+    switch (event.codeIndex)
+    {
+    case 0xB: buttonMidiType = nodes::button::kButtonMidiCc; break;
+    case 0x8:
+    case 0x9: buttonMidiType = nodes::button::kButtonMidiNote; break;
+    case 0xC: buttonMidiType = nodes::button::kButtonMidiProgram; break;
+    default: break;
+    }
+    if (buttonMidiType != 0xFF)
+    {
+        const uint8_t channel0 = event.status & 0x0F;
+        const uint8_t number = event.data1;
+        for (uint16_t w = 0; w < widgetCount; ++w)
+        {
+            if (widgets[w].type != NodeType::Button) continue;
+            ButtonState &b = *instances[widgets[w].instanceBase].button;
+            for (uint8_t buttonIndex = 0; buttonIndex < b.count; ++buttonIndex)
+            {
+                const ButtonControl &binding = b.controls[buttonIndex];
+                if (binding.midiType != buttonMidiType || binding.cc < 0 ||
+                    binding.channel < 0 || static_cast<uint8_t>(binding.channel) != channel0)
+                    continue;
+                const bool matched = static_cast<uint8_t>(binding.cc) == number;
+                if (!matched && buttonMidiType != nodes::button::kButtonMidiProgram) continue;
+                const uint8_t controlIndex = ButtonState::controlIndex(buttonIndex, b.activeLayer);
+                ButtonControl &control = b.controls[controlIndex];
+                bool above = matched;
+                if (buttonMidiType == nodes::button::kButtonMidiCc) above = event.data2 >= 64;
+                else if (buttonMidiType == nodes::button::kButtonMidiNote) above = event.codeIndex == 0x9 && event.data2 > 0;
+                else if (!matched && !control.wasAbove) continue; // other program, nothing to release
+
+                if (binding.switchMode)
+                {
+                    if (above)
+                    {
+                        if (control.valueListCount >= 2)
+                            control.listIndex = static_cast<uint8_t>((control.listIndex + 1) % control.valueListCount);
+                        else
+                            control.wasAbove = !control.wasAbove;
+                    }
+                }
+                else
+                {
+                    if (control.valueListCount >= 2 && above && !control.wasAbove)
+                        control.listIndex = static_cast<uint8_t>((control.listIndex + 1) % control.valueListCount);
+                    control.wasAbove = above;
+                }
+                control.currentValue = control.currentOutput();
+
+                pushControlRouteValue(*this, w, ControlRoute::Kind::Button, control.currentValue, controlIndex);
+                recordControlDebug(w, controlIndex, false, channel0, number,
+                                   buttonMidiType == nodes::button::kButtonMidiProgram ? (above ? 127 : 0) : event.data2);
+            }
+        }
+    }
+
     // Control Change: knob CC-learn/mapping, entirely independent of note
     // on/off below. Runs natively on the ESP regardless of whether a
     // browser is even connected (see plan: "ESP-nativer" delivery path).
@@ -1253,29 +1335,6 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     k.currentValue = k.mappedValue();
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
-                    recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
-                }
-            }
-            else if (widgets[w].type == NodeType::Button)
-            {
-                NodeInstance &btnInst = instances[widgets[w].instanceBase];
-                ButtonState &b = *btnInst.button;
-                for (uint8_t buttonIndex = 0; buttonIndex < b.count; ++buttonIndex)
-                {
-                    const ButtonControl &binding = b.controls[buttonIndex];
-                    if (binding.cc < 0 || static_cast<uint8_t>(binding.cc) != ccNumber ||
-                        binding.channel < 0 || static_cast<uint8_t>(binding.channel) != ccChannel0)
-                        continue;
-                    const uint8_t controlIndex = ButtonState::controlIndex(buttonIndex, b.activeLayer);
-                    ButtonControl &control = b.controls[controlIndex];
-
-                    const bool above = ccValue >= 64;
-                    if (control.valueListCount >= 2 && above && !control.wasAbove)
-                        control.listIndex = static_cast<uint8_t>((control.listIndex + 1) % control.valueListCount);
-                    control.wasAbove = above;
-                    control.currentValue = control.currentOutput();
-
-                    pushControlRouteValue(*this, w, ControlRoute::Kind::Button, control.currentValue, controlIndex);
                     recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
                 }
             }
@@ -2089,6 +2148,28 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 const uint8_t buttonIndex = buttonControlIndex % synth::kButtonControlMax;
                 for (uint8_t layerIndex = 0; layerIndex < button->layerCount; ++layerIndex)
                     button->controls[ButtonState::controlIndex(buttonIndex, layerIndex)].channel = ch;
+            }
+        }
+        else if (slot.type == NodeType::Button && strcmp(key, "midiType") == 0 && cJSON_IsString(item))
+        {
+            const uint8_t midiType = nodes::button::buttonMidiTypeFromString(item->valuestring);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                const uint8_t buttonIndex = buttonControlIndex % synth::kButtonControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < button->layerCount; ++layerIndex)
+                    button->controls[ButtonState::controlIndex(buttonIndex, layerIndex)].midiType = midiType;
+            }
+        }
+        else if (slot.type == NodeType::Button && strcmp(key, "switchMode") == 0 && cJSON_IsBool(item))
+        {
+            const bool enabled = cJSON_IsTrue(item);
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                const uint8_t buttonIndex = buttonControlIndex % synth::kButtonControlMax;
+                for (uint8_t layerIndex = 0; layerIndex < button->layerCount; ++layerIndex)
+                    button->controls[ButtonState::controlIndex(buttonIndex, layerIndex)].switchMode = enabled;
             }
         }
         else if (slot.type == NodeType::Button && strcmp(key, "valueList") == 0)

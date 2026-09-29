@@ -9,9 +9,14 @@ struct KnobActivity
     uint32_t presetSequence = 0;
     uint8_t controlIndex = 0;
     uint8_t raw = 0;
+    bool isButton = false; // Button node (MidiButton card) instead of a Knob
+    float sourceValue = 0.0f; // Button: its current output value
     char sourceId[24] = {};
     char name[48] = {};
     char targetId[24] = {};
     char device[48] = {};
     char port[16] = {};
+    uint8_t targetType = 0;
+    float targetValue = 0.0f; // current value at the target port (usually volts)
+    bool targetValueRaw = false; // targetValue is an integer (raw CC or layer number), not volts
 };

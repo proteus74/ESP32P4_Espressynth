@@ -8130,7 +8130,7 @@ const BUTTON_MAX_COUNT = 16;
 const BUTTON_MAX_LAYERS = 8;
 
 function createButtonControl() {
-  return { cc: null, channel: null, value0: 0, value127: CV_MAX_VOLTS, listText: "", listIndex: 0, wasAbove: false };
+  return { cc: null, channel: null, midiType: "cc", switchMode: false, value0: 0, value127: CV_MAX_VOLTS, listText: "", listIndex: 0, wasAbove: false };
 }
 
 function createButtonLayer(bindingSource = null) {
@@ -8139,6 +8139,8 @@ function createButtonLayer(bindingSource = null) {
     if (bindingSource?.controls[index]) {
       control.cc = bindingSource.controls[index].cc;
       control.channel = bindingSource.controls[index].channel;
+      control.midiType = bindingSource.controls[index].midiType;
+      control.switchMode = bindingSource.controls[index].switchMode;
     }
     return control;
   });
@@ -8327,7 +8329,7 @@ function updateButtonVisual(widgetId, buttonIndex = null) {
     const list = parseValueList(control.listText);
     const active = list && list.length >= 2 ? control.listIndex > 0 : control.wasAbove;
     if (readout) {
-      readout.textContent = formatNumber(buttonCurrentOutput(control));
+      readout.textContent = String(buttonCurrentOutput(control));
       readout.classList.toggle("is-active", active);
       readout.setAttribute("aria-pressed", String(active));
     }
@@ -8335,41 +8337,69 @@ function updateButtonVisual(widgetId, buttonIndex = null) {
 }
 
 function routeMidiToButtons(data) {
-  if (data.type !== "midi" || data.midiType !== "control_change") return;
+  const input = buttonMidiInput(data);
+  if (!input) return;
 
   if (buttonMidiLearnTargetId) {
+    // Learn on a press only, so the release of a note does not re-learn or cancel.
+    if (!input.above) return;
     const target = buttonMidiLearnTargetId;
     const state = buttonStates.get(target.widgetId);
     if (state) {
       state.layers.forEach((layer) => {
-        layer.controls[target.index].cc = data.control;
+        layer.controls[target.index].cc = input.number;
         layer.controls[target.index].channel = data.channel;
+        layer.controls[target.index].midiType = input.midiType;
       });
       buttonMidiLearnTargetId = null;
       updateButtonSettingsCcDisplay(target.widgetId, target.index);
-      sendLiveParamUpdate(target.widgetId, { buttonIndex: target.index + 1, cc: data.control, channel: data.channel });
+      sendLiveParamUpdate(target.widgetId, {
+        buttonIndex: target.index + 1, cc: input.number, channel: data.channel, midiType: input.midiType,
+      });
       savePresetNow();
     }
     buttonMidiLearnTargetId = null;
     return;
   }
 
-  // Following an incoming CC only updates the display - the device already applied it.
+  // Following incoming MIDI only updates the display - the device already applied it.
   withDeviceSyncMuted(() => buttonStates.forEach((state, widgetId) => {
     const bindings = buttonLayer(state, 0);
     bindings.controls.slice(0, state.count).forEach((binding, buttonIndex) => {
-      if (binding.cc !== data.control || binding.channel !== data.channel) return;
+      if ((binding.midiType || "cc") !== input.midiType || binding.cc === null || binding.channel !== data.channel) return;
+      const matched = binding.cc === input.number;
+      if (!matched && input.midiType !== "program") return;
       const control = buttonLayer(state).controls[buttonIndex];
-      const above = data.value >= 64;
+      // Program Change: the matching program presses, any other one releases.
+      const above = input.midiType === "program" ? matched : input.above;
+      if (!matched && !control.wasAbove) return;
       const list = parseValueList(control.listText);
-      if (list && list.length >= 2 && above && !control.wasAbove) {
-        control.listIndex = (control.listIndex + 1) % list.length;
+      if (binding.switchMode) {
+        if (above) {
+          if (list && list.length >= 2) control.listIndex = (control.listIndex + 1) % list.length;
+          else control.wasAbove = !control.wasAbove;
+        }
+      } else {
+        if (list && list.length >= 2 && above && !control.wasAbove) {
+          control.listIndex = (control.listIndex + 1) % list.length;
+        }
+        control.wasAbove = above;
       }
-      control.wasAbove = above;
       publishButtonValue(widgetId, buttonIndex);
       markDirty();
     });
   }));
+}
+
+// Buttons learn CC, Note On/Off or Program Change - same rules as Graph::handleMidiEvent.
+function buttonMidiInput(data) {
+  if (data.type !== "midi") return null;
+  if (data.midiType === "control_change") return { midiType: "cc", number: data.control, above: data.value >= 64 };
+  if (data.midiType === "note_on" || data.midiType === "note_off") {
+    return { midiType: "note", number: data.note, above: data.midiType === "note_on" && data.velocity > 0 };
+  }
+  if (data.midiType === "program_change") return { midiType: "program", number: data.program, above: true };
+  return null;
 }
 
 const buttonSettingsOverlay = document.getElementById("buttonSettingsOverlay");
@@ -8395,7 +8425,9 @@ function updateButtonCardDisabledState(card) {
 function buttonCcDisplayText(widgetId, index) {
   if (buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index) return "Waiting…";
   const binding = buttonLayer(buttonStates.get(widgetId), 0)?.controls[index];
-  return binding?.cc === null || binding?.cc === undefined ? "Learn" : `${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
+  if (binding?.cc === null || binding?.cc === undefined) return "Learn";
+  const prefix = { note: "Note ", program: "PC " }[binding.midiType] || "";
+  return `${prefix}${binding.cc}${binding.channel === null ? "" : ` (Ch ${binding.channel + 1})`}`;
 }
 
 function updateButtonSettingsCcDisplay(widgetId, index) {
@@ -8404,6 +8436,12 @@ function updateButtonSettingsCcDisplay(widgetId, index) {
   const waiting = buttonMidiLearnTargetId?.widgetId === widgetId && buttonMidiLearnTargetId.index === index;
   display.textContent = buttonCcDisplayText(widgetId, index);
   display.classList.toggle("waiting", waiting);
+  const sw = display.closest("[data-button-index]")?.querySelector('[data-button-field="switchMode"]');
+  if (sw) {
+    const binding = buttonLayer(buttonStates.get(widgetId), 0)?.controls[index];
+    sw.checked = !!binding?.switchMode;
+    sw.disabled = binding?.cc == null || pendingButtonLayerIndex !== 0;
+  }
 }
 
 function startButtonMidiLearn(widgetId, index) {
@@ -8428,9 +8466,11 @@ function clearButtonMidiLearn(widgetId, index) {
   state.layers.forEach((layer) => {
     layer.controls[index].cc = null;
     layer.controls[index].channel = null;
+    layer.controls[index].midiType = "cc";
+    layer.controls[index].switchMode = false;
   });
   updateButtonSettingsCcDisplay(widgetId, index);
-  sendLiveParamUpdate(widgetId, { buttonIndex: index + 1, cc: null, channel: null });
+  sendLiveParamUpdate(widgetId, { buttonIndex: index + 1, cc: null, channel: null, midiType: "cc", switchMode: false });
   savePresetNow();
 }
 
@@ -8523,6 +8563,19 @@ function renderButtonSettingsGrid(widgetId) {
     }
     cc.addEventListener("contextmenu", (event) => openButtonCcContextMenu(event, widgetId, index));
     card.appendChild(cc);
+    const sw = document.createElement("input");
+    sw.type = "checkbox";
+    sw.dataset.buttonField = "switchMode";
+    sw.checked = !!control.switchMode;
+    sw.disabled = control.cc === null || pendingButtonLayerIndex !== 0;
+    sw.setAttribute("aria-label", `Button ${index + 1} MIDI switch mode`);
+    sw.title = "Each MIDI button press toggles or advances the list";
+    sw.addEventListener("change", () => {
+      state.layers.forEach((entry) => { entry.controls[index].switchMode = sw.checked; });
+      sendLiveParamUpdate(widgetId, { buttonIndex: index + 1, switchMode: sw.checked });
+      savePresetNow();
+    });
+    card.appendChild(sw);
     const addInput = (field, value, fixed = false) => {
       const input = createKnobSettingsInput(field, value);
       delete input.dataset.knobField;
@@ -8730,6 +8783,8 @@ document.getElementById("buttonSettingsSave").addEventListener("click", () => {
         const binding = state.layers[0].controls[buttonIndex];
         control.cc = binding.cc;
         control.channel = binding.channel;
+        control.midiType = binding.midiType;
+        control.switchMode = binding.switchMode;
         const output = buttonCurrentOutput(control);
         audioEngine.setParam(pendingButtonId, buttonValueParamName(buttonIndex, layerIndex), output);
         if (layerIndex === state.activeLayer) propagate(pendingButtonId, buttonPortId(buttonIndex, layerIndex), output);
@@ -8740,6 +8795,8 @@ document.getElementById("buttonSettingsSave").addEventListener("click", () => {
           activeLayer: state.activeLayer,
           cc: control.cc,
           channel: control.channel,
+          midiType: control.midiType,
+          switchMode: control.switchMode,
           value0: control.value0,
           value127: control.value127,
           listIndex: control.listIndex,
@@ -21707,7 +21764,7 @@ const WIDGET_ENGINES = {
         layerCount: state.layerCount,
         activeLayer: state.activeLayer,
         outputSide: state.outputSide,
-        bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel }) => ({ cc, channel })),
+        bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel, midiType, switchMode }) => ({ cc, channel, midiType, switchMode })),
         layers: state.layers.slice(0, state.layerCount).map((layer) => ({
           name: layer.name,
           labels: layer.labels.slice(0, state.count),
@@ -21749,6 +21806,8 @@ const WIDGET_ENGINES = {
         for (let index = 0; index < state.count; index += 1) {
           layer.controls[index].cc = typeof bindings[index]?.cc === "number" ? bindings[index].cc : null;
           layer.controls[index].channel = typeof bindings[index]?.channel === "number" ? bindings[index].channel : null;
+          layer.controls[index].midiType = ["note", "program"].includes(bindings[index]?.midiType) ? bindings[index].midiType : "cc";
+          layer.controls[index].switchMode = bindings[index]?.switchMode === true;
         }
       });
       renderButtonControls(id);

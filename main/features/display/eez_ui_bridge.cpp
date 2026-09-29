@@ -47,7 +47,7 @@ void action_select_preset(lv_event_t *)
 }
 
 // lv_label_set_text() always invalidates (and so re-renders) the label, even for identical
-// text - with a dozen status labels refreshed 8x per second that alone kept taskLVGL busy
+// text - with a dozen status labels refreshed every tick that alone kept taskLVGL busy
 // re-drawing unchanged pixels. Only touch a label when its text actually differs.
 void set_label_text(lv_obj_t *label, const char *text)
 {
@@ -85,10 +85,10 @@ void update_runtime_labels()
     s_knob_overlay.tick(activityNowUs);
     set_label_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
 
-    // Preset loader bar: every timer tick, so the progress animation stays smooth.
+    // Show actual loading progress immediately on every timer tick.
     if (synth.preset_load_active) {
         lv_obj_clear_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-        lv_bar_set_value(objects.bar_preset_loader, synth.preset_load_progress, LV_ANIM_ON);
+        lv_bar_set_value(objects.bar_preset_loader, synth.preset_load_progress, LV_ANIM_OFF);
     } else {
         lv_obj_add_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
     }
@@ -101,13 +101,11 @@ void update_runtime_labels()
     set_label_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
     set_label_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
 
-    // Load/memory/IP readouts: twice per second - they change on nearly every sample, so the
-    // text comparison above wouldn't save their redraws at a faster rate. Also gives the
-    // Core 0 figure a stable 500 ms averaging window.
+    // Refresh CPU labels and bars together, averaging Core 0 over the elapsed interval.
     static int64_t previous_sample_us = 0;
     static uint32_t previous_idle_runtime = 0;
     const int64_t now_us = esp_timer_get_time();
-    if (previous_sample_us != 0 && now_us - previous_sample_us < 500000) return;
+    if (previous_sample_us != 0 && now_us - previous_sample_us < 100000) return;
     const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(App::MAIN_CORE);
     float core0 = 0.0f;
     if (previous_sample_us != 0) {
@@ -119,6 +117,16 @@ void update_runtime_labels()
     previous_sample_us = now_us;
     previous_idle_runtime = idle_runtime;
 
+    set_label_fmt(objects.lbl_core0_util, "Core 0: %u %%", static_cast<unsigned>(core0 + 0.5f));
+    set_label_fmt(objects.lbl_core1_util, "Core 1: %u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
+    lv_bar_set_value(objects.bar_core0_util, static_cast<int32_t>(core0 + 0.5f), LV_ANIM_OFF);
+    lv_bar_set_value(objects.bar_core1_util, static_cast<int32_t>(synth.audio_core_load + 0.5f), LV_ANIM_OFF);
+
+    // Heap statistics and network details only need sampling twice per second.
+    static int64_t previous_info_us = 0;
+    if (previous_info_us != 0 && now_us - previous_info_us < 500000) return;
+    previous_info_us = now_us;
+
     const unsigned psram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
     const unsigned psram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
     const unsigned sysram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
@@ -129,10 +137,6 @@ void update_runtime_labels()
     char ip_address[24] = {};
     eez_network_ip(ip_address, sizeof(ip_address));
     set_label_fmt(objects.lbl_ip_address, "IP: %s", ip_address);
-    set_label_fmt(objects.lbl_core0_util, "Core 0: %u %%", static_cast<unsigned>(core0 + 0.5f));
-    set_label_fmt(objects.lbl_core1_util, "Core 1: %u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
-    lv_bar_set_value(objects.bar_core0_util, static_cast<int32_t>(core0 + 0.5f), LV_ANIM_OFF);
-    lv_bar_set_value(objects.bar_core1_util, static_cast<int32_t>(synth.audio_core_load + 0.5f), LV_ANIM_OFF);
 }
 
 void timer_callback(lv_timer_t *)

@@ -545,7 +545,8 @@ private:
                 for (uint8_t buttonIndex = 0; buttonIndex < instance.button->count; ++buttonIndex)
                 {
                     const ButtonControl &binding = instance.button->controls[buttonIndex];
-                    if (binding.cc < 0 || static_cast<uint8_t>(binding.cc) != event.data1 ||
+                    if (binding.midiType != nodes::button::kButtonMidiCc ||
+                        binding.cc < 0 || static_cast<uint8_t>(binding.cc) != event.data1 ||
                         binding.channel < 0 || static_cast<uint8_t>(binding.channel) != channel)
                         continue;
                     const ButtonControl &control = instance.button->controls[
@@ -609,12 +610,14 @@ private:
             if (midiCcDebugQueue_ != nullptr)
                 xQueueSend(midiCcDebugQueue_, &snapshot, 0);
         }
-        if (!snapshot.isKnob || knobActivityQueue_ == nullptr) return;
+        if (!(snapshot.isKnob || snapshot.isButton) || knobActivityQueue_ == nullptr) return;
         KnobActivity activity{};
         activity.updatedUs = esp_timer_get_time();
         activity.presetSequence = presetChangeSequence();
         activity.controlIndex = snapshot.controlIndex;
         activity.raw = snapshot.rawValue;
+        activity.isButton = snapshot.isButton;
+        activity.sourceValue = snapshot.sourceValue;
         memcpy(activity.sourceId, snapshot.sourceId, sizeof(activity.sourceId));
         memcpy(activity.name, snapshot.knobName, sizeof(activity.name));
         const uint8_t count = snapshot.targetCount > 0 ? snapshot.targetCount : 1;
@@ -626,6 +629,9 @@ private:
                 memcpy(activity.targetId, target.targetId, sizeof(activity.targetId));
                 memcpy(activity.device, target.targetLabel, sizeof(activity.device));
                 memcpy(activity.port, target.paramName, sizeof(activity.port));
+                activity.targetType = static_cast<uint8_t>(target.targetType);
+                activity.targetValue = target.value;
+                activity.targetValueRaw = target.raw;
             }
             if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
             {

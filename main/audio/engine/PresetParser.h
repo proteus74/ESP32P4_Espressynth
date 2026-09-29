@@ -270,6 +270,8 @@ struct WidgetParams
     // button
     struct ButtonControlParams
     {
+        char label[48] = {};
+        uint8_t midiType = 0; // nodes::button::kButtonMidiCc/Note/Program
         int16_t cc = -1;
         int8_t channel = -1;
         float value0 = 0.0f;
@@ -278,6 +280,7 @@ struct WidgetParams
         uint8_t valueListCount = 0;
         uint8_t listIndex = 0;
         bool wasAbove = false;
+        bool switchMode = false;
     };
     uint8_t buttonCount = 1;
     uint8_t buttonLayerCount = 1;

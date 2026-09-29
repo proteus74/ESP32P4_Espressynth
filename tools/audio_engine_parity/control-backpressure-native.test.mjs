@@ -33,6 +33,7 @@ writeFileSync(path.join(temporary, "test.cpp"), `
 #include <vector>
 #include <cstdarg>
 constexpr size_t kMaxMidiCcDebugTargets=16;
+enum class NodeType : uint8_t { Unknown };
 ${declaration("MidiCcDebugTarget")}
 ${declaration("MidiCcDebugSnapshot")}
 ${readFileSync(path.join(root, "main/features/synth/KnobActivity.h"), "utf8").replace("#pragma once", "")}
