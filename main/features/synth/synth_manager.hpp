@@ -428,22 +428,32 @@ inline void handleDeviceSettingsMidi(uint8_t status, uint8_t data1, uint8_t data
     auto &ds = synth::deviceSettings();
     const uint8_t channel = status & 0x0F;
     const bool above = data2 >= 64;
+    const int64_t nowUs = esp_timer_get_time();
 
-    if (ds.prevCc >= 0 && static_cast<uint8_t>(ds.prevCc) == data1 &&
-        static_cast<uint8_t>(ds.prevChannel) == channel) {
-        if (above && !ds.prevHeld && s_presetNavQueue != nullptr) {
-            int direction = -1;
+    // Many buttons send only the "on" value (127) and never a release (0), which would keep
+    // the held flag set forever. So a binding also re-arms once its "on" messages pause for
+    // kPresetNavRearmUs - a held pad's rapid repeats keep refreshing lastOnUs and still fire once.
+    constexpr int64_t kPresetNavRearmUs = 100000;
+    auto step = [&](bool &held, int64_t &lastOnUs, int direction) {
+        if (above && (!held || nowUs - lastOnUs > kPresetNavRearmUs) && s_presetNavQueue != nullptr) {
             xQueueOverwrite(s_presetNavQueue, &direction);
         }
-        ds.prevHeld = above;
+        held = above;
+        if (above) lastOnUs = nowUs;
+    };
+    if (ds.prevCc >= 0 && static_cast<uint8_t>(ds.prevCc) == data1 &&
+        static_cast<uint8_t>(ds.prevChannel) == channel) {
+        step(ds.prevHeld, ds.prevLastOnUs, -1);
     }
     if (ds.nextCc >= 0 && static_cast<uint8_t>(ds.nextCc) == data1 &&
         static_cast<uint8_t>(ds.nextChannel) == channel) {
-        if (above && !ds.nextHeld && s_presetNavQueue != nullptr) {
-            int direction = 1;
-            xQueueOverwrite(s_presetNavQueue, &direction);
-        }
-        ds.nextHeld = above;
+        step(ds.nextHeld, ds.nextLastOnUs, 1);
+    }
+    // Master volume follows the CC's live value (knob/fader), unlike the edge-only preset
+    // step above. A plain float store - the render task only reads it once per block.
+    if (ds.volumeCc >= 0 && static_cast<uint8_t>(ds.volumeCc) == data1 &&
+        static_cast<uint8_t>(ds.volumeChannel) == channel) {
+        ds.volume = static_cast<float>(data2) / 127.0f;
     }
 }
 

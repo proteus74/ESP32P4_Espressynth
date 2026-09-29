@@ -182,21 +182,9 @@
       </div>
 
       <div class="settings-section">
-        <h4 class="modal-section-title">Preset Navigation (MIDI Learn)</h4>
-        <div class="modal-cc-learn-row">
-          <label class="modal-field modal-cc-field">
-            <span>Previous Preset</span>
-            <input type="text" id="presetPrevCcDisplay" readonly placeholder="– none yet –">
-          </label>
-          <button id="presetPrevLearnBtn" type="button" class="btn-secondary">Learn</button>
-        </div>
-        <div class="modal-cc-learn-row">
-          <label class="modal-field modal-cc-field">
-            <span>Next Preset</span>
-            <input type="text" id="presetNextCcDisplay" readonly placeholder="– none yet –">
-          </label>
-          <button id="presetNextLearnBtn" type="button" class="btn-secondary">Learn</button>
-        </div>
+        <h4 class="modal-section-title">Global MIDI Controls</h4>
+        <p id="globalMidiSummaryText" class="modal-field-readout">Nothing learned</p>
+        <button type="button" id="openGlobalMidiSettings" class="btn-secondary">Configure MIDI Controls…</button>
       </div>
 
       <div class="settings-section">
@@ -218,9 +206,8 @@
 
       <div class="settings-section">
         <h4 class="modal-section-title">LED String (WS2812)</h4>
-        <label class="modal-field"><span>Data Pin</span><select id="ledStripPinSelect"></select></label>
-        <label class="modal-field"><span>Number of LEDs</span><input type="number" id="ledStripCountInput" min="0" max="256" step="1"></label>
-        <p id="ledStripStatusText" class="modal-field-hint"></p>
+        <p id="ledStripSummaryText" class="modal-field-readout">Not connected</p>
+        <button type="button" id="openLedStripSettings" class="btn-secondary">Configure LED String…</button>
       </div>
 
       <div class="settings-section">
@@ -283,6 +270,57 @@
     <div class="modal-actions">
       <button id="gpioSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="gpioSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="ledStripSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>LED String (WS2812)</h3>
+    <label class="modal-field"><span>Data Pin</span><select id="ledStripPinSelect"></select></label>
+    <label class="modal-field"><span>Number of LEDs</span><input type="number" id="ledStripCountInput" min="0" max="256" step="1"></label>
+    <p id="ledStripStatusText" class="modal-field-hint"></p>
+    <div class="modal-actions">
+      <button id="ledStripSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="ledStripSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="globalMidiSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Global MIDI Controls</h3>
+    <p class="modal-hint">Device-wide, independent of the loaded preset. Click Learn, then move the controller. Changes apply immediately.</p>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field"><span>Previous Preset</span>
+        <input type="text" id="globalMidiPrevDisplay" readonly placeholder="– not learned –"></label>
+      <button type="button" class="btn-secondary" data-global-learn="prev">Learn</button>
+      <button type="button" class="btn-secondary" data-global-clear="prev">Clear</button>
+    </div>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field"><span>Next Preset</span>
+        <input type="text" id="globalMidiNextDisplay" readonly placeholder="– not learned –"></label>
+      <button type="button" class="btn-secondary" data-global-learn="next">Learn</button>
+      <button type="button" class="btn-secondary" data-global-clear="next">Clear</button>
+    </div>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field"><span>Master Tempo (BPM)</span>
+        <input type="text" id="globalMidiBpmDisplay" readonly placeholder="– not learned –"></label>
+      <button type="button" class="btn-secondary" data-global-learn="bpm">Learn</button>
+      <button type="button" class="btn-secondary" data-global-clear="bpm">Clear</button>
+    </div>
+    <div class="modal-cc-learn-row">
+      <label class="modal-field modal-cc-field"><span>Master Volume</span>
+        <input type="text" id="globalMidiVolumeDisplay" readonly placeholder="– not learned –"></label>
+      <button type="button" class="btn-secondary" data-global-learn="volume">Learn</button>
+      <button type="button" class="btn-secondary" data-global-clear="volume">Clear</button>
+    </div>
+    <label class="modal-field">
+      <span>Master Volume: <span id="masterVolumeValue">100%</span></span>
+      <input type="range" id="masterVolumeInput" min="0" max="100" step="1" value="100">
+    </label>
+    <div class="modal-actions">
+      <button id="globalMidiSettingsClose">Close</button>
     </div>
   </div>
 </div>

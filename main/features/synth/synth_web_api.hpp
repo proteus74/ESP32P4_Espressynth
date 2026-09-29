@@ -1601,7 +1601,7 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     handled_locally = true;
                 } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@deviceSettings") == 0 &&
                            cJSON_IsObject(params)) {
-                    // Device name + preset-nav Learn bindings (DeviceSettings.h) - same
+                    // Device name, preset-nav/master-volume Learn bindings (DeviceSettings.h) - same
                     // "engine-global, not a graph widget, save right here off the render
                     // task" reasoning as @masterClock above.
                     auto &ds = synth::deviceSettings();
@@ -1615,6 +1615,12 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsNumber(prevChannel)) ds.prevChannel = prevChannel->valueint;
                     if (cJSON_IsNumber(nextCc)) ds.nextCc = nextCc->valueint;
                     if (cJSON_IsNumber(nextChannel)) ds.nextChannel = nextChannel->valueint;
+                    cJSON *volume = cJSON_GetObjectItemCaseSensitive(params, "volume");
+                    cJSON *volumeCc = cJSON_GetObjectItemCaseSensitive(params, "volumeCc");
+                    cJSON *volumeChannel = cJSON_GetObjectItemCaseSensitive(params, "volumeChannel");
+                    if (cJSON_IsNumber(volume)) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
+                    if (cJSON_IsNumber(volumeCc)) ds.volumeCc = volumeCc->valueint;
+                    if (cJSON_IsNumber(volumeChannel)) ds.volumeChannel = volumeChannel->valueint;
                     synth::saveDeviceSettingsToFs();
                     // WS2812 string pin/count - persisted only, applied at the next boot.
                     cJSON *ledPin = cJSON_GetObjectItemCaseSensitive(params, "ledPin");

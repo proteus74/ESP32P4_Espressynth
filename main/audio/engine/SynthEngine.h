@@ -705,6 +705,7 @@ private:
     };
     OutputFadeState outputFadeState_ = OutputFadeState::Idle;
     float outputFadeMul_ = 1.0f; // currently effective multiplier, ramped sample-accurately
+    float masterVolumeMul_ = 1.0f; // smoothed synth::deviceSettings().volume (squared taper)
     Graph *pendingGraph_ = nullptr; // fully built by the loader task, waits for the swap after fade-out
     char pendingPresetPath_[300] = {}; // path of pendingGraph_, for currentPresetPath_ after the swap
 
@@ -1529,6 +1530,8 @@ inline void SynthEngine::taskLoop()
         // outputFadeState_ declaration. Multiplied below with sink_[idx].gain
         // before converting to PCM - so the actual sink gain/mute path stays
         // unchanged and the fade only layers additively on top.
+        const float masterVolume = synth::deviceSettings().volume;
+        const float masterVolumeTarget = masterVolume * masterVolume;
         for (size_t i = 0; i < synth::kBlockSize; ++i)
         {
             switch (outputFadeState_)
@@ -1544,7 +1547,11 @@ inline void SynthEngine::taskLoop()
             case OutputFadeState::Idle:
                 break;
             }
-            fadeMulBlock[i] = outputFadeMul_;
+            // Device-wide master volume (DeviceSettings.h), one-pole smoothed so a CC sweep
+            // doesn't zipper. Only scales the block - the fade-state checks below still
+            // read the bare outputFadeMul_.
+            masterVolumeMul_ += (masterVolumeTarget - masterVolumeMul_) * 0.002f;
+            fadeMulBlock[i] = outputFadeMul_ * masterVolumeMul_;
         }
 
         // Fade-out done (output at zero) -> only now perform the swap.

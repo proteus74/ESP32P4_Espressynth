@@ -471,7 +471,10 @@ async function fetchGpioInfo() {
 const ledStripPinSelect = document.getElementById("ledStripPinSelect");
 const ledStripCountInput = document.getElementById("ledStripCountInput");
 const ledStripStatusText = document.getElementById("ledStripStatusText");
+const ledStripSummaryText = document.getElementById("ledStripSummaryText");
+const ledStripSettingsOverlay = document.getElementById("ledStripSettingsOverlay");
 let ledStripInfo = null;
+let ledStripGpioInfo = { minPin: 0, maxPin: -1, reserved: [] };
 
 async function fetchLedStripInfo() {
   try {
@@ -492,7 +495,14 @@ async function fetchLedStripInfo() {
 
 // Free pins = valid range minus reserved (which already includes the saved LED pin itself -
 // re-added here) minus pins used in Settings -> GPIO.
+function updateLedStripSummary() {
+  ledStripSummaryText.textContent = !ledStripInfo
+    ? "Unavailable"
+    : ledStripInfo.pin < 0 ? "Not connected" : `GPIO${ledStripInfo.pin} · ${ledStripInfo.count} LEDs`;
+}
+
 function renderLedStripSettings(gpioInfo) {
+  updateLedStripSummary();
   ledStripPinSelect.innerHTML = "";
   const none = document.createElement("option");
   none.value = "-1";
@@ -703,11 +713,7 @@ async function openSettings() {
     const res = await fetch("/api/settings/device");
     const data = await res.json();
     deviceNameInput.value = data.name || "";
-    presetPrevCc = typeof data.prevCc === "number" && data.prevCc >= 0 ? data.prevCc : null;
-    presetPrevChannel = typeof data.prevChannel === "number" && data.prevChannel >= 0 ? data.prevChannel : null;
-    presetNextCc = typeof data.nextCc === "number" && data.nextCc >= 0 ? data.nextCc : null;
-    presetNextChannel = typeof data.nextChannel === "number" && data.nextChannel >= 0 ? data.nextChannel : null;
-    updatePresetNavLearnUi();
+    applyGlobalMidiDeviceSettings(data);
   } catch (err) {
     appendLog(`Could not load device settings: ${err.message}`);
   }
@@ -729,7 +735,8 @@ async function openSettings() {
   }
   try {
     ledStripInfo = await fetchLedStripInfo();
-    renderLedStripSettings(await fetchGpioInfo());
+    ledStripGpioInfo = await fetchGpioInfo();
+    renderLedStripSettings(ledStripGpioInfo);
   } catch (err) {
     appendLog(`Could not load LED string settings: ${err.message}`);
   }
@@ -740,9 +747,6 @@ const loadSamplesSetting = document.getElementById("loadSamplesSetting");
 
 function closeSettings() {
   settingsOverlay.classList.add("hidden");
-  presetPrevLearnActive = false;
-  presetNextLearnActive = false;
-  updatePresetNavLearnUi();
 }
 
 document.getElementById("menuSettings").addEventListener("click", (e) => {
@@ -783,6 +787,32 @@ document.getElementById("gpioSettingsSave").addEventListener("click", () => clos
 document.getElementById("gpioSettingsCancel").addEventListener("click", () => closeGpioSettings({ save: false }));
 gpioSettingsOverlay.addEventListener("click", (e) => {
   if (e.target === gpioSettingsOverlay) closeGpioSettings({ save: false });
+});
+
+// LED String: own modal too - Save persists pin/count right away (applied at next boot).
+document.getElementById("openLedStripSettings").addEventListener("click", () => {
+  ledStripSettingsOverlay.classList.remove("hidden");
+});
+
+function closeLedStripSettings({ save } = {}) {
+  if (save && ledStripInfo) {
+    const ledPin = parseInt(ledStripPinSelect.value, 10);
+    const ledCount = Math.max(0, Math.min(ledStripInfo.maxCount, parseInt(ledStripCountInput.value, 10) || 0));
+    if (ledPin !== ledStripInfo.pin || ledCount !== ledStripInfo.count) {
+      const pin = Number.isFinite(ledPin) ? ledPin : -1;
+      sendLiveParamUpdate("@deviceSettings", { ledPin: pin, ledCount });
+      ledStripInfo = { ...ledStripInfo, pin, count: ledCount };
+      showToast("LED string settings take effect after a reboot");
+    }
+  }
+  renderLedStripSettings(ledStripGpioInfo);
+  ledStripSettingsOverlay.classList.add("hidden");
+}
+
+document.getElementById("ledStripSettingsSave").addEventListener("click", () => closeLedStripSettings({ save: true }));
+document.getElementById("ledStripSettingsCancel").addEventListener("click", () => closeLedStripSettings({ save: false }));
+ledStripSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === ledStripSettingsOverlay) closeLedStripSettings({ save: false });
 });
 
 // Same idea for Network (Ethernet + Wi-Fi): its own modal, its own
@@ -881,18 +911,7 @@ wifiScanButton.addEventListener("click", async () => {
 });
 
 document.getElementById("settingsSave").addEventListener("click", () => {
-  const deviceParams = { name: deviceNameInput.value.trim() };
-  if (ledStripInfo) {
-    const ledPin = parseInt(ledStripPinSelect.value, 10);
-    const ledCount = Math.max(0, Math.min(ledStripInfo.maxCount, parseInt(ledStripCountInput.value, 10) || 0));
-    if (ledPin !== ledStripInfo.pin || ledCount !== ledStripInfo.count) {
-      deviceParams.ledPin = Number.isFinite(ledPin) ? ledPin : -1;
-      deviceParams.ledCount = ledCount;
-      ledStripInfo = { ...ledStripInfo, pin: deviceParams.ledPin, count: ledCount };
-      showToast("LED string settings take effect after a reboot");
-    }
-  }
-  sendLiveParamUpdate("@deviceSettings", deviceParams);
+  sendLiveParamUpdate("@deviceSettings", { name: deviceNameInput.value.trim() });
   const loadSamples = loadSamplesSetting.checked;
   try {
     localStorage.setItem(LOAD_SAMPLES_KEY, loadSamples ? "1" : "0");
@@ -12206,7 +12225,6 @@ let masterClockMaxBpm = 240;
 let masterClockRoundBpm = false;
 let masterClockCc = null;
 let masterClockChannel = null;
-let masterClockLearnActive = false;
 
 function updateMasterClockBadge() {
   const label = document.getElementById("masterClockBpmLabel");
@@ -12219,7 +12237,8 @@ function updateMasterClockLearnUi() {
     ccDisplay.value = masterClockCc === null ? "" : `${masterClockCc} (Ch ${masterClockChannel + 1})`;
   }
   const learnButton = document.getElementById("masterClockLearnButton");
-  if (learnButton && !masterClockLearnActive) learnButton.textContent = "Learn";
+  if (learnButton) learnButton.textContent = globalMidiLearnTarget === "bpm" ? "Waiting…" : "Learn";
+  updateGlobalMidiUi();
 }
 
 function restartAllClockTimers() {
@@ -12260,14 +12279,6 @@ function applyMasterClockBroadcast(data) {
 // per-widget target.
 function routeMidiToMasterClock(data) {
   if (data.type !== "midi" || data.midiType !== "control_change") return;
-  if (masterClockLearnActive) {
-    masterClockCc = data.control;
-    masterClockChannel = data.channel;
-    masterClockLearnActive = false;
-    updateMasterClockLearnUi();
-    sendLiveParamUpdate("@masterClock", { cc: masterClockCc, channel: masterClockChannel });
-    return;
-  }
   if (masterClockCc === data.control && masterClockChannel === data.channel) {
     setMasterClockBpm((data.value / 127) * masterClockMaxBpm);
   }
@@ -12290,7 +12301,7 @@ function openMasterClockSettings() {
 
 function closeMasterClockSettings() {
   masterClockSettingsOverlay.classList.add("hidden");
-  masterClockLearnActive = false;
+  if (globalMidiLearnTarget === "bpm") globalMidiLearnTarget = null;
   updateMasterClockLearnUi();
 }
 
@@ -12299,10 +12310,7 @@ masterClockSettingsOverlay?.addEventListener("click", (e) => {
   if (e.target === masterClockSettingsOverlay) closeMasterClockSettings();
 });
 document.getElementById("masterClockSettingsCancel")?.addEventListener("click", closeMasterClockSettings);
-masterClockLearnButton?.addEventListener("click", () => {
-  masterClockLearnActive = true;
-  masterClockLearnButton.textContent = "Waiting…";
-});
+masterClockLearnButton?.addEventListener("click", () => startGlobalMidiLearn("bpm"));
 document.getElementById("masterClockSettingsSave")?.addEventListener("click", () => {
   masterClockRoundBpm = masterClockRoundBpmInput.checked;
   masterClockMaxBpm = Math.max(1, Number(masterClockMaxBpmInput.value) || 240);
@@ -12315,58 +12323,158 @@ document.getElementById("masterClockSettingsSave")?.addEventListener("click", ()
   closeMasterClockSettings();
 });
 
-// Preset-navigation MIDI learn (Settings dialog): device-global like Master
-// Clock above, but the actual edge-triggered preset step runs natively on
-// the firmware (see synth_manager.hpp's handleDeviceSettingsMidi()) so it
-// keeps working with no browser tab open - this side only needs to capture
-// the learned CC while "Waiting…" and mirror it for display.
+// Global MIDI Controls (Settings -> Global MIDI Controls): device-wide CC bindings for
+// preset prev/next, master tempo and master volume. All of them run natively on the
+// firmware (synth_manager.hpp's handleDeviceSettingsMidi(), SynthEngine.h's
+// handleMasterClockMidi()) so they keep working with no browser tab open - this side only
+// captures the learned CC while "Waiting…", sends Learn/Clear, and mirrors state for display.
+// Master tempo's binding lives in masterClockCc/masterClockChannel above.
 let presetPrevCc = null;
 let presetPrevChannel = null;
 let presetNextCc = null;
 let presetNextChannel = null;
-let presetPrevLearnActive = false;
-let presetNextLearnActive = false;
+let masterVolumeCc = null;
+let masterVolumeChannel = null;
+let masterVolume = 1;
+let globalMidiLearnTarget = null; // "prev" | "next" | "bpm" | "volume" | null
 
-const presetPrevCcDisplay = document.getElementById("presetPrevCcDisplay");
-const presetNextCcDisplay = document.getElementById("presetNextCcDisplay");
-const presetPrevLearnBtn = document.getElementById("presetPrevLearnBtn");
-const presetNextLearnBtn = document.getElementById("presetNextLearnBtn");
+const globalMidiSettingsOverlay = document.getElementById("globalMidiSettingsOverlay");
+const globalMidiSummaryText = document.getElementById("globalMidiSummaryText");
+const masterVolumeInput = document.getElementById("masterVolumeInput");
+const masterVolumeValue = document.getElementById("masterVolumeValue");
 
-function updatePresetNavLearnUi() {
-  if (presetPrevCcDisplay) presetPrevCcDisplay.value = presetPrevCc === null ? "" : `${presetPrevCc} (Ch ${presetPrevChannel + 1})`;
-  if (presetNextCcDisplay) presetNextCcDisplay.value = presetNextCc === null ? "" : `${presetNextCc} (Ch ${presetNextChannel + 1})`;
-  if (presetPrevLearnBtn && !presetPrevLearnActive) presetPrevLearnBtn.textContent = "Learn";
-  if (presetNextLearnBtn && !presetNextLearnActive) presetNextLearnBtn.textContent = "Learn";
+// get() -> [cc, channel] (null = unlearned); send(cc, channel) updates the local mirror and
+// persists on the firmware (-1 = cleared).
+const globalMidiTargets = {
+  prev: {
+    label: "Prev",
+    display: document.getElementById("globalMidiPrevDisplay"),
+    get: () => [presetPrevCc, presetPrevChannel],
+    send(cc, ch) {
+      presetPrevCc = cc;
+      presetPrevChannel = ch;
+      sendLiveParamUpdate("@deviceSettings", { prevCc: cc ?? -1, prevChannel: ch ?? -1 });
+    },
+  },
+  next: {
+    label: "Next",
+    display: document.getElementById("globalMidiNextDisplay"),
+    get: () => [presetNextCc, presetNextChannel],
+    send(cc, ch) {
+      presetNextCc = cc;
+      presetNextChannel = ch;
+      sendLiveParamUpdate("@deviceSettings", { nextCc: cc ?? -1, nextChannel: ch ?? -1 });
+    },
+  },
+  bpm: {
+    label: "BPM",
+    display: document.getElementById("globalMidiBpmDisplay"),
+    get: () => [masterClockCc, masterClockChannel],
+    send(cc, ch) {
+      masterClockCc = cc;
+      masterClockChannel = ch;
+      sendLiveParamUpdate("@masterClock", { cc: cc ?? -1, channel: ch ?? -1 });
+    },
+  },
+  volume: {
+    label: "Volume",
+    display: document.getElementById("globalMidiVolumeDisplay"),
+    get: () => [masterVolumeCc, masterVolumeChannel],
+    send(cc, ch) {
+      masterVolumeCc = cc;
+      masterVolumeChannel = ch;
+      sendLiveParamUpdate("@deviceSettings", { volumeCc: cc ?? -1, volumeChannel: ch ?? -1 });
+    },
+  },
+};
+
+function learnedOrNull(value) {
+  return typeof value === "number" && value >= 0 ? value : null;
 }
 
-function routeMidiToPresetNav(data) {
+// Mirrors GET /api/settings/device (DeviceSettings.h's formatDeviceSettingsJson()).
+function applyGlobalMidiDeviceSettings(data) {
+  presetPrevCc = learnedOrNull(data.prevCc);
+  presetPrevChannel = learnedOrNull(data.prevChannel);
+  presetNextCc = learnedOrNull(data.nextCc);
+  presetNextChannel = learnedOrNull(data.nextChannel);
+  masterVolumeCc = learnedOrNull(data.volumeCc);
+  masterVolumeChannel = learnedOrNull(data.volumeChannel);
+  if (typeof data.volume === "number") masterVolume = Math.max(0, Math.min(1, data.volume));
+  updateGlobalMidiUi();
+}
+
+function updateMasterVolumeUi() {
+  const pct = Math.round(masterVolume * 100);
+  if (masterVolumeInput && document.activeElement !== masterVolumeInput) masterVolumeInput.value = String(pct);
+  if (masterVolumeValue) masterVolumeValue.textContent = `${pct}%`;
+}
+
+function updateGlobalMidiUi() {
+  const learned = [];
+  for (const [key, target] of Object.entries(globalMidiTargets)) {
+    const [cc, ch] = target.get();
+    if (target.display) target.display.value = cc === null ? "" : `CC ${cc} (Ch ${ch + 1})`;
+    const learnBtn = globalMidiSettingsOverlay?.querySelector(`[data-global-learn="${key}"]`);
+    if (learnBtn) learnBtn.textContent = globalMidiLearnTarget === key ? "Waiting…" : "Learn";
+    const clearBtn = globalMidiSettingsOverlay?.querySelector(`[data-global-clear="${key}"]`);
+    if (clearBtn) clearBtn.disabled = cc === null;
+    if (cc !== null) learned.push(target.label);
+  }
+  if (globalMidiSummaryText) globalMidiSummaryText.textContent = learned.length ? `Learned: ${learned.join(", ")}` : "Nothing learned";
+  updateMasterVolumeUi();
+}
+
+function startGlobalMidiLearn(key) {
+  globalMidiLearnTarget = globalMidiLearnTarget === key ? null : key; // second click cancels
+  updateMasterClockLearnUi();
+}
+
+function routeMidiToGlobalMidiControls(data) {
   if (data.type !== "midi" || data.midiType !== "control_change") return;
-  if (presetPrevLearnActive) {
-    presetPrevCc = data.control;
-    presetPrevChannel = data.channel;
-    presetPrevLearnActive = false;
-    updatePresetNavLearnUi();
-    sendLiveParamUpdate("@deviceSettings", { prevCc: presetPrevCc, prevChannel: presetPrevChannel });
-  } else if (presetNextLearnActive) {
-    presetNextCc = data.control;
-    presetNextChannel = data.channel;
-    presetNextLearnActive = false;
-    updatePresetNavLearnUi();
-    sendLiveParamUpdate("@deviceSettings", { nextCc: presetNextCc, nextChannel: presetNextChannel });
+  if (globalMidiLearnTarget) {
+    globalMidiTargets[globalMidiLearnTarget].send(data.control, data.channel);
+    globalMidiLearnTarget = null;
+    updateMasterClockLearnUi();
+    return;
+  }
+  // Display mirror only - the firmware applies the volume itself.
+  if (masterVolumeCc === data.control && masterVolumeChannel === data.channel) {
+    masterVolume = data.value / 127;
+    updateMasterVolumeUi();
   }
 }
 
-presetPrevLearnBtn?.addEventListener("click", () => {
-  presetPrevLearnActive = true;
-  presetNextLearnActive = false;
-  presetPrevLearnBtn.textContent = "Waiting…";
-  updatePresetNavLearnUi();
+globalMidiSettingsOverlay?.querySelectorAll("[data-global-learn]").forEach((btn) => {
+  btn.addEventListener("click", () => startGlobalMidiLearn(btn.dataset.globalLearn));
 });
-presetNextLearnBtn?.addEventListener("click", () => {
-  presetNextLearnActive = true;
-  presetPrevLearnActive = false;
-  presetNextLearnBtn.textContent = "Waiting…";
-  updatePresetNavLearnUi();
+globalMidiSettingsOverlay?.querySelectorAll("[data-global-clear]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const key = btn.dataset.globalClear;
+    if (globalMidiLearnTarget === key) globalMidiLearnTarget = null;
+    globalMidiTargets[key].send(null, null);
+    updateMasterClockLearnUi();
+  });
+});
+masterVolumeInput?.addEventListener("input", () => {
+  masterVolume = Number(masterVolumeInput.value) / 100;
+  updateMasterVolumeUi();
+  sendLiveParamUpdate("@deviceSettings", { volume: masterVolume });
+});
+
+function closeGlobalMidiSettings() {
+  globalMidiSettingsOverlay.classList.add("hidden");
+  globalMidiLearnTarget = null;
+  updateMasterClockLearnUi();
+}
+
+document.getElementById("openGlobalMidiSettings")?.addEventListener("click", () => {
+  updateGlobalMidiUi();
+  globalMidiSettingsOverlay.classList.remove("hidden");
+});
+document.getElementById("globalMidiSettingsClose")?.addEventListener("click", closeGlobalMidiSettings);
+globalMidiSettingsOverlay?.addEventListener("click", (e) => {
+  if (e.target === globalMidiSettingsOverlay) closeGlobalMidiSettings();
 });
 
 function stopClockTimer(widgetId) {
@@ -23807,7 +23915,7 @@ function connectWs() {
 
 
       routeMidiToMasterClock(data);
-      routeMidiToPresetNav(data);
+      routeMidiToGlobalMidiControls(data);
       if (["note_on", "note_off"].includes(data.midiType)) {
         previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
       }
