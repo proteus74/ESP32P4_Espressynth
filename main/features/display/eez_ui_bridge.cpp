@@ -1,7 +1,7 @@
 #include "eez_ui_bridge.hpp"
 
 #include "app_core.hpp"
-#include "boards/board_config.hpp"
+#include "version.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -33,7 +33,8 @@ void action_open_preset_list(lv_event_t *)
 
 void action_back_to_main(lv_event_t *)
 {
-    loadScreen(SCREEN_ID_MAIN);
+    lv_obj_add_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN);
 }
 
 void action_select_preset(lv_event_t *)
@@ -43,7 +44,7 @@ void action_select_preset(lv_event_t *)
     lv_table_get_selected_cell(objects.tbl_presets, &row, &column);
     (void)column;
     if (row == LV_TABLE_CELL_NONE || row == 0 || row > s_preset_list.count) return;
-    if (eez_synth_load_preset(s_preset_list.entries[row - 1].file_name)) loadScreen(SCREEN_ID_MAIN);
+    if (eez_synth_load_preset(s_preset_list.entries[row - 1].file_name)) action_back_to_main(nullptr);
 }
 
 // lv_label_set_text() always invalidates (and so re-renders) the label, even for identical
@@ -85,19 +86,8 @@ void update_runtime_labels()
     s_knob_overlay.tick(activityNowUs);
     set_label_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
 
-    // Show actual loading progress immediately on every timer tick.
-    if (synth.preset_load_active) {
-        lv_obj_clear_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-        lv_bar_set_value(objects.bar_preset_loader, synth.preset_load_progress, LV_ANIM_OFF);
-    } else {
-        lv_obj_add_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (synth.preset_name[0] != '\0') set_label_text(objects.lbl_preset_name, synth.preset_name);
-    if (synth.preset_count != 0)
-        set_label_fmt(objects.lbl_preset_number, "Preset %u von %u", static_cast<unsigned>(synth.preset_number),
-                      static_cast<unsigned>(synth.preset_count));
-    else
-        set_label_text(objects.lbl_preset_number, "Preset --");
+    if (synth.preset_name[0] != '\0')
+        set_label_fmt(objects.lbl_preset_name, "%u - %s", static_cast<unsigned>(synth.preset_number), synth.preset_name);
     set_label_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
     set_label_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
 
@@ -117,8 +107,8 @@ void update_runtime_labels()
     previous_sample_us = now_us;
     previous_idle_runtime = idle_runtime;
 
-    set_label_fmt(objects.lbl_core0_util, "Core 0: %u %%", static_cast<unsigned>(core0 + 0.5f));
-    set_label_fmt(objects.lbl_core1_util, "Core 1: %u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
+    set_label_fmt(objects.lbl_core0_util, "%u %%", static_cast<unsigned>(core0 + 0.5f));
+    set_label_fmt(objects.lbl_core1_util, "%u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
     lv_bar_set_value(objects.bar_core0_util, static_cast<int32_t>(core0 + 0.5f), LV_ANIM_OFF);
     lv_bar_set_value(objects.bar_core1_util, static_cast<int32_t>(synth.audio_core_load + 0.5f), LV_ANIM_OFF);
 
@@ -127,11 +117,13 @@ void update_runtime_labels()
     if (previous_info_us != 0 && now_us - previous_info_us < 500000) return;
     previous_info_us = now_us;
 
-    const unsigned psram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
-    const unsigned psram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024);
+    constexpr size_t mib = 1024 * 1024;
+    const unsigned psram_free_tenths = static_cast<unsigned>((heap_caps_get_free_size(MALLOC_CAP_SPIRAM) * 10ULL + mib / 2) / mib);
+    const unsigned psram_total_tenths = static_cast<unsigned>((heap_caps_get_total_size(MALLOC_CAP_SPIRAM) * 10ULL + mib / 2) / mib);
     const unsigned sysram_free = static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
     const unsigned sysram_total = static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL) / 1024);
-    set_label_fmt(objects.lbl_psram_info, "PSRAM: %u / %u KB", psram_free, psram_total);
+    set_label_fmt(objects.lbl_psram_info, "PSRAM: %u.%u / %u.%u MB", psram_free_tenths / 10,
+                  psram_free_tenths % 10, psram_total_tenths / 10, psram_total_tenths % 10);
     set_label_fmt(objects.lbl_sysram_info, "System: %u / %u KB", sysram_free, sysram_total);
 
     char ip_address[24] = {};
@@ -167,16 +159,24 @@ namespace Feature::EEZUI {
 void init()
 {
     ui_init();
-    lv_bar_set_range(objects.bar_preset_loader, 0, 100);
-    lv_obj_add_flag(objects.bar_preset_loader, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text_fmt(objects.lbl_title_version, "Espressynth - %s", CurrentBoard::BOARD_NAME);
+    lv_obj_t *header = lv_win_get_header(objects.wndmain);
+    lv_obj_t *content = lv_win_get_content(objects.wndmain);
+    lv_obj_set_parent(objects.btn_back, header);
+    lv_obj_set_parent(objects.lbl_title_presets, header);
+    lv_obj_set_parent(objects.tbl_presets, content);
+    lv_obj_set_height(header, 56);
+    lv_obj_set_size(objects.btn_back, 150, LV_PCT(100));
+    lv_obj_set_flex_grow(objects.lbl_title_presets, 1);
+    lv_obj_set_style_pad_all(content, 0, 0);
+    lv_obj_set_pos(objects.tbl_presets, 0, 0);
+    lv_obj_set_size(objects.tbl_presets, LV_PCT(100), LV_PCT(100));
+    action_back_to_main(nullptr);
+    lv_label_set_text(objects.lbl_title_version, "ESPRESSYNTH " FIRMWARE_VERSION);
     lv_obj_add_event_cb(objects.btn_panic, action_panic, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.btn_next_preset, action_next_preset, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.btn_previous_preset, action_previous_preset, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(objects.lbl_preset_name, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(objects.lbl_preset_number, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(objects.lbl_preset_name, action_open_preset_list, LV_EVENT_CLICKED, nullptr);
-    lv_obj_add_event_cb(objects.lbl_preset_number, action_open_preset_list, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.tbl_presets, action_select_preset, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(objects.btn_back, action_back_to_main, LV_EVENT_CLICKED, nullptr);
 }
@@ -202,7 +202,8 @@ void show_preset_list()
         lv_table_set_cell_value(table, i + 1, 2, preset->description);
         lv_table_set_cell_value(table, i + 1, 3, preset->author);
     }
-    loadScreen(SCREEN_ID_PAGE_PRESET_LIST);
+    lv_obj_clear_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(table, LV_OBJ_FLAG_HIDDEN);
 }
 
 void start()

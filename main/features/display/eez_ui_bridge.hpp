@@ -12,8 +12,6 @@ typedef struct EezSynthStatus {
     uint16_t maximum_voices;
     uint16_t preset_number;
     uint16_t preset_count;
-    uint8_t preset_load_progress;
-    bool preset_load_active;
     uint32_t underruns;
     uint32_t preset_change_sequence;
     char preset_name[64];

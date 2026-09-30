@@ -121,8 +121,6 @@ extern "C" bool eez_synth_status(EezSynthStatus *status) {
     status->maximum_voices = voices.maximum;
     status->underruns = Feature::Synth::dma_underrun_count();
     status->preset_change_sequence = Feature::Synth::engine().presetChangeSequence();
-    status->preset_load_active = Feature::Synth::engine().presetLoadActive();
-    status->preset_load_progress = Feature::Synth::engine().presetLoadProgress();
     Feature::Synth::engine().readCurrentPresetName(status->preset_name, sizeof(status->preset_name));
     update_preset_position(status);
 #if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
