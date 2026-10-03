@@ -23174,6 +23174,31 @@ document.getElementById("panicBtn").addEventListener("click", () => {
   showToast("Panic: MIDI reset and preset reload requested");
 });
 
+// A Knob/Button changed on the device's touch screen (eez_send_control_param): the device
+// already applied it, so only follow it here - nothing is sent back.
+function applyDeviceParamUpdate(widgetId, params) {
+  withDeviceSyncMuted(() => {
+    if (typeof params.knobIndex === "number" && typeof params.raw === "number") {
+      const state = knobStates.get(widgetId);
+      const controlIndex = params.knobIndex - 1;
+      if (!state || state.activeLayer !== Math.floor(controlIndex / KNOB_MAX_COUNT)) return;
+      setKnobRaw(widgetId, params.raw, controlIndex % KNOB_MAX_COUNT);
+    } else if (typeof params.buttonIndex === "number") {
+      const state = buttonStates.get(widgetId);
+      const controlIndex = params.buttonIndex - 1;
+      const buttonIndex = controlIndex % BUTTON_MAX_COUNT;
+      const control = buttonLayer(state)?.controls[buttonIndex];
+      if (!control || state.activeLayer !== Math.floor(controlIndex / BUTTON_MAX_COUNT)) return;
+      if (typeof params.listIndex === "number") control.listIndex = params.listIndex;
+      if (typeof params.wasAbove === "number") control.wasAbove = params.wasAbove !== 0;
+      publishButtonValue(widgetId, buttonIndex);
+    } else {
+      return;
+    }
+    markDirty();
+  });
+}
+
 function sendLiveParamUpdate(widgetId, params) {
   if (deviceSyncMuteDepth > 0) return; // see deliverToWidget()
   wsSend({ type: "paramUpdate", widgetId, params });
@@ -23963,6 +23988,8 @@ function connectWs() {
       }
     } else if (data.type === "masterClock") {
       applyMasterClockBroadcast(data);
+    } else if (data.type === "deviceParamUpdate") {
+      applyDeviceParamUpdate(data.widgetId, data.params || {});
     } else if (data.type === "midi") {
       appendLog(`[${data.time}] ${data.port}: ${data.message}`);
       routeMidiToWidgets(data);

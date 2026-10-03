@@ -8,6 +8,7 @@
 #include "freertos/idf_additions.h"
 #include "lvgl.h"
 #include "KnobActivityOverlay.h"
+#include "PageControlsView.h"
 
 extern "C" {
 #include "actions.h"
@@ -23,6 +24,11 @@ namespace {
 
 lv_timer_t *s_timer = nullptr;
 EezPresetList s_preset_list{};
+EezTabList *s_tab_list = nullptr; // allocated in PSRAM on first use
+lv_obj_t *s_pages_box = nullptr;  // open Pages popup, closed again on a preset change
+EezPageControls *s_page_controls = nullptr; // allocated in PSRAM on first use
+char s_page_id[sizeof(EezTabList::ids[0])] = {}; // page shown in wndmain, "" = none
+PageControlsView s_page_view;
 KnobActivityOverlay s_knob_overlay;
 uint32_t s_knob_preset_sequence = 0;
 
@@ -35,6 +41,62 @@ void action_back_to_main(lv_event_t *)
 {
     lv_obj_add_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN);
+    s_page_view.setHidden(false);
+}
+
+// (Re)builds the controls of s_page_id in wndmain from the active preset.
+void show_page()
+{
+    if (s_page_id[0] == '\0') return;
+    if (s_page_controls == nullptr)
+        s_page_controls = static_cast<EezPageControls *>(
+            heap_caps_malloc(sizeof(EezPageControls), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (s_page_controls == nullptr || !eez_list_page_controls(s_page_id, s_page_controls)) {
+        s_page_view.clear();
+        return;
+    }
+    s_page_view.show(lv_win_get_content(objects.wndmain), *s_page_controls);
+    if (!lv_obj_has_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN)) s_page_view.setHidden(true);
+}
+
+void action_select_page(lv_event_t *e)
+{
+    const auto index = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    if (s_tab_list == nullptr || index >= s_tab_list->count) return;
+    snprintf(s_page_id, sizeof(s_page_id), "%s", s_tab_list->ids[index]);
+    show_page();
+    // Async: this handler runs on a button inside the box being closed.
+    if (s_pages_box != nullptr) lv_msgbox_close_async(s_pages_box);
+}
+
+void action_open_pages(lv_event_t *)
+{
+    if (s_tab_list == nullptr)
+        s_tab_list = static_cast<EezTabList *>(heap_caps_malloc(sizeof(EezTabList), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (s_pages_box != nullptr || s_tab_list == nullptr || !eez_list_tabs(s_tab_list)) return;
+    lv_obj_t *box = lv_msgbox_create(nullptr);
+    s_pages_box = box;
+    lv_obj_add_event_cb(box, [](lv_event_t *) { s_pages_box = nullptr; }, LV_EVENT_DELETE, nullptr);
+    lv_obj_set_width(box, 560);
+    lv_obj_set_style_text_font(lv_msgbox_add_title(box, "Pages"), &lv_font_montserrat_18, 0);
+    // Tapping the dimmed backdrop (outside the box) closes the popup.
+    lv_obj_add_event_cb(lv_obj_get_parent(box), [](lv_event_t *e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e))
+            lv_msgbox_close(static_cast<lv_obj_t *>(lv_event_get_user_data(e)));
+    }, LV_EVENT_CLICKED, box);
+
+    lv_obj_t *content = lv_msgbox_get_content(box);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    lv_obj_t *list = lv_list_create(content);
+    lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(list, 460, 0);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    for (uint16_t i = 0; i < s_tab_list->count; ++i) {
+        lv_obj_t *button = lv_list_add_button(list, nullptr, s_tab_list->titles[i]);
+        lv_obj_set_height(button, 60);
+        lv_obj_set_style_text_font(button, &lv_font_montserrat_18, 0);
+        lv_obj_add_event_cb(button, action_select_page, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+    }
 }
 
 void action_select_preset(lv_event_t *)
@@ -74,13 +136,16 @@ void update_runtime_labels()
     {
         s_knob_overlay.clear();
         s_knob_preset_sequence = synth.preset_change_sequence;
+        if (s_pages_box != nullptr) lv_msgbox_close(s_pages_box);
+        show_page(); // same page of the new preset (empty if it has no such page)
     }
     const int64_t activityNowUs = esp_timer_get_time();
     KnobActivity activity{};
     for (uint16_t i = 0; i < 512 && eez_read_knob_activity(&activity); ++i)
     {
-        if (activity.presetSequence == synth.preset_change_sequence &&
-            activityNowUs - activity.updatedUs < 1000000)
+        if (activity.presetSequence != synth.preset_change_sequence) continue;
+        // A control already visible on the shown page needs no overlay card on top of it.
+        if (!s_page_view.apply(activity) && activityNowUs - activity.updatedUs < 1000000)
             s_knob_overlay.update(activity, true);
     }
     s_knob_overlay.tick(activityNowUs);
@@ -90,6 +155,7 @@ void update_runtime_labels()
         set_label_fmt(objects.lbl_preset_name, "%u - %s", static_cast<unsigned>(synth.preset_number), synth.preset_name);
     set_label_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
     set_label_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
+    set_label_fmt(objects.lbl_bpm, "%.2f BPM", static_cast<double>(synth.master_clock_bpm));
 
     // Refresh CPU labels and bars together, averaging Core 0 over the elapsed interval.
     static int64_t previous_sample_us = 0;
@@ -179,6 +245,7 @@ void init()
     lv_obj_add_event_cb(objects.lbl_preset_name, action_open_preset_list, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.tbl_presets, action_select_preset, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(objects.btn_back, action_back_to_main, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(objects.btn_pages, action_open_pages, LV_EVENT_CLICKED, nullptr);
 }
 
 void show_preset_list()
@@ -204,6 +271,7 @@ void show_preset_list()
     }
     lv_obj_clear_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(table, LV_OBJ_FLAG_HIDDEN);
+    s_page_view.setHidden(true);
 }
 
 void start()

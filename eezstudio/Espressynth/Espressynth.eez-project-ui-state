@@ -1,6 +1,8 @@
 {
   "navigation": {
+    "selectedUserPageObject": "[Espressynth.eez-project]:/userPages/0",
     "selectedUserWidgetObject": "[Espressynth.eez-project]:/userWidgets/0",
+    "selectedStyleObject": "[Espressynth.eez-project]:/lvglStyles/styles/0",
     "subnavigationSelectedItems": {}
   },
   "layoutModel": {
@@ -21,6 +23,7 @@
           },
           {
             "type": "border",
+            "selected": 0,
             "size": 240,
             "location": "right",
             "children": [
@@ -121,7 +124,6 @@
                   "type": "tabset",
                   "id": "#82a26e04-b0e4-43e9-90f7-1d92c316fa5e",
                   "weight": 1,
-                  "selected": 1,
                   "enableClose": false,
                   "children": [
                     {
@@ -187,7 +189,8 @@
             {
               "type": "tabset",
               "id": "EDITORS",
-              "weight": 53.030797946803546,
+              "weight": 53.739669421487605,
+              "selected": 1,
               "enableDeleteWhenEmpty": false,
               "enableClose": false,
               "children": [
@@ -213,18 +216,17 @@
                   },
                   "icon": "svg:page"
                 }
-              ],
-              "active": true
+              ]
             },
             {
               "type": "row",
               "id": "#dad15f9f-8423-48d2-8605-fc326fb5b728",
-              "weight": 31.969202053196454,
+              "weight": 31.260330578512395,
               "children": [
                 {
                   "type": "tabset",
                   "id": "#008f9d82-bec2-4f94-91de-858649eb08a7",
-                  "weight": 2.404109589041096,
+                  "weight": 1.7935420743639923,
                   "children": [
                     {
                       "type": "tab",
@@ -234,12 +236,13 @@
                       "enableClose": false,
                       "icon": "svg:properties"
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
                   "id": "#ab7aea4b-a7cd-425e-b749-e9b5efd49b4d",
-                  "weight": 0.5958904109589042,
+                  "weight": 1.2064579256360077,
                   "children": [
                     {
                       "type": "tab",
@@ -852,7 +855,8 @@
                       "component": "styles",
                       "enableClose": false
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
@@ -1063,13 +1067,24 @@
   "objects": {
     "[Espressynth.eez-project]:/userPages/0[flow-state]": {
       "selectionFront": {},
-      "selectionBack": {},
+      "selectionBack": {
+        "0": {
+          "0": {
+            "$selected": true
+          },
+          "1": {},
+          "2": {},
+          "3": {},
+          "4": {},
+          "6": {}
+        }
+      },
       "transform": {
         "translate": {
-          "x": -512,
-          "y": -300
+          "x": -439.9654811120412,
+          "y": -391.4387197739463
         },
-        "scale": 3
+        "scale": 1
       },
       "timeline": {
         "isEditorActive": false,
@@ -1092,7 +1107,7 @@
           "x": -471.42857142857133,
           "y": -303.63987077985496
         },
-        "scale": 3
+        "scale": 1
       },
       "timeline": {
         "isEditorActive": false,
@@ -1122,6 +1137,28 @@
         "secondToPx": 200,
         "scrollLeft": 0
       }
+    },
+    "[Espressynth.eez-project]:/userPages/1[flow-state]": {
+      "selectionFront": {},
+      "selectionBack": {},
+      "transform": {
+        "translate": {
+          "x": -512,
+          "y": -300
+        },
+        "scale": 1
+      },
+      "timeline": {
+        "isEditorActive": false,
+        "position": 0,
+        "secondToPx": 200,
+        "scrollLeft": 0
+      }
+    },
+    "[Espressynth.eez-project]:/lvglStyles/styles[tree-state]": {
+      "0": {
+        "$selected": true
+      }
     }
   },
   "activeOutputSection": 0,
@@ -1135,23 +1172,22 @@
   "showComponentDescriptions": true,
   "logsPanelFilter": "all",
   "selectedStylePropertyName": "",
-  "lvglPart": "KNOB",
+  "lvglPart": "SCROLLBAR",
   "lvglState": "DEFAULT",
   "lvglExpandedPropertiesGroup": [
     "LINE",
     "ARC",
     "POSITION AND SIZE",
     "IMAGE",
-    "SHADOW",
-    "BORDER",
     "BACKGROUND",
     "MARGIN",
     "PADDING",
-    "LAYOUT",
-    "TEXT"
+    "TEXT",
+    "MISCELLANEOUS",
+    "LAYOUT"
   ],
   "showInactiveFlowsInDebugger": true,
   "globalFlowZoom": true,
-  "flowZoom": 3,
+  "flowZoom": 1,
   "implementationLanguage": "C"
 }

@@ -1,0 +1,204 @@
+#pragma once
+
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+#include "lvgl.h"
+#include "screens.h"
+#include "eez_ui_bridge.hpp"
+#include "features/synth/KnobActivity.h"
+
+// The Knob/Button controls of one preset page as touch-editable cards inside wndmain.
+// A touch sends the same paramUpdate a browser drag sends (eez_send_control_param), so
+// routes, MIDI-CC-out and the activity display behave exactly like any other live change.
+class PageControlsView
+{
+    struct Card
+    {
+        EezPageControl control;
+        lv_obj_t *root;
+        lv_obj_t *arc;    // nullptr on button cards
+        lv_obj_t *button; // nullptr on knob cards
+        lv_obj_t *value;
+        lv_obj_t *nodeValue;
+    };
+    lv_obj_t *panel_ = nullptr;
+    std::vector<Card> cards_;
+
+    static void setText(lv_obj_t *label, const char *text)
+    {
+        if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
+    }
+
+    static void refresh(Card &card)
+    {
+        char text[24];
+        if (card.control.is_button)
+        {
+            snprintf(text, sizeof(text), "%.4g", static_cast<double>(card.control.value));
+            setText(card.value, text);
+            if (card.control.switch_mode && card.control.list_count < 2)
+            {
+                if (card.control.was_above) lv_obj_add_state(card.button, LV_STATE_CHECKED);
+                else lv_obj_remove_state(card.button, LV_STATE_CHECKED);
+            }
+            return;
+        }
+        if (lv_arc_get_value(card.arc) != card.control.raw) lv_arc_set_value(card.arc, card.control.raw);
+        snprintf(text, sizeof(text), "%u", static_cast<unsigned>(card.control.raw));
+        setText(card.value, text);
+        snprintf(text, sizeof(text), "%.2f", static_cast<double>(card.control.value));
+        setText(card.nodeValue, text);
+    }
+
+    static void onArcChanged(lv_event_t *e)
+    {
+        Card &card = *static_cast<Card *>(lv_event_get_user_data(e));
+        const int32_t raw = lv_arc_get_value(card.arc);
+        if (raw == card.control.raw) return;
+        card.control.raw = static_cast<uint8_t>(raw);
+        eez_send_control_param(card.control.widget_id, false, card.control.control_index, "raw", static_cast<float>(raw));
+        refresh(card);
+    }
+
+    // Mirrors Graph::handleMidiEvent's button press/release handling.
+    static void onButton(lv_event_t *e)
+    {
+        Card &card = *static_cast<Card *>(lv_event_get_user_data(e));
+        EezPageControl &c = card.control;
+        const bool pressed = lv_event_get_code(e) == LV_EVENT_PRESSED;
+        if (c.switch_mode)
+        {
+            if (!pressed) return;
+            if (c.list_count >= 2)
+            {
+                c.list_index = static_cast<uint8_t>((c.list_index + 1) % c.list_count);
+                eez_send_control_param(c.widget_id, true, c.control_index, "listIndex", c.list_index);
+            }
+            else
+            {
+                c.was_above = !c.was_above;
+                eez_send_control_param(c.widget_id, true, c.control_index, "wasAbove", c.was_above ? 1.0f : 0.0f);
+            }
+        }
+        else
+        {
+            if (pressed && c.list_count >= 2 && !c.was_above)
+            {
+                c.list_index = static_cast<uint8_t>((c.list_index + 1) % c.list_count);
+                eez_send_control_param(c.widget_id, true, c.control_index, "listIndex", c.list_index);
+            }
+            c.was_above = pressed;
+            eez_send_control_param(c.widget_id, true, c.control_index, "wasAbove", pressed ? 1.0f : 0.0f);
+        }
+        refresh(card);
+    }
+
+public:
+    void clear()
+    {
+        if (panel_ != nullptr) lv_obj_delete(panel_);
+        panel_ = nullptr;
+        cards_.clear();
+    }
+
+    void show(lv_obj_t *parent, const EezPageControls &controls)
+    {
+        clear();
+        panel_ = lv_obj_create(parent);
+        lv_obj_set_size(panel_, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_style_pad_all(panel_, 8, 0);
+        lv_obj_set_style_pad_row(panel_, 12, 0);
+        lv_obj_set_style_pad_column(panel_, 12, 0);
+        lv_obj_set_style_border_width(panel_, 0, 0);
+        lv_obj_set_style_radius(panel_, 0, 0);
+        lv_obj_set_flex_flow(panel_, LV_FLEX_FLOW_ROW_WRAP);
+        lv_obj_set_scroll_dir(panel_, LV_DIR_VER);
+
+        // Card addresses are event user data: reserve up front so push_back never moves them.
+        cards_.reserve(controls.count);
+        for (uint16_t i = 0; i < controls.count; ++i)
+        {
+            Card card{};
+            card.control = controls.controls[i];
+            card.root = lv_obj_create(panel_);
+            lv_obj_set_size(card.root, 150, card.control.is_button ? 150 : 194);
+            lv_obj_set_style_pad_all(card.root, 0, 0);
+            lv_obj_set_style_border_width(card.root, 0, 0);
+            lv_obj_set_style_bg_opa(card.root, LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(card.root, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+            // EEZ's reusable factories write their handles into objects[] - capture them and
+            // restore the screen handles right away (same as KnobActivityOverlay).
+            const objects_t screenObjects = objects;
+            auto **handles = reinterpret_cast<lv_obj_t **>(&objects);
+            lv_obj_t *device;
+            lv_obj_t *port;
+            lv_obj_t *name;
+            if (card.control.is_button)
+            {
+                create_user_widget_midi_button(card.root, 0);
+                card.value = handles[0];
+                device = handles[1];
+                port = handles[2];
+                name = handles[3];
+                card.nodeValue = handles[4];
+                card.button = lv_obj_get_parent(card.value);
+            }
+            else
+            {
+                create_user_widget_knob(card.root, 0);
+                card.arc = handles[0];
+                card.value = handles[1];
+                device = handles[2];
+                port = handles[3];
+                name = handles[4];
+                card.nodeValue = handles[5];
+                lv_arc_set_range(card.arc, 0, 127);
+            }
+            objects = screenObjects;
+            lv_label_set_text(name, card.control.name);
+            lv_label_set_text(device, card.control.widget_label);
+            lv_label_set_text(port, "");
+            lv_label_set_text(card.nodeValue, "");
+            cards_.push_back(card);
+            Card &stored = cards_.back();
+            if (stored.arc != nullptr)
+                lv_obj_add_event_cb(stored.arc, onArcChanged, LV_EVENT_VALUE_CHANGED, &stored);
+            else
+            {
+                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESSED, &stored);
+                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_RELEASED, &stored);
+                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESS_LOST, &stored);
+            }
+            refresh(stored);
+        }
+    }
+
+    void setHidden(bool hidden)
+    {
+        if (panel_ == nullptr) return;
+        if (hidden) lv_obj_add_flag(panel_, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(panel_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Takes over a value change from MIDI, the browser or this view's own touches.
+    // Returns true when the control is on this page (so the activity overlay can stay away).
+    bool apply(const KnobActivity &activity)
+    {
+        bool shown = false;
+        for (auto &card : cards_)
+        {
+            if (card.control.control_index != activity.controlIndex ||
+                strcmp(card.control.widget_id, activity.sourceId) != 0)
+                continue;
+            shown = true;
+            // While a finger is on the arc, the touch is the newest value - don't jump back.
+            if (!card.control.is_button && !lv_obj_has_state(card.arc, LV_STATE_PRESSED))
+                card.control.raw = activity.raw;
+            card.control.value = activity.sourceValue;
+            refresh(card);
+        }
+        return shown;
+    }
+};

@@ -20,9 +20,10 @@ typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *page_preset_list;
     lv_obj_t *lbl_title_version;
-    lv_obj_t *btn_panic;
     lv_obj_t *btn_next_preset;
     lv_obj_t *btn_previous_preset;
+    lv_obj_t *btn_panic;
+    lv_obj_t *obj0;
     lv_obj_t *lbl_ip_address;
     lv_obj_t *lbl_midi_devicename;
     lv_obj_t *lbl_underruns;
@@ -32,10 +33,11 @@ typedef struct _objects_t {
     lv_obj_t *bar_core0_util;
     lv_obj_t *lbl_core0_util;
     lv_obj_t *lbl_core1_util;
-    lv_obj_t *bar_core1_util;
     lv_obj_t *lbl_bpm;
+    lv_obj_t *bar_core1_util;
     lv_obj_t *wndmain;
     lv_obj_t *lbl_preset_name;
+    lv_obj_t *btn_pages;
     lv_obj_t *tbl_presets;
     lv_obj_t *btn_back;
     lv_obj_t *lbl_title_presets;
