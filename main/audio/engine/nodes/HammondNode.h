@@ -120,15 +120,21 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool tuneAudioConstant = tuneAudioFed && audioPortConstantForBlock(inst, kTunePort, frames, constantTuneVolts);
     const bool tuneNeedsAudioRate = tuneAudioFed && !tuneAudioConstant;
     const bool amplitudeAudioFed = (inst.audioConnectedPortMask & synth::portBit(kAmplitudePort)) != 0;
-    const bool gainFed = (inst.audioConnectedPortMask & synth::portBit(kGainPort)) != 0;
-    const float gainTarget = cv::vcaGain(s.gainCv, false);
-    const bool gainSmoothing = !gainFed && fabsf(s.gainSmooth.current() - gainTarget) > kSilentGain;
+    float constantAmplitude = 0.0f;
+    const bool amplitudeConstant = amplitudeAudioFed && audioPortConstantForBlock(inst, kAmplitudePort, frames, constantAmplitude);
+    const bool amplitudeNeedsAudioRate = amplitudeAudioFed && !amplitudeConstant;
+    const bool gainAudioFed = (inst.audioConnectedPortMask & synth::portBit(kGainPort)) != 0;
+    float constantGain = 0.0f;
+    const bool gainConstant = gainAudioFed && audioPortConstantForBlock(inst, kGainPort, frames, constantGain);
+    const bool gainFed = gainAudioFed && !gainConstant;
+    const float gainTarget = cv::vcaGain(gainConstant ? constantGain : s.gainCv, false);
+    const bool gainSmoothing = !gainAudioFed && fabsf(s.gainSmooth.current() - gainTarget) > kSilentGain;
 
     // Node-level silence fast path - same click-safe pattern as Oscillator's
     // gain==0 case (see OscillatorNode.h): gated on the CONVERGED smoothed
     // value, not the raw target, so a knob turned down this block still
     // fades through the normal per-sample path below - never a click.
-    if (!gainFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
+    if (!gainAudioFed && gainTarget <= 0.0f && s.gainSmooth.current() <= kSilentGain)
     {
         memset(inst.outL, 0, frames * sizeof(float));
         return;
@@ -147,6 +153,12 @@ inline void render(NodeInstance &inst, size_t frames)
         const bool fed = (inst.audioConnectedPortMask & synth::portBit(port)) != 0;
         dbBuf[k] = fed ? inst.inPorts[port] : nullptr;
         dbTarget[k] = cv::vcaGain(s.drawbarCv[k], false);
+        float constantDrawbar = 0.0f;
+        if (fed && audioPortConstantForBlock(inst, port, frames, constantDrawbar))
+        {
+            dbBuf[k] = nullptr;
+            dbTarget[k] = cv::vcaGain(constantDrawbar, false);
+        }
         dbActive[k] = (dbBuf[k] != nullptr) || dbTarget[k] > 0.0f || s.drawbarSmooth[k].current() > kSilentGain;
         dbSmoothing[k] = !fed && fabsf(s.drawbarSmooth[k].current() - dbTarget[k]) > kSilentGain;
         if (dbActive[k])
@@ -155,7 +167,8 @@ inline void render(NodeInstance &inst, size_t frames)
         }
     }
 
-    const float baseAmp = controlPortConnected(inst, kAmplitudePort) ? s.amplitude : 0.0f;
+    const float baseAmp = (controlPortConnected(inst, kAmplitudePort) ? s.amplitude : 0.0f) +
+                         (amplitudeConstant ? cv::vcaGain(constantAmplitude, false) : 0.0f);
 
     // Two branches mirroring Oscillator's own audio-rate-vs-static split
     // (OscillatorNode.h) - and for the exact same reason: cv::hzFromPitchCv()
@@ -165,7 +178,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // getting it wrong in Oscillator, since every recompute feeds all nine
     // independent phase accumulators below.
     const bool frequencyModulated = pitchNeedsAudioRate || tuneNeedsAudioRate;
-    if (frequencyModulated || amplitudeAudioFed)
+    if (frequencyModulated || amplitudeNeedsAudioRate)
     {
         const size_t modulationStride = static_cast<size_t>(clampf(static_cast<float>(s.modulationStride), 1.0f, 16.0f));
         size_t nextModulationSample = 0;
@@ -199,7 +212,7 @@ inline void render(NodeInstance &inst, size_t frames)
                     }
                 }
                 amp = baseAmp +
-                      (amplitudeAudioFed ? cv::vcaGain(portSample(inst, kAmplitudePort, i), false) : 0.0f);
+                      (amplitudeNeedsAudioRate ? cv::vcaGain(portSample(inst, kAmplitudePort, i), false) : 0.0f);
             }
 
             // Every drawbar's phase accumulator always advances (continuous
@@ -245,11 +258,28 @@ inline void render(NodeInstance &inst, size_t frames)
     const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
     const float tuneVoltsConst = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
     const float hz = cv::hzFromPitchCv(pitchCv + (tuneVoltsConst - kCenterVolts));
-    const float amp = baseAmp + (amplitudeAudioFed ? cv::vcaGain(portSample(inst, kAmplitudePort, 0), false) : 0.0f);
+    const float amp = baseAmp;
     uint32_t phaseIncrement[kDrawbarCount];
     for (int k = 0; k < kDrawbarCount; ++k)
     {
         phaseIncrement[k] = phaseStep(hz, s.ratio[k]);
+    }
+    // A silent amplitude block still advances tonewheels and manual smoothers.
+    // Do not freeze their state or skip a pitch-modulated block.
+    if (amp == 0.0f)
+    {
+        for (int k = 0; k < kDrawbarCount; ++k)
+        {
+            s.phase[k] += phaseIncrement[k] * static_cast<uint32_t>(frames);
+            if (dbSmoothing[k])
+                for (size_t i = 0; i < frames; ++i)
+                    s.drawbarSmooth[k].process(dbTarget[k]);
+        }
+        if (gainSmoothing)
+            for (size_t i = 0; i < frames; ++i)
+                s.gainSmooth.process(gainTarget);
+        memset(inst.outL, 0, frames * sizeof(float));
+        return;
     }
     for (size_t i = 0; i < frames; ++i)
     {
