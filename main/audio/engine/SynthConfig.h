@@ -12,7 +12,7 @@
 namespace synth
 {
 constexpr uint32_t kSampleRate = 44100;
-// Kconfig-configurable (Application Features > Audio Subsystem >
+// Kconfig-configurable (Espressynth > Features > Synth Engine >
 // AUDIO_SYNTH_BLOCK_SIZE) - see that option's help for the latency/overhead
 // tradeoff.
 constexpr size_t kBlockSize = CONFIG_AUDIO_SYNTH_BLOCK_SIZE;

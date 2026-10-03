@@ -25,6 +25,15 @@ constexpr bool pin_in_list(gpio_num_t pin, const gpio_num_t (&list)[N]) {
 constexpr bool is_pin_reserved(gpio_num_t pin) {
     if (pin == GPIO_NUM_NC) return false;
     if (pin_in_list(pin, CurrentBoard::RESERVED_PINS)) return true;
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI) && CONFIG_APP_DISPLAY_SPI_PIN_CLK >= 0
+    const int display_pins[] = {CONFIG_APP_DISPLAY_SPI_PIN_CLK, CONFIG_APP_DISPLAY_SPI_PIN_MISO,
+                               CONFIG_APP_DISPLAY_SPI_PIN_MOSI, CONFIG_APP_DISPLAY_SPI_PIN_DC,
+                               CONFIG_APP_DISPLAY_SPI_PIN_CS, CONFIG_APP_DISPLAY_SPI_PIN_RESET,
+                               CONFIG_APP_DISPLAY_SPI_PIN_BACKLIGHT};
+    for (int display_pin : display_pins) {
+        if (pin == display_pin) return true;
+    }
+#endif
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE)
     if (pin == GPIO_NUM_26 || pin == GPIO_NUM_27) return true;
 #endif

@@ -30,7 +30,7 @@ struct AdsrState
     float velocity = 1.0f;
     // "att"/"dec"/"sus"/"rel" are real, but control-only audio-rate ports
     // (see PortTables.h) - only used when the respective port is wired via
-    // a DSP edge (see render() below); *MaxSeconds/*Log mirror main.js's
+    // a DSP edge or scalar control route; *MaxSeconds/*Log mirror main.js's
     // ADSR settings dialog (Sustain has no own setting there - pure
     // 0-10V->0..1 linear mapping). The unwired case remains the already
     // existing direct attack/decay/sustain/release-in-seconds delivery via
@@ -43,7 +43,7 @@ struct AdsrState
     bool releaseLog = false;
 };
 
-inline void render(NodeInstance &inst, size_t frames)
+inline void updateParameters(NodeInstance &inst)
 {
     using namespace noderender;
     const float kSampleRate = static_cast<float>(synth::kSampleRate);
@@ -56,10 +56,11 @@ inline void render(NodeInstance &inst, size_t frames)
     // resolution here. Not wired: the already existing direct
     // attack/decay/sustain/release-in-seconds delivery via ParamDispatch
     // (ramp.configure() there) remains.
-    const bool attFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 0)) != 0;
-    const bool decFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
-    const bool susFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
-    const bool relFed = (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const uint32_t parameterPorts = inst.audioConnectedPortMask | inst.controlConnectedPortMask;
+    const bool attFed = (parameterPorts & synth::portBit(0)) != 0;
+    const bool decFed = (parameterPorts & synth::portBit(1)) != 0;
+    const bool susFed = (parameterPorts & synth::portBit(2)) != 0;
+    const bool relFed = (parameterPorts & synth::portBit(3)) != 0;
     if (attFed || decFed || susFed || relFed)
     {
         const float attackSec = attFed
@@ -76,6 +77,13 @@ inline void render(NodeInstance &inst, size_t frames)
             : s.ramp.releaseSec();
         s.ramp.configure(attackSec, decaySec, sustainLevel, releaseSec, kSampleRate);
     }
+}
+
+inline void render(NodeInstance &inst, size_t frames)
+{
+    using namespace noderender;
+    auto &s = *inst.adsr;
+    updateParameters(inst);
     // "gate" (Port-Index 4, real but control-only audio-rate port, see
     // PortTables.h) - lets a non-MIDI source (e.g. a CV Step-Arpeggiator's
     // "gateOut") retrigger this envelope directly, same as WavePlayer's own

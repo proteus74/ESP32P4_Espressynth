@@ -1,16 +1,19 @@
 #pragma once
 
-#include <atomic>
+#include "sdkconfig.h"
 #include <cstdint>
 #include <cstdio>
 
 #include "cJSON.h"
+#if defined(CONFIG_APP_ENABLE_WS2812)
+#include <atomic>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_strip.h"
 
 #include "features/io/gpio_manager.hpp"
+#endif
 
 // WS2812 LED string on a user-chosen GPIO, driven via RMT (espressif/led_strip). Pin and LED
 // count are device-wide settings (Settings dialog, /littlefs/LedStripSettings.json) and only
@@ -36,6 +39,8 @@ inline Settings &settings() {
     return s;
 }
 
+#if defined(CONFIG_APP_ENABLE_WS2812)
+constexpr bool kEnabled = true;
 namespace detail {
 inline const char *TAG = "LedStrip";
 inline led_strip_handle_t s_strip = nullptr;
@@ -45,6 +50,9 @@ inline std::atomic<uint32_t> s_pixels[kMaxLeds] = {};
 inline uint16_t s_activeCount = 0; // LEDs actually driven (0 = driver not running), set once in init()
 constexpr uint32_t kWrittenFlag = 1u << 24;
 } // namespace detail
+#else
+constexpr bool kEnabled = false;
+#endif
 
 inline void load_settings_from_fs() {
     FILE *f = fopen(kSettingsPath, "rb");
@@ -72,6 +80,7 @@ inline void save_settings_to_fs() {
     fclose(f);
 }
 
+#if defined(CONFIG_APP_ENABLE_WS2812)
 // LEDs the running driver actually addresses - 0 if the string isn't configured/initialized.
 // Settings changes only apply after a reboot, so this can differ from settings().count.
 inline uint16_t active_count() { return detail::s_activeCount; }
@@ -137,5 +146,11 @@ inline void init() {
     xTaskCreatePinnedToCore(&strip_task, "led_strip", 3072, nullptr, 3, nullptr, 0); // core 0: core 1 belongs to the render task
     ESP_LOGI(TAG, "LED strip init ok: GPIO%d, %u LEDs", s.pin, static_cast<unsigned>(s.count));
 }
+
+#else
+inline uint16_t active_count() { return 0; }
+inline void set_pixel(int, uint32_t) {}
+inline void init() {}
+#endif
 
 } // namespace Feature::LedStrip

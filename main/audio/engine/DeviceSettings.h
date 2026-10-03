@@ -46,7 +46,13 @@ inline DeviceSettingsState &deviceSettings()
 
 inline float clampDeviceVolume(float v)
 {
-    return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+    return !(v >= 0.0f) ? 0.0f : v > 1.0f ? 1.0f : v;
+}
+
+inline bool hasLearnedMasterVolume()
+{
+    const auto &ds = deviceSettings();
+    return ds.volumeCc >= 0 && ds.volumeCc <= 127 && ds.volumeChannel >= 0 && ds.volumeChannel <= 15;
 }
 
 constexpr const char *kDeviceSettingsPath = "/littlefs/DeviceSettings.json";
@@ -104,7 +110,8 @@ inline int formatDeviceSettingsJson(char *buf, size_t bufSize)
 }
 
 // Persists the current deviceSettings() state - called only from the
-// browser's Settings dialog Save/Learn actions (infrequent), never from the
+// browser's Settings dialog Save/Learn actions and preset_nav_task's
+// debounced learned-CC master volume save (infrequent), never from the
 // per-message MIDI path.
 inline void saveDeviceSettingsToFs()
 {

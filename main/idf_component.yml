@@ -1,4 +1,5 @@
 dependencies:
+  espressif/esp_lcd_ili9341: ^2.1.0
   espressif/cjson: "*"
   espressif/esp_codec_dev: ^1.6.2
   # WS2812 LED string via RMT. See main/features/io/led_strip_manager.hpp.

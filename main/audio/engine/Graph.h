@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 
 #include "CvConventions.h"
+#include "DeviceSettings.h"
 #include "EngineStats.h"
 #include "EspEqEffect.h"
 #include "GraphicEqEffect.h"
@@ -134,8 +135,8 @@ struct Edge
 // (source widget) -> (target widget's control field) route: either one of
 // midi-in's frequency/gate/velocity "virtual" outputs, a Const scalar, or a
 // knob's/button's mapped CC value targeting an arbitrary named param on the
-// target (paramName is only populated for Kind::Const/Kind::Knob/Kind::Button - the three
-// MidiIn kinds have a fixed, implicit target field per Graph::handleMidiEvent).
+// target. Scalar routes, including MIDI aftertouch and pitch bend, name their
+// target field; note/gate/velocity delivery also has specialized MIDI handling.
 struct ControlRoute
 {
     enum class Kind : uint8_t
@@ -146,12 +147,13 @@ struct ControlRoute
         MidiRaw,
         MidiPitchCv, // MidiIn's "pitchCv" output: 1V/oct CV, see CvConventions.h
         MidiAftertouch, // MidiIn's "aftertouch" output: channel pressure (0xD), linear 0-10V
-        MidiPitchBend,  // MidiIn's "pitchBend" output: pitch-bend wheel (0xE), 5V-centered, per-widget range
+        MidiPitchBend,  // MidiIn's "pitchBend" output: pitch-bend wheel (0xE), 0V-centered, per-widget range
         Knob,        // Knob's "voltage" output (0-10V, mapped)
         KnobCc,      // Knob's "cc" output (raw 0-127, unmapped)
         Const,       // Const's scalar "value" output
         Button,
         UpDownButton,
+        MasterVolume,
     };
 
     uint16_t sourceWidget = 0; // midi-in, const, knob, or button widget index
@@ -270,6 +272,7 @@ public:
 
     WidgetSlot widgets[synth::kMaxWidgets];
     uint16_t widgetCount = 0;
+    float presetBpm = -1.0f;
 
     // EMA-smoothed per-widget CPU load. Profiling rotates over one widget per
     // block so timer reads do not scale with graph size. Generation advances
@@ -367,6 +370,12 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
         {
             NodeInstance &target = graph.instances[targetWidget.instanceBase + v];
             float targetValue = value;
+            if (kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0 &&
+                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator || target.type == NodeType::Hammond))
+            {
+                // Bipolar Pitch Bend feeds the existing 5V-centered Tune parameter.
+                targetValue += cv::kMaxVolts / 2.0f;
+            }
             // LFO Rate is configured in Hz, but its connected CV input is
             // 0-10 V. Map that voltage to the LFO's 0-50 Hz range. A raw
             // Knob CC route intentionally stays raw and is clamped by the
@@ -384,6 +393,20 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
                 target.controlValue[route.targetPort] = targetValue;
             }
         }
+    }
+}
+
+inline void updateMasterVolumeControlRoutes(Graph &graph)
+{
+    const float volts = synth::clampDeviceVolume(synth::deviceSettings().volume) * cv::kMaxVolts;
+    for (uint16_t w = 0; w < graph.widgetCount; ++w)
+    {
+        const WidgetSlot &widget = graph.widgets[w];
+        if (widget.type != NodeType::MasterVolume) continue;
+        auto &previous = graph.instances[widget.instanceBase].controlValue[0];
+        if (previous == volts) continue;
+        previous = volts;
+        pushControlRouteValue(graph, w, ControlRoute::Kind::MasterVolume, volts);
     }
 }
 
@@ -460,11 +483,15 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
             }
             else if (target.type == NodeType::Adsr)
             {
+                // Idle voices may not have rendered since the last Knob update.
+                // Configure before scheduling this note's attack/release.
+                nodes::adsr::updateParameters(target);
                 target.adsr->ramp.gate(noteOn);
                 target.adsr->gatePrev = noteOn;
             }
             else if (target.type == NodeType::DxEnvelope)
             {
+                nodes::dxenvelope::updateParameters(target);
                 noteOn ? target.dxEnvelope->scheduler.gateOn() : target.dxEnvelope->scheduler.gateOff();
                 target.dxEnvelope->gatePrev = noteOn;
             }
@@ -632,6 +659,7 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::KnobCc:
         case ControlRoute::Kind::Button:
         case ControlRoute::Kind::UpDownButton:
+        case ControlRoute::Kind::MasterVolume:
         case ControlRoute::Kind::Const:
             break; // handled in the CC branch above, never reached here
         }
@@ -663,6 +691,7 @@ inline void releaseVoiceGate(Graph &graph, uint16_t midiInWidget, uint8_t voiceI
 // it here.
 IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
 {
+    updateMasterVolumeControlRoutes(*this);
     if (widgetProfileEmaAlpha == 0.0f && renderOrderCount > 0)
     {
         float retention = 1.0f;
@@ -1121,6 +1150,8 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
         const auto &event = controlDebugEvents[i];
         const auto &source = widgets[event.widget];
         const auto &inst = instances[source.instanceBase];
+        if ((source.type == NodeType::Knob && !inst.knob->controls.contains(event.side)) ||
+            (source.type == NodeType::Button && !inst.button->controls.contains(event.side))) continue;
         snapshot = {};
         snapshot.fromUi = event.fromUi;
         snapshot.channel = event.channel;
@@ -1300,6 +1331,10 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                 }
                 control.currentValue = control.currentOutput();
 
+                // Incoming hardware events already carry the controller's value.
+                // Do not feed them back and create MIDI echo loops.
+                control.midiFeedback = (static_cast<uint32_t>(control.channel) << 16) |
+                                       (static_cast<uint32_t>(control.cc) << 8) | control.feedbackValue();
                 pushControlRouteValue(*this, w, ControlRoute::Kind::Button, control.currentValue, controlIndex);
                 recordControlDebug(w, controlIndex, false, channel0, number,
                                    buttonMidiType == nodes::button::kButtonMidiProgram ? (above ? 127 : 0) : event.data2);
@@ -1333,6 +1368,8 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     KnobControl &k = knobInst.knob->controls[controlIndex];
                     k.raw = static_cast<float>(ccValue);
                     k.currentValue = k.mappedValue();
+                    k.midiFeedback = (static_cast<uint32_t>(k.channel) << 16) |
+                                     (static_cast<uint32_t>(k.cc) << 8) | ccValue;
                     pushControlRouteValue(*this, w, ControlRoute::Kind::Knob, k.currentValue, controlIndex);
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
                     recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
@@ -1500,9 +1537,9 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
     // (MidiInState::pitchBendRangeCents), so the volts computation happens
     // INSIDE the loop - each matching source widget may have a different
     // configured range, unlike aftertouch's fixed mapping. Deliberately a
-    // SEPARATE output, not blended into pitchCv - 5V = no bend, matching
-    // pitchCv's own 5V-at-note-60 center; cents convert trivially since cv's
-    // convention is exactly 1200 cents/volt.
+    // SEPARATE output, not blended into pitchCv - 0V = no bend. The
+    // persisted cents range remains compatible with existing presets;
+    // the settings dialog displays it in volts (1200 cents/volt).
     if (event.codeIndex == 0xE)
     {
         const uint8_t eventChannel0 = event.status & 0x0F;
@@ -1512,16 +1549,15 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
             if (widgets[w].type != NodeType::MidiIn) continue;
             const MidiInState &m = instances[widgets[w].instanceBase].midiIn;
             if (m.channel >= 0 && static_cast<uint8_t>(m.channel) != eventChannel0) continue;
-            float bendVolts = (cv::kMaxVolts / 2.0f) +
-                               (static_cast<float>(bend) / 8192.0f) * (m.pitchBendRangeCents / 1200.0f);
-            if (bendVolts < 0.0f) bendVolts = 0.0f;
-            if (bendVolts > cv::kMaxVolts) bendVolts = cv::kMaxVolts;
+            const float rangeVolts = m.pitchBendRangeCents / 1200.0f;
+            float bendVolts = (static_cast<float>(bend) / (bend < 0 ? 8192.0f : 8191.0f)) * rangeVolts;
             if (m.pitchBendQuantizeCents)
             {
                 // Snap to the nearest whole cent (1/1200 V) so the output
                 // always lands on a voltage matching an exact pitch step,
                 // instead of a smooth in-between value.
-                bendVolts = roundf(bendVolts * 1200.0f) / 1200.0f;
+                const float limitCents = floorf(m.pitchBendRangeCents);
+                bendVolts = std::fmax(-limitCents, std::fmin(limitCents, roundf(bendVolts * 1200.0f))) / 1200.0f;
             }
             pushControlRouteValue(*this, w, ControlRoute::Kind::MidiPitchBend, bendVolts);
         }
@@ -1705,7 +1741,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 (count > static_cast<int>(synth::kKnobControlMax) ? synth::kKnobControlMax : count));
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
-                instances[slot.instanceBase + v].knob->count = clamped;
+                KnobState *knob = instances[slot.instanceBase + v].knob;
+                if (!knob->resizeControls(clamped, knob->layerCount)) return;
             }
         }
         cJSON *layerCountItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "layerCount");
@@ -1717,10 +1754,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 KnobState *knob = instances[slot.instanceBase + v].knob;
-                knob->layerCount = clamped;
-                if (knob->activeLayer >= clamped) knob->activeLayer = clamped - 1;
+                if (!knob->resizeControls(knob->count, clamped)) return;
             }
         }
+        for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            if (!instances[slot.instanceBase + v].knob->controls.contains(knobControlIndex)) return;
         cJSON *activeLayerItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "activeLayer");
         if (cJSON_IsNumber(activeLayerItem))
         {
@@ -1743,8 +1781,10 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             const int count = countItem->valueint;
             const uint8_t clamped = static_cast<uint8_t>(count < 1 ? 1 :
                 (count > static_cast<int>(synth::kButtonControlMax) ? synth::kButtonControlMax : count));
-            for (uint16_t v = 0; v < slot.instanceCount; ++v)
-                instances[slot.instanceBase + v].button->count = clamped;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v) {
+                ButtonState *button = instances[slot.instanceBase + v].button;
+                if (!button->resizeControls(clamped, button->layerCount)) return;
+            }
         }
         cJSON *layerCountItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "layerCount");
         if (cJSON_IsNumber(layerCountItem))
@@ -1755,10 +1795,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 ButtonState *button = instances[slot.instanceBase + v].button;
-                button->layerCount = clamped;
-                if (button->activeLayer >= clamped) button->activeLayer = clamped - 1;
+                if (!button->resizeControls(button->count, clamped)) return;
             }
         }
+        for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            if (!instances[slot.instanceBase + v].button->controls.contains(buttonControlIndex)) return;
         cJSON *activeLayerItem = cJSON_GetObjectItemCaseSensitive(paramsObj, "activeLayer");
         if (cJSON_IsNumber(activeLayerItem))
         {
@@ -2039,7 +2080,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         else if (slot.type == NodeType::MidiIn && strcmp(key, "pitchBendRangeCents") == 0 && cJSON_IsNumber(item))
         {
             const float value = static_cast<float>(item->valuedouble);
-            const float clamped = value < 1.0f ? 1.0f : (value > 6000.0f ? 6000.0f : value);
+            const float clamped = std::isfinite(value) ? std::fmax(0.0f, std::fmin(6000.0f, value)) : 200.0f;
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 instances[slot.instanceBase + v].midiIn.pitchBendRangeCents = clamped;

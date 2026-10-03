@@ -8,13 +8,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
 const errors = [];
+const presetSaves = [];
+const savedPresets = new Map();
+let delayedPresetName = null;
 page.on("pageerror", (error) => errors.push(error.message));
 await page.addInitScript(() => {
-  window.WebSocket = class extends EventTarget { static OPEN = 1; readyState = 1; send(value) { (window.__wsMessages ||= []).push(JSON.parse(value)); } close() {} };
+  window.WebSocket = class extends EventTarget { static OPEN = 1; readyState = 1; constructor() { super(); (window.__sockets ||= []).push(this); } send(value) { (window.__wsMessages ||= []).push(JSON.parse(value)); } close() {} };
 });
 await page.route("http://bpm.test/**", async (route) => {
   const url = new URL(route.request().url());
   if (url.pathname.startsWith("/api/")) {
+    if (url.pathname === '/api/preset' && route.request().method() === 'GET' && url.searchParams.get('name') === delayedPresetName)
+      await new Promise(resolve => setTimeout(resolve, 200));
+    if (url.pathname === "/api/preset" && route.request().method() === "POST") {
+      const preset = route.request().postDataJSON();
+      presetSaves.push(preset);
+      savedPresets.set(url.searchParams.get('name') || '', preset);
+    }
+    if (url.pathname === "/api/preset" && route.request().method() === "GET" && savedPresets.has(url.searchParams.get('name') || ''))
+      return route.fulfill({ contentType: "application/json", headers: { 'X-Preset-Name': url.searchParams.get('name') || '' }, body: JSON.stringify(savedPresets.get(url.searchParams.get('name') || '')) });
     const data = url.pathname === "/api/preset" ? { schemaVersion: 4, widgets: [], connections: [] }
       : url.pathname === "/api/presets" ? { presets: [] } : [];
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
@@ -23,7 +35,7 @@ await page.route("http://bpm.test/**", async (route) => {
     const file = path.join(root, "data", url.pathname === "/" ? "index.html" : url.pathname);
     let body = readFileSync(file);
     if (url.pathname === "/static/js/main.js") body = Buffer.concat([body, Buffer.from(`
-window.__bpmTest = { createWidget, serializePreset, applyPresetData, deliverToWidget, setMasterClockBpm,
+window.__bpmTest = { createWidget, serializePreset, applyPresetData, loadPresetByName, deliverToWidget, setMasterClockBpm,
  stepArpStates, drumSequencerStates, clockStates, restartAllClockTimers, refreshControlGraph, drawConnections,
  stepArpRateBpm, drumSequencerBpm, stepArpRestartInternalClock, drumSequencerRestartInternalClock,
  openStepArpSettings, setStepArpValue, stepArpTriggerStep, audioEngine,
@@ -305,7 +317,75 @@ try {
   await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), patternPreset);
   assert.deepEqual(await arpInfo(), { count: 1, active: 0, pending: -1, step1: 0, label: '1/1' });
   assert.equal(await page.evaluate((id) => window.__bpmTest.stepArpStates.get(id).steps[15], ids.arp), 7.5);
+  const tempoPreset = await page.evaluate(() => {
+    const t = window.__bpmTest;
+    t.setMasterClockBpm(91.5);
+    return t.serializePreset();
+  });
+  assert.equal(tempoPreset.masterClock.bpm, 91.5);
+  await page.evaluate(async (preset) => {
+    const t = window.__bpmTest;
+    t.setMasterClockBpm(180);
+    await t.applyPresetData(preset);
+  }, tempoPreset);
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '91.50');
+  delete tempoPreset.masterClock;
+  await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), tempoPreset);
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '91.50');
+  tempoPreset.masterClock = { bpm: -1 };
+  await page.evaluate((preset) => window.__bpmTest.applyPresetData(preset), tempoPreset);
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '91.50');
   assert.deepEqual(errors, []);
+  await page.locator('#masterClockBadge').click();
+  await page.locator('#masterClockRoundBpmInput').uncheck();
+  await page.locator('#masterClockBpmInput').fill('143.75');
+  await page.locator('#masterClockSettingsSave').click();
+  await page.waitForFunction(() => document.getElementById('masterClockBpmLabel').textContent === '143.75');
+  await page.waitForTimeout(100);
+  assert.equal(presetSaves.at(-1)?.masterClock.bpm, 143.75);
+  savedPresets.set('Tempo A', { ...tempoPreset, masterClock: { bpm: 80 } });
+  savedPresets.set('Tempo B', { ...tempoPreset, masterClock: { bpm: 160 } });
+  for (const [name, bpm] of [['Tempo A', 87.5], ['Tempo B', 155]]) {
+    await page.evaluate((name) => window.__bpmTest.loadPresetByName(name), name);
+    await page.locator('#masterClockBadge').click();
+    await page.locator('#masterClockBpmInput').fill(String(bpm));
+    const saveRequest = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/preset');
+    await page.locator('#masterClockSettingsSave').click();
+    await saveRequest;
+    assert.equal(savedPresets.get(name).masterClock.bpm, bpm);
+  }
+  for (const [name, bpm] of [['Tempo A', '87.50'], ['Tempo B', '155.00'], ['Tempo A', '87.50']]) {
+    await page.evaluate((name) => window.__bpmTest.loadPresetByName(name), name);
+    assert.equal(await page.locator('#masterClockBpmLabel').textContent(), bpm);
+  }
+  console.log('PASS named preset BPM: separate saves, HTTP reload and A/B/A switching');
+  await page.evaluate(() => {
+    const emit = data => window.__sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify(data) }));
+    emit({type:'presetChanged',name:'Tempo B'}); // Delayed confirmation of the previous graph.
+    emit({type:'masterClock',bpm:155,maxBpm:240,round:false,cc:-1,channel:-1});
+  });
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '87.50');
+  await page.evaluate(() => {
+    const emit = data => window.__sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify(data) }));
+    emit({type:'presetChanged',name:'Tempo A'});
+    emit({type:'masterClock',bpm:88,maxBpm:240,round:false,cc:-1,channel:-1});
+  });
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '88.00');
+  delayedPresetName = 'Tempo A';
+  const oldRequest = page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).searchParams.get('name') === 'Tempo A');
+  const firstLoad = page.evaluate(() => window.__bpmTest.loadPresetByName('Tempo A'));
+  await oldRequest;
+  await page.evaluate(() => window.__bpmTest.loadPresetByName('Tempo B'));
+  await firstLoad;
+  assert.equal(await page.locator('#masterClockBpmLabel').textContent(), '155.00');
+  console.log('PASS preset tempo races: delayed graph/tempo broadcasts and out-of-order HTTP loads');
+  const envelopeId = await page.evaluate(() => window.__bpmTest.createWidget('dx-envelope', 'DX Envelope', 40, 40).id);
+  assert.equal(await page.locator(`#${envelopeId} .widget-instance-label`).textContent(), 'Envelope');
+  assert.equal(await page.locator('#dxEnvelopeSettingsOverlay h3').textContent(), 'Envelope Settings');
+  const envelopePreset = await page.evaluate(() => window.__bpmTest.serializePreset());
+  assert.equal(envelopePreset.pages.generator.widgets.find(widget => widget.id === envelopeId).label, 'Envelope');
+  console.log('PASS Envelope naming: legacy default label, widget title, settings and saved preset');
+  console.log('PASS preset BPM: serialize, restore, legacy/invalid fallback and tempo-dialog save');
   console.log('PASS BPM UI: labels/order, removed sliders, direct Clock tempo, live changes, Master fallback, arbitrary external BPM, zero stop, trigger priority, legacy IDs, preset reload');
   console.log('PASS Skip on C0: checkbox/save/cancel/live update, CV hold, silent gate, overlap cancellation, all-zero pattern, dimmed editable knobs, copy/paste, preset reload, on for new widgets');
   console.log('PASS Snap to Semitones: settings/save/cancel, wheel semitone steps, bounds, free 0.1 V mode, Pitch-offset grid, live flag/value, MIDI/CV quantization, copy/paste, preset reload, on for new widgets');

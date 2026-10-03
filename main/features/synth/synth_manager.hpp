@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdio>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -56,6 +57,12 @@ inline QueueHandle_t s_liveParamQueue = nullptr;
 // s_presetNavTask - see step_preset()'s comment for why that FS-heavy work
 // can't run on the MIDI transport task that detects the button edge.
 inline QueueHandle_t s_presetNavQueue = nullptr;
+// esp_timer time of the last learned-CC master volume change not yet written
+// to DeviceSettings.json (0 = nothing pending). Set on the MIDI transport
+// task, persisted by preset_nav_task once the knob has rested for
+// kMasterVolumeSaveDelayUs - one flash write per gesture, not per CC message.
+inline std::atomic<int64_t> s_masterVolumeDirtyUs{0};
+constexpr int64_t kMasterVolumeSaveDelayUs = 2000000;
 
 /** @brief The live SynthEngine instance - valid once init() has returned successfully. */
 inline SynthEngine &engine() {
@@ -287,33 +294,53 @@ void tap_mix(float *blockL, float *blockR, size_t frames) {
 } // namespace
 #endif // CONFIG_APP_ENABLE_USB_DEVICE && CONFIG_USB_DEV_ENABLE_UAC2
 
-#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)) || \
-    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST))
+#if defined(CONFIG_APP_MIDI_CC_FEEDBACK_OUT)
 namespace {
 // MidiCcOut sink (see SynthEngine::setMidiCcOutCallback): mirrors a MIDI-learned Knob's value
 // out to every connected MIDI transport. Best-effort - a controller that doesn't support or
 // want CC feedback just ignores the message, same as any other MIDI receiver; a transport that
 // isn't connected right now silently drops it (Feature::MIDI::send()/BLE MIDI::send()'s own
 // not-connected checks).
-void send_midi_cc_out(uint8_t channel, uint8_t cc, uint8_t value7bit) {
+bool try_send_midi_cc_out(uint8_t channel, uint8_t cc, uint8_t value7bit) {
     const uint8_t message[3] = {
         static_cast<uint8_t>(0xB0 | (channel & 0x0F)),
         static_cast<uint8_t>(cc & 0x7F),
         static_cast<uint8_t>(value7bit & 0x7F),
     };
+    bool connected = false, success = true;
 #if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
-    Feature::MIDI::send(message, sizeof(message));
+    if (Feature::MIDI::is_connected()) {
+        connected = true;
+        success = Feature::MIDI::send(message, sizeof(message)) == ESP_OK && success;
+    }
 #endif
 #if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
     for (const auto &conn : Feature::BLE::midi_connections) {
         if (conn.conn_handle != 0xffff && conn.chr_handle != 0) {
-            Feature::BLE::MIDI::send(conn.conn_handle, message, sizeof(message));
+            connected = true;
+            success = Feature::BLE::MIDI::send(conn.conn_handle, message, sizeof(message)) == ESP_OK && success;
         }
     }
 #endif
+    return connected && success;
+}
+
+void send_midi_cc_out(uint8_t channel, uint8_t cc, uint8_t value7bit) {
+    try_send_midi_cc_out(channel, cc, value7bit);
+}
+
+uint32_t midi_connection_sequence() {
+    uint32_t generation = 0;
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+    generation += Feature::MIDI::connection_sequence();
+#endif
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
+    generation += Feature::BLE::MIDI::connection_sequence();
+#endif
+    return generation;
 }
 } // namespace
-#endif // USB-host MIDI or BLE MIDI host enabled
+#endif // CONFIG_APP_MIDI_CC_FEEDBACK_OUT
 
 /**
  * @brief Converts a {status, data1, data2} MIDI message - the shape shared by every transport
@@ -405,8 +432,15 @@ inline bool step_preset(int direction) {
 void preset_nav_task(void *) {
     int direction = 0;
     while (true) {
-        if (xQueueReceive(s_presetNavQueue, &direction, portMAX_DELAY) == pdTRUE) {
+        // Wakes at least every 500 ms to persist a settled master volume (see s_masterVolumeDirtyUs).
+        if (xQueueReceive(s_presetNavQueue, &direction, pdMS_TO_TICKS(500)) == pdTRUE) {
             step_preset(direction);
+        }
+        int64_t dirtyUs = s_masterVolumeDirtyUs.load();
+        // compare_exchange: a CC arriving during the check keeps the save pending for its own 2 s.
+        if (dirtyUs != 0 && esp_timer_get_time() - dirtyUs >= kMasterVolumeSaveDelayUs &&
+            s_masterVolumeDirtyUs.compare_exchange_strong(dirtyUs, 0)) {
+            synth::saveDeviceSettingsToFs();
         }
     }
 }
@@ -451,9 +485,10 @@ inline void handleDeviceSettingsMidi(uint8_t status, uint8_t data1, uint8_t data
     }
     // Master volume follows the CC's live value (knob/fader), unlike the edge-only preset
     // step above. A plain float store - the render task only reads it once per block.
-    if (ds.volumeCc >= 0 && static_cast<uint8_t>(ds.volumeCc) == data1 &&
+    if (synth::hasLearnedMasterVolume() && static_cast<uint8_t>(ds.volumeCc) == data1 &&
         static_cast<uint8_t>(ds.volumeChannel) == channel) {
-        ds.volume = static_cast<float>(data2) / 127.0f;
+        ds.volume = synth::clampDeviceVolume(static_cast<float>(data2) / 127.0f);
+        s_masterVolumeDirtyUs.store(nowUs);
     }
 }
 
@@ -589,9 +624,9 @@ inline esp_err_t init() {
     s_engine.setUsbAudioTap(&tap_submit, &tap_mix);
 #endif
 
-#if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)) || \
-    (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST))
+#if defined(CONFIG_APP_MIDI_CC_FEEDBACK_OUT)
     s_engine.setMidiCcOutCallback(&send_midi_cc_out);
+    s_engine.setMidiFeedbackCallbacks(&try_send_midi_cc_out, &midi_connection_sequence);
 #endif
 
     // Device-wide, independent of any preset (see MasterClock.h) - load before

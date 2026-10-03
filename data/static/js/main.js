@@ -1,6 +1,7 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
+import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20260927-monoflop-1";
+import { AudioEngine } from "./audio-engine.js?v=20261003-master-volume-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -481,8 +482,10 @@ async function fetchLedStripInfo() {
     const res = await fetch("/api/settings/device");
     if (!res.ok) return null;
     const data = await res.json();
+    applyGlobalMidiDeviceSettings(data);
     if (typeof data.ledPin !== "number") return null;
     return {
+      enabled: data.ledEnabled !== false,
       pin: data.ledPin,
       count: data.ledCount || 0,
       activeCount: data.ledActiveCount || 0,
@@ -498,7 +501,7 @@ async function fetchLedStripInfo() {
 function updateLedStripSummary() {
   ledStripSummaryText.textContent = !ledStripInfo
     ? "Unavailable"
-    : ledStripInfo.pin < 0 ? "Not connected" : `GPIO${ledStripInfo.pin} · ${ledStripInfo.count} LEDs`;
+    : ledStripInfo.enabled === false ? "Disabled" : ledStripInfo.pin < 0 ? "Not connected" : `GPIO${ledStripInfo.pin} · ${ledStripInfo.count} LEDs`;
 }
 
 function renderLedStripSettings(gpioInfo) {
@@ -508,10 +511,10 @@ function renderLedStripSettings(gpioInfo) {
   none.value = "-1";
   none.textContent = "Not connected";
   ledStripPinSelect.appendChild(none);
-  if (!ledStripInfo) {
+  if (!ledStripInfo || ledStripInfo.enabled === false) {
     ledStripPinSelect.disabled = true;
     ledStripCountInput.disabled = true;
-    ledStripStatusText.textContent = "LED string settings unavailable.";
+    ledStripStatusText.textContent = ledStripInfo?.enabled === false ? "WS2812 LED system disabled." : "LED string settings unavailable.";
     return;
   }
   ledStripPinSelect.disabled = false;
@@ -688,25 +691,44 @@ function updateNetworkSummary() {
   const wifiPart = !wifiEnabledInput.checked
     ? "Wi-Fi disabled"
     : `Wi-Fi: ${wifiSsidInput.value.trim() || "(no SSID)"}${wifiDhcpInput.checked ? "" : " (static IP)"}`;
-  networkSummaryText.textContent = `${ethPart} · ${wifiPart}`;
+  networkSummaryText.textContent = [
+    !document.getElementById("ethSettingsGroup").hidden && ethPart,
+    !document.getElementById("wifiSettingsGroup").hidden && wifiPart,
+  ].filter(Boolean).join(" · ");
+}
+
+function updateSettingsHardwareVisibility() {
+  const gpioSection = document.getElementById("settingsGpioSection");
+  const ledSection = document.getElementById("settingsLedStripSection");
+  gpioSection.hidden = !(gpioInputAvailable || gpioOutputsAvailable);
+  ledSection.hidden = !ledStripInfo || ledStripInfo.enabled !== true;
+  document.getElementById("settingsHardwareGroup").hidden = gpioSection.hidden && ledSection.hidden;
 }
 
 async function openSettings() {
+  document.getElementById("settingsNetworkSection").hidden = true;
+  document.getElementById("ethSettingsGroup").hidden = true;
+  document.getElementById("wifiSettingsGroup").hidden = true;
+  updateSettingsHardwareVisibility();
   settingsOverlay.classList.remove("hidden");
   loadSamplesSetting.checked = audioEngine.isSampleLoadingEnabled();
   try {
     const res = await fetch("/api/settings/network");
-    const data = await res.json();
-    loadedNetworkData = data;
-    applyNetworkData(data);
+    if (res.ok) {
+      const data = await res.json();
+      const ethernet = data.ethAvailable === true || (data.ethAvailable !== false && typeof data.ethDhcp === "boolean");
+      const wifi = data.wifiAvailable === true || (data.wifiAvailable !== false && typeof data.wifiEnabled === "boolean");
+      document.getElementById("ethSettingsGroup").hidden = !ethernet;
+      document.getElementById("wifiSettingsGroup").hidden = !wifi;
+      document.getElementById("settingsNetworkSection").hidden = !(ethernet || wifi);
+      loadedNetworkData = data;
+      applyNetworkData(data);
+    }
   } catch (err) {
     appendLog(`Could not load network settings: ${err.message}`);
   }
-  // Baseline to detect whether the user actually touched Ethernet/Wi-Fi before Save - there is
-  // no /api/settings/network backend yet (GET above always fails, silently kept at whatever
-  // the fields already showed), so without this check every Save would try (and fail) to POST
-  // network settings even when this section was never opened/touched, showing a confusing
-  // error for an unrelated Device/GPIO save.
+  // Network controls appear only when a working settings endpoint supplies them.
+  // Keep a baseline so an unchanged dialog does not submit network settings.
   loadedNetworkSnapshot = currentNetworkSnapshot();
   updateNetworkSummary();
   try {
@@ -719,6 +741,7 @@ async function openSettings() {
   }
   try {
     await cvIoAvailabilityReady;
+    updateSettingsHardwareVisibility();
     updateGpioDirectionOptions();
     const gpioRes = await fetch("/api/settings/gpio");
     const gpioData = await gpioRes.json();
@@ -737,6 +760,7 @@ async function openSettings() {
     ledStripInfo = await fetchLedStripInfo();
     ledStripGpioInfo = await fetchGpioInfo();
     renderLedStripSettings(ledStripGpioInfo);
+    updateSettingsHardwareVisibility();
   } catch (err) {
     appendLog(`Could not load LED string settings: ${err.message}`);
   }
@@ -767,6 +791,7 @@ document.getElementById("settingsRestoreBtn").addEventListener("click", () => {
 // own Save/Cancel apply or discard just the GPIO edits immediately, without
 // touching Device/Network state sitting behind it.
 document.getElementById("openGpioSettings").addEventListener("click", () => {
+  if (!(gpioInputAvailable || gpioOutputsAvailable)) return;
   gpioSettingsOverlay.classList.remove("hidden");
 });
 
@@ -791,11 +816,12 @@ gpioSettingsOverlay.addEventListener("click", (e) => {
 
 // LED String: own modal too - Save persists pin/count right away (applied at next boot).
 document.getElementById("openLedStripSettings").addEventListener("click", () => {
+  if (!ledStripInfo || ledStripInfo.enabled !== true) return;
   ledStripSettingsOverlay.classList.remove("hidden");
 });
 
 function closeLedStripSettings({ save } = {}) {
-  if (save && ledStripInfo) {
+  if (save && ledStripInfo && ledStripInfo.enabled !== false) {
     const ledPin = parseInt(ledStripPinSelect.value, 10);
     const ledCount = Math.max(0, Math.min(ledStripInfo.maxCount, parseInt(ledStripCountInput.value, 10) || 0));
     if (ledPin !== ledStripInfo.pin || ledCount !== ledStripInfo.count) {
@@ -818,6 +844,7 @@ ledStripSettingsOverlay.addEventListener("click", (e) => {
 // Same idea for Network (Ethernet + Wi-Fi): its own modal, its own
 // Save/Cancel, independent of the main Settings dialog behind it.
 document.getElementById("openNetworkSettings").addEventListener("click", () => {
+  if (document.getElementById("settingsNetworkSection").hidden) return;
   networkSettingsOverlay.classList.remove("hidden");
 });
 
@@ -828,7 +855,7 @@ async function closeNetworkSettings({ save } = {}) {
     networkSettingsOverlay.classList.add("hidden");
     return;
   }
-  if (currentNetworkSnapshot() === loadedNetworkSnapshot) {
+  if (document.getElementById("settingsNetworkSection").hidden || currentNetworkSnapshot() === loadedNetworkSnapshot) {
     networkSettingsOverlay.classList.add("hidden");
     return;
   }
@@ -1699,7 +1726,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "out", label: "Out" }],
   },
   "dx-envelope": {
-    label: "DX Envelope",
+    label: "Envelope",
     icon: "⌁",
     inputs: [
       { id: "gate", label: "Gate" },
@@ -1753,6 +1780,7 @@ const WIDGET_TYPES = {
       { id: `velocity${i + 1}`, label: `V${i + 1}` },
     ]).flat(),
   },
+  "master-volume": { label: "Master Volume", icon: "🔊", inputs: [], outputs: [{ id: "value", label: "0–10 V" }] },
   const: {
     label: "Const",
     icon: "🔢",
@@ -1778,6 +1806,20 @@ const WIDGET_TYPES = {
       { id: "symmetry", label: "Symmetry" },
       { id: "gain", label: "Gain" },
       { id: "mix", label: "Mix" },
+    ],
+    outputs: [{ id: "out", label: "Out" }],
+  },
+  "overdrive": {
+    label: "Overdrive",
+    icon: "🔥",
+    inputs: [
+      { id: "in", label: "In" },
+      { id: "mode", label: "Mode" },
+      { id: "drive", label: "Drive" },
+      { id: "tone", label: "Tone" },
+      { id: "bias", label: "Bias" },
+      { id: "mix", label: "Mix" },
+      { id: "gain", label: "Gain" },
     ],
     outputs: [{ id: "out", label: "Out" }],
   },
@@ -2010,12 +2052,12 @@ const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split", "midi-filter"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["lfo", "wavetable", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
-  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const"] },
+  { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const", "master-volume"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "counter", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
-  { label: "Effects", types: ["bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
-  { label: "Mixing/Output", types: ["gain", "mixer", "audio-out", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
-  { label: "External Audio", types: ["usb-out", "es8311-out", "wm8960-out"] },
+  { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
+  { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
+  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"] },
 ];
@@ -2058,6 +2100,7 @@ const AUDIO_PORTS = {
   wavetable: { out: ["value"] },
   // Const is a scalar control source. It is not an audio-rate output.
   const: { out: [] },
+  "master-volume": { out: [] },
   
   
   
@@ -2126,6 +2169,7 @@ const AUDIO_PORTS = {
   chorus: { in: ["in"], out: ["left", "right"] },
   bitcrusher: { in: ["in"], out: ["out"] },
   "wave-folder": { in: ["in", "drive", "symmetry", "gain", "mix"], out: ["out"] },
+  "overdrive": { in: ["in", ...OVERDRIVE_PORTS], out: ["out"] },
   "envelope-follower": { in: ["in", "attack", "release", "preGain"], out: ["out"] },
   "burst-generator": { in: ["in", "mode", "count", "time", "decay"], out: ["out"] },
   pan: { in: ["in", "pan"], out: ["out1", "out2"] },
@@ -2417,11 +2461,12 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "const", "bitcrusher", "wave-folder", "envelope-follower", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "master-volume", "const", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan",
 ];
 const FX_PAGE_TYPES = [
+  "master-volume",
   "midi-in", "adsr",
-  "bitcrusher", "wave-folder", "envelope-follower", "pan", "chorus", "delay", "reverb-light", "audio-out",
+  "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light", "audio-out",
   "usb-out", "es8311-out", "wm8960-out",
 ];
 
@@ -3034,7 +3079,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "wave-player", "lfo", "wavetable", "comb-filter"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "overdrive", "wave-player", "lfo", "wavetable", "comb-filter"]);
 
 // LFO and Wavetable share one implementation (state in lfoStates, tickLfo,
 // reset/one-shot/global handling, rate settings dialog); state.wavetable
@@ -3046,6 +3091,7 @@ function isLfoLikeType(type) {
 function createWidget(type, label, x, y, forcedId) {
   // The reverb was renamed; presets saved with the old default name follow along.
   if (type === "reverb-light" && label === "Reverb Light") label = "Reverb";
+  if (type === "dx-envelope" && label === "DX Envelope") label = "Envelope";
   if (!forcedId && OUTPUT_SINGLETON_TYPES.includes(type)) {
     const existing = pages.fx.canvasContentEl.querySelector(`.widget-instance[data-widget-type="${type}"]`);
     if (existing) {
@@ -4378,6 +4424,12 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, type, { ...state });
   }
 
+  if (type === "overdrive") {
+    const state = { ...OVERDRIVE_DEFAULTS };
+    overdriveStates.set(id, state);
+    audioEngine.createNode(id, type, { ...state });
+  }
+
   if (type === "envelope-follower") {
     const state = { attack: CV_MAX_VOLTS / 2, release: CV_MAX_VOLTS / 2, preGain: CV_MAX_VOLTS / 2, coeffStride: 4 };
     envelopeFollowerStates.set(id, state);
@@ -5038,6 +5090,28 @@ function createWidget(type, label, x, y, forcedId) {
     outputSwitchBody = body;
   }
 
+  if (type === "master-volume") {
+    audioEngine.createNode(id, type, { value: masterVolume * CV_MAX_VOLTS });
+    const body = document.createElement("div");
+    body.className = "widget-instance-body master-volume-body";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "port-slider";
+    slider.min = "0";
+    slider.max = String(CV_MAX_VOLTS);
+    slider.step = "0.01";
+    slider.setAttribute("aria-label", "Master Volume (0–10 V)");
+    slider.setAttribute("aria-describedby", `${id}-volume-value`);
+    slider.addEventListener("mousedown", e => e.stopPropagation());
+    slider.addEventListener("click", e => e.stopPropagation());
+    slider.addEventListener("input", () => setManualMasterVolume(Number(slider.value) / CV_MAX_VOLTS));
+    const value = document.createElement("output");
+    value.dataset.role = "master-volume-value";
+    value.className = "port-value";
+    value.id = `${id}-volume-value`;
+    body.append(slider, value);
+    el.appendChild(body);
+  }
   if (type === "const") {
     constStates.set(id, { value: 0 });
     audioEngine.createNode(id, "const", { value: 0 });
@@ -5722,6 +5796,26 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.dataset.role = `wave-folder-${port.id}-value`;
         row.appendChild(valueSpan);
       }
+      if (type === "overdrive" && OVERDRIVE_PORTS.includes(port.id)) {
+        const state = overdriveStates.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = port.id === "mode" ? "2.5" : "0.01";
+        slider.value = String(state[port.id]);
+        slider.dataset.role = `overdrive-${port.id}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => setOverdriveParam(id, port.id, Number(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `overdrive-${port.id}-value`;
+        row.appendChild(valueSpan);
+      }
       if (type === "envelope-follower" && ENVELOPE_FOLLOWER_SLIDER_PORTS.includes(port.id)) {
         const state = envelopeFollowerStates.get(id);
         const slider = document.createElement("input");
@@ -6391,6 +6485,8 @@ function createWidget(type, label, x, y, forcedId) {
     const pressRow = el.querySelector(".up-down-button-press-row");
     if (pressRow) pressRow.appendChild(ports);
     else el.appendChild(ports);
+  } else if (type === "master-volume") {
+    el.querySelector(".master-volume-body").appendChild(ports);
   } else if (type === "const") {
     ports.classList.add("const-output-ports");
     const constBody = el.querySelector(".const-body");
@@ -6452,6 +6548,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   canvasContent.appendChild(el);
+  if (type === "master-volume") updateMasterVolumeUi();
   if (isLinkedInputType(type)) updateLinkedInputVisual(id);
   if (isLinkedOutputType(type)) updateLinkedOutputVisual(id);
   if (type === "audio-output-link") updateAudioOutputLinkVisual(id);
@@ -6480,6 +6577,7 @@ function createWidget(type, label, x, y, forcedId) {
   if (type === "drum-sequencer") updateDrumSequencerVisual(id);
   if (["sample-hold", "monoflop"].includes(type)) updateSampleHoldVisual(id);
   if (type === "wave-folder") updateWaveFolderVisual(id);
+  if (type === "overdrive") updateOverdriveVisual(id);
   if (type === "envelope-follower") updateEnvelopeFollowerVisual(id);
   if (type === "burst-generator") updateBurstGeneratorVisual(id);
   if (type === "pan") updatePanVisual(id);
@@ -6554,6 +6652,7 @@ function removeWidget(id, force = false) {
   chorusStates.delete(id);
   bitcrusherStates.delete(id);
   waveFolderStates.delete(id);
+  overdriveStates.delete(id);
   envelopeFollowerStates.delete(id);
   panStates.delete(id);
   sampleHoldStates.delete(id);
@@ -9591,7 +9690,7 @@ function openMidiInSettings(widgetId) {
   midiInOverflowModeSelect.value = state.overflowMode;
   midiInOverflowModeSelect.disabled = fxMidiIn;
   midiInOverflowModeSelect.closest(".modal-field")?.classList.toggle("disabled", fxMidiIn);
-  midiInPitchBendRangeInput.value = state.pitchBendRangeCents ?? 200;
+  midiInPitchBendRangeInput.value = Number(((state.pitchBendRangeCents ?? 200) / 1200).toFixed(6));
   midiInPitchBendQuantizeInput.checked = state.pitchBendQuantizeCents === true;
   midiInSettingsOverlay.classList.remove("hidden");
 }
@@ -9613,8 +9712,9 @@ document.getElementById("midiInSettingsSave").addEventListener("click", () => {
     state.overflowMode = isFxMidiIn(pendingMidiInId) || midiInOverflowModeSelect.value === "ignore"
       ? "ignore"
       : "steal-oldest";
-    const cents = parseFloatFlexible(midiInPitchBendRangeInput.value);
-    state.pitchBendRangeCents = Number.isNaN(cents) ? 200 : clamp(cents, 1, 6000);
+    const volts = parseFloatFlexible(midiInPitchBendRangeInput.value);
+    // Keep the stored cents field compatible with existing presets (1 V/octave).
+    state.pitchBendRangeCents = Number.isFinite(volts) ? clamp(volts, 0, 5) * 1200 : 200;
     state.pitchBendQuantizeCents = midiInPitchBendQuantizeInput.checked === true;
     sendLiveParamUpdate(pendingMidiInId, {
       pitchBendRangeCents: state.pitchBendRangeCents,
@@ -10836,6 +10936,7 @@ function refreshControlGraph() {
   const sources = [];
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
+  document.querySelectorAll('[data-widget-type="master-volume"]').forEach(el => push(el.id, "value", masterVolume * CV_MAX_VOLTS));
   knobStates.forEach((state, id) => {
     const layerIndex = state.activeLayer;
     knobLayer(state, layerIndex).controls.slice(0, state.count).forEach((control, index) => {
@@ -10871,6 +10972,8 @@ function refreshControlGraph() {
       if (control) value = mapKnobValue(control);
     } else if (sourceType === "const" && connection.from.portId === "value") {
       value = constStates.get(connection.from.widgetId)?.value ?? null;
+    } else if (sourceType === "master-volume" && connection.from.portId === "value") {
+      value = masterVolume * CV_MAX_VOLTS;
     } else if (sourceType === "button") {
       const sourceState = buttonStates.get(connection.from.widgetId);
       const parsed = parseButtonPortId(connection.from.portId);
@@ -12323,6 +12426,7 @@ function setMasterClockBpm(bpm) {
 // sync with the firmware's authoritative state, including a Learn/Save done
 // from a different tab.
 function applyMasterClockBroadcast(data) {
+  if (pendingPresetName !== null) return; // Running graph still belongs to the previous selection.
   masterClockMaxBpm = Number(data.maxBpm) || 240;
   masterClockRoundBpm = data.round === true;
   masterClockCc = typeof data.cc === "number" && data.cc >= 0 ? data.cc : null;
@@ -12378,6 +12482,7 @@ document.getElementById("masterClockSettingsSave")?.addEventListener("click", ()
     round: masterClockRoundBpm,
   });
   closeMasterClockSettings();
+  savePresetNow();
 });
 
 // Global MIDI Controls (Settings -> Global MIDI Controls): device-wide CC bindings for
@@ -12457,14 +12562,43 @@ function applyGlobalMidiDeviceSettings(data) {
   presetNextChannel = learnedOrNull(data.nextChannel);
   masterVolumeCc = learnedOrNull(data.volumeCc);
   masterVolumeChannel = learnedOrNull(data.volumeChannel);
-  if (typeof data.volume === "number") masterVolume = Math.max(0, Math.min(1, data.volume));
+  if (Number.isFinite(data.volume)) masterVolume = Math.max(0, Math.min(1, data.volume));
   updateGlobalMidiUi();
+}
+
+function hasLearnedMasterVolume() {
+  return Number.isInteger(masterVolumeCc) && masterVolumeCc >= 0 && masterVolumeCc <= 127 &&
+    Number.isInteger(masterVolumeChannel) && masterVolumeChannel >= 0 && masterVolumeChannel <= 15;
+}
+
+function setManualMasterVolume(value) {
+  if (hasLearnedMasterVolume() || !Number.isFinite(value)) return;
+  masterVolume = Math.max(0, Math.min(1, value));
+  updateMasterVolumeUi();
+  sendLiveParamUpdate("@deviceSettings", { volume: masterVolume });
 }
 
 function updateMasterVolumeUi() {
   const pct = Math.round(masterVolume * 100);
-  if (masterVolumeInput && document.activeElement !== masterVolumeInput) masterVolumeInput.value = String(pct);
+  const volts = masterVolume * CV_MAX_VOLTS;
+  const learned = hasLearnedMasterVolume();
+  if (masterVolumeInput) {
+    masterVolumeInput.value = String(pct);
+    masterVolumeInput.disabled = learned;
+  }
   if (masterVolumeValue) masterVolumeValue.textContent = `${pct}%`;
+  const meterFill = document.getElementById("masterVolumeMeterFill");
+  if (meterFill) meterFill.style.width = `${pct}%`;
+  const meterValue = document.getElementById("masterVolumeMeterValue");
+  if (meterValue) meterValue.textContent = `${pct}%`;
+  document.querySelectorAll('[data-widget-type="master-volume"]').forEach(el => {
+    const slider = el.querySelector('.master-volume-body input');
+    slider.value = String(volts);
+    slider.disabled = learned;
+    el.querySelector('[data-role="master-volume-value"]').textContent = `${volts.toFixed(2)} V`;
+    audioEngine.setParam(el.id, "value", volts);
+    propagate(el.id, "value", volts);
+  });
 }
 
 function updateGlobalMidiUi() {
@@ -12497,7 +12631,8 @@ function routeMidiToGlobalMidiControls(data) {
   }
   // Display mirror only - the firmware applies the volume itself.
   if (masterVolumeCc === data.control && masterVolumeChannel === data.channel) {
-    masterVolume = data.value / 127;
+    if (!Number.isFinite(data.value)) return;
+    masterVolume = Math.max(0, Math.min(1, data.value / 127));
     updateMasterVolumeUi();
   }
 }
@@ -12514,9 +12649,7 @@ globalMidiSettingsOverlay?.querySelectorAll("[data-global-clear]").forEach((btn)
   });
 });
 masterVolumeInput?.addEventListener("input", () => {
-  masterVolume = Number(masterVolumeInput.value) / 100;
-  updateMasterVolumeUi();
-  sendLiveParamUpdate("@deviceSettings", { volume: masterVolume });
+  setManualMasterVolume(Number(masterVolumeInput.value) / 100);
 });
 
 function closeGlobalMidiSettings() {
@@ -13145,7 +13278,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
   "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter", "comb-filter",
   "esp-eq", "graphic-eq",
-  "mixer", "bitcrusher", "wave-folder", "pan", "counter", "monoflop", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
+  "mixer", "bitcrusher", "wave-folder", "overdrive", "pan", "counter", "monoflop", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
 ]);
 
@@ -15146,6 +15279,42 @@ function setWaveFolderParam(widgetId, portId, value) {
   state[portId] = clamp(Number(value) || 0, 0, CV_MAX_VOLTS);
   audioEngine.setParam(widgetId, portId, state[portId]);
   updateWaveFolderVisual(widgetId);
+  sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+}
+
+const overdriveStates = new Map();
+
+// Readouts mirror overdrive-core.js / OverdriveNode.h mappings.
+function formatOverdriveValue(portId, value) {
+  const volts = overdriveCv(Number(value));
+  if (portId === "mode") return OVERDRIVE_MODE_NAMES[overdriveModeIndex(volts)];
+  if (portId === "drive") return `+${formatNumber(20 * Math.log10(overdriveDriveFactor(volts)))} dB`;
+  if (portId === "tone") {
+    const hz = overdriveToneHz(volts);
+    return hz >= 1000 ? `${formatNumber(hz / 1000)} kHz` : `${Math.round(hz)} Hz`;
+  }
+  if (portId === "bias") return `${formatNumber((volts - CV_MAX_VOLTS / 2) * 20)} %`;
+  return `${formatNumber(volts / CV_MAX_VOLTS * 100)} %`;
+}
+
+function updateOverdriveVisual(widgetId) {
+  const state = overdriveStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  OVERDRIVE_PORTS.forEach((portId) => {
+    const slider = el.querySelector(`[data-role="overdrive-${portId}-slider"]`);
+    if (slider) slider.value = String(state[portId]);
+    const value = el.querySelector(`[data-role="overdrive-${portId}-value"]`);
+    if (value) value.textContent = formatOverdriveValue(portId, state[portId]);
+  });
+}
+
+function setOverdriveParam(widgetId, portId, value) {
+  const state = overdriveStates.get(widgetId);
+  if (!state || !OVERDRIVE_PORTS.includes(portId)) return;
+  state[portId] = overdriveCv(Number(value), OVERDRIVE_DEFAULTS[portId]);
+  audioEngine.setParam(widgetId, portId, state[portId]);
+  updateOverdriveVisual(widgetId);
   sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
 }
 
@@ -19433,6 +19602,7 @@ function drawConnections() {
   sampleHoldStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
   monoflopStates.forEach((_, widgetId) => updateSampleHoldVisual(widgetId));
   waveFolderStates.forEach((_, widgetId) => updateWaveFolderVisual(widgetId));
+  overdriveStates.forEach((_, widgetId) => updateOverdriveVisual(widgetId));
   envelopeFollowerStates.forEach((_, widgetId) => updateEnvelopeFollowerVisual(widgetId));
   panStates.forEach((_, widgetId) => updatePanVisual(widgetId));
   refreshWiredSliderLocks();
@@ -19808,7 +19978,14 @@ function propagate(widgetId, portId, value, voiceIndex) {
         }
       }
       // Cable path: the device drives the target itself - see withDeviceSyncMuted().
-      withDeviceSyncMuted(() => deliverToWidget(c.to.widgetId, c.to.portId, value, voiceIndex));
+      let targetValue = value;
+      if (portId === "pitchBend" && c.to.portId === "tune" &&
+          ["midi-in", "midi-filter"].includes(document.getElementById(widgetId)?.dataset.widgetType) &&
+          ["oscillator", "fm-oscillator", "hammond"].includes(document.getElementById(c.to.widgetId)?.dataset.widgetType)) {
+        // Pitch Bend is bipolar; Tune sliders use 5 V as their neutral position.
+        targetValue = Number(value) + CV_MAX_VOLTS / 2;
+      }
+      withDeviceSyncMuted(() => deliverToWidget(c.to.widgetId, c.to.portId, targetValue, voiceIndex));
     });
 }
 
@@ -20880,6 +21057,10 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     setWaveFolderParam(widgetId, portId, Number(value));
   }
 
+  if (el.dataset.widgetType === "overdrive" && OVERDRIVE_PORTS.includes(portId)) {
+    setOverdriveParam(widgetId, portId, Number(value));
+  }
+
   if (el.dataset.widgetType === "envelope-follower" && ENVELOPE_FOLLOWER_SLIDER_PORTS.includes(portId)) {
     setEnvelopeFollowerParam(widgetId, portId, Number(value));
   }
@@ -21461,9 +21642,13 @@ function routeMidiWidget(data, id, state) {
     } else if (data.midiType === "aftertouch") {
       propagate(id, "aftertouch", (data.value / 127) * CV_MAX_VOLTS);
     } else if (data.midiType === "pitchwheel") {
-      const cents = state.pitchBendRangeCents ?? 200;
-      let cv = clamp(CV_MAX_VOLTS / 2 + (data.value / 8192) * (cents / 1200), 0, CV_MAX_VOLTS);
-      if (state.pitchBendQuantizeCents) cv = Math.round(cv * 1200) / 1200;
+      const rangeVolts = clamp(state.pitchBendRangeCents ?? 200, 0, 6000) / 1200;
+      const bend = clamp(data.value, -8192, 8191);
+      let cv = (bend / (bend < 0 ? 8192 : 8191)) * rangeVolts;
+      if (state.pitchBendQuantizeCents) {
+        const limitCents = Math.floor(state.pitchBendRangeCents ?? 200);
+        cv = clamp(Math.sign(cv) * Math.round(Math.abs(cv) * 1200), -limitCents, limitCents) / 1200;
+      }
       propagate(id, "pitchBend", cv);
     }
 }
@@ -21593,7 +21778,8 @@ const WIDGET_ENGINES = {
       if (isFxMidiIn(id)) state.overflowMode = "ignore";
       state.glide = state.glide === true;
       state.glideTime = clamp(Number(state.glideTime) || 0, 0, 2);
-      state.pitchBendRangeCents = clamp(Number(state.pitchBendRangeCents) || 200, 1, 6000);
+      const bendRange = Number(state.pitchBendRangeCents ?? 200);
+      state.pitchBendRangeCents = Number.isFinite(bendRange) ? clamp(bendRange, 0, 6000) : 200;
       state.pitchBendQuantizeCents = state.pitchBendQuantizeCents === true;
       resizeVoiceSlots(id, state.voices);
       updateMidiInControls(id);
@@ -22786,6 +22972,7 @@ const WIDGET_ENGINES = {
       drumSequencerRestartInternalClock(id);
     },
   },
+  "master-volume": { getParams: () => ({}), applyParams: () => updateMasterVolumeUi() },
   const: {
     getParams: (id) => {
       const state = constStates.get(id);
@@ -22847,6 +23034,21 @@ const WIDGET_ENGINES = {
       state.mix = clamp(Number(params.mix ?? CV_MAX_VOLTS) || 0, 0, CV_MAX_VOLTS);
       WAVE_FOLDER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
       updateWaveFolderVisual(id);
+    },
+  },
+  "overdrive": {
+    getParams: (id) => {
+      const state = overdriveStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = overdriveStates.get(id);
+      if (!state || !params) return;
+      OVERDRIVE_PORTS.forEach((portId) => {
+        state[portId] = overdriveCv(Number(params[portId]), OVERDRIVE_DEFAULTS[portId]);
+        audioEngine.setParam(id, portId, state[portId]);
+      });
+      updateOverdriveVisual(id);
     },
   },
   "envelope-follower": {
@@ -22985,6 +23187,7 @@ function serializePreset() {
 
   return {
     schemaVersion: SCHEMA_VERSION,
+    masterClock: { bpm: masterClockBpm },
     title: presetDescription.title,
     description: presetDescription.description,
     longDescription: presetDescription.longDescription,
@@ -23010,6 +23213,8 @@ function serializePreset() {
 
 
 let currentPresetName = null;
+let pendingPresetName = null;
+let presetLoadGeneration = 0;
 let presetDescription = { title: "", description: "", longDescription: "", author: "" };
 
 async function saveToServer(name) {
@@ -23449,6 +23654,12 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   switchPage("fx");
   clearCanvas();
 
+  // Restore tempo after removing the old graph: restarting its Clock nodes
+  // could otherwise publish live values or save the outgoing preset.
+  if (typeof data.masterClock?.bpm === "number" && Number.isFinite(data.masterClock.bpm) && data.masterClock.bpm >= 0) {
+    setMasterClockBpm(data.masterClock.bpm);
+  }
+
   
   
   
@@ -23687,12 +23898,15 @@ async function loadPresetOnStartup() {
 }
 
 async function loadPresetByName(name, { activate = true } = {}) {
+  const generation = ++presetLoadGeneration;
+  if (activate) pendingPresetName = name || "";
   try {
     if (activate) {
       const selectUrl = name
         ? `/api/preset/select?name=${encodeURIComponent(name)}`
         : "/api/preset/select";
       const selectRes = await fetch(selectUrl, { method: "POST" });
+      if (generation !== presetLoadGeneration) return;
       if (!selectRes.ok) throw new Error(`Select HTTP ${selectRes.status}`);
     }
     const url = name ? `/api/preset?name=${encodeURIComponent(name)}` : "/api/preset";
@@ -23700,10 +23914,13 @@ async function loadPresetByName(name, { activate = true } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const headerName = res.headers.get("X-Preset-Name") || "";
     const data = await res.json();
+    if (generation !== presetLoadGeneration) return;
     currentPresetName = headerName || null;
     await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {
+    if (generation !== presetLoadGeneration) return;
+    pendingPresetName = null;
     appendLog(`Preset could not be loaded: ${err.message}`);
     restoringPreset = false;
   }
@@ -23983,6 +24200,8 @@ function connectWs() {
     }
     if (data.type === "presetChanged") {
       const incomingName = data.name || "";
+      if (pendingPresetName !== null && incomingName !== pendingPresetName) return;
+      pendingPresetName = null;
       if (incomingName !== (currentPresetName || "")) {
         loadPresetByName(incomingName, { activate: false });
       }

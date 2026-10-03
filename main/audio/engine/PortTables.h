@@ -379,6 +379,15 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "gain")) return 3;
         if (is(portName, "mix")) return 4;
         return -1;
+    case NodeType::Overdrive:
+        if (is(portName, "in")) return 0;
+        if (is(portName, "mode")) return 1;
+        if (is(portName, "drive")) return 2;
+        if (is(portName, "tone")) return 3;
+        if (is(portName, "bias")) return 4;
+        if (is(portName, "mix")) return 5;
+        if (is(portName, "gain")) return 6;
+        return -1;
     case NodeType::EnvelopeFollower:
         if (is(portName, "in")) return 0;
         if (is(portName, "attack")) return 1;
@@ -742,6 +751,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Bitcrusher:
         return is(portName, "out") ? 0 : -1;
     case NodeType::WaveFolder:
+    case NodeType::Overdrive:
         return is(portName, "out") ? 0 : -1;
     case NodeType::EnvelopeFollower:
         return is(portName, "out") ? 0 : -1;
@@ -908,6 +918,8 @@ inline int audioInPortCount(NodeType type)
         return 3;
     case NodeType::WaveFolder:
         return 5;
+    case NodeType::Overdrive:
+        return 7; // "in" + mode/drive/tone/bias/mix/gain (CV)
     case NodeType::EnvelopeFollower:
         return 4; // "in" + "attack" + "release" + "preGain" (CV)
     case NodeType::BurstGenerator:
@@ -1045,7 +1057,7 @@ inline bool hasNoOutputs(NodeType type)
 inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::GraphicEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
-           type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder ||
+           type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder || type == NodeType::Overdrive ||
            type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower;
 }
 

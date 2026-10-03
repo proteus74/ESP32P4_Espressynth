@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Effects Widgets · ESPRESSYNTH</title>
-<meta name="description" content="Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.">
+<meta name="description" content="Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Overdrive, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.">
 <link rel="icon" type="image/png" href="../../../data/static/img/FavLogo.png">
 <link rel="stylesheet" href="../style.css">
 </head>
@@ -26,10 +26,11 @@
 <main>
 <div class="breadcrumb"><a href="index.html">Widgets</a> &rsaquo; Effects</div>
 <h1>Effects</h1>
-<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.</p>
+<p class="tagline" style="color:var(--text-dim); max-width:70ch;">Klangeffekte zum Veredeln oder Verbiegen des Sounds: Bitcrusher, Wave Folder, Overdrive, Envelope Follower, Stereo-Pan, Chorus, Delay und ein leichtgewichtiger Reverb.</p>
 <div class="widget-index">
   <a href="#bitcrusher">▦ Bitcrusher</a>
   <a href="#wave-folder">〰 Wave Folder</a>
+  <a href="#overdrive">🔥 Overdrive</a>
   <a href="#envelope-follower">◟◝ Envelope Follower</a>
   <a href="#pan">⇄ Pan</a>
   <a href="#chorus">🌀 Chorus</a>
@@ -71,6 +72,28 @@ simple wave.</p>
 </ul>
 <h2>Output</h2>
 <p><span class="port-label">Out</span> — the folded audio signal.</p>
+  </div>
+</article>
+<article class="widget-entry" id="overdrive">
+  <h3 class="widget-entry-title">🔥 Overdrive <span class="type">(overdrive)</span></h3>
+  <div class="help-body">
+<h2>What it's for</h2>
+<p>Classic overdrive and distortion. The signal is boosted by <em>Drive</em> and pushed through a
+saturation curve that rounds off or clips the peaks, adding harmonics from warm tube-like grit to
+square-wave fuzz. The firmware runs the curve with 2x oversampling to reduce aliasing.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">In</span> — the audio signal to distort.</li>
+<li><span class="port-label">Mode</span> — character in four steps: <b>Soft</b> (Tube-Screamer style overdrive: only the mids and highs are clipped, the clean bass stays), <b>Hard</b> (full-band hard clipping), <b>Tube</b> (asymmetric, warm even harmonics), <b>Fuzz</b> (pulse-like, octave-heavy fuzz).</li>
+<li><span class="port-label">Drive</span> — amount of distortion, 0 dB to +40 dB of gain into the clipper. Auto-level keeps the distorted signal as loud as the input, so more drive means more grit, not more volume.</li>
+<li><span class="port-label">Tone</span> — low-pass after the distortion (500 Hz – 12 kHz) to tame harsh fizz.</li>
+<li><span class="port-label">Bias</span> — shifts the signal off-center before the curve (relative to the input level) for asymmetric, more complex tones - audible at any drive. The resulting DC offset is removed again.</li>
+<li><span class="port-label">Mix</span> — blends the distorted signal with the original dry signal.</li>
+<li><span class="port-label">Gain</span> — overall output volume.</li>
+</ul>
+<p>Every control is a 0–10 V CV input and can be modulated or driven by a Knob.</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> — the distorted audio signal.</p>
   </div>
 </article>
 <article class="widget-entry" id="envelope-follower">

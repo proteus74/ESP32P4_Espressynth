@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20260929-button-midi-sw-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20261003-master-volume-row-1">
 </head>
 <body>
 
@@ -88,6 +88,11 @@
   <span class="app-title">ESPRESSYNTH</span>
 
   <div class="header-right">
+    <div class="cpu-load master-volume-meter" title="Master Volume">
+      <span class="cpu-load-label">VOL</span>
+      <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="masterVolumeMeterFill"></div></div>
+      <span class="cpu-load-value" id="masterVolumeMeterValue">–</span>
+    </div>
     <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
       <span class="master-clock-badge-icon">⏱️</span>
       <span id="masterClockBpmLabel">120</span> BPM
@@ -169,63 +174,60 @@
 <div id="toast" class="toast hidden"></div>
 
 <div id="settingsOverlay" class="modal-overlay hidden">
-  <div class="modal modal-wide">
-    <h3>Settings</h3>
-
+  <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <h3 id="settingsTitle">Settings</h3>
     <div class="settings-grid">
-      <div class="settings-section">
-        <h4 class="modal-section-title">Device</h4>
+      <fieldset class="settings-section">
+        <legend>Device &amp; Browser</legend>
         <label class="modal-field">
           <span>Device Name</span>
           <input type="text" id="deviceNameInput" maxlength="31" placeholder="ESPRESSYNTH">
         </label>
-      </div>
-
-      <div class="settings-section">
-        <h4 class="modal-section-title">Global MIDI Controls</h4>
-        <p id="globalMidiSummaryText" class="modal-field-readout">Nothing learned</p>
-        <button type="button" id="openGlobalMidiSettings" class="btn-secondary">Configure MIDI Controls…</button>
-      </div>
-
-      <div class="settings-section">
-        <h4 class="modal-section-title">Browser Preview</h4>
         <label class="modal-field modal-field-checkbox">
-          <input type="checkbox" id="loadSamplesSetting">
+          <input type="checkbox" id="loadSamplesSetting" aria-describedby="loadSamplesHint">
           <span>Load samples in the browser</span>
         </label>
-        <p class="modal-field-hint">Applies to this browser only. When off, Wave Player, SoundFont Player and
-          MDA Piano don't download their samples on page load (faster start); use "Load Samples" in the top
-          bar to fetch them later.</p>
-      </div>
+        <p id="loadSamplesHint" class="modal-field-hint">Only affects this browser. Leave off for a faster start; use “Load Samples” to download samples later.</p>
+      </fieldset>
 
-      <div class="settings-section">
-        <h4 class="modal-section-title">GPIO</h4>
-        <p id="gpioSummaryText" class="modal-field-readout">No pins configured</p>
-        <button type="button" id="openGpioSettings" class="btn-secondary">Configure GPIO…</button>
-      </div>
+      <fieldset class="settings-section">
+        <legend>Global MIDI Controls</legend>
+        <p class="modal-field-hint">Controller mappings for preset navigation, tempo and volume.</p>
+        <p id="globalMidiSummaryText" class="modal-field-readout">Nothing learned</p>
+        <button type="button" id="openGlobalMidiSettings" class="btn-secondary">Configure MIDI Controls…</button>
+      </fieldset>
 
-      <div class="settings-section">
-        <h4 class="modal-section-title">LED String (WS2812)</h4>
-        <p id="ledStripSummaryText" class="modal-field-readout">Not connected</p>
-        <button type="button" id="openLedStripSettings" class="btn-secondary">Configure LED String…</button>
-      </div>
+      <fieldset id="settingsHardwareGroup" class="settings-section settings-section-full" hidden>
+        <legend>Hardware</legend>
+        <div class="settings-hardware-grid">
+          <div id="settingsGpioSection" class="settings-item" hidden>
+            <h4>GPIO</h4>
+            <p id="gpioSummaryText" class="modal-field-readout">No pins configured</p>
+            <button type="button" id="openGpioSettings" class="btn-secondary">Configure GPIO…</button>
+          </div>
+          <div id="settingsLedStripSection" class="settings-item" hidden>
+            <h4>LED String (WS2812)</h4>
+            <p id="ledStripSummaryText" class="modal-field-readout">Not connected</p>
+            <button type="button" id="openLedStripSettings" class="btn-secondary">Configure LED String…</button>
+          </div>
+        </div>
+      </fieldset>
 
-      <div class="settings-section">
-        <h4 class="modal-section-title">Network</h4>
+      <fieldset id="settingsNetworkSection" class="settings-section settings-section-full" hidden>
+        <legend>Network</legend>
         <p id="networkSummaryText" class="modal-field-readout">–</p>
         <button type="button" id="openNetworkSettings" class="btn-secondary">Configure Network…</button>
-      </div>
+      </fieldset>
 
-      <div class="settings-section settings-section-full">
-        <h4 class="modal-section-title">Backup &amp; Restore</h4>
+      <fieldset class="settings-section settings-section-full">
+        <legend>Backup &amp; Restore</legend>
         <div class="modal-actions modal-inline-actions">
           <button type="button" id="settingsBackupBtn" class="btn-secondary">Create System Backup</button>
           <button type="button" id="settingsRestoreBtn" class="btn-secondary">Restore Backup…</button>
         </div>
-      </div>
+      </fieldset>
     </div>
-
-    <div class="modal-actions">
+    <div class="modal-actions settings-footer">
       <button id="settingsCancel" class="btn-secondary">Cancel</button>
       <button id="settingsSave">Save</button>
     </div>
@@ -329,7 +331,8 @@
   <div class="modal">
     <h3>Network</h3>
 
-    <h4 class="modal-section-title">Ethernet</h4>
+    <fieldset id="ethSettingsGroup" class="settings-section" hidden>
+    <legend>Ethernet</legend>
     <label class="modal-field modal-field-checkbox">
       <input type="checkbox" id="ethDhcpInput" checked>
       <span>DHCP</span>
@@ -357,7 +360,9 @@
       </div>
     </div>
 
-    <h4 class="modal-section-title" id="wifiSettingsSection">Wi-Fi</h4>
+    </fieldset>
+    <fieldset id="wifiSettingsGroup" class="settings-section" hidden>
+    <legend id="wifiSettingsSection">Wi-Fi</legend>
     <label class="modal-field modal-field-checkbox">
       <input type="checkbox" id="wifiEnabledInput">
       <span>Enable Wi-Fi station</span>
@@ -405,6 +410,7 @@
       </div>
       <div id="wifiNetworks" class="wifi-network-list" hidden></div>
     </div>
+    </fieldset>
 
     <div class="modal-actions">
       <button id="networkSettingsCancel" class="btn-secondary">Cancel</button>
@@ -744,7 +750,8 @@
         <option value="ignore">Ignore new note</option>
       </select>
     </label>
-    <label class="modal-field"><span>Pitch Bend Range (cents)</span><input type="text" inputmode="decimal" id="midiInPitchBendRangeInput" value="200"></label>
+    <label class="modal-field"><span>Pitch Bend Range (±V)</span><input type="text" inputmode="decimal" id="midiInPitchBendRangeInput" value="0.166667" aria-describedby="midiInPitchBendRangeHelp"></label>
+    <p id="midiInPitchBendRangeHelp">Enter 0–5 V for either side. Center: 0 V. Example: 1 V gives −1 to +1 V; 1 V changes Tune by one octave.</p>
     <label class="modal-field modal-field-checkbox">
       <input type="checkbox" id="midiInPitchBendQuantizeInput">
       <span>Quantize to cents (snap to exact pitch steps)</span>
@@ -1201,7 +1208,7 @@
 
 <div id="dxEnvelopeSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
-    <h3>DX Envelope Settings</h3>
+    <h3>Envelope Settings</h3>
     <p class="modal-hint">Time inputs are 0-10V CV. Set each segment's maximum duration and mapping.</p>
     <div class="modal-field-row">
       <label class="modal-field"><span>Time 1 Max (s)</span><input type="text" inputmode="decimal" id="dxEnvelopeTime1MaxInput" value="4"></label>
@@ -1416,6 +1423,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20260929-button-midi-sw-2"></script>
+<script type="module" src="/static/js/main.js?v=20261003-master-volume-row-1"></script>
 </body>
 </html>

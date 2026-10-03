@@ -43,7 +43,7 @@ inline uint32_t mapColor(const RgbLedState &s, float volts)
 
 inline void render(NodeInstance &inst, size_t frames)
 {
-    if (frames == 0) return;
+    if (!Feature::LedStrip::kEnabled || frames == 0) return;
     auto &s = inst.rgbLed;
     // Last sample of the block is plenty - the strip only refreshes at 20 Hz anyway.
     Feature::LedStrip::set_pixel(s.ledIndex, mapColor(s, noderender::portSample(inst, 0, frames - 1)));

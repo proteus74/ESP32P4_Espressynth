@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 
@@ -17,6 +19,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/OverdriveNode.h"
 #include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
@@ -174,6 +177,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::WaveFolder:
         nodes::wavefolder::parsePreset(p, out);
         break;
+    case NodeType::Overdrive:
+        nodes::overdrive::parsePreset(p, out);
+        break;
     case NodeType::EnvelopeFollower:
         nodes::envelopefollower::parsePreset(p, out);
         break;
@@ -277,6 +283,7 @@ void parseWidgetsArray(cJSON *widgetsArr, PresetDoc &doc, bool isFxPage)
         WidgetDesc &wd = doc.widgets[doc.widgetCount];
         snprintf(wd.id, sizeof(wd.id), "%s", id);
         const char *label = presetFillGetString(w, "label", typeStr);
+        if (type == NodeType::DxEnvelope && strcmp(label, "DX Envelope") == 0) label = "Envelope";
         snprintf(wd.label, sizeof(wd.label), "%s", label);
         wd.type = type;
         wd.isFxPage = isFxPage;
@@ -327,6 +334,7 @@ inline bool parsePreset(const char *json, size_t len, PresetDoc &out)
 {
     out.widgetCount = 0;
     out.connectionCount = 0;
+    out.bpm = -1.0f;
 
     if (json == nullptr || len == 0 || len > synth::kMaxPresetBytes)
     {
@@ -338,6 +346,12 @@ inline bool parsePreset(const char *json, size_t len, PresetDoc &out)
     {
         return false;
     }
+
+    cJSON *clock = cJSON_GetObjectItemCaseSensitive(root, "masterClock");
+    cJSON *bpm = cJSON_GetObjectItemCaseSensitive(clock, "bpm");
+    if (cJSON_IsNumber(bpm) && std::isfinite(bpm->valuedouble) && bpm->valuedouble >= 0.0 &&
+        bpm->valuedouble <= std::numeric_limits<float>::max())
+        out.bpm = static_cast<float>(bpm->valuedouble);
 
     cJSON *pages = cJSON_GetObjectItemCaseSensitive(root, "pages");
     if (cJSON_IsObject(pages))

@@ -30,6 +30,7 @@ enum class NodeType : uint8_t
     ValueMapper,
     Bitcrusher,
     WaveFolder,
+    Overdrive,
     EnvelopeFollower,
     Pan,
     Chorus,
@@ -78,6 +79,7 @@ enum class NodeType : uint8_t
     MidiFilter,
     Counter,
     Monoflop,
+    MasterVolume,
     Unknown,
 };
 
@@ -190,6 +192,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Bitcrusher;
     if (strcmp(typeStr, "wave-folder") == 0)
         return NodeType::WaveFolder;
+    if (strcmp(typeStr, "overdrive") == 0)
+        return NodeType::Overdrive;
     if (strcmp(typeStr, "envelope-follower") == 0)
         return NodeType::EnvelopeFollower;
     if (strcmp(typeStr, "pan") == 0)
@@ -233,6 +237,7 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::MidiFilter;
     if (strcmp(typeStr, "midi-split") == 0)
         return NodeType::MidiSplit;
+    if (strcmp(typeStr, "master-volume") == 0) return NodeType::MasterVolume;
     if (strcmp(typeStr, "const") == 0)
         return NodeType::Const;
     if (strcmp(typeStr, "knob") == 0)

@@ -175,7 +175,7 @@ void create_screen_main() {
                     // bar_core0_util
                     lv_obj_t *obj = lv_bar_create(parent_obj);
                     objects.bar_core0_util = obj;
-                    lv_obj_set_pos(obj, 700, 4);
+                    lv_obj_set_pos(obj, 697, -15);
                     lv_obj_set_size(obj, 102, 7);
                     lv_bar_set_value(obj, 25, LV_ANIM_OFF);
                     lv_obj_set_style_radius(obj, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
@@ -185,7 +185,7 @@ void create_screen_main() {
                     // lbl_core0_util
                     lv_obj_t *obj = lv_label_create(parent_obj);
                     objects.lbl_core0_util = obj;
-                    lv_obj_set_pos(obj, 613, 0);
+                    lv_obj_set_pos(obj, 610, -19);
                     lv_obj_set_size(obj, 82, 17);
                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -195,7 +195,7 @@ void create_screen_main() {
                     // lbl_core1_util
                     lv_obj_t *obj = lv_label_create(parent_obj);
                     objects.lbl_core1_util = obj;
-                    lv_obj_set_pos(obj, 613, -19);
+                    lv_obj_set_pos(obj, 610, 0);
                     lv_obj_set_size(obj, 82, 17);
                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -205,20 +205,39 @@ void create_screen_main() {
                     // lbl_bpm
                     lv_obj_t *obj = lv_label_create(parent_obj);
                     objects.lbl_bpm = obj;
-                    lv_obj_set_pos(obj, -14, -13);
-                    lv_obj_set_size(obj, 134, 21);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_pos(obj, -16, -19);
+                    lv_obj_set_size(obj, 134, 17);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_label_set_text_static(obj, "lbl_bpm");
                 }
                 {
                     // bar_core1_util
                     lv_obj_t *obj = lv_bar_create(parent_obj);
                     objects.bar_core1_util = obj;
-                    lv_obj_set_pos(obj, 700, -15);
+                    lv_obj_set_pos(obj, 697, 3);
                     lv_obj_set_size(obj, 102, 7);
                     lv_bar_set_value(obj, 25, LV_ANIM_OFF);
                     lv_obj_set_style_radius(obj, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
                     lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                }
+                {
+                    // bar_master_volume
+                    lv_obj_t *obj = lv_bar_create(parent_obj);
+                    objects.bar_master_volume = obj;
+                    lv_obj_set_pos(obj, 11, 3);
+                    lv_obj_set_size(obj, 102, 7);
+                    lv_bar_set_value(obj, 25, LV_ANIM_OFF);
+                    lv_obj_set_style_radius(obj, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+                    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                }
+                {
+                    // lbl_bpm_1
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.lbl_bpm_1 = obj;
+                    lv_obj_set_pos(obj, -16, -2);
+                    lv_obj_set_size(obj, 24, 17);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "Vol:");
                 }
             }
         }
@@ -473,6 +492,36 @@ void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex) 
 }
 
 void tick_user_widget_midi_button(int startWidgetIndex) {
+    (void)startWidgetIndex;
+}
+
+void create_user_widget_envelope(lv_obj_t *parent_obj, int startWidgetIndex) {
+    (void)startWidgetIndex;
+    lv_obj_t *obj = parent_obj;
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            // lblenvelopename
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
+            lv_obj_set_pos(obj, 1, 0);
+            lv_obj_set_size(obj, 199, 17);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblknobname");
+        }
+        {
+            // envelopechart
+            lv_obj_t *obj = lv_chart_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
+            lv_obj_set_pos(obj, 0, 17);
+            lv_obj_set_size(obj, 200, 133);
+        }
+    }
+}
+
+void tick_user_widget_envelope(int startWidgetIndex) {
     (void)startWidgetIndex;
 }
 

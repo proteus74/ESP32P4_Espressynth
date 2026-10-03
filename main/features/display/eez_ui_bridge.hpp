@@ -9,6 +9,7 @@
 typedef struct EezSynthStatus {
     float audio_core_load;
     float master_clock_bpm;
+    float master_volume; // 0..1, DeviceSettings volume
     uint16_t active_voices;
     uint16_t maximum_voices;
     uint16_t preset_number;

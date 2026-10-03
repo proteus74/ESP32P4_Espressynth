@@ -1,19 +1,14 @@
 #pragma once
 
 #include <cstdio>
+#include <cmath>
+#include <cstdint>
 
 #include "cJSON.h"
 
-// Engine-global, device-wide Master Clock: one shared BPM (settable directly
-// in the browser's Master Clock dialog, or driven live by a learned MIDI
-// CC), independent of any preset - every Clock-type node's pulse output
-// (nodes/ClockNode.h) reads bpm from here instead of carrying its own
-// tempo/sync ports, and it survives preset switches, matching a physical
-// hardware master-clock knob rather than a per-patch setting.
-//
-// Persisted to its own tiny file (see kMasterClockPath below), deliberately
-// OUTSIDE preset JSON/PresetParser.h/PresetFill.h - a preset switch must
-// never change the running tempo.
+// Shared tempo for all Clock-type nodes. Presets restore their saved BPM;
+// MIDI mapping/rounding remain device-wide. The separate file supplies boot
+// defaults for legacy presets without a tempo.
 namespace synth
 {
 
@@ -25,6 +20,15 @@ struct MasterClockState
     bool roundBpm = false;
     int midiCc = -1;      // -1 = unlearned
     int midiChannel = -1; // -1 = unlearned
+    uint32_t midiFeedback = UINT32_MAX; // Runtime only; never persisted.
+
+    int feedbackValue() const
+    {
+        if (midiCc < 0 || midiCc > 127 || midiChannel < 0 || midiChannel > 15 ||
+            !std::isfinite(bpm) || !std::isfinite(maxBpm) || maxBpm <= 0.0f) return -1;
+        const float tempo = roundBpm ? std::round(bpm) : bpm;
+        return static_cast<int>(std::fmax(0.0f, std::fmin(127.0f, (tempo / maxBpm) * 127.0f)) + 0.5f);
+    }
 };
 
 inline MasterClockState &masterClock()

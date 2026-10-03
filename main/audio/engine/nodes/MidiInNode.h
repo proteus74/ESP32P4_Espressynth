@@ -73,7 +73,8 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.overflowMode = overflowModeFromString(presetparser::getString(p, "overflowMode", "steal-oldest"));
     out.glide = presetparser::getBool(p, "glide", false);
     out.glideTime = presetparser::getFloat(p, "glideTime", 0.0f);
-    out.midiInPitchBendRangeCents = presetparser::getFloat(p, "pitchBendRangeCents", 200.0f);
+    const float bendRange = presetparser::getFloat(p, "pitchBendRangeCents", 200.0f);
+    out.midiInPitchBendRangeCents = std::isfinite(bendRange) ? std::fmax(0.0f, std::fmin(6000.0f, bendRange)) : 200.0f;
     out.midiInPitchBendQuantizeCents = presetparser::getBool(p, "pitchBendQuantizeCents", false);
 }
 

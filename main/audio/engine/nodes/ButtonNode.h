@@ -10,6 +10,7 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
+#include "../LayerControls.h"
 
 // Button (CC-learn momentary switch) and UpDownButton (two independently
 // CC-learnable buttons driving one shared value) - grouped since they share
@@ -55,6 +56,14 @@ struct ButtonControl
     bool wasAbove = false;
     bool switchMode = false;
     float currentValue = 0.0f;
+    uint32_t midiFeedback = UINT32_MAX;
+
+    uint8_t feedbackValue() const
+    {
+        if (valueListCount >= 2)
+            return static_cast<uint8_t>((listIndex < valueListCount ? listIndex : 0) * 127 / (valueListCount - 1));
+        return wasAbove ? 127 : 0;
+    }
 
     float currentOutput() const
     {
@@ -72,7 +81,17 @@ struct ButtonState
     uint8_t count = 1;
     uint8_t layerCount = 1;
     uint8_t activeLayer = 0;
-    ButtonControl controls[synth::kButtonOutputMax] = {};
+    uint8_t feedbackLayer = UINT8_MAX;
+    LayerControls<ButtonControl> controls;
+
+    bool resizeControls(uint8_t newCount, uint8_t newLayers)
+    {
+        if (!controls.resize(newCount, newLayers)) return false;
+        count = newCount;
+        layerCount = newLayers;
+        if (activeLayer >= layerCount) activeLayer = layerCount - 1;
+        return true;
+    }
 
     static constexpr uint8_t controlIndex(uint8_t buttonIndex, uint8_t layerIndex)
     {
@@ -138,11 +157,12 @@ inline void renderUpDownButton(NodeInstance &inst, size_t frames)
 inline void buildButton(NodeInstance &inst, const WidgetParams &p)
 {
     ButtonState &button = *inst.button;
-    button.count = p.buttonCount;
-    button.layerCount = p.buttonLayerCount;
+    if (!button.resizeControls(p.buttonCount, p.buttonLayerCount)) return;
     button.activeLayer = p.buttonActiveLayer < button.layerCount ? p.buttonActiveLayer : 0;
-    for (uint8_t controlIndex = 0; controlIndex < synth::kButtonOutputMax; ++controlIndex)
+    for (uint8_t layer = 0; layer < button.layerCount; ++layer)
+    for (uint8_t buttonIndex = 0; buttonIndex < button.count; ++buttonIndex)
     {
+        const uint8_t controlIndex = ButtonState::controlIndex(buttonIndex, layer);
         const WidgetParams::ButtonControlParams &source = p.buttons[controlIndex];
         ButtonControl &control = button.controls[controlIndex];
         memcpy(control.label, source.label, sizeof(control.label));
@@ -183,6 +203,7 @@ inline void destroyButton(NodeInstance &inst)
 {
     if (inst.button != nullptr)
     {
+        inst.button->~ButtonState();
         heap_caps_free(inst.button);
         inst.button = nullptr;
     }
@@ -219,7 +240,7 @@ inline bool setParamButton(NodeInstance &inst, const char *name, float value, ui
         inst.button->activeLayer = static_cast<uint8_t>(layer);
         return true;
     }
-    if (controlIndex >= synth::kButtonOutputMax) return false;
+    if (!inst.button->controls.contains(controlIndex)) return false;
     ButtonControl &control = inst.button->controls[controlIndex];
     if (strcmp(name, "listIndex") == 0)
     {

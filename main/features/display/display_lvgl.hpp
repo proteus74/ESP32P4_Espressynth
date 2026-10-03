@@ -16,16 +16,22 @@
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "eez_ui_bridge.hpp"
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
-    // JC1060P470C 7": JD9165 panel, GT911 touch, natively landscape (no rotation).
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI)
+#include "display_spi.hpp"
+#endif
+#if defined(CONFIG_APP_DISPLAY_MIPI_JD9165)
     #include "esp_lcd_jd9165.h"
-    #include "esp_lcd_touch_gt911.h"
     #include "features/display/jd9165_panel_init.h"
 #else
-    // JC8012P4A1 and friends: JD9365 panel, GSL3680 touch, portrait panel driven landscape.
     #include "esp_lcd_jd9365.h"
-    #include "esp_lcd_gsl3680.h"
     #include "features/display/jd9365_init.h"
+#endif
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+    // JC1060P470C 7": JD9165 panel, GT911 touch, natively landscape (no rotation).
+    #include "esp_lcd_touch_gt911.h"
+#else
+    // JC8012P4A1 and friends: JD9365 panel, GSL3680 touch, portrait panel driven landscape.
+    #include "esp_lcd_gsl3680.h"
     // The rotating flush path below offloads the per-frame rotation to the ESP32-P4's PPA
     // (Pixel Processing Accelerator) hardware instead of LVGL's software rotator
     // (lv_draw_sw_rotate()), which was pegging taskLVGL near 100% transposing the whole
@@ -89,7 +95,7 @@ constexpr size_t FRAME_BUFFER_COUNT = 2;
 constexpr size_t FRAME_BUFFER_COUNT = 3;
 #endif
 static esp_lcd_panel_handle_t s_panel = nullptr;
-#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 static SemaphoreHandle_t s_dpi_vsync = nullptr;
 static void* s_frame_buffers[FRAME_BUFFER_COUNT] = {};
 static ppa_client_handle_t s_ppa_srm_client = nullptr;
@@ -392,7 +398,7 @@ lv_obj_t* create_card(lv_obj_t* parent, int x, int y, int width, int height, con
     return card;
 }
 
-#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 void calibrate_touch_coordinates(esp_lcd_touch_handle_t touch, uint16_t* x,
                                  uint16_t* y, uint16_t* strength,
                                  uint8_t* point_count, uint8_t max_points) {
@@ -466,7 +472,7 @@ void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
-#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
                             esp_lcd_dpi_panel_event_data_t* event_data,
                             void* user_ctx) {
@@ -482,6 +488,7 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 }
 #endif
 
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI)
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
@@ -584,6 +591,8 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
 }
 
 #endif
+
+#endif // CONFIG_APP_ENABLE_MIPI_DSI
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
 // Boot splash screen: /littlefs/system/splash.png, scaled-to-fit ("Stretch to Uniform" -
@@ -841,11 +850,15 @@ inline void finish_startup_screen() {
 }
 
 /**
- * @brief Initialize the selected board's MIPI-DSI panel and a minimal LVGL screen.
+ * @brief Initialize the selected MIPI/SPI panel and LVGL screen.
  */
 inline esp_err_t init() {
     constexpr const char* TAG = "FeatureLVGL";
 
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI)
+    ESP_RETURN_ON_ERROR(Feature::SPIDisplay::init(), TAG, "SPI display initialization failed");
+    esp_lcd_panel_handle_t panel = Feature::SPIDisplay::panel;
+#else
     ESP_LOGI(TAG, "Initializing MIPI-DSI display for %s (%dx%d native)",
              CurrentBoard::BOARD_NAME,
              CurrentBoard::DISPLAY_NATIVE_WIDTH, CurrentBoard::DISPLAY_NATIVE_HEIGHT);
@@ -907,10 +920,6 @@ inline esp_err_t init() {
     dpi_config.video_timing.vsync_back_porch = CurrentBoard::DISPLAY_VSYNC_BACK_PORCH;
     dpi_config.video_timing.vsync_pulse_width = CurrentBoard::DISPLAY_VSYNC_PULSE_WIDTH;
     dpi_config.video_timing.vsync_front_porch = CurrentBoard::DISPLAY_VSYNC_FRONT_PORCH;
-
-    jd9165_vendor_config_t vendor_config = {};
-    vendor_config.init_cmds = jd9165_jc1060p470c_init_cmds;
-    vendor_config.init_cmds_size = jd9165_jc1060p470c_init_cmds_size;
 #else
     dpi_config.dpi_clock_freq_mhz = 60;
     dpi_config.video_timing.hsync_back_porch = 20;
@@ -920,6 +929,12 @@ inline esp_err_t init() {
     dpi_config.video_timing.vsync_pulse_width = 4;
     dpi_config.video_timing.vsync_front_porch = 20;
 
+#endif
+#if defined(CONFIG_APP_DISPLAY_MIPI_JD9165)
+    jd9165_vendor_config_t vendor_config = {};
+    vendor_config.init_cmds = jd9165_jc1060p470c_init_cmds;
+    vendor_config.init_cmds_size = jd9165_jc1060p470c_init_cmds_size;
+#else
     jd9365_vendor_config_t vendor_config = {};
     vendor_config.init_cmds = jd9365_init_cmds;
     vendor_config.init_cmds_size = jd9365_init_cmds_size;
@@ -935,7 +950,7 @@ inline esp_err_t init() {
     panel_config.vendor_config = &vendor_config;
 
     esp_lcd_panel_handle_t panel = nullptr;
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_DISPLAY_MIPI_JD9165)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_jd9165(dbi_io, &panel_config, &panel), TAG,
                         "JD9165 panel creation failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "JD9165 panel reset failed");
@@ -951,7 +966,7 @@ inline esp_err_t init() {
 #endif
 
     s_panel = panel;
-#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(
                             panel, FRAME_BUFFER_COUNT, &s_frame_buffers[0],
                             &s_frame_buffers[1], &s_frame_buffers[2]),
@@ -964,7 +979,7 @@ inline esp_err_t init() {
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_client_config, &s_ppa_srm_client), TAG,
                         "PPA SRM client registration failed");
 #endif
-#if !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && !defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     s_dpi_vsync = xSemaphoreCreateBinary();
     if (s_dpi_vsync == nullptr) {
         ESP_LOGE(TAG, "Could not create DSI VSYNC semaphore");
@@ -984,6 +999,8 @@ inline esp_err_t init() {
         ESP_RETURN_ON_ERROR(gpio_set_level(CurrentBoard::PIN_BACKLIGHT, 1), TAG,
                             "Backlight enable failed");
     }
+
+#endif // CONFIG_APP_DISPLAY_OUTPUT_SPI
 
     lvgl_port_cfg_t lvgl_config = ESP_LVGL_PORT_INIT_CONFIG();
     // Library default is task_affinity = -1 (unpinned); this project pins every task it
@@ -1005,7 +1022,32 @@ inline esp_err_t init() {
         image_handlers->buf_malloc_cb = image_cache_buf_malloc;
         image_handlers->buf_free_cb = image_cache_buf_free;
     }
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI)
+    lvgl_port_display_cfg_t display_config = {};
+    display_config.io_handle = Feature::SPIDisplay::io;
+    display_config.panel_handle = panel;
+    display_config.hres = CONFIG_APP_DISPLAY_WIDTH;
+    display_config.vres = CONFIG_APP_DISPLAY_HEIGHT;
+    display_config.buffer_size = CONFIG_APP_DISPLAY_WIDTH * Feature::SPIDisplay::buffer_lines;
+    display_config.double_buffer = true;
+    display_config.color_format = LV_COLOR_FORMAT_RGB565;
+    display_config.flags.buff_dma = true;
+    display_config.flags.swap_bytes = true;
+    display_config.rotation.swap_xy = CONFIG_APP_DISPLAY_WIDTH > 240;
+    display_config.rotation.mirror_x = CONFIG_APP_DISPLAY_WIDTH > 240;
+    lv_display_t* display = lvgl_port_add_disp(&display_config);
+#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+    if (display != nullptr) {
+        lv_display_add_event_cb(display, [](lv_event_t* event) {
+            auto* screen = static_cast<lv_display_t*>(lv_event_get_target(event));
+            if (lv_display_flush_is_last(screen) &&
+                s_splash_frame_pending.exchange(false, std::memory_order_acq_rel)) {
+                s_splash_visible_since.store(xTaskGetTickCount(), std::memory_order_release);
+            }
+        }, LV_EVENT_FLUSH_FINISH, nullptr);
+    }
+#endif
+#elif defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     // The panel is natively landscape, so LVGL renders in the panel's own orientation.
     lv_display_t* display = create_direct_display(panel);
 #else
@@ -1020,6 +1062,7 @@ inline esp_err_t init() {
         return ESP_ERR_NO_MEM;
     }
 
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI)
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     ESP_LOGI(TAG, "LVGL: direct rendering into two DPI PSRAM buffers, frame-synchronized switching");
 #else
@@ -1045,6 +1088,9 @@ inline esp_err_t init() {
     lv_display_set_flush_cb(display, flush_cb);
 #endif
 
+#endif // CONFIG_APP_ENABLE_MIPI_DSI
+
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI)
     i2c_master_bus_handle_t touch_i2c_bus = Board::get_i2c_bus_handle(0);
     if (touch_i2c_bus == nullptr) {
         lvgl_port_unlock();
@@ -1106,6 +1152,8 @@ inline esp_err_t init() {
     lv_timer_set_period(lv_indev_get_read_timer(touch_indev), 16);
     ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d, 16 ms polling)",
              CurrentBoard::PIN_TOUCH_RST, CurrentBoard::PIN_TOUCH_INT);
+
+#endif // CONFIG_APP_ENABLE_MIPI_DSI
 
 #if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \
     (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_HID_HOST))
@@ -1181,7 +1229,9 @@ inline esp_err_t init() {
 #else
     ESP_LOGI(TAG, "Display and LVGL status UI are ready");
 #endif
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI)
     (void)dsi_phy_ldo; // Keep the PHY rail acquired for the lifetime of the display.
+#endif
     return ESP_OK;
 }
 

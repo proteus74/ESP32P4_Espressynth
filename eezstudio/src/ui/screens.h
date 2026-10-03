@@ -35,6 +35,8 @@ typedef struct _objects_t {
     lv_obj_t *lbl_core1_util;
     lv_obj_t *lbl_bpm;
     lv_obj_t *bar_core1_util;
+    lv_obj_t *bar_master_volume;
+    lv_obj_t *lbl_bpm_1;
     lv_obj_t *wndmain;
     lv_obj_t *lbl_preset_name;
     lv_obj_t *btn_pages;
@@ -56,6 +58,9 @@ void tick_user_widget_knob(int startWidgetIndex);
 
 void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex);
 void tick_user_widget_midi_button(int startWidgetIndex);
+
+void create_user_widget_envelope(lv_obj_t *parent_obj, int startWidgetIndex);
+void tick_user_widget_envelope(int startWidgetIndex);
 
 void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);

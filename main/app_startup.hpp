@@ -20,6 +20,13 @@
     #include "features/display/display_lvgl.hpp"
 #endif
 
+#if defined(CONFIG_APP_ENABLE_SSD1306)
+    #include "features/display/display_ssd1306.hpp"
+#endif
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI) && !defined(CONFIG_APP_ENABLE_LVGL)
+    #include "features/display/display_spi.hpp"
+#endif
+
 #if defined(CONFIG_APP_ENABLE_WIFI)
     #include "features/wifi/wifi_manager.hpp"
 #endif
@@ -181,9 +188,20 @@ inline void init() {
     }
 #endif
 
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI) && !defined(CONFIG_APP_ENABLE_LVGL) && CONFIG_APP_DISPLAY_SPI_PIN_CLK >= 0
+    ESP_ERROR_CHECK(Feature::SPIDisplay::init());
+#endif
+
 #if defined(CONFIG_APP_ENABLE_LVGL)
     ESP_LOGI(TAG, "Feature: LVGL enabled -> Initializing...");
     ESP_ERROR_CHECK(Feature::LVGL::init());
+#endif
+
+#if defined(CONFIG_APP_ENABLE_SSD1306)
+    const esp_err_t oled_err = Feature::SSD1306::init();
+    if (oled_err != ESP_OK) {
+        ESP_LOGW(TAG, "SSD1306 unavailable: %s", esp_err_to_name(oled_err));
+    }
 #endif
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_ETHERNET)
@@ -275,6 +293,9 @@ inline void init() {
 
 #if defined(CONFIG_APP_ENABLE_LVGL)
     Feature::LVGL::finish_startup_screen();
+#endif
+#if defined(CONFIG_APP_ENABLE_SSD1306)
+    Feature::SSD1306::finish_startup_screen();
 #endif
 
     ESP_LOGI(TAG, "Application initialization complete. Running main loop...");

@@ -23,6 +23,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/OverdriveNode.h"
 #include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
@@ -691,6 +692,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::WaveFolder:
         nodes::wavefolder::build(inst, p);
         break;
+    case NodeType::Overdrive:
+        nodes::overdrive::build(inst, p);
+        break;
     case NodeType::EnvelopeFollower:
         nodes::envelopefollower::build(inst, p);
         break;
@@ -837,6 +841,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     }
 
     Graph *g = Graph::allocate();
+    g->presetBpm = doc.bpm;
     const size_t internalFreeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t internalLargestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     uint16_t outputPsramFallbacks = 0;
@@ -1047,11 +1052,13 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 break;
             case NodeType::Knob:
                 inst.knob = allocateNodeState<KnobState>(outputPsramFallbacks);
-                stateAllocFailed = (inst.knob == nullptr);
+                stateAllocFailed = (inst.knob == nullptr || !inst.knob->resizeControls(
+                    doc.widgets[i].params.knobCount, doc.widgets[i].params.knobLayerCount));
                 break;
             case NodeType::Button:
                 inst.button = allocateNodeState<ButtonState>(outputPsramFallbacks);
-                stateAllocFailed = (inst.button == nullptr);
+                stateAllocFailed = (inst.button == nullptr || !inst.button->resizeControls(
+                    doc.widgets[i].params.buttonCount, doc.widgets[i].params.buttonLayerCount));
                 break;
             case NodeType::UpDownButton:
                 inst.upDownButton = allocateNodeState<UpDownButtonState>(outputPsramFallbacks);
@@ -1310,6 +1317,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 route.sourceWidget = static_cast<uint16_t>(fromIdx);
                 route.targetWidget = static_cast<uint16_t>(toIdx);
                 route.kind = kind;
+                snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
                 if (toPort >= 0)
                 {
                     route.targetPort = static_cast<int8_t>(toPort);
@@ -1458,14 +1466,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // Const's scalar Value output is a control route. It deliberately has
         // no audio-rate output port; targets receive the numeric value in
         // their named parameter and, when applicable, controlValue buffer.
-        if (fromType == NodeType::Const &&
+        if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume) &&
             (strcmp(cd.fromPort, "value") == 0 || strcmp(cd.fromPort, "audio") == 0) &&
             g->controlRouteCount < synth::kMaxConnections)
         {
             ControlRoute &route = g->controlRoutes[g->controlRouteCount++];
             route.sourceWidget = static_cast<uint16_t>(fromIdx);
             route.targetWidget = static_cast<uint16_t>(toIdx);
-            route.kind = ControlRoute::Kind::Const;
+            route.kind = fromType == NodeType::MasterVolume ? ControlRoute::Kind::MasterVolume : ControlRoute::Kind::Const;
             snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
             if (toPort >= 0)
             {
@@ -1523,12 +1531,15 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             initial = g->instances[g->widgets[route.sourceWidget].instanceBase].constant.value;
         }
+        else if (route.kind == ControlRoute::Kind::MasterVolume)
+        {
+            initial = synth::clampDeviceVolume(synth::deviceSettings().volume) * cv::kMaxVolts;
+            g->instances[g->widgets[route.sourceWidget].instanceBase].controlValue[0] = initial;
+        }
         else if (route.kind == ControlRoute::Kind::MidiPitchBend)
         {
-            // "no bend" = 5V (matches pitchCv's own 5V-at-note-60 center).
-            // Without this a target reads fully-bent-down (0V) until the
-            // first real pitch-bend message arrives.
-            initial = cv::kMaxVolts / 2.0f;
+            // Pitch Bend starts centered at 0V; Tune conversion happens below.
+            initial = 0.0f;
         }
         else
         {
@@ -1541,6 +1552,11 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             NodeInstance &target = g->instances[targetWidget.instanceBase + v];
             float targetValue = initial;
+            if (route.kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0 &&
+                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator || target.type == NodeType::Hammond))
+            {
+                targetValue += cv::kMaxVolts / 2.0f;
+            }
             if ((target.type == NodeType::Lfo || target.type == NodeType::Wavetable) &&
                 strcmp(route.paramName, "rate") == 0 && route.kind != ControlRoute::Kind::KnobCc)
             {

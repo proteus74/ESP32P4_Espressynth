@@ -703,6 +703,10 @@ button:hover {
   transition: width 0.2s ease;
 }
 
+.master-volume-meter {
+  padding: 0 0.5rem 0 0;
+}
+
 .cpu-load-bar-fill.warn {
   background: #fbbf24;
 }
@@ -4117,29 +4121,113 @@ body.show-oscilloscopes .oscilloscope-only-body {
   margin-top: 0;
 }
 
-/* Settings dialog only - GPIO and Network now live in their own popped-out
-   modals (#gpioSettingsOverlay / #networkSettingsOverlay), so the main
-   Settings dialog only ever holds two short sections and no longer needs
-   to sprawl edge-to-edge; a normal 2-column width keeps fields readable
-   instead of stretching input boxes across a near-fullscreen modal. */
-.modal-wide {
-  width: min(680px, 95vw);
-  max-width: 95vw;
+/* Keep actions visible while the grouped settings scroll on small screens. */
+.settings-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  width: min(740px, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  padding: 1.5rem;
+  overflow: hidden;
+}
+
+.settings-modal h3 {
+  margin: 0;
 }
 
 .settings-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem 2rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 0.4rem;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--card-border);
+  border-radius: 0.6rem;
+  background: rgb(15 23 42 / 28%);
+}
+
+.settings-section legend {
+  padding: 0 0.45rem;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.settings-section .modal-field,
+.settings-section .modal-field-hint,
+.settings-section .modal-field-readout,
+.settings-section .modal-actions {
+  margin: 0;
+}
+
+.settings-section > button {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.settings-section .modal-inline-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.settings-hardware-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 1.25rem;
+}
+
+.settings-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.settings-item h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.settings-footer {
+  flex-shrink: 0;
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.settings-modal [hidden],
+#networkSettingsOverlay [hidden] {
+  display: none !important;
+}
+
+#networkSettingsOverlay .settings-section {
+  margin-bottom: 1rem;
 }
 
 .settings-section-full {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 600px) {
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-modal {
+    padding: 1rem;
   }
 }
 
@@ -5278,3 +5366,10 @@ input[type="range"].port-slider + .port-value {
 .wavetable-editor .modal-actions > button:nth-child(2) {
   margin-right: auto;
 }
+
+.master-volume-body { display: flex; align-items: center; gap: 0.5rem; padding: 0.65rem 0.6rem; }
+.master-volume-body .port-slider { flex-basis: 96px; width: 96px; }
+.master-volume-body output { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.master-volume-body .widget-ports { margin-left: auto; padding: 0; }
+.master-volume-body .port-row { padding: 0; }
+.master-volume-body .port-label { display: none; }

@@ -13,10 +13,10 @@ constexpr const char* BOARD_NAME = "JC1060P470C 7\" (ESP32-P4)";
 
 // Display Specifications (MIPI DSI - JD9165, 1024x600 landscape panel)
 // The panel is natively landscape, so no software rotation is needed (unlike JC8012P4A1).
-constexpr int DISPLAY_WIDTH       = 1024;
-constexpr int DISPLAY_HEIGHT      = 600;
-constexpr int DISPLAY_NATIVE_WIDTH  = 1024;
-constexpr int DISPLAY_NATIVE_HEIGHT = 600;
+constexpr int DISPLAY_WIDTH       = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_HEIGHT      = CONFIG_APP_DISPLAY_HEIGHT;
+constexpr int DISPLAY_NATIVE_WIDTH  = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_NATIVE_HEIGHT = CONFIG_APP_DISPLAY_HEIGHT;
 constexpr int DISPLAY_DSI_LANES   = 2;
 constexpr int DISPLAY_REFRESH_HZ  = 60;
 // DSI/DPI timing from the vendor demo (both the BSP and the xiaozhi board file agree on the

@@ -3,6 +3,7 @@
 import { parseSf2, resolvePreset, decibelsToGain, cents2Hertz } from "./sf2-engine.js";
 import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv, createCombFilterDsp } from "./comb-filter-core.js?v=20260926-comb-1";
+import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, overdriveCv, createOverdriveDsp } from "./overdrive-core.js?v=20261003-od-3";
 import { createReverbCore } from "./reverb-core.js?v=20260926-knob-2";
 
 function clampRange(value, lo, hi) {
@@ -248,9 +249,9 @@ function hzFromPitchCv(volts) {
 // rather than porting the whole program system. Likewise mdaEPiano's own
 // pan/tremolo (lmod/rmod) and overdrive are always zero in this integration
 // (MdaPianoNode.h never sets them nonzero - the audible tremolo/wah is
-// entirely RefaceCpChain's, applied afterward), and the sustain pedal is
-// never wired into handleMidi(), so note-off always releases immediately -
-// both are omitted here as dead code, not approximated.
+// entirely RefaceCpChain's, applied afterward) - omitted here as dead code,
+// not approximated. Sustain (CC64/66) and CC120/123 mirror
+// mdaEPiano::processMidiController().
 // ============================================================================
 const MDA_EPIANO_DEFAULT_PARAM = [0.5, 0.5, 0.5, 0.5, 0.5, 0.65, 0.25, 0.5, 1.0, 0.5, 0.146, 0.0];
 
@@ -285,7 +286,9 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
     delta: 0, dbase: 0, frac: 0, pos: 0, end: 0, loop: 0,
     env: 0, dec: 0.99, outl: 0, outr: 0, note: -1,
   }));
+  const SUSTAIN = 128;
   let activevoices = 0;
+  let sustain = false;
   let tl = 0, tr = 0, lfo0 = 0, lfo1 = 1;
   let bendf = 1;
   let waves = null;
@@ -295,6 +298,7 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
   function resetVoices() {
     for (const v of voices) { v.env = 0; v.dec = 0.99; }
     activevoices = 0;
+    sustain = false;
     tl = tr = lfo0 = 0;
     lfo1 = 1;
   }
@@ -351,7 +355,8 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
     } else {
       for (let v = 0; v < maxVoices; v += 1) {
         if (voices[v].note === note) {
-          voices[v].dec = Math.exp(-iFs * Math.exp(6.0 + 0.01 * note - 5.0 * p[1]));
+          if (sustain) voices[v].note = SUSTAIN;
+          else voices[v].dec = Math.exp(-iFs * Math.exp(6.0 + 0.01 * note - 5.0 * p[1]));
         }
       }
     }
@@ -359,6 +364,19 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
 
   function noteOff(note) {
     noteOn(note, 0);
+  }
+
+  // Subset of mdaEPiano::processMidiController() wired by MdaPianoNode.h.
+  function controlChange(cc, value) {
+    if (cc === 64 || cc === 66) {
+      sustain = (value & 0x40) !== 0;
+      if (!sustain) noteOn(SUSTAIN, 0);
+    } else if (cc === 120) {
+      resetVoices();
+    } else if (cc === 123) {
+      for (const v of voices) v.env = 0;
+      activevoices = 0;
+    }
   }
 
   function setPitchBend(bend14) {
@@ -415,7 +433,7 @@ function createMdaEpianoEngine(maxVoices, sampleRate) {
     }
   }
 
-  return { noteOn, noteOff, setPitchBend, resetVoices, loadInstrument, process };
+  return { noteOn, noteOff, controlChange, setPitchBend, resetVoices, loadInstrument, process };
 }
 
 // One-pole envelope-follower-driven wah, ported from wahwah.h (SvfWahCore +
@@ -2268,9 +2286,8 @@ export class AudioEngine {
   // the ported engine, mod wheel only updates entry.modWheel (consumed by
   // the effects-chain trem/wah depth in the "mda-piano" onaudioprocess
   // above, exactly like the firmware's state.modWheel), pitch bend goes to
-  // the engine's own setPitchBend(). Sustain pedal is intentionally not
-  // wired here either - MdaPianoNode.h's handleMidi() never wires it in the
-  // firmware, so note-off always releases immediately there too.
+  // the engine's own setPitchBend(), CC64/66/120/123 to the engine's
+  // controlChange() (sustain pedal etc.).
   handleMdaPianoMidi(id, data) {
     const wrapper = this.nodes.get(id);
     const entry = wrapper && wrapper.voiced ? wrapper.instances[0] : wrapper;
@@ -2284,6 +2301,8 @@ export class AudioEngine {
     } else if (data.midiType === "control_change") {
       if (entry.enableModWheel && data.control === 1) {
         entry.modWheel = (data.value ?? 0) / 127;
+      } else {
+        entry.engine.controlChange(data.control, data.value ?? 0);
       }
     } else if (data.midiType === "pitchwheel") {
       if (entry.enablePitchWheel && data.value !== undefined) {
@@ -3037,6 +3056,7 @@ export class AudioEngine {
         }
         return lfoEntry;
       }
+      case "master-volume":
       case "const":
       case "up-down-button": {
         const constant = ctx.createConstantSource();
@@ -4002,6 +4022,34 @@ export class AudioEngine {
             const wet = fold(dry * drive + bias);
             output[i] = (dry + (wet - dry) * mix) * gain;
           }
+        };
+        return entry;
+      }
+      case "overdrive": {
+        // Signal on merger channel 0, every CV on its own channel, so all
+        // parameters stay audio-rate modulatable - DSP in overdrive-core.js.
+        const inputMerger = ctx.createChannelMerger(1 + OVERDRIVE_PORTS.length);
+        const processor = ctx.createScriptProcessor(256, 1 + OVERDRIVE_PORTS.length, 1);
+        const controlSources = OVERDRIVE_PORTS.map((name, index) => {
+          const source = ctx.createConstantSource();
+          source.offset.value = overdriveCv(Number(params[name]), OVERDRIVE_DEFAULTS[name]);
+          source.connect(inputMerger, 0, index + 1);
+          source.start();
+          return source;
+        });
+        inputMerger.connect(processor);
+        const dsp = createOverdriveDsp(ctx.sampleRate);
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          controlSources,
+          controlValues: controlSources.map((source) => source.offset.value),
+          controlConnectionCounts: OVERDRIVE_PORTS.map(() => 0),
+        };
+        processor.onaudioprocess = (event) => {
+          const inputs = Array.from({ length: 1 + OVERDRIVE_PORTS.length }, (_, ch) => event.inputBuffer.getChannelData(ch));
+          dsp.render(inputs, event.outputBuffer.getChannelData(0));
         };
         return entry;
       }
@@ -5904,6 +5952,7 @@ export class AudioEngine {
         if (index !== undefined) entry.controlSources[index].offset.value = Number.isFinite(Number(value)) ? Number(value) : 0;
         break;
       }
+      case "master-volume":
       case "const":
       case "up-down-button":
         if (paramName === "value") applyRamp(entry.constant.offset);
@@ -5998,6 +6047,15 @@ export class AudioEngine {
         const index = ["drive", "symmetry", "gain", "mix"].indexOf(paramName);
         if (index >= 0) {
           const safe = clampRange(Number(value) || 0, 0, CV_MAX_VOLTS);
+          entry.controlValues[index] = safe;
+          if (entry.controlConnectionCounts[index] === 0) applyRampValue(entry.controlSources[index].offset, safe);
+        }
+        break;
+      }
+      case "overdrive": {
+        const index = OVERDRIVE_PORTS.indexOf(paramName);
+        if (index >= 0) {
+          const safe = overdriveCv(Number(value), OVERDRIVE_DEFAULTS[paramName]);
           entry.controlValues[index] = safe;
           if (entry.controlConnectionCounts[index] === 0) applyRampValue(entry.controlSources[index].offset, safe);
         }
@@ -6294,6 +6352,7 @@ export class AudioEngine {
     if (entry.type === "dx-envelope" && port === "out") return entry.output;
     if (entry.type === "bitcrusher" && port === "out") return entry.processor;
     if (entry.type === "wave-folder" && port === "out") return entry.processor;
+    if (entry.type === "overdrive" && port === "out") return entry.processor;
     if (entry.type === "envelope-follower" && port === "out") return entry.processor;
     if (entry.type === "burst-generator" && port === "out") return entry.processor;
     if (entry.type === "pan" && port === "out1") return entry.out1;
@@ -6407,6 +6466,7 @@ export class AudioEngine {
     if (entry.type === "detune" && port === "cv") return entry.cvIn;
     if (entry.type === "bitcrusher" && port === "in") return entry.processor;
     if (entry.type === "wave-folder" && ["in", "drive", "symmetry", "gain", "mix"].includes(port)) return entry.inputMerger;
+    if (entry.type === "overdrive" && (port === "in" || OVERDRIVE_PORTS.includes(port))) return entry.inputMerger;
     if (entry.type === "envelope-follower" && ["in", "attack", "release", "preGain"].includes(port)) return entry.inputMerger;
     if (entry.type === "burst-generator" && ["in", "mode", "count", "time", "decay"].includes(port)) return entry.inputMerger;
     if (entry.type === "pan" && (port === "in" || port === "pan")) return entry.inputMerger;
@@ -6471,8 +6531,10 @@ export class AudioEngine {
       this._wireCombFilterInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
       return;
     }
-    if (toEntry && toEntry.type === "wave-folder") {
-      const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
+    if (toEntry && (toEntry.type === "wave-folder" || toEntry.type === "overdrive")) {
+      const inputIndex = toEntry.type === "overdrive"
+        ? (toPort === "in" ? 0 : (OVERDRIVE_PORTS.indexOf(toPort) + 1 || undefined))
+        : { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from === undefined || !from || inputIndex === undefined) return;
       try {
@@ -6787,8 +6849,10 @@ export class AudioEngine {
       this._wireCombFilterInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
       return;
     }
-    if (toEntry && toEntry.type === "wave-folder") {
-      const inputIndex = { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
+    if (toEntry && (toEntry.type === "wave-folder" || toEntry.type === "overdrive")) {
+      const inputIndex = toEntry.type === "overdrive"
+        ? (toPort === "in" ? 0 : (OVERDRIVE_PORTS.indexOf(toPort) + 1 || undefined))
+        : { in: 0, drive: 1, symmetry: 2, gain: 3, mix: 4 }[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from === undefined || !from || inputIndex === undefined) return;
       try {

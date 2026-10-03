@@ -3,9 +3,12 @@
 #include "app_core.hpp"
 #include "version.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "lvgl.h"
 #include "KnobActivityOverlay.h"
 #include "PageControlsView.h"
@@ -17,6 +20,7 @@ extern "C" {
 }
 
 #include <cstdarg>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -26,11 +30,114 @@ lv_timer_t *s_timer = nullptr;
 EezPresetList s_preset_list{};
 EezTabList *s_tab_list = nullptr; // allocated in PSRAM on first use
 lv_obj_t *s_pages_box = nullptr;  // open Pages popup, closed again on a preset change
-EezPageControls *s_page_controls = nullptr; // allocated in PSRAM on first use
+lv_obj_t *s_page_loading = nullptr;
 char s_page_id[sizeof(EezTabList::ids[0])] = {}; // page shown in wndmain, "" = none
 PageControlsView s_page_view;
 KnobActivityOverlay s_knob_overlay;
-uint32_t s_knob_preset_sequence = 0;
+uint32_t s_knob_preset_sequence = UINT32_MAX;
+EezPageControls *s_cached_pages[EEZ_TAB_CAPACITY] = {};
+bool s_page_requested[EEZ_TAB_CAPACITY] = {};
+bool s_page_fetching = false, s_tabs_fetching = false, s_presets_ready = false;
+int64_t s_presets_loaded_us = 0;
+
+int cached_page_index(const char *pageId)
+{
+    if (s_tab_list != nullptr)
+        for (uint16_t i = 0; i < s_tab_list->count; ++i)
+            if (strcmp(s_tab_list->ids[i], pageId) == 0) return i;
+    return -1;
+}
+
+void clear_page_cache()
+{
+    s_page_view.clear();
+    for (auto *&page : s_cached_pages) {
+        heap_caps_free(page);
+        page = nullptr;
+    }
+    memset(s_page_requested, 0, sizeof(s_page_requested));
+    heap_caps_free(s_tab_list);
+    s_tab_list = nullptr;
+    s_page_fetching = s_tabs_fetching = false;
+}
+
+enum class DataKind : uint8_t { Page, Tabs, Presets };
+struct DataRequest {
+    DataKind kind;
+    uint32_t generation;
+    uint32_t presetSequence;
+    char pageId[sizeof(s_page_id)];
+};
+struct DataResult {
+    DataRequest request;
+    void *data;
+};
+QueueHandle_t s_data_requests = nullptr, s_data_results = nullptr;
+std::atomic<uint32_t> s_data_generation[3]{};
+DataRequest s_pending_data[3]{};
+bool s_data_pending[3]{};
+
+// UI owns pending requests. Queue writes never block LVGL; newer selections replace
+// requests not yet sent. The worker only owns file I/O and its result allocation.
+bool request_data(DataKind kind, const char *pageId = nullptr)
+{
+    if (s_data_requests == nullptr) return false;
+    const unsigned index = static_cast<unsigned>(kind);
+    auto &request = s_pending_data[index];
+    request = {kind, ++s_data_generation[index], s_knob_preset_sequence, {}};
+    snprintf(request.pageId, sizeof(request.pageId), "%s", pageId != nullptr ? pageId : s_page_id);
+    s_data_pending[index] = true;
+    if (kind == DataKind::Page) s_page_fetching = true;
+    if (kind == DataKind::Tabs) s_tabs_fetching = true;
+    return true;
+}
+
+void prefetch_pages()
+{
+    if (s_tab_list == nullptr || s_page_fetching) return;
+    for (uint16_t i = 0; i < s_tab_list->count; ++i)
+        if (s_cached_pages[i] == nullptr && !s_page_requested[i]) {
+            if (request_data(DataKind::Page, s_tab_list->ids[i])) s_page_requested[i] = true;
+            return;
+        }
+}
+
+void dispatch_data_requests()
+{
+    if (s_data_requests == nullptr) return;
+    for (unsigned i = 0; i < 3; ++i)
+        if (s_data_pending[i] && xQueueSend(s_data_requests, &s_pending_data[i], 0) == pdTRUE)
+            s_data_pending[i] = false;
+}
+
+void data_worker(void *)
+{
+    DataRequest request{};
+    for (;;) {
+        xQueueReceive(s_data_requests, &request, portMAX_DELAY);
+        const unsigned index = static_cast<unsigned>(request.kind);
+        if (request.generation != s_data_generation[index].load()) continue;
+        const size_t size = request.kind == DataKind::Page ? sizeof(EezPageControls)
+                          : request.kind == DataKind::Tabs ? sizeof(EezTabList) : sizeof(EezPresetList);
+        void *data = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        bool loaded = false;
+        if (data != nullptr) {
+            switch (request.kind) {
+            case DataKind::Page: loaded = eez_list_page_controls(request.pageId, static_cast<EezPageControls *>(data)); break;
+            case DataKind::Tabs: loaded = eez_list_tabs(static_cast<EezTabList *>(data)); break;
+            case DataKind::Presets: loaded = eez_list_presets(static_cast<EezPresetList *>(data)); break;
+            }
+        }
+        if (!loaded) {
+            heap_caps_free(data);
+            data = nullptr;
+            ESP_LOGW("EEZUI", "Could not load display data (kind %u)", index);
+        }
+        DataResult result{request, data};
+        // Only this worker may wait for result capacity. LVGL always polls with zero timeout.
+        xQueueSend(s_data_results, &result, portMAX_DELAY);
+    }
+}
 
 void action_open_preset_list(lv_event_t *)
 {
@@ -42,21 +149,28 @@ void action_back_to_main(lv_event_t *)
     lv_obj_add_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN);
     s_page_view.setHidden(false);
+    if (s_page_loading != nullptr) lv_obj_remove_flag(s_page_loading, LV_OBJ_FLAG_HIDDEN);
 }
 
 // (Re)builds the controls of s_page_id in wndmain from the active preset.
 void show_page()
 {
     if (s_page_id[0] == '\0') return;
-    if (s_page_controls == nullptr)
-        s_page_controls = static_cast<EezPageControls *>(
-            heap_caps_malloc(sizeof(EezPageControls), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (s_page_controls == nullptr || !eez_list_page_controls(s_page_id, s_page_controls)) {
-        s_page_view.clear();
+    const int index = cached_page_index(s_page_id);
+    if (index >= 0 && s_cached_pages[index] != nullptr) {
+        if (s_page_loading != nullptr) lv_obj_delete(s_page_loading);
+        s_page_loading = nullptr;
+        s_page_view.show(lv_win_get_content(objects.wndmain), *s_cached_pages[index], s_page_id);
+        s_page_view.setHidden(!lv_obj_has_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN));
         return;
     }
-    s_page_view.show(lv_win_get_content(objects.wndmain), *s_page_controls);
-    if (!lv_obj_has_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN)) s_page_view.setHidden(true);
+    // Old controls must not send parameters to a newly selected preset while loading.
+    s_page_view.setHidden(true);
+    if (s_page_loading == nullptr)
+        s_page_loading = lv_label_create(lv_win_get_content(objects.wndmain));
+    lv_label_set_text(s_page_loading, request_data(DataKind::Page) ? "Lade Seite..." : "Seite konnte nicht geladen werden");
+    if (!lv_obj_has_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN)) lv_obj_add_flag(s_page_loading, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_remove_flag(s_page_loading, LV_OBJ_FLAG_HIDDEN);
 }
 
 void action_select_page(lv_event_t *e)
@@ -69,11 +183,11 @@ void action_select_page(lv_event_t *e)
     if (s_pages_box != nullptr) lv_msgbox_close_async(s_pages_box);
 }
 
+void populate_pages();
+
 void action_open_pages(lv_event_t *)
 {
-    if (s_tab_list == nullptr)
-        s_tab_list = static_cast<EezTabList *>(heap_caps_malloc(sizeof(EezTabList), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (s_pages_box != nullptr || s_tab_list == nullptr || !eez_list_tabs(s_tab_list)) return;
+    if (s_pages_box != nullptr) return;
     lv_obj_t *box = lv_msgbox_create(nullptr);
     s_pages_box = box;
     lv_obj_add_event_cb(box, [](lv_event_t *) { s_pages_box = nullptr; }, LV_EVENT_DELETE, nullptr);
@@ -87,6 +201,15 @@ void action_open_pages(lv_event_t *)
 
     lv_obj_t *content = lv_msgbox_get_content(box);
     lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    if (s_tab_list != nullptr) populate_pages();
+    else lv_label_set_text(lv_label_create(content), (s_tabs_fetching || request_data(DataKind::Tabs)) ? "Lade Seiten..." : "Seiten konnten nicht geladen werden");
+}
+
+void populate_pages()
+{
+    if (s_pages_box == nullptr) return;
+    lv_obj_t *content = lv_msgbox_get_content(s_pages_box);
+    lv_obj_clean(content);
     lv_obj_t *list = lv_list_create(content);
     lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_max_height(list, 460, 0);
@@ -96,6 +219,91 @@ void action_open_pages(lv_event_t *)
         lv_obj_set_height(button, 60);
         lv_obj_set_style_text_font(button, &lv_font_montserrat_18, 0);
         lv_obj_add_event_cb(button, action_select_page, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+    }
+}
+
+void populate_presets()
+{
+    lv_obj_t *table = objects.tbl_presets;
+    lv_table_set_row_count(table, s_preset_list.count + 1);
+    lv_table_set_column_count(table, 4);
+    lv_table_set_column_width(table, 0, 55);
+    lv_table_set_column_width(table, 1, 240);
+    lv_table_set_column_width(table, 2, 470);
+    lv_table_set_column_width(table, 3, 250);
+    lv_table_set_cell_value(table, 0, 0, "#");
+    lv_table_set_cell_value(table, 0, 1, "Preset");
+    lv_table_set_cell_value(table, 0, 2, "Short Description");
+    lv_table_set_cell_value(table, 0, 3, "Author");
+    for (uint16_t i = 0; i < s_preset_list.count; ++i) {
+        const EezPresetEntry *preset = &s_preset_list.entries[i];
+        lv_table_set_cell_value_fmt(table, i + 1, 0, "%u", static_cast<unsigned>(i + 1));
+        lv_table_set_cell_value(table, i + 1, 1, preset->display_name);
+        lv_table_set_cell_value(table, i + 1, 2, preset->description);
+        lv_table_set_cell_value(table, i + 1, 3, preset->author);
+    }
+}
+
+void apply_data_results()
+{
+    if (s_data_results == nullptr) return;
+    DataResult result{};
+    while (xQueueReceive(s_data_results, &result, 0) == pdTRUE) {
+        const auto &request = result.request;
+        const unsigned index = static_cast<unsigned>(request.kind);
+        if ((request.kind != DataKind::Page && request.generation != s_data_generation[index].load()) ||
+            request.presetSequence != s_knob_preset_sequence) {
+            heap_caps_free(result.data);
+            continue;
+        }
+        switch (request.kind) {
+        case DataKind::Page:
+            if (request.generation == s_data_generation[index].load()) s_page_fetching = false;
+            if (result.data != nullptr) {
+                auto *controls = static_cast<EezPageControls *>(result.data);
+                const int pageIndex = cached_page_index(request.pageId);
+                if (pageIndex >= 0) {
+                    heap_caps_free(s_cached_pages[pageIndex]);
+                    s_cached_pages[pageIndex] = controls;
+                    s_page_requested[pageIndex] = true;
+                    result.data = nullptr; // PSRAM cache owns the loaded page.
+                }
+                if (strcmp(request.pageId, s_page_id) == 0) {
+                    if (s_page_loading != nullptr) lv_obj_delete(s_page_loading);
+                    s_page_loading = nullptr;
+                    s_page_view.show(lv_win_get_content(objects.wndmain), *controls, s_page_id);
+                    s_page_view.setHidden(!lv_obj_has_flag(objects.tbl_presets, LV_OBJ_FLAG_HIDDEN));
+                } else if (pageIndex >= 0) {
+                    s_page_view.prepare(lv_win_get_content(objects.wndmain), *controls, request.pageId);
+                }
+            } else if (strcmp(request.pageId, s_page_id) == 0 && s_page_loading != nullptr) lv_label_set_text(s_page_loading, "Seite konnte nicht geladen werden");
+            break;
+        case DataKind::Tabs:
+            s_tabs_fetching = false;
+            heap_caps_free(s_tab_list);
+            s_tab_list = static_cast<EezTabList *>(result.data);
+            result.data = nullptr; // Keep tab IDs alive for popup button callbacks.
+            if (s_tab_list != nullptr) populate_pages();
+            else if (s_pages_box != nullptr) {
+                lv_obj_t *content = lv_msgbox_get_content(s_pages_box);
+                lv_obj_clean(content);
+                lv_label_set_text(lv_label_create(content), "Seiten konnten nicht geladen werden");
+            }
+            break;
+        case DataKind::Presets:
+            if (result.data != nullptr) {
+                const bool changed = !s_presets_ready || memcmp(&s_preset_list, result.data, sizeof(s_preset_list)) != 0;
+                s_preset_list = *static_cast<EezPresetList *>(result.data);
+                s_presets_ready = true;
+                s_presets_loaded_us = esp_timer_get_time();
+                if (changed) populate_presets();
+            } else if (!s_presets_ready) {
+                s_preset_list.count = 0;
+                lv_table_set_cell_value(objects.tbl_presets, 0, 0, "Presets konnten nicht geladen werden");
+            }
+            break;
+        }
+        heap_caps_free(result.data);
     }
 }
 
@@ -128,6 +336,26 @@ __attribute__((format(printf, 2, 3))) void set_label_fmt(lv_obj_t *label, const 
     set_label_text(label, text);
 }
 
+void update_control_activity(uint32_t presetSequence)
+{
+    // Bound queue processing so MIDI bursts leave time for touch and rendering.
+    // Remaining display notifications stay queued; audio/button processing is independent.
+    constexpr int64_t kActivityBudgetUs = 2000;
+    const int64_t activityNowUs = esp_timer_get_time();
+    KnobActivity activity{};
+    for (uint16_t i = 0; i < 512 &&
+         (i == 0 || esp_timer_get_time() - activityNowUs < kActivityBudgetUs) &&
+         eez_read_knob_activity(&activity); ++i)
+    {
+        if (activity.presetSequence != presetSequence) continue;
+        // Only state changes in this loop; each page card refreshes once afterwards.
+        if ((activity.isEnvelope || !s_page_view.apply(activity, true)) && activityNowUs - activity.updatedUs < activity.durationUs())
+            s_knob_overlay.update(activity, true);
+    }
+    s_page_view.tick();
+    s_knob_overlay.tick(esp_timer_get_time());
+}
+
 void update_runtime_labels()
 {
     EezSynthStatus synth{};
@@ -135,20 +363,17 @@ void update_runtime_labels()
     if (s_knob_preset_sequence != synth.preset_change_sequence)
     {
         s_knob_overlay.clear();
+        clear_page_cache();
         s_knob_preset_sequence = synth.preset_change_sequence;
         if (s_pages_box != nullptr) lv_msgbox_close(s_pages_box);
         show_page(); // same page of the new preset (empty if it has no such page)
+        request_data(DataKind::Tabs);
+        request_data(DataKind::Presets);
     }
-    const int64_t activityNowUs = esp_timer_get_time();
-    KnobActivity activity{};
-    for (uint16_t i = 0; i < 512 && eez_read_knob_activity(&activity); ++i)
-    {
-        if (activity.presetSequence != synth.preset_change_sequence) continue;
-        // A control already visible on the shown page needs no overlay card on top of it.
-        if (!s_page_view.apply(activity) && activityNowUs - activity.updatedUs < 1000000)
-            s_knob_overlay.update(activity, true);
-    }
-    s_knob_overlay.tick(activityNowUs);
+    apply_data_results();
+    prefetch_pages();
+    dispatch_data_requests();
+    update_control_activity(synth.preset_change_sequence);
     set_label_text(objects.lbl_midi_devicename, synth.midi_name[0] != '\0' ? synth.midi_name : "Kein MIDI");
 
     if (synth.preset_name[0] != '\0')
@@ -156,6 +381,7 @@ void update_runtime_labels()
     set_label_fmt(objects.lbl_used_voices, "Voices: %u / %u", synth.active_voices, synth.maximum_voices);
     set_label_fmt(objects.lbl_underruns, "Underruns: %lu", static_cast<unsigned long>(synth.underruns));
     set_label_fmt(objects.lbl_bpm, "%.2f BPM", static_cast<double>(synth.master_clock_bpm));
+    lv_bar_set_value(objects.bar_master_volume, static_cast<int32_t>(synth.master_volume * 100.0f + 0.5f), LV_ANIM_OFF);
 
     // Refresh CPU labels and bars together, averaging Core 0 over the elapsed interval.
     static int64_t previous_sample_us = 0;
@@ -224,7 +450,17 @@ namespace Feature::EEZUI {
 
 void init()
 {
+    s_data_requests = xQueueCreate(3, sizeof(DataRequest));
+    s_data_results = xQueueCreate(3, sizeof(DataResult));
+    if (s_data_requests == nullptr || s_data_results == nullptr ||
+        xTaskCreatePinnedToCore(data_worker, "uiStorage", 8 * 1024, nullptr, 2, nullptr, App::MAIN_CORE) != pdPASS) {
+        if (s_data_requests != nullptr) vQueueDelete(s_data_requests);
+        if (s_data_results != nullptr) vQueueDelete(s_data_results);
+        s_data_requests = s_data_results = nullptr;
+        ESP_LOGE("EEZUI", "Could not start display storage worker");
+    }
     ui_init();
+    s_knob_overlay.warmup();
     lv_obj_t *header = lv_win_get_header(objects.wndmain);
     lv_obj_t *content = lv_win_get_content(objects.wndmain);
     lv_obj_set_parent(objects.btn_back, header);
@@ -246,39 +482,32 @@ void init()
     lv_obj_add_event_cb(objects.tbl_presets, action_select_preset, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(objects.btn_back, action_back_to_main, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.btn_pages, action_open_pages, LV_EVENT_CLICKED, nullptr);
+    // Populate caches while the startup splash is still visible.
+    s_timer = lv_timer_create(timer_callback, 16, nullptr);
 }
 
 void show_preset_list()
 {
-    if (!eez_list_presets(&s_preset_list)) return;
     lv_obj_t *table = objects.tbl_presets;
-    lv_table_set_row_count(table, s_preset_list.count + 1);
-    lv_table_set_column_count(table, 4);
-    lv_table_set_column_width(table, 0, 55);
-    lv_table_set_column_width(table, 1, 240);
-    lv_table_set_column_width(table, 2, 470);
-    lv_table_set_column_width(table, 3, 250);
-    lv_table_set_cell_value(table, 0, 0, "#");
-    lv_table_set_cell_value(table, 0, 1, "Preset");
-    lv_table_set_cell_value(table, 0, 2, "Short Description");
-    lv_table_set_cell_value(table, 0, 3, "Author");
-    for (uint16_t i = 0; i < s_preset_list.count; ++i) {
-        const EezPresetEntry *preset = &s_preset_list.entries[i];
-        lv_table_set_cell_value_fmt(table, i + 1, 0, "%u", static_cast<unsigned>(i + 1));
-        lv_table_set_cell_value(table, i + 1, 1, preset->display_name);
-        lv_table_set_cell_value(table, i + 1, 2, preset->description);
-        lv_table_set_cell_value(table, i + 1, 3, preset->author);
+    if (!s_presets_ready) {
+        lv_table_set_row_count(table, 1);
+        lv_table_set_column_count(table, 1);
+        lv_table_set_column_width(table, 0, 790);
+        lv_table_set_cell_value(table, 0, 0, request_data(DataKind::Presets) ? "Lade Presets..." : "Presets konnten nicht geladen werden");
+    } else if (esp_timer_get_time() - s_presets_loaded_us > 5000000) {
+        request_data(DataKind::Presets); // Refresh stale metadata without hiding cached rows.
     }
     lv_obj_clear_flag(lv_win_get_header(objects.wndmain), LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(table, LV_OBJ_FLAG_HIDDEN);
     s_page_view.setHidden(true);
+    if (s_page_loading != nullptr) lv_obj_add_flag(s_page_loading, LV_OBJ_FLAG_HIDDEN);
 }
 
 void start()
 {
     if (s_timer != nullptr) return;
     update_runtime_labels();
-    s_timer = lv_timer_create(timer_callback, 33, nullptr);
+    s_timer = lv_timer_create(timer_callback, 16, nullptr);
 }
 
 } // namespace Feature::EEZUI

@@ -16,6 +16,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/OverdriveNode.h"
 #include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
@@ -210,6 +211,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::WaveFolder:
         return nodes::wavefolder::setParam(inst, name, value);
+
+    case NodeType::Overdrive:
+        return nodes::overdrive::setParam(inst, name, value);
 
     case NodeType::EnvelopeFollower:
         return nodes::envelopefollower::setParam(inst, name, value);

@@ -100,6 +100,9 @@ struct SuperSawLoopCtx
     bool gainConverged;
     bool fmActive;
     bool feedbackActive;
+    bool hasAmpRamp;
+    float ampRampStart;
+    float ampRampStep;
 };
 
 template <bool AudioRatePitch, bool ConstantOutput>
@@ -147,7 +150,8 @@ IRAM_ATTR inline void renderSuperSawLoop(SuperSawLoopCtx &c, size_t frames)
         {
             const float amp = c.ampConstantForBlock
                                   ? c.ampConstantValue
-                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+                                  : (c.hasAmpRamp ? c.ampRampStart + c.ampRampStep * static_cast<float>(i)
+                                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false));
             const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
                                              : (c.gainConverged ? c.gainTarget : s.gainSmooth.process(c.gainTarget));
             c.inst->outL[i] = sample * amp * gainMul * cv::kAudioPeakVolts;
@@ -206,7 +210,8 @@ IRAM_ATTR inline void renderFastLoop(FastLoopCtx &c, size_t frames)
     for (size_t i = 0; i < frames; ++i)
     {
         const float amp = c.ampConstantForBlock ? c.ampConstantValue
-                                                 : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+                                                 : (c.hasAmpRamp ? c.ampRampStart + c.ampRampStep * static_cast<float>(i)
+                                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false));
         const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
                                          : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
         const float sample = c.phaseGen->processWithIncrementT<W>(c.phaseIncrementInt, 0.0f, c.dutyThresholdInt);
@@ -279,7 +284,8 @@ IRAM_ATTR inline void renderModulatedLoop(FastLoopCtx &c, size_t frames)
     for (size_t i = 0; i < frames; ++i)
     {
         const float amp = c.ampConstantForBlock ? c.ampConstantValue
-                                                 : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false);
+                                                 : (c.hasAmpRamp ? c.ampRampStart + c.ampRampStep * static_cast<float>(i)
+                                                  : c.baseAmp + cv::vcaGain(c.ampBuf != nullptr ? c.ampBuf[i] : c.ampScalar, false));
         const float gainMul = c.gainFed ? cv::vcaGain(c.gainBuf[i], false)
                                          : (c.gainConverged ? c.gainTarget : c.gainSmooth->process(c.gainTarget));
         float phaseOffset = 0.0f;
@@ -527,6 +533,11 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         else ++enginestats::current.fmAmpAudioRate;
     }
 
+    const NodeInstance::RampDescriptor *ampRamp = ampConstantForBlock ? nullptr : rampForPort(inst, 0);
+    const bool hasAmpRamp = ampRamp != nullptr;
+    const float ampRampStart = hasAmpRamp ? baseAmp + ampRamp->start * cv::kInvMaxVolts : 0.0f;
+    const float ampRampStep = hasAmpRamp ? ampRamp->inc * cv::kInvMaxVolts : 0.0f;
+
     if (wave == WaveType::SuperSaw)
     {
         ++enginestats::current.fmSuperSawActive;
@@ -564,6 +575,9 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         ctx.gainConverged = gainConverged;
         ctx.fmActive = fmActive;
         ctx.feedbackActive = feedbackActive;
+        ctx.hasAmpRamp = hasAmpRamp;
+        ctx.ampRampStart = ampRampStart;
+        ctx.ampRampStep = ampRampStep;
         for (size_t voice = 0; voice < 6; ++voice)
             ctx.ratios[voice] = exp2f(kSuperSawCents[voice] * detune / 1200.0f);
 
@@ -658,7 +672,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
             }
             const float amp = ampConstantForBlock
                                   ? ampConstantValue
-                                  : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+                                  : (hasAmpRamp ? ampRampStart + ampRampStep * static_cast<float>(i)
+                                                : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false));
             const float gainMul = gainFed ? cv::vcaGain(gainBuf[i], false)
                                           : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
             float phaseOffset = fmActive ? fmInBuf[i] * phaseOffsetScale : 0.0f;
@@ -697,7 +712,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
                 const float amp = ampConstantForBlock
                                       ? ampConstantValue
-                                      : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+                                      : (hasAmpRamp ? ampRampStart + ampRampStep * static_cast<float>(i)
+                                                : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false));
                 const float gainMul = gainFed ? cv::vcaGain(gainBuf[i], false)
                                               : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
                 float phaseOffset = fmActive ? fmInBuf[i] * phaseOffsetScale : 0.0f;
@@ -720,7 +736,8 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
                 const float amp = ampConstantForBlock
                                       ? ampConstantValue
-                                      : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false);
+                                      : (hasAmpRamp ? ampRampStart + ampRampStep * static_cast<float>(i)
+                                                : baseAmp + cv::vcaGain(ampBuf != nullptr ? ampBuf[i] : ampScalar, false));
                 const float gainMul = gainFed ? cv::vcaGain(gainBuf[i], false)
                                               : (gainConverged ? gainTarget : s.gainSmooth.process(gainTarget));
                 const float sample = s.phaseGen.processWithIncrement(wave, hz * kInvSampleRate, 0.0f, dutyThresholdInt);
@@ -766,17 +783,6 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         inst.outConstantValue = 0.0f;
         return;
     }
-
-    // P2 continued (fm-plan.md section 3): amplitude actively ramping
-    // (ADSR attack/decay) rather than block-constant - if the producer
-    // tagged it a whole-block linear ramp (see NodeInstance.h's
-    // rampPortMask, same mechanism GainNode.h/DetuneNode.h/ArithmeticNodes.h
-    // already consume), fold baseAmp/kInvMaxVolts in once here instead of
-    // per sample - see renderRampAmpFastLoop above.
-    const NodeInstance::RampDescriptor *ampRamp = ampConstantForBlock ? nullptr : rampForPort(inst, 0);
-    const bool hasAmpRamp = ampRamp != nullptr;
-    const float ampRampStart = hasAmpRamp ? baseAmp + ampRamp->start * cv::kInvMaxVolts : 0.0f;
-    const float ampRampStep = hasAmpRamp ? ampRamp->inc * cv::kInvMaxVolts : 0.0f;
 
     FastLoopCtx ctx{&inst,           &s.phaseGen,        &s.gainSmooth, ampBuf,
                     gainBuf,         fmInBuf,            ampScalar,     baseAmp,

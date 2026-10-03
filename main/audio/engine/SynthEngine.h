@@ -26,6 +26,7 @@
 #include "GraphBuilder.h"
 #include "LiveParamMsg.h"
 #include "KnobActivity.h"
+#include "EnvelopeActivity.h"
 #include "MasterClock.h"
 #include "MemoryDiagnostics.h"
 #include "PresetChangedMsg.h"
@@ -358,6 +359,13 @@ public:
     // unaware of which transport(s) are even active.
     using MidiCcOut = void (*)(uint8_t channel, uint8_t cc, uint8_t value7bit);
     void setMidiCcOutCallback(MidiCcOut cb) { midiCcOut_ = cb; }
+    using MidiFeedbackOut = bool (*)(uint8_t, uint8_t, uint8_t);
+    using MidiConnectionGeneration = uint32_t (*)();
+    void setMidiFeedbackCallbacks(MidiFeedbackOut out, MidiConnectionGeneration generation)
+    {
+        midiFeedbackOut_ = out;
+        midiConnectionGeneration_ = generation;
+    }
     MidiCcOut midiCcOutCallback() const { return midiCcOut_; }
 
     // Public entry point for a live (browser-driven) Knob change to also
@@ -369,6 +377,31 @@ public:
     void publishKnobActivityFromUi(const char *label, uint8_t channel, uint8_t cc, uint8_t raw, float value)
     {
         publishMidiControlSnapshot(label, MidiControlSnapshot::Kind::Knob, 0, channel, cc, raw, value);
+    }
+
+    bool publishEnvelopeActivity(const char *widgetId, const char *parameter)
+    {
+        if (liveGraph_ == nullptr || knobActivityQueue_ == nullptr) return false;
+        for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w)
+        {
+            const auto &widget = liveGraph_->widgets[w];
+            if (strcmp(widget.id, widgetId) != 0 ||
+                !isEnvelopeShapeParameter(widget.type, parameter)) continue;
+            KnobActivity activity{};
+            activity.updatedUs = esp_timer_get_time();
+            activity.presetSequence = presetChangeSequence();
+            snprintf(activity.sourceId, sizeof(activity.sourceId), "%s", widget.id);
+            snprintf(activity.name, sizeof(activity.name), "%s", widget.label[0] ? widget.label : widget.id);
+            fillEnvelopeActivity(activity, liveGraph_->instances[widget.instanceBase]);
+            if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
+            {
+                KnobActivity discarded{};
+                xQueueReceive(knobActivityQueue_, &discarded, 0);
+                xQueueSend(knobActivityQueue_, &activity, 0);
+            }
+            return true;
+        }
+        return false;
     }
 
     // Per-sink output routing. The master stream (graph's AudioOut) is
@@ -469,31 +502,81 @@ private:
     // after a preset finishes loading, so a controller with LED rings/
     // motorized faders shows what the just-loaded preset actually set,
     // not whatever position it was left at before the reload.
-    void publishLearnedKnobsToMidiOut()
+    void resetMidiControlFeedback()
     {
-        if (midiCcOut_ == nullptr || liveGraph_ == nullptr)
-        {
-            return;
+        // A fresh graph's per-control feedback stamps start invalid. Send in
+        // bounded batches from the regular render loop, not in the preset swap.
+        midiFeedbackWidget_ = 0;
+        if (liveGraph_ != nullptr && liveGraph_->presetBpm >= 0.0f)
+            synth::masterClock().bpm = liveGraph_->presetBpm;
+        synth::masterClock().midiFeedback = UINT32_MAX;
+    }
+
+    void synchronizeMidiControls()
+    {
+        if (midiFeedbackOut_ == nullptr || liveGraph_ == nullptr) return;
+        const uint32_t generation = midiConnectionGeneration_ ? midiConnectionGeneration_() : 0;
+        if (generation != midiFeedbackGeneration_) {
+            midiFeedbackGeneration_ = generation;
+            synth::masterClock().midiFeedback = UINT32_MAX;
+            for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w) {
+                auto &inst = liveGraph_->instances[liveGraph_->widgets[w].instanceBase];
+                if (inst.type == NodeType::Knob) inst.knob->feedbackLayer = UINT8_MAX;
+                if (inst.type == NodeType::Button) inst.button->feedbackLayer = UINT8_MAX;
+            }
         }
-        for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w)
-        {
-            const WidgetSlot &widget = liveGraph_->widgets[w];
-            if (widget.type != NodeType::Knob)
-            {
-                continue;
+        unsigned sent = 0;
+        auto &clock = synth::masterClock();
+        const int tempoRaw = clock.feedbackValue();
+        if (tempoRaw >= 0) {
+            const uint32_t stamp = (static_cast<uint32_t>(clock.midiChannel) << 16) |
+                                  (static_cast<uint32_t>(clock.midiCc) << 8) | tempoRaw;
+            if (clock.midiFeedback != stamp) {
+                if (!midiFeedbackOut_(clock.midiChannel, clock.midiCc, tempoRaw)) return;
+                clock.midiFeedback = stamp;
+                ++sent;
             }
-            const KnobState &knob = *liveGraph_->instances[widget.instanceBase].knob;
-            for (uint8_t i = 0; i < knob.count; ++i)
-            {
-                const KnobControl &control = knob.controls[i];
-                if (control.cc < 0 || control.channel < 0)
-                {
-                    continue;
+        }
+        auto send = [&](auto &control, uint8_t raw) {
+            if (control.cc < 0 || control.cc > 127 || control.channel < 0 || control.channel > 15) return true;
+            const uint32_t stamp = (static_cast<uint32_t>(control.channel) << 16) |
+                                   (static_cast<uint32_t>(control.cc) << 8) | raw;
+            if (stamp == control.midiFeedback) return true;
+            if (!midiFeedbackOut_(control.channel, control.cc, raw)) return false;
+            control.midiFeedback = stamp;
+            ++sent;
+            return true;
+        };
+        for (uint16_t checked = 0; checked < liveGraph_->widgetCount; ++checked) {
+            if (midiFeedbackWidget_ >= liveGraph_->widgetCount) midiFeedbackWidget_ = 0;
+            auto &inst = liveGraph_->instances[liveGraph_->widgets[midiFeedbackWidget_].instanceBase];
+            auto synchronize = [&](auto &state, auto value) {
+                if (state.feedbackLayer != state.activeLayer) {
+                    state.feedbackLayer = state.activeLayer;
+                    for (uint8_t i = 0; i < state.count; ++i)
+                        state.controls[state.controlIndex(i, state.activeLayer)].midiFeedback = UINT32_MAX;
                 }
-                const float raw = control.raw < 0.0f ? 0.0f : (control.raw > 127.0f ? 127.0f : control.raw);
-                midiCcOut_(static_cast<uint8_t>(control.channel), static_cast<uint8_t>(control.cc),
-                           static_cast<uint8_t>(raw + 0.5f));
-            }
+                for (uint8_t i = 0; i < state.count; ++i) {
+                    auto &control = state.controls[state.controlIndex(i, state.activeLayer)];
+                    const int raw = value(control);
+                    if (raw >= 0 && !send(control, static_cast<uint8_t>(raw))) return false;
+                    if (sent >= 4) return false;
+                }
+                return true;
+            };
+            bool done = true;
+            if (inst.type == NodeType::Knob)
+                done = synchronize(*inst.knob, [](const KnobControl &control) {
+                    if (!std::isfinite(control.raw)) return -1;
+                    return static_cast<int>(std::fmax(0.0f, std::fmin(127.0f, control.raw)) + 0.5f);
+                });
+            else if (inst.type == NodeType::Button)
+                done = synchronize(*inst.button, [](const ButtonControl &control) {
+                    if (control.midiType != nodes::button::kButtonMidiCc) return -1;
+                    return static_cast<int>(control.feedbackValue());
+                });
+            if (!done) return; // Queue full or batch budget reached; retry next block.
+            ++midiFeedbackWidget_;
         }
     }
 
@@ -632,6 +715,7 @@ private:
                 activity.targetType = static_cast<uint8_t>(target.targetType);
                 activity.targetValue = target.value;
                 activity.targetValueRaw = target.raw;
+                publishEnvelopeActivity(target.targetId, target.paramName);
             }
             if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
             {
@@ -696,6 +780,10 @@ private:
     TapSubmit submitOut_ = nullptr;
     TapMix mixHostIn_ = nullptr;
     MidiCcOut midiCcOut_ = nullptr;
+    MidiFeedbackOut midiFeedbackOut_ = nullptr;
+    MidiConnectionGeneration midiConnectionGeneration_ = nullptr;
+    uint32_t midiFeedbackGeneration_ = 0;
+    uint16_t midiFeedbackWidget_ = 0;
 
     SinkParams sink_[3];
 
@@ -901,6 +989,10 @@ inline void handleMasterClockMidi(const UsbMidiEvent &event)
     if (mc.midiCc < 0 || static_cast<uint8_t>(mc.midiCc) != event.data1) return;
     if (mc.midiChannel < 0 || static_cast<uint8_t>(mc.midiChannel) != (event.status & 0x0F)) return;
     mc.bpm = (static_cast<float>(event.data2) / 127.0f) * mc.maxBpm;
+    const int raw = mc.feedbackValue();
+    if (raw >= 0)
+        mc.midiFeedback = (static_cast<uint32_t>(mc.midiChannel) << 16) |
+                          (static_cast<uint32_t>(mc.midiCc) << 8) | raw;
 }
 
 // Parse each queued frame once, then route the resolved fields either to the
@@ -925,7 +1017,11 @@ void applyLiveParamMessage(SynthEngine &engine, Graph &graph, const char *json)
         if (!engine.applyOutputParam(widgetId->valuestring, params))
         {
             KnobLiveChangeInfo activity;
-            graph.applyLiveParams(widgetId->valuestring, params, engine.midiCcOutCallback(), &activity);
+            graph.applyLiveParams(widgetId->valuestring, params, nullptr, &activity);
+            cJSON *parameter = nullptr;
+            cJSON_ArrayForEach(parameter, params)
+                if (cJSON_IsNumber(parameter) || cJSON_IsString(parameter))
+                    if (engine.publishEnvelopeActivity(widgetId->valuestring, parameter->string)) break;
             if (activity.changed)
             {
                 engine.publishKnobActivityFromUi(activity.label, activity.channel, activity.cc, activity.raw,
@@ -1299,6 +1395,8 @@ inline void SynthEngine::loaderTaskLoop()
         }
 
         BuiltGraphMsg built;
+        // Internal voice-count/Panic rebuilds preserve the live tempo.
+        if (!gotMsg) newGraph->presetBpm = -1.0f;
         built.graph = newGraph;
         snprintf(built.path, sizeof(built.path), "%s", path);
         // Blocking send with full timeout: if the render task still holds a
@@ -1325,6 +1423,8 @@ inline void SynthEngine::taskLoop()
         liveGraph_ = initial;
     }
     publishMidiVoiceUsage();
+
+    resetMidiControlFeedback();
 
     static float fadeMulBlock[synth::kBlockSize];
     static float usbL[synth::kBlockSize];
@@ -1417,6 +1517,7 @@ inline void SynthEngine::taskLoop()
         gout.esL = esL; gout.esR = esR;
         gout.wmL = wmL; gout.wmR = wmR;
         liveGraph_->renderBlock(gout, synth::kBlockSize);
+        synchronizeMidiControls();
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
         const int64_t renderUs = esp_timer_get_time() - renderStartUs;
         liveGraph_->flushControlDebug(midiCcDebugScratch_, [](const MidiCcDebugSnapshot &snapshot, void *context)
@@ -1589,7 +1690,7 @@ inline void SynthEngine::taskLoop()
             liveGraph_ = pendingGraph_;
             pendingGraph_ = nullptr;
             publishMidiVoiceUsage();
-            publishLearnedKnobsToMidiOut();
+            resetMidiControlFeedback();
             // A preset save/reload is a full runtime reset. Drop queued MIDI
             // and stale live-param messages, same cleanup effect as Panic.
             if (midiEventQueue_ != nullptr)

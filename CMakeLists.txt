@@ -34,6 +34,18 @@ project(ESP32P4_Espressynth)
 # constant-propagation additionally surfaces the identical out-of-bounds access as
 # -Warray-bounds, so both need silencing here.
 idf_build_get_property(build_components BUILD_COMPONENTS)
+# Put RGB565 blending and arc/rounded-edge masking hot paths in IRAM. Keep
+# other formats in flash to preserve internal RAM for audio. Use a stable
+# section name because LVGL annotates declarations as well as definitions.
+if("lvgl__lvgl" IN_LIST build_components)
+    idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
+    idf_component_get_property(lvgl_dir lvgl__lvgl COMPONENT_DIR)
+    set_source_files_properties(
+        "${lvgl_dir}/src/draw/sw/blend/lv_draw_sw_blend_to_rgb565.c"
+        "${lvgl_dir}/src/draw/sw/lv_draw_sw_mask.c"
+        TARGET_DIRECTORY ${lvgl_lib}
+        PROPERTIES COMPILE_DEFINITIONS "LV_ATTRIBUTE_FAST_MEM=__attribute__((section(\".iram1\")))")
+endif()
 if("jonlidgard__wm8960" IN_LIST build_components)
     idf_component_get_property(wm8960_lib jonlidgard__wm8960 COMPONENT_LIB)
     target_compile_options(${wm8960_lib} PRIVATE -Wno-error=stringop-overread -Wno-error=array-bounds)

@@ -26,6 +26,8 @@
 // unaffected. Must match the JS reference in static/js/audio-engine.js
 // (CV_MAX_VOLTS/AUDIO_PEAK_VOLTS/GATE_ON_VOLTS/GATE_OFF_VOLTS/
 // GATE_THRESHOLD_VOLTS/noteToVoltage/velocityToVoltage) 1:1.
+// Exception: MIDI Pitch Bend is bipolar, centered at 0V with a range up to ±5V.
+// Direct Pitch Bend -> Tune routes translate this to Tune's 5V-centered scale.
 namespace cv
 {
 constexpr float kMaxVolts = 10.0f;

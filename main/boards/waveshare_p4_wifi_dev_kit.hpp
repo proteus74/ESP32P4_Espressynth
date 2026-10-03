@@ -9,14 +9,14 @@ namespace Board::WaveshareP4WiFiDevKit {
 constexpr const char* BOARD_NAME = "Waveshare ESP32-P4-WIFI6-DEV-KIT";
 
 // Display Specifications (MIPI DSI 2-lane, Supports Waveshare DSI displays e.g., 7-inch 1024x600 or 10.1-inch 1280x800)
-constexpr int DISPLAY_WIDTH       = 1024;
-constexpr int DISPLAY_HEIGHT      = 600;
-constexpr int DISPLAY_NATIVE_WIDTH  = 1024;
-constexpr int DISPLAY_NATIVE_HEIGHT = 600;
+constexpr int DISPLAY_WIDTH       = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_HEIGHT      = CONFIG_APP_DISPLAY_HEIGHT;
+constexpr int DISPLAY_NATIVE_WIDTH  = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_NATIVE_HEIGHT = CONFIG_APP_DISPLAY_HEIGHT;
 constexpr int DISPLAY_DSI_LANES   = 2;
 constexpr int DISPLAY_REFRESH_HZ  = 60;
-constexpr gpio_num_t PIN_LCD_RST   = GPIO_NUM_NC;
-constexpr gpio_num_t PIN_BACKLIGHT  = GPIO_NUM_NC;
+constexpr gpio_num_t PIN_LCD_RST   = static_cast<gpio_num_t>(CONFIG_WAVESHARE_P4_PIN_LCD_RST);
+constexpr gpio_num_t PIN_BACKLIGHT  = static_cast<gpio_num_t>(CONFIG_WAVESHARE_P4_PIN_BACKLIGHT);
 constexpr int DISPLAY_DSI_LDO_CHANNEL = 3;
 constexpr int DISPLAY_DSI_LDO_VOLTAGE_MV = 2500;
 

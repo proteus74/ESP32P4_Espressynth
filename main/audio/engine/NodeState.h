@@ -309,6 +309,28 @@ struct WaveFolderState
     float mix = 10.0f;
 };
 
+// Overdrive/Distortion controls (0-10V CV) plus DSP memory. The drive factor
+// and filter coefficients are cached and recomputed only when their raw CV
+// changes, see OverdriveNode.h.
+struct OverdriveState
+{
+    float mode = 0.0f;
+    float drive = 5.0f;
+    float tone = 7.0f;
+    float bias = 5.0f;
+    float mix = 10.0f;
+    float gain = 10.0f;
+
+    float prevIn = 0.0f; // last shaper input (2x oversampling)
+    float preLp = 0.0f;  // Soft mode's 720 Hz pre-emphasis split
+    float dcX1 = 0.0f, dcY1 = 0.0f;
+    float toneZ1 = 0.0f;
+    float inPow = 0.0f, wetPow = 0.0f; // auto-level power trackers
+
+    float cachedDriveCv = -1.0f, cachedToneCv = -1.0f;
+    float driveFactor = 1.0f, toneCoeff = 1.0f;
+};
+
 // Equal-power stereo pan. Centre (5V) = hard center, see PanNode.h.
 struct PanState
 {
@@ -571,7 +593,8 @@ struct MidiInState
     bool glide = false;
     float glideTime = 0.0f;
     // Pitch-bend range in cents (MIDI-standard default: 200 = 2 semitones).
-    // Cents, not percent - matches cv's 1V/octave = 1200 cents/volt exactly.
+    // Stored in cents for preset compatibility; UI displays ±V, centered at 0V.
+    // 1V/octave = 1200 cents/volt; maximum ±5V (6000 cents).
     float pitchBendRangeCents = 200.0f;
     // When on, the pitch-bend CV snaps to the nearest whole cent (nearest
     // 1/1200 V) instead of a continuous voltage - so it always lands on a

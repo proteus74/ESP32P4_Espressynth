@@ -450,7 +450,7 @@ export async function runAll() {
       "switch", "output-switch", "audio-out", "usb-out", "gain", "linked-input", "linked-output", "filter",
       "curtis-filter", "comb-filter", "esp-eq", "graphic-eq", "mixer", "multiplexer", "output-multiplexer", "multiplier", "adder",
       "divide", "frequency-divider", "abs", "logic-and", "logic-or", "logic-xor", "logic-not", "value-mapper",
-      "detune", "adsr", "dx-envelope", "bitcrusher", "wave-folder", "envelope-follower", "pan", "sample-hold",
+      "detune", "adsr", "dx-envelope", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "sample-hold",
       "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "vu-meter",
       "oscilloscope", "spectrum"];
     await render(0.2, (e) => {

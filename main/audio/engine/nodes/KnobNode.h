@@ -10,6 +10,7 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
+#include "../LayerControls.h"
 
 // CC-learn + 2-point mapping curve, ported from main.js's knobStates entries
 // (cc/point1In/point1Out/point2In/point2Out/constraintMin/constraintMax). Not
@@ -45,6 +46,7 @@ struct KnobControl
     // ButtonState).
     float valueList[synth::kValueListMax] = {};
     uint8_t valueListCount = 0;
+    uint32_t midiFeedback = UINT32_MAX;
 
     float mappedValue() const
     {
@@ -70,7 +72,17 @@ struct KnobState
     uint8_t count = 1;
     uint8_t layerCount = 1;
     uint8_t activeLayer = 0;
-    KnobControl controls[synth::kKnobOutputMax];
+    uint8_t feedbackLayer = UINT8_MAX;
+    LayerControls<KnobControl> controls;
+
+    bool resizeControls(uint8_t newCount, uint8_t newLayers)
+    {
+        if (!controls.resize(newCount, newLayers)) return false;
+        count = newCount;
+        layerCount = newLayers;
+        if (activeLayer >= layerCount) activeLayer = layerCount - 1;
+        return true;
+    }
 
     static constexpr uint8_t controlIndex(uint8_t knobIndex, uint8_t layerIndex)
     {
@@ -96,8 +108,7 @@ inline void render(NodeInstance &inst, size_t frames)
 
 inline void build(NodeInstance &inst, const WidgetParams &p)
 {
-    inst.knob->count = p.knobCount < 1 ? 1 : (p.knobCount > synth::kKnobControlMax ? synth::kKnobControlMax : p.knobCount);
-    inst.knob->layerCount = p.knobLayerCount < 1 ? 1 : (p.knobLayerCount > synth::kKnobLayerMax ? synth::kKnobLayerMax : p.knobLayerCount);
+    if (!inst.knob->resizeControls(p.knobCount, p.knobLayerCount)) return;
     inst.knob->activeLayer = p.knobActiveLayer < inst.knob->layerCount ? p.knobActiveLayer : 0;
     for (uint8_t layerIndex = 0; layerIndex < inst.knob->layerCount; ++layerIndex)
     {
@@ -132,6 +143,7 @@ inline void destroy(NodeInstance &inst)
 {
     if (inst.knob != nullptr)
     {
+        inst.knob->~KnobState();
         heap_caps_free(inst.knob);
         inst.knob = nullptr;
     }
@@ -159,7 +171,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value, uint8_t 
         inst.knob->activeLayer = static_cast<uint8_t>(layer);
         return true;
     }
-    if (controlIndex >= synth::kKnobOutputMax)
+    if (!inst.knob->controls.contains(controlIndex))
     {
         return false;
     }

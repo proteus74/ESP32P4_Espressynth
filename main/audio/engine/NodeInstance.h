@@ -253,6 +253,7 @@ struct NodeInstance
         GainState gain;
         BitcrusherState bitcrusher;
         WaveFolderState waveFolder;
+        OverdriveState overdrive;
         EnvelopeFollowerState envelopeFollower;
         PanState pan;
         MixerState mixer;
@@ -387,6 +388,9 @@ struct NodeInstance
             break;
         case NodeType::WaveFolder:
             new (&waveFolder) WaveFolderState();
+            break;
+        case NodeType::Overdrive:
+            new (&overdrive) OverdriveState();
             break;
         case NodeType::EnvelopeFollower:
             new (&envelopeFollower) EnvelopeFollowerState();

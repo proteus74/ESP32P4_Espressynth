@@ -17,6 +17,7 @@
 #include "nodes/ButtonNode.h"
 #include "nodes/BitcrusherNode.h"
 #include "nodes/WaveFolderNode.h"
+#include "nodes/OverdriveNode.h"
 #include "nodes/BurstGeneratorNode.h"
 #include "nodes/EnvelopeFollowerNode.h"
 #include "nodes/PanNode.h"
@@ -238,6 +239,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::WaveFolder:
         nodes::wavefolder::render(inst, frames);
+        break;
+    case NodeType::Overdrive:
+        nodes::overdrive::render(inst, frames);
         break;
     case NodeType::EnvelopeFollower:
         nodes::envelopefollower::render(inst, frames);

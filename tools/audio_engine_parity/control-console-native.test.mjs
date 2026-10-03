@@ -30,7 +30,8 @@ writeFileSync(path.join(temporary, "test.cpp"), `
 namespace synth { constexpr int kBlockSize=4, kMaxWidgets=64, kMaxAudioInPorts=22, kKnobControlMax=16, kButtonControlMax=16; inline uint32_t portBit(int port) { return 1u << port; } }
 enum class NodeType { Unknown, Knob, Button, Switch, OutputSwitch, Gain, Multiplier };
 struct Control { float currentValue=0, raw=0; char label[48]={}; };
-struct Controls { uint8_t activeLayer=0; Control controls[64]; };
+struct ControlArray { Control data[64]; bool contains(uint8_t i) const {return i<64;} Control &operator[](uint8_t i){return data[i];} const Control &operator[](uint8_t i)const{return data[i];} };
+struct Controls { uint8_t activeLayer=0; ControlArray controls; };
 struct NodeInstance {
  uint16_t widgetIndex=0;
  uint32_t audioConnectedPortMask=0;

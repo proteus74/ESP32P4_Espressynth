@@ -1343,7 +1343,8 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
     // addresses (settings only apply after a reboot), which is what RGB LED widgets validate against.
     const auto &led = Feature::LedStrip::settings();
     snprintf(json + n - 1, sizeof(json) - static_cast<size_t>(n - 1),
-             ",\"ledPin\":%d,\"ledCount\":%u,\"ledActiveCount\":%u,\"ledMaxCount\":%u}", led.pin,
+             ",\"ledEnabled\":%s,\"ledPin\":%d,\"ledCount\":%u,\"ledActiveCount\":%u,\"ledMaxCount\":%u}",
+             Feature::LedStrip::kEnabled ? "true" : "false", led.pin,
              static_cast<unsigned>(led.count), static_cast<unsigned>(Feature::LedStrip::active_count()),
              static_cast<unsigned>(Feature::LedStrip::kMaxLeds));
     httpd_resp_sendstr(req, json);
@@ -1618,14 +1619,14 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     cJSON *volume = cJSON_GetObjectItemCaseSensitive(params, "volume");
                     cJSON *volumeCc = cJSON_GetObjectItemCaseSensitive(params, "volumeCc");
                     cJSON *volumeChannel = cJSON_GetObjectItemCaseSensitive(params, "volumeChannel");
-                    if (cJSON_IsNumber(volume)) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
-                    if (cJSON_IsNumber(volumeCc)) ds.volumeCc = volumeCc->valueint;
-                    if (cJSON_IsNumber(volumeChannel)) ds.volumeChannel = volumeChannel->valueint;
+                    if (cJSON_IsNumber(volumeCc)) ds.volumeCc = volumeCc->valueint >= 0 && volumeCc->valueint <= 127 ? volumeCc->valueint : -1;
+                    if (cJSON_IsNumber(volumeChannel)) ds.volumeChannel = volumeChannel->valueint >= 0 && volumeChannel->valueint <= 15 ? volumeChannel->valueint : -1;
+                    if (cJSON_IsNumber(volume) && !synth::hasLearnedMasterVolume()) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
                     synth::saveDeviceSettingsToFs();
                     // WS2812 string pin/count - persisted only, applied at the next boot.
                     cJSON *ledPin = cJSON_GetObjectItemCaseSensitive(params, "ledPin");
                     cJSON *ledCount = cJSON_GetObjectItemCaseSensitive(params, "ledCount");
-                    if (cJSON_IsNumber(ledPin) || cJSON_IsNumber(ledCount)) {
+                    if (Feature::LedStrip::kEnabled && (cJSON_IsNumber(ledPin) || cJSON_IsNumber(ledCount))) {
                         auto &led = Feature::LedStrip::settings();
                         if (cJSON_IsNumber(ledPin)) {
                             const int pin = ledPin->valueint;

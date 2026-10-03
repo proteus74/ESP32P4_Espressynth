@@ -180,11 +180,12 @@ struct DxEnvelopeState
     bool gatePrev = false;
 };
 
-inline void render(NodeInstance &inst, size_t frames)
+inline void updateParameters(NodeInstance &inst)
 {
     auto &state = *inst.dxEnvelope;
     constexpr synth::PortMask kShapePortMask = 0xFFu;
-    if ((inst.audioConnectedPortMask & kShapePortMask) != 0)
+    const auto shapePorts = inst.audioConnectedPortMask | inst.controlConnectedPortMask;
+    if ((shapePorts & kShapePortMask) != 0)
     {
         float levels[4];
         float times[4];
@@ -192,11 +193,11 @@ inline void render(NodeInstance &inst, size_t frames)
         {
             levels[i] = state.scheduler.level(i);
             times[i] = state.scheduler.time(i);
-            if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i))) != 0)
+            if ((shapePorts & synth::portBit(static_cast<int>(i))) != 0)
             {
                 levels[i] = clampLevel(noderender::portSample(inst, static_cast<int>(i), 0));
             }
-            if ((inst.audioConnectedPortMask & synth::portBit(static_cast<int>(i + 4))) != 0)
+            if ((shapePorts & synth::portBit(static_cast<int>(i + 4))) != 0)
             {
                 times[i] = cv::cvToEnvelopeSeconds(
                     noderender::portSample(inst, static_cast<int>(i + 4), 0),
@@ -206,6 +207,12 @@ inline void render(NodeInstance &inst, size_t frames)
         state.scheduler.configure(levels, times, static_cast<float>(synth::kSampleRate));
         ++enginestats::current.dxShapeConfigured;
     }
+}
+
+inline void render(NodeInstance &inst, size_t frames)
+{
+    auto &state = *inst.dxEnvelope;
+    updateParameters(inst);
 
     // "gate" (Port-Index 8, real but control-only audio-rate port, see
     // PortTables.h) - lets a non-MIDI source (e.g. a CV Step-Arpeggiator's
@@ -341,6 +348,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     }
     if (strcmp(name, "gate") == 0)
     {
+        updateParameters(inst);
         const bool gateNow = value >= cv::kGateThresholdVolts;
         if (gateNow != state.gatePrev)
         {

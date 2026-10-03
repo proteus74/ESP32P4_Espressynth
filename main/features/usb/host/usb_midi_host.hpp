@@ -33,6 +33,7 @@ inline Feature::MIDI::EventCallback event_callback = nullptr;
 inline uint8_t connected_idx = 0;
 inline uint8_t connected_address = 0;
 inline bool connected = false;
+inline std::atomic<uint32_t> connection_generation{0};
 
 // Outgoing messages: TinyUSB host is not thread-safe, so send() (called from httpd, the synth
 // engine, ...) only queues; tx_drain() runs inside the USB host task via usbh_defer_func().
@@ -41,14 +42,23 @@ inline bool connected = false;
 struct tx_message_t { uint8_t cable; uint8_t length; uint8_t data[3]; };
 inline QueueHandle_t tx_queue = nullptr;
 inline std::atomic<bool> tx_drain_pending{false};
+inline uint8_t tx_offset = 0; // USB-host task owns partial stream writes.
 
 inline void tx_drain(void*) {
     tx_drain_pending = false;
+    if (tx_queue == nullptr) return;
+    if (!connected || !tuh_midi_mounted(connected_idx)) {
+        xQueueReset(tx_queue);
+        tx_offset = 0;
+        return;
+    }
     tx_message_t message{};
-    while (xQueueReceive(tx_queue, &message, 0) == pdTRUE) {
-        if (connected && tuh_midi_mounted(connected_idx)) {
-            tuh_midi_stream_write(connected_idx, message.cable, message.data, message.length);
-        }
+    while (xQueuePeek(tx_queue, &message, 0) == pdTRUE) {
+        tx_offset += tuh_midi_stream_write(connected_idx, message.cable, message.data + tx_offset,
+                                          message.length - tx_offset);
+        if (tx_offset < message.length) break; // Retry when the endpoint has space.
+        xQueueReceive(tx_queue, &message, 0);
+        tx_offset = 0;
     }
     if (connected && tuh_midi_mounted(connected_idx)) {
         tuh_midi_write_flush(connected_idx);
@@ -92,6 +102,7 @@ inline bool is_connected() {
 inline uint8_t connected_device_address() {
     return connected_address;
 }
+inline uint32_t connection_sequence() { return connection_generation.load(std::memory_order_acquire); }
 
 /**
  * @brief Send raw MIDI stream bytes (e.g. {0x90, 0x3C, 0x7F} for Note On) to the
@@ -136,7 +147,10 @@ extern "C" __attribute__((used)) void tuh_midi_mount_cb(uint8_t idx, const tuh_m
     ESP_LOGI(TAG, "MIDI mounted: address=%u index=%u", data->daddr, idx);
     connected_idx = idx;
     connected_address = data->daddr;
+    if (tx_queue != nullptr) xQueueReset(tx_queue);
+    tx_offset = 0;
     connected = true;
+    connection_generation.fetch_add(1, std::memory_order_release);
 }
 
 extern "C" __attribute__((used)) void tuh_midi_umount_cb(uint8_t idx) {
@@ -165,6 +179,9 @@ extern "C" __attribute__((used)) void tuh_midi_rx_cb(uint8_t idx, uint32_t bytes
 }
 
 extern "C" __attribute__((used)) void tuh_midi_tx_cb(uint8_t idx, uint32_t bytes) {
+    using namespace Feature::MIDI;
     (void)idx;
     (void)bytes;
+    if (tx_queue != nullptr && uxQueueMessagesWaiting(tx_queue) != 0 && !tx_drain_pending.exchange(true))
+        usbh_defer_func(tx_drain, nullptr, false);
 }

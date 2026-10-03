@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -218,53 +219,23 @@ void add_section_controls(const char *pages, const char *pages_end, const char *
     }
 }
 
-void update_preset_position(EezSynthStatus *status) {
-    constexpr size_t kPresetCapacity = 32;
-    static uint32_t seen_sequence = UINT32_MAX;
-    static uint16_t number = 1;
-    static uint16_t count = 1;
-    static char names[kPresetCapacity][presetpaths::kMaxNameLen];
+// Refreshed by the UI storage worker; status polling never touches LittleFS.
+std::atomic<uint32_t> s_preset_position{(1u << 16) | 1u};
 
-    const uint32_t sequence = Feature::Synth::engine().presetChangeSequence();
-    if (sequence != seen_sequence) {
-        seen_sequence = sequence;
-        size_t found = 1; // index 0 = current.json
-        names[0][0] = '\0';
-
-        DIR *dir = opendir(presetpaths::kDir);
-        if (dir != nullptr) {
-            dirent *entry;
-            while ((entry = readdir(dir)) != nullptr && found < kPresetCapacity) {
-                const char *file_name = entry->d_name;
-                const size_t length = strlen(file_name);
-                if (file_name[0] == '.' || length < 6 || strcmp(file_name, "current.json") == 0 ||
-                    strcmp(file_name + length - 5, ".json") != 0)
-                    continue;
-
-                char preset_name[presetpaths::kMaxNameLen] = {};
-                snprintf(preset_name, sizeof(preset_name), "%.*s", static_cast<int>(length - 5), file_name);
-                if (!presetpaths::isSafeName(preset_name)) continue;
-                snprintf(names[found++], sizeof(names[0]), "%s", preset_name);
-            }
-            closedir(dir);
-        }
-
-        char active_path[300] = {};
-        char active_name[presetpaths::kMaxNameLen] = {};
-        presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
-        size_t index = 0;
-        for (size_t i = 1; i < found; ++i) {
-            if (strcmp(active_name, names[i]) == 0) {
-                index = i;
-                break;
-            }
-        }
-        number = static_cast<uint16_t>(index + 1);
-        count = static_cast<uint16_t>(found);
+// Only the display storage worker reads this snapshot. Tabs and all pages share
+// one PSRAM copy instead of reopening the same preset for every page.
+const char *display_preset_text() {
+    static char *json = nullptr;
+    static uint32_t sequence = UINT32_MAX;
+    const uint32_t current = Feature::Synth::engine().presetChangeSequence();
+    if (sequence != current || json == nullptr) {
+        heap_caps_free(json);
+        char path[300] = {}, name[presetpaths::kMaxNameLen] = {};
+        presetpaths::resolveActivePath(path, sizeof(path), name, sizeof(name));
+        json = read_text_file(path);
+        sequence = current;
     }
-
-    status->preset_number = number;
-    status->preset_count = count;
+    return json;
 }
 
 } // namespace
@@ -286,13 +257,16 @@ extern "C" bool eez_synth_status(EezSynthStatus *status) {
     // Same effective tempo the Clock/Sequencer nodes run at (and the browser's BPM badge shows).
     const auto &mc = synth::masterClock();
     status->master_clock_bpm = mc.roundBpm ? roundf(mc.bpm) : mc.bpm;
+    status->master_volume = synth::deviceSettings().volume;
     const SynthEngine::MidiVoiceUsageSnapshot voices = Feature::Synth::engine().midiVoiceUsage();
     status->active_voices = voices.active;
     status->maximum_voices = voices.maximum;
     status->underruns = Feature::Synth::dma_underrun_count();
     status->preset_change_sequence = Feature::Synth::engine().presetChangeSequence();
     Feature::Synth::engine().readCurrentPresetName(status->preset_name, sizeof(status->preset_name));
-    update_preset_position(status);
+    const uint32_t position = s_preset_position.load(std::memory_order_relaxed);
+    status->preset_number = position & 0xffffu;
+    status->preset_count = position >> 16;
 #if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
     if (Feature::MIDI::is_connected()) snprintf(status->midi_name, sizeof(status->midi_name), "USB MIDI");
 #endif
@@ -333,9 +307,8 @@ extern "C" bool eez_list_presets(EezPresetList *list) {
     read_preset_metadata(presetpaths::unnamedPath(), current);
 
     DIR *dir = opendir(presetpaths::kDir);
-    if (dir == nullptr) return true;
     dirent *entry;
-    while ((entry = readdir(dir)) != nullptr && list->count < EEZ_PRESET_CAPACITY) {
+    while (dir != nullptr && (entry = readdir(dir)) != nullptr && list->count < EEZ_PRESET_CAPACITY) {
         const char *file_name = entry->d_name;
         const size_t length = strlen(file_name);
         if (file_name[0] == '.' || length < 6 || strcmp(file_name, "current.json") == 0 ||
@@ -351,7 +324,17 @@ extern "C" bool eez_list_presets(EezPresetList *list) {
         read_preset_metadata(path, preset);
         ++list->count;
     }
-    closedir(dir);
+    if (dir != nullptr) closedir(dir);
+    char active_path[300] = {};
+    char active_name[presetpaths::kMaxNameLen] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    uint16_t number = 1;
+    for (uint16_t i = 1; i < list->count; ++i)
+        if (strcmp(active_name, list->entries[i].file_name) == 0) {
+            number = i + 1;
+            break;
+        }
+    s_preset_position.store((static_cast<uint32_t>(list->count) << 16) | number, std::memory_order_relaxed);
 #endif
     return true;
 }
@@ -360,13 +343,9 @@ extern "C" bool eez_list_tabs(EezTabList *list) {
     if (list == nullptr) return false;
     memset(list, 0, sizeof(*list));
 #if defined(CONFIG_APP_ENABLE_SYNTH)
-    char path[300] = {};
-    char name[presetpaths::kMaxNameLen] = {};
-    presetpaths::resolveActivePath(path, sizeof(path), name, sizeof(name));
-    char *json = read_text_file(path);
+    const char *json = display_preset_text();
     cJSON *ui_pages = json != nullptr ? parse_json_array(json, "uiPages") : nullptr;
     cJSON *tab_order = json != nullptr ? parse_json_array(json, "uiTabOrder") : nullptr;
-    heap_caps_free(json);
 
     // Same tabs main.js's restoreGeneratorPageStructure() builds: base sound page,
     // the extra sound pages from uiPages, then the fixed FX page.
@@ -421,10 +400,7 @@ extern "C" bool eez_list_page_controls(const char *page_id, EezPageControls *out
     if (page_id == nullptr || out == nullptr) return false;
     out->count = 0;
 #if defined(CONFIG_APP_ENABLE_SYNTH)
-    char path[300] = {};
-    char name[presetpaths::kMaxNameLen] = {};
-    presetpaths::resolveActivePath(path, sizeof(path), name, sizeof(name));
-    char *json = read_text_file(path);
+    const char *json = display_preset_text();
     if (json == nullptr) return false;
     const char *end = json + strlen(json);
     const char *pages = find_json_value(json, end, "pages");
@@ -433,7 +409,6 @@ extern "C" bool eez_list_page_controls(const char *page_id, EezPageControls *out
         add_section_controls(pages, pages_end, "generator", page_id, out);
         add_section_controls(pages, pages_end, "fx", page_id, out);
     }
-    heap_caps_free(json);
     // Reading order of the browser canvas: top to bottom, then left to right.
     std::stable_sort(out->controls, out->controls + out->count, [](const EezPageControl &a, const EezPageControl &b) {
         return a.ui_y != b.ui_y ? a.ui_y < b.ui_y : a.ui_x < b.ui_x;

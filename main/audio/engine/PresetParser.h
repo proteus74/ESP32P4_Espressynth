@@ -138,6 +138,9 @@ struct WidgetParams
     // wave-folder - all four controls are raw 0-10V CV values.
     float waveFolderDrive = 0.0f, waveFolderSymmetry = 5.0f;
     float waveFolderGain = 10.0f, waveFolderMix = 10.0f;
+    // overdrive - all six controls are raw 0-10V CV values (see OverdriveNode.h).
+    float overdriveMode = 0.0f, overdriveDrive = 5.0f, overdriveTone = 7.0f;
+    float overdriveBias = 5.0f, overdriveMix = 10.0f, overdriveGain = 10.0f;
     // envelope-follower - attack/release/preGain, raw 0-10V CV values (see
     // EnvelopeFollowerNode.h's cv::cvToRange log-curve mapping).
     float envelopeFollowerAttack = 5.0f, envelopeFollowerRelease = 5.0f, envelopeFollowerPreGain = 5.0f;
@@ -426,6 +429,7 @@ struct ConnectionDesc
 // "boundary between pages" semantics structurally).
 struct PresetDoc
 {
+    float bpm = -1.0f; // Missing tempo in legacy presets preserves the running clock.
     WidgetDesc widgets[synth::kMaxWidgets];
     uint16_t widgetCount = 0;
     ConnectionDesc connections[synth::kMaxConnections];

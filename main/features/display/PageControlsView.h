@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <utility>
 
 #include "lvgl.h"
 #include "screens.h"
@@ -22,9 +23,35 @@ class PageControlsView
         lv_obj_t *button; // nullptr on knob cards
         lv_obj_t *value;
         lv_obj_t *nodeValue;
+        bool dirty = false;
     };
     lv_obj_t *panel_ = nullptr;
     std::vector<Card> cards_;
+    struct CachedView {
+        char pageId[32];
+        lv_obj_t *panel;
+        std::vector<Card> cards;
+    };
+    std::vector<CachedView> cached_;
+    char pageId_[32] = {};
+    static constexpr size_t kCachedViews = 8;
+
+    void saveCurrent()
+    {
+        if (panel_ == nullptr) return;
+        lv_obj_add_flag(panel_, LV_OBJ_FLAG_HIDDEN);
+        if (cached_.size() >= kCachedViews) {
+            lv_obj_delete(cached_.front().panel);
+            cached_.erase(cached_.begin());
+        }
+        CachedView saved{};
+        snprintf(saved.pageId, sizeof(saved.pageId), "%s", pageId_);
+        saved.panel = panel_;
+        saved.cards = std::move(cards_); // Event user-data pointers stay at the same addresses.
+        cached_.push_back(std::move(saved));
+        panel_ = nullptr;
+        pageId_[0] = '\0';
+    }
 
     static void setText(lv_obj_t *label, const char *text)
     {
@@ -33,6 +60,7 @@ class PageControlsView
 
     static void refresh(Card &card)
     {
+        card.dirty = false;
         char text[24];
         if (card.control.is_button)
         {
@@ -101,11 +129,32 @@ public:
         if (panel_ != nullptr) lv_obj_delete(panel_);
         panel_ = nullptr;
         cards_.clear();
+        for (auto &view : cached_) lv_obj_delete(view.panel);
+        cached_.clear();
+        pageId_[0] = '\0';
     }
 
-    void show(lv_obj_t *parent, const EezPageControls &controls)
+    void show(lv_obj_t *parent, const EezPageControls &controls, const char *pageId = "")
     {
-        clear();
+        if (pageId[0] != '\0') {
+            if (panel_ != nullptr && strcmp(pageId_, pageId) == 0) {
+                setHidden(false);
+                tick();
+                return;
+            }
+            saveCurrent();
+            for (auto it = cached_.begin(); it != cached_.end(); ++it) {
+                if (strcmp(it->pageId, pageId) != 0) continue;
+                panel_ = it->panel;
+                cards_ = std::move(it->cards);
+                cached_.erase(it);
+                snprintf(pageId_, sizeof(pageId_), "%s", pageId);
+                setHidden(false);
+                tick();
+                return;
+            }
+        } else clear();
+        snprintf(pageId_, sizeof(pageId_), "%s", pageId);
         panel_ = lv_obj_create(parent);
         lv_obj_set_size(panel_, LV_PCT(100), LV_PCT(100));
         lv_obj_set_style_pad_all(panel_, 8, 0);
@@ -175,6 +224,23 @@ public:
         }
     }
 
+    // Build a hidden view during prefetch, keeping the visible page unchanged.
+    void prepare(lv_obj_t *parent, const EezPageControls &controls, const char *pageId)
+    {
+        if (strcmp(pageId_, pageId) == 0 || cached_.size() >= kCachedViews - 1) return;
+        for (const auto &view : cached_)
+            if (strcmp(view.pageId, pageId) == 0) return;
+        char previous[sizeof(pageId_)];
+        snprintf(previous, sizeof(previous), "%s", pageId_);
+        const bool hidden = panel_ != nullptr && lv_obj_has_flag(panel_, LV_OBJ_FLAG_HIDDEN);
+        show(parent, controls, pageId);
+        setHidden(true);
+        if (previous[0] != '\0') {
+            show(parent, controls, previous);
+            setHidden(hidden);
+        } else saveCurrent();
+    }
+
     void setHidden(bool hidden)
     {
         if (panel_ == nullptr) return;
@@ -184,7 +250,7 @@ public:
 
     // Takes over a value change from MIDI, the browser or this view's own touches.
     // Returns true when the control is on this page (so the activity overlay can stay away).
-    bool apply(const KnobActivity &activity)
+    bool apply(const KnobActivity &activity, bool defer = false)
     {
         bool shown = false;
         for (auto &card : cards_)
@@ -197,8 +263,24 @@ public:
             if (!card.control.is_button && !lv_obj_has_state(card.arc, LV_STATE_PRESSED))
                 card.control.raw = activity.raw;
             card.control.value = activity.sourceValue;
-            refresh(card);
+            if (defer) card.dirty = true;
+            else refresh(card);
         }
+        // Hidden cached pages track live state without formatting or invalidating pixels.
+        for (auto &view : cached_)
+            for (auto &card : view.cards)
+                if (card.control.control_index == activity.controlIndex &&
+                    strcmp(card.control.widget_id, activity.sourceId) == 0) {
+                    if (!card.control.is_button) card.control.raw = activity.raw;
+                    card.control.value = activity.sourceValue;
+                    card.dirty = true;
+                }
         return shown;
+    }
+
+    void tick()
+    {
+        for (auto &card : cards_)
+            if (card.dirty) refresh(card);
     }
 };

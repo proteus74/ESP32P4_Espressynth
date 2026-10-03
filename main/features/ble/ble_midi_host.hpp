@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,6 +13,8 @@
 // BLE-MIDI ("MIDI over Bluetooth Low Energy", Apple's widely-adopted spec) central: connects
 // to wireless MIDI keyboards/controllers that expose the standard BLE-MIDI GATT service.
 namespace Feature::BLE::MIDI {
+inline std::atomic<uint32_t> connection_generation{0};
+inline uint32_t connection_sequence() { return connection_generation.load(std::memory_order_acquire); }
 
 struct Event {
     uint16_t conn_handle;
@@ -104,6 +107,7 @@ inline void midi_on_peer_ready(const struct peer* p) {
         return;
     }
     ESP_LOGI(MIDI_TAG, "BLE-MIDI device connected and subscribed; conn_handle=%u", p->conn_handle);
+    Feature::BLE::MIDI::connection_generation.fetch_add(1, std::memory_order_release);
 }
 
 inline void midi_on_disconnected(uint16_t conn_handle) {

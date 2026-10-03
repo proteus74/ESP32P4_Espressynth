@@ -7,15 +7,15 @@ namespace Board::JC8012P4A1 {
 constexpr const char* BOARD_NAME = "JC8012P4A1 (ESP32-P4)";
 
 // Display Specifications (MIPI DSI - JD9365)
-constexpr int DISPLAY_WIDTH       = 1280;
-constexpr int DISPLAY_HEIGHT      = 800;
+constexpr int DISPLAY_WIDTH       = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_HEIGHT      = CONFIG_APP_DISPLAY_HEIGHT;
 // The panel is physically 800x1280 portrait; the application uses landscape.
-constexpr int DISPLAY_NATIVE_WIDTH  = 800;
-constexpr int DISPLAY_NATIVE_HEIGHT = 1280;
+constexpr int DISPLAY_NATIVE_WIDTH  = CONFIG_APP_DISPLAY_HEIGHT;
+constexpr int DISPLAY_NATIVE_HEIGHT = CONFIG_APP_DISPLAY_WIDTH;
 constexpr int DISPLAY_DSI_LANES   = 2;
 constexpr int DISPLAY_REFRESH_HZ  = 60;
-constexpr gpio_num_t PIN_LCD_RST   = GPIO_NUM_27;
-constexpr gpio_num_t PIN_BACKLIGHT  = GPIO_NUM_23;
+constexpr gpio_num_t PIN_LCD_RST   = static_cast<gpio_num_t>(CONFIG_JC8012P4A1_PIN_LCD_RST);
+constexpr gpio_num_t PIN_BACKLIGHT  = static_cast<gpio_num_t>(CONFIG_JC8012P4A1_PIN_BACKLIGHT);
 constexpr int DISPLAY_DSI_LDO_CHANNEL = 3;
 constexpr int DISPLAY_DSI_LDO_VOLTAGE_MV = 2500;
 

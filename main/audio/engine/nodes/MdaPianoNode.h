@@ -162,6 +162,13 @@ inline void handleMidi(MdaPianoState &state, const UsbMidiEvent &event)
     case 0xB:
         if (state.enableModWheel && (event.status & 0x0F) == 0 && event.data1 == 1)
             state.modWheel = event.data2 / 127.0f;
+        // Sustain (64), sostenuto (66 - mdaEPiano treats it as sustain),
+        // All Sound Off (120), All Notes Off (123): handled natively by the
+        // engine. Other CCs stay filtered - 7/126/127 would change volume or
+        // polyphony behind the node's back.
+        else if (rt != nullptr && (event.data1 == 64 || event.data1 == 66 ||
+                                   event.data1 == 120 || event.data1 == 123))
+            rt->piano.processMidiController(event.data1, event.data2);
         break;
     case 0xE:
         if (state.enablePitchWheel)
