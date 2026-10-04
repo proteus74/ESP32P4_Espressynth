@@ -944,8 +944,8 @@ namespace
 {
 constexpr const char *kSynthEngineTag = "synth_engine";
 constexpr UBaseType_t kSynthEngineMidiQueueDepth = 32;
-constexpr uint32_t kSynthEngineTaskStackSize = 32768; // reverb comb-summing + port-summing are the deepest call paths; the USB-audio mix (mixHostAudioInto) additionally allocates temporary buffers
-constexpr uint32_t kSynthEngineLoaderTaskStackSize = 8192; // only JSON parse + GraphBuilder::build, no DSP buffers like the render task
+constexpr uint32_t kSynthEngineTaskStackSize = 12288; // FatSuperSaw boot/reload/render used <3 KiB; retain headroom for USB mixing and other DSP paths.
+constexpr uint32_t kSynthEngineLoaderTaskStackSize = 6144; // boot/reload/load testing leaves >2 KiB; no render-task DSP buffers
 
 // Real-time budget of one block in microseconds - the time actually
 // available between two codec write operations.

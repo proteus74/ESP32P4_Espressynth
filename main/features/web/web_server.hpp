@@ -194,7 +194,7 @@ inline esp_err_t begin() {
     config.max_uri_handlers = 28; // ws, preset get/post/list, wavetable, samples/soundfonts, files
                                   // list/upload/delete/rename, midi devices, version, memory
                                   // diagnostics, static "/*"
-    config.stack_size = 10240; // default (4096) is too tight for the file-explorer handlers'
+    config.stack_size = 8192; // measured uploads/reloads leave >4 KiB free; default (4096) is too tight for the file-explorer handlers'
                                 // path-building locals plus the upload handler's streaming buffer
     config.open_fn = &socket_open_callback;
 

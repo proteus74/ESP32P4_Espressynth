@@ -1009,7 +1009,7 @@ inline esp_err_t init() {
     lvgl_config.task_affinity = App::MAIN_CORE;
     lvgl_config.task_max_sleep_ms = 33;
     // PNG decoding and LittleFS/VFS calls need more stack than the port's 7 KB default.
-    lvgl_config.task_stack = 16 * 1024;
+    lvgl_config.task_stack = 12 * 1024; // splash decoding leaves >7 KiB of measured stack headroom
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_config), TAG, "LVGL port initialization failed");
 
     lvgl_port_lock(0);

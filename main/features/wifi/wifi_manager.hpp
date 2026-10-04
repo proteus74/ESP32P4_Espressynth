@@ -35,6 +35,12 @@ inline bool captive_portal_active = false;
 inline void start_captive_portal() {
     if (captive_portal_active) return;
 
+    // STA needs no AP netif. Allocate its DHCP/driver state only for fallback.
+    ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == nullptr) {
+        ESP_LOGE(TAG, "Failed to create captive portal AP interface");
+        return;
+    }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 
     wifi_config_t ap_config{};
@@ -78,6 +84,8 @@ inline void stop_captive_portal() {
     stop_dns_server(dns_handle);
     dns_handle = nullptr;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    esp_netif_destroy_default_wifi(ap_netif);
+    ap_netif = nullptr;
     captive_portal_active = false;
     ESP_LOGI(TAG, "Wi-Fi reconnected -- fallback AP and captive portal closed");
 }
@@ -238,11 +246,6 @@ inline esp_err_t init() {
 
     sta_netif = esp_netif_create_default_wifi_sta();
     if (sta_netif == nullptr) return ESP_FAIL;
-
-#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
-    ap_netif = esp_netif_create_default_wifi_ap();
-    if (ap_netif == nullptr) return ESP_FAIL;
-#endif
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init_cfg);

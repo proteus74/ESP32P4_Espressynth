@@ -69,6 +69,7 @@ constexpr size_t kMaxPresetBodyLen = 256 * 1024;
 constexpr const char *kEmptyPresetJson = "{\"widgets\":[],\"connections\":[]}";
 constexpr size_t kUploadSafetyMarginBytes = 4096; // headroom below reported free space
 constexpr size_t kMaxWsClients = 12; // must cover Feature::Web::begin()'s config.max_open_sockets
+constexpr size_t kMaxWsFrameLen = 8192; // includes the complete GPIO/device-settings messages
 
 struct BroadcastWork {
     // CV status can contain one live-voltage entry per widget.
@@ -95,7 +96,7 @@ void broadcast_work(void *arg) {
             }
         }
     }
-    delete work;
+    heap_caps_free(work);
 }
 } // namespace
 
@@ -107,12 +108,13 @@ void broadcast_work(void *arg) {
 inline void broadcast_json(const char *json) {
     httpd_handle_t server = Feature::Web::handle();
     if (server == nullptr) return;
-    BroadcastWork *work = new (std::nothrow) BroadcastWork();
+    auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork),
+                                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (work == nullptr) return;
     const int length = snprintf(work->json, sizeof(work->json), "%s", json);
     if (length < 0 || static_cast<size_t>(length) >= sizeof(work->json) ||
         httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
-        delete work;
+        heap_caps_free(work);
     }
 }
 
@@ -837,21 +839,11 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    auto *body = static_cast<char *>(heap_caps_malloc(req->content_len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    constexpr size_t chunkSize = 1024;
+    auto *body = static_cast<char *>(heap_caps_malloc(chunkSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (body == nullptr) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
         return ESP_FAIL;
-    }
-
-    size_t received = 0;
-    while (received < req->content_len) {
-        int ret = httpd_req_recv(req, body + received, req->content_len - received);
-        if (ret <= 0) {
-            heap_caps_free(body);
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
-            return ESP_FAIL;
-        }
-        received += static_cast<size_t>(ret);
     }
 
     char target_path[kMaxPathLen];
@@ -865,16 +857,36 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     // is only a defensive fallback if a save races ahead of that.
     mkdir(presetpaths::kDir, 0775);
 
-    FILE *file = fopen(target_path, "wb");
+    char temporary_path[kMaxPathLen + 5];
+    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", target_path);
+    FILE *file = fopen(temporary_path, "wb");
     if (file == nullptr) {
         heap_caps_free(body);
         ESP_LOGE(WEB_API_TAG, "%s could not be opened for writing", target_path);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not write preset");
         return ESP_FAIL;
     }
-    fwrite(body, 1, received, file);
-    fclose(file);
+    size_t received = 0;
+    while (received < req->content_len) {
+        const size_t remaining = req->content_len - received;
+        const int ret = httpd_req_recv(req, body, remaining < chunkSize ? remaining : chunkSize);
+        if (ret <= 0 || fwrite(body, 1, static_cast<size_t>(ret), file) != static_cast<size_t>(ret)) {
+            fclose(file);
+            unlink(temporary_path);
+            heap_caps_free(body);
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+            else if (ret > 0) httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not write preset");
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    const int closeResult = fclose(file);
     heap_caps_free(body);
+    if (closeResult != 0 || rename(temporary_path, target_path) != 0) {
+        unlink(temporary_path);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not replace preset");
+        return ESP_FAIL;
+    }
 
     const bool queued = has_name_param ? Feature::Synth::request_preset_name(raw_name)
                                        : Feature::Synth::request_current_preset();
@@ -1603,7 +1615,33 @@ esp_err_t memory_diagnostics_handler(httpd_req_t *req) {
         }
         first = false;
     }
-    if (httpd_resp_send_chunk(req, "}}", 2) != ESP_OK) return ESP_FAIL;
+    constexpr uint32_t dmaCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+    length = snprintf(json, sizeof(json),
+                      "},\"dma\":{\"free\":%u,\"largest\":%u},\"audio\":{\"overruns\":%" PRIu32
+                      ",\"midiDrops\":%" PRIu32 "},\"tasks\":[",
+                      static_cast<unsigned>(heap_caps_get_free_size(dmaCaps)),
+                      static_cast<unsigned>(heap_caps_get_largest_free_block(dmaCaps)),
+                      engine().renderOverrunCount(), engine().midiDropCount());
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||
+        httpd_resp_send_chunk(req, json, length) != ESP_OK) return ESP_FAIL;
+#if defined(CONFIG_FREERTOS_USE_TRACE_FACILITY)
+    const UBaseType_t capacity = uxTaskGetNumberOfTasks() + 8;
+    auto *tasks = static_cast<TaskStatus_t *>(heap_caps_calloc(capacity, sizeof(TaskStatus_t),
+                                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (tasks == nullptr) return ESP_ERR_NO_MEM;
+    const UBaseType_t count = uxTaskGetSystemState(tasks, capacity, nullptr);
+    esp_err_t sendResult = ESP_OK;
+    for (UBaseType_t i = 0; i < count && sendResult == ESP_OK; ++i) {
+        length = snprintf(json, sizeof(json), "%s{\"name\":\"%s\",\"stackFree\":%u}",
+                          i == 0 ? "" : ",", tasks[i].pcTaskName,
+                          static_cast<unsigned>(tasks[i].usStackHighWaterMark));
+        if (length < 0 || static_cast<size_t>(length) >= sizeof(json)) sendResult = ESP_FAIL;
+        else sendResult = httpd_resp_send_chunk(req, json, length);
+    }
+    heap_caps_free(tasks);
+    if (sendResult != ESP_OK) return sendResult;
+#endif
+    if (httpd_resp_send_chunk(req, "]}", 2) != ESP_OK) return ESP_FAIL;
     return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
@@ -1628,9 +1666,10 @@ esp_err_t websocket_handler(httpd_req_t *req) {
         return ret;
     }
     if (frame.len == 0) return ESP_OK; // control frame (ping/pong/close) without payload
+    if (frame.len > kMaxWsFrameLen) return ESP_ERR_INVALID_SIZE; // httpd closes the unread session
 
     // +1 for a trailing NUL so a text payload can be logged/parsed as a C string.
-    auto *payload = static_cast<uint8_t *>(malloc(frame.len + 1));
+    auto *payload = static_cast<uint8_t *>(heap_caps_malloc(frame.len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (payload == nullptr) return ESP_ERR_NO_MEM;
     frame.payload = payload;
     ret = httpd_ws_recv_frame(req, &frame, frame.len);
