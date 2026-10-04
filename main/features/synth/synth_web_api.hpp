@@ -43,8 +43,8 @@
 #if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
     #include "features/usb/host/usb_midi_host.hpp"
 #endif
-#if defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_MIDI_HOST)
-    #include "features/ble/ble_midi_host.hpp"
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH)
+    #include "features/ble/ble_manager.hpp"
 #endif
 
 // REST + WebSocket API for the synth engine's browser patch-editor UI (data/index.html,
@@ -1304,6 +1304,99 @@ esp_err_t midi_devices_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH)
+// ---- /api/ble ----
+
+// GET: BLE state for the Settings > Bluetooth dialog (main.js renderBleSettings()). Only
+// registered when BLE is compiled in, so the frontend hides the section on a 404.
+esp_err_t ble_get_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ready", Feature::BLE::is_ready());
+    cJSON_AddBoolToObject(root, "scanning", Feature::BLE::is_scanning());
+    char mac[18];
+
+    cJSON *known = cJSON_AddArrayToObject(root, "known");
+    const int known_count = Feature::BLE::known_device_count();
+    for (int i = 0; i < known_count; ++i) {
+        const Feature::BLE::KnownDevice device = Feature::BLE::known_device_at(i);
+        Feature::BLE::format_mac(device.addr, mac, sizeof(mac));
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "mac", mac);
+        cJSON_AddStringToObject(item, "name", device.name);
+        cJSON_AddBoolToObject(item, "auto", device.autoconnect);
+        cJSON_AddBoolToObject(item, "connected", Feature::BLE::is_connected_mac(device.addr));
+        cJSON_AddItemToArray(known, item);
+    }
+
+    cJSON *connected = cJSON_AddArrayToObject(root, "connected");
+    const int connected_count = Feature::BLE::connected_device_count();
+    for (int i = 0; i < connected_count; ++i) {
+        const Feature::BLE::ConnectedDevice device = Feature::BLE::connected_device_at(i);
+        Feature::BLE::format_mac(device.addr, mac, sizeof(mac));
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "mac", mac);
+        cJSON_AddStringToObject(item, "name", device.name);
+        cJSON_AddStringToObject(item, "cls", device.device_class);
+        cJSON_AddItemToArray(connected, item);
+    }
+
+    cJSON *found = cJSON_AddArrayToObject(root, "found");
+    const int found_count = Feature::BLE::discovered_device_count();
+    for (int i = 0; i < found_count; ++i) {
+        const Feature::BLE::DiscoveredDevice device = Feature::BLE::discovered_device_at(i);
+        Feature::BLE::format_mac(device.addr, mac, sizeof(mac));
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "mac", mac);
+        cJSON_AddStringToObject(item, "name", device.name);
+        cJSON_AddStringToObject(item, "cls", device.device_class);
+        cJSON_AddNumberToObject(item, "rssi", device.rssi);
+        cJSON_AddItemToArray(found, item);
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+// POST /api/ble?action=scan | connect|disconnect|forget&mac=AA:.. | auto&mac=AA:..&on=0|1
+// Non-blocking: a scan only starts here; the browser polls GET until "scanning" is false.
+esp_err_t ble_post_handler(httpd_req_t *req) {
+    char action[16] = {};
+    char mac[24] = {};
+    char on[4] = {};
+    extract_query_param(req, "action", action, sizeof(action));
+    extract_query_param(req, "mac", mac, sizeof(mac));
+    extract_query_param(req, "on", on, sizeof(on));
+
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (!Feature::BLE::is_ready()) err = ESP_ERR_INVALID_STATE;
+    else if (strcmp(action, "scan") == 0) err = Feature::BLE::start_scan(5000);
+    else if (strcmp(action, "connect") == 0) err = Feature::BLE::connect_by_mac(mac);
+    else if (strcmp(action, "disconnect") == 0) err = Feature::BLE::disconnect_by_mac(mac);
+    else if (strcmp(action, "forget") == 0) err = Feature::BLE::forget(mac);
+    else if (strcmp(action, "auto") == 0) err = Feature::BLE::set_autoconnect(mac, strcmp(on, "1") == 0);
+
+    httpd_resp_set_type(req, "application/json");
+    if (err != ESP_OK) {
+        char json[96];
+        snprintf(json, sizeof(json), "{\"error\":\"%s\"}",
+                 err == ESP_ERR_NOT_FOUND ? "unknown device" : esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, json);
+        return ESP_OK;
+    }
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+#endif
+
 // ---- /api/masterclock ----
 
 // One-shot hydration for a freshly-opened tab (initial page load, or any
@@ -1844,6 +1937,18 @@ inline void register_web_routes() {
         .uri = "/api/wavetable", .method = HTTP_POST, .handler = &wavetable_live_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &wavetable_live_uri);
+
+#if defined(CONFIG_APP_ENABLE_BLUETOOTH)
+    static const httpd_uri_t ble_get_uri = {
+        .uri = "/api/ble", .method = HTTP_GET, .handler = &ble_get_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &ble_get_uri);
+
+    static const httpd_uri_t ble_post_uri = {
+        .uri = "/api/ble", .method = HTTP_POST, .handler = &ble_post_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &ble_post_uri);
+#endif
 
     ESP_LOGI(WEB_API_TAG, "Synth web API routes registered");
 }

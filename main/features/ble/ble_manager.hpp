@@ -1,6 +1,7 @@
 #pragma once
 
 #include "boards/board_config.hpp"
+#include <atomic>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -8,7 +9,9 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_hosted.h"
 #include "esp_hosted_bt_host_stack.h"
@@ -52,6 +55,18 @@ struct ConnectedDevice {
     char device_class[16] = {}; // from a prior ble-scan discovery, if any; empty if unknown
 };
 
+// A device the user connected to at least once (remembered in NVS until forget()). If
+// `autoconnect` is set, a background scan runs while it isn't connected and reconnects as soon
+// as it advertises nearby.
+struct KnownDevice {
+    ble_addr_t addr{};
+    char name[32] = {};
+    bool autoconnect = false;
+    // RAM-only (cleared on load): set by a manual disconnect_by_mac() so auto-connect doesn't
+    // immediately undo it; cleared again by connect_by_mac() or re-enabling auto-connect.
+    bool suppressed = false;
+};
+
 /**
  * @brief Format a BLE address as "AA:BB:CC:DD:EE:FF". `out_size` must be at least 18.
  */
@@ -73,7 +88,106 @@ inline int discovered_device_total = 0;
 constexpr int MAX_TRACKED_CONNECTIONS = MYNEWT_VAL(BLE_MAX_CONNECTIONS);
 inline ConnectedDevice connected_devices[MAX_TRACKED_CONNECTIONS]{};
 
+constexpr int MAX_KNOWN_DEVICES = 8;
+constexpr const char* KNOWN_NVS_NAMESPACE = "ble";
+constexpr const char* KNOWN_NVS_KEY = "known_v1";
+inline KnownDevice known_devices[MAX_KNOWN_DEVICES]{};
+inline int known_device_total = 0;
+// Guards known_devices: mutated from the CLI/httpd tasks, read by the NimBLE host task.
+inline SemaphoreHandle_t known_mutex = nullptr;
+inline StaticSemaphore_t known_mutex_buffer;
+
+// True while an explicit scan() / start_scan() window runs; auto-connect stays off meanwhile
+// so it doesn't cancel the user's scan.
+inline std::atomic<bool> user_scan_active{false};
+
+// No-op before init() created the mutex (nothing else touches known_devices then).
+struct KnownLock {
+    KnownLock() { if (known_mutex != nullptr) xSemaphoreTake(known_mutex, portMAX_DELAY); }
+    ~KnownLock() { if (known_mutex != nullptr) xSemaphoreGive(known_mutex); }
+};
+
 int gap_event(struct ble_gap_event* event, void* arg);
+
+inline int find_known(const uint8_t val[6]) {
+    for (int i = 0; i < known_device_total; ++i) {
+        if (std::memcmp(known_devices[i].addr.val, val, 6) == 0) return i;
+    }
+    return -1;
+}
+
+inline bool is_connected(const uint8_t val[6]) {
+    for (const auto& c : connected_devices) {
+        if (c.conn_handle != 0xffff && std::memcmp(c.addr.val, val, 6) == 0) return true;
+    }
+    return false;
+}
+
+// Caller holds KnownLock. Stores only the first known_device_total entries.
+inline void save_known() {
+    nvs_handle_t nvs;
+    if (nvs_open(KNOWN_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_blob(nvs, KNOWN_NVS_KEY, known_devices, sizeof(KnownDevice) * known_device_total);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+inline void load_known() {
+    nvs_handle_t nvs;
+    if (nvs_open(KNOWN_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    size_t size = sizeof(known_devices);
+    if (nvs_get_blob(nvs, KNOWN_NVS_KEY, known_devices, &size) == ESP_OK && size % sizeof(KnownDevice) == 0) {
+        known_device_total = static_cast<int>(size / sizeof(KnownDevice));
+        for (int i = 0; i < known_device_total; ++i) known_devices[i].suppressed = false;
+    }
+    nvs_close(nvs);
+}
+
+// Caller holds KnownLock. True if some auto-connect device is neither connected nor suppressed.
+inline bool wants_autoconnect() {
+    for (int i = 0; i < known_device_total; ++i) {
+        const KnownDevice& k = known_devices[i];
+        if (k.autoconnect && !k.suppressed && !is_connected(k.addr.val)) return true;
+    }
+    return false;
+}
+
+// Starts an open-ended passive scan whenever auto-connect has something to look for and the
+// controller is otherwise idle. Called on every state change that could make it necessary.
+inline void maybe_start_background_scan() {
+    if (!ble_hs_synced() || user_scan_active || ble_gap_disc_active() || ble_gap_conn_active()) return;
+    if (active_connections >= MAX_TRACKED_CONNECTIONS) return;
+    {
+        KnownLock lock;
+        if (!wants_autoconnect()) return;
+    }
+    uint8_t own_addr_type;
+    if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return;
+    struct ble_gap_disc_params disc_params{};
+    disc_params.passive = 1;
+    disc_params.filter_duplicates = 1;
+    const int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &disc_params, gap_event, nullptr);
+    if (rc != 0) ESP_LOGW(TAG, "Failed to start auto-connect scan; rc=%d", rc);
+}
+
+// Background-scan hit: connect if this advertiser is an auto-connect device not yet connected.
+inline void try_autoconnect(const ble_addr_t& addr) {
+    if (user_scan_active) return;
+    {
+        KnownLock lock;
+        const int i = find_known(addr.val);
+        if (i < 0 || !known_devices[i].autoconnect || known_devices[i].suppressed || is_connected(addr.val)) return;
+    }
+    ble_gap_disc_cancel();
+    uint8_t own_addr_type;
+    if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return;
+    char mac[18];
+    format_mac(addr, mac, sizeof(mac));
+    ESP_LOGI(TAG, "Auto-connecting to %s", mac);
+    if (ble_gap_connect(own_addr_type, &addr, 10000, nullptr, gap_event, nullptr) != 0) {
+        maybe_start_background_scan();
+    }
+}
 
 // Parses "AA:BB:CC:DD:EE:FF" (case-insensitive) into 6 address bytes, in the same val[]
 // (little-endian) order used by ble_addr_t / format_mac() above.
@@ -160,6 +274,12 @@ inline int gap_event(struct ble_gap_event* event, void* arg) {
     switch (event->type) {
     case BLE_GAP_EVENT_DISC:
         record_discovery(&event->disc);
+        try_autoconnect(event->disc.addr);
+        return 0;
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        user_scan_active = false;
+        maybe_start_background_scan();
         return 0;
 
     case BLE_GAP_EVENT_CONNECT:
@@ -199,6 +319,7 @@ inline int gap_event(struct ble_gap_event* event, void* arg) {
         } else {
             ESP_LOGW(TAG, "BLE connect attempt failed; status=%d", event->connect.status);
         }
+        maybe_start_background_scan();
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -216,6 +337,7 @@ inline int gap_event(struct ble_gap_event* event, void* arg) {
         }
         peer_delete(event->disconnect.conn.conn_handle);
         if (active_connections > 0) --active_connections;
+        maybe_start_background_scan();
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -253,8 +375,9 @@ inline void on_reset(int reason) {
 inline void on_sync() {
     ble_hs_util_ensure_addr(0);
     active_connections = 0;
-    // No scanning and no auto-connect at boot: discovery only happens on demand, via the
-    // CLI's "ble-scan" (and manual "ble-connect") commands.
+    // Only devices the user marked for auto-connect are looked for at boot; everything else
+    // waits for an explicit scan()/connect_by_mac() (CLI "ble scan"/"ble connect", web UI).
+    maybe_start_background_scan();
 }
 
 inline void host_task(void*) {
@@ -265,15 +388,15 @@ inline void host_task(void*) {
 } // namespace
 
 /**
- * @brief Run a timed active discovery window, collecting every advertising BLE device
- *        (regardless of profile support) into the list returned by discovered_device_count()/
- *        discovered_device_at(). Blocks the calling task for approximately duration_ms.
- *        Continuous background scanning (for HID/MIDI auto-connect) resumes automatically
- *        once the window ends.
+ * @brief Start a timed discovery window without blocking, collecting every advertising BLE
+ *        device (regardless of profile support) into the list returned by
+ *        discovered_device_count()/discovered_device_at(). is_scanning() stays true until the
+ *        window ends; the auto-connect background scan (if needed) resumes afterwards.
  */
-inline esp_err_t scan(uint32_t duration_ms) {
+inline esp_err_t start_scan(uint32_t duration_ms) {
+    if (!ble_hs_synced()) return ESP_ERR_INVALID_STATE;
     discovered_device_total = 0;
-    ble_gap_disc_cancel(); // defensive: cancel any lingering discovery before starting a fresh one
+    ble_gap_disc_cancel(); // cancels a running auto-connect background scan, if any
 
     uint8_t own_addr_type;
     if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return ESP_FAIL;
@@ -284,15 +407,27 @@ inline esp_err_t scan(uint32_t duration_ms) {
     // a separate report from its ADV_IND.
     disc_params.filter_duplicates = 0;
 
+    user_scan_active = true;
     const int rc = ble_gap_disc(own_addr_type, static_cast<int32_t>(duration_ms), &disc_params, gap_event, nullptr);
     if (rc != 0) {
+        user_scan_active = false;
         ESP_LOGW(TAG, "Failed to start BLE scan; rc=%d", rc);
+        maybe_start_background_scan();
         return ESP_FAIL;
     }
+    return ESP_OK;
+}
 
+/** @brief start_scan(), then block the calling task until the window has ended. */
+inline esp_err_t scan(uint32_t duration_ms) {
+    const esp_err_t err = start_scan(duration_ms);
+    if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(duration_ms + 200));
     return ESP_OK;
 }
+
+inline bool is_ready() { return ble_hs_synced(); }
+inline bool is_scanning() { return user_scan_active; }
 
 inline int discovered_device_count() { return discovered_device_total; }
 inline const DiscoveredDevice& discovered_device_at(int index) { return discovered_devices[index]; }
@@ -315,8 +450,10 @@ inline ConnectedDevice connected_device_at(int index) {
 
 /**
  * @brief Connect to a device by MAC address ("AA:BB:CC:DD:EE:FF"), as previously seen by
- *        scan(). Returns ESP_ERR_INVALID_ARG if the address doesn't parse, ESP_ERR_NOT_FOUND
- *        if it wasn't seen by a scan (its address type -- public/random -- is unknown).
+ *        scan() or remembered from an earlier connection, and remember it (see
+ *        known_device_count()). Returns ESP_ERR_INVALID_ARG if the address doesn't parse,
+ *        ESP_ERR_NOT_FOUND if it is neither known nor seen by a scan (its address type --
+ *        public/random -- is unknown).
  */
 inline esp_err_t connect_by_mac(const char* mac_str) {
     uint8_t val[6];
@@ -324,18 +461,41 @@ inline esp_err_t connect_by_mac(const char* mac_str) {
 
     ble_addr_t target{};
     std::memcpy(target.val, val, sizeof(val));
+    const char* name = "";
 
-    bool known = false;
+    bool found = false;
     for (int i = 0; i < discovered_device_total; ++i) {
         if (std::memcmp(discovered_devices[i].addr.val, val, sizeof(val)) == 0) {
             target.type = discovered_devices[i].addr.type;
-            known = true;
+            name = discovered_devices[i].name;
+            found = true;
             break;
         }
     }
-    if (!known) return ESP_ERR_NOT_FOUND;
+
+    {
+        KnownLock lock;
+        int k = find_known(val);
+        if (k >= 0) {
+            if (!found) target.type = known_devices[k].addr.type;
+            found = true;
+        } else if (found && known_device_total < MAX_KNOWN_DEVICES) {
+            k = known_device_total++;
+            known_devices[k] = KnownDevice{};
+        }
+        if (k >= 0) {
+            known_devices[k].addr = target;
+            known_devices[k].suppressed = false;
+            if (name[0] != '\0') {
+                std::strncpy(known_devices[k].name, name, sizeof(known_devices[k].name) - 1);
+            }
+            save_known();
+        }
+    }
+    if (!found) return ESP_ERR_NOT_FOUND;
 
     ble_gap_disc_cancel(); // ok if not currently scanning
+    user_scan_active = false; // a cancelled discovery reports no DISC_COMPLETE
 
     uint8_t own_addr_type;
     if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) return ESP_FAIL;
@@ -343,26 +503,94 @@ inline esp_err_t connect_by_mac(const char* mac_str) {
     const int rc = ble_gap_connect(own_addr_type, &target, 30000, nullptr, gap_event, nullptr);
     if (rc != 0) {
         ESP_LOGW(TAG, "Failed to connect to %s; rc=%d", mac_str, rc);
+        maybe_start_background_scan();
         return ESP_FAIL;
     }
     return ESP_OK;
 }
 
 /**
- * @brief Disconnect the currently connected device with the given MAC address. Returns
- *        ESP_ERR_INVALID_ARG if the address doesn't parse, ESP_ERR_NOT_FOUND if no connected
- *        device matches it.
+ * @brief Disconnect the currently connected device with the given MAC address. A known
+ *        auto-connect device is not reconnected until connect_by_mac() or set_autoconnect()
+ *        (or a reboot). Returns ESP_ERR_INVALID_ARG if the address doesn't parse,
+ *        ESP_ERR_NOT_FOUND if no connected device matches it.
  */
 inline esp_err_t disconnect_by_mac(const char* mac_str) {
     uint8_t val[6];
     if (!parse_mac(mac_str, val)) return ESP_ERR_INVALID_ARG;
 
+    {
+        KnownLock lock;
+        const int k = find_known(val);
+        if (k >= 0) known_devices[k].suppressed = true;
+    }
     for (const auto& c : connected_devices) {
         if (c.conn_handle != 0xffff && std::memcmp(c.addr.val, val, sizeof(val)) == 0) {
             return ble_gap_terminate(c.conn_handle, BLE_ERR_REM_USER_CONN_TERM) == 0 ? ESP_OK : ESP_FAIL;
         }
     }
     return ESP_ERR_NOT_FOUND;
+}
+
+inline int known_device_count() {
+    KnownLock lock;
+    return known_device_total;
+}
+
+/** @brief Copy of known device `index` (empty KnownDevice if out of range). */
+inline KnownDevice known_device_at(int index) {
+    KnownLock lock;
+    return index >= 0 && index < known_device_total ? known_devices[index] : KnownDevice{};
+}
+
+inline bool is_connected_mac(const ble_addr_t& addr) { return is_connected(addr.val); }
+
+/**
+ * @brief Turn auto-connect on/off for a known device (persisted). Returns ESP_ERR_INVALID_ARG
+ *        if the address doesn't parse, ESP_ERR_NOT_FOUND if the device isn't known.
+ */
+inline esp_err_t set_autoconnect(const char* mac_str, bool enabled) {
+    uint8_t val[6];
+    if (!parse_mac(mac_str, val)) return ESP_ERR_INVALID_ARG;
+    bool still_wanted;
+    {
+        KnownLock lock;
+        const int k = find_known(val);
+        if (k < 0) return ESP_ERR_NOT_FOUND;
+        known_devices[k].autoconnect = enabled;
+        if (enabled) known_devices[k].suppressed = false;
+        save_known();
+        still_wanted = wants_autoconnect();
+    }
+    if (enabled) {
+        maybe_start_background_scan();
+    } else if (!still_wanted && !user_scan_active) {
+        ble_gap_disc_cancel(); // nothing left to look for
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief Forget a known device: drop it from the persisted list (and any NimBLE bond) and
+ *        disconnect it if connected. Returns ESP_ERR_INVALID_ARG if the address doesn't parse,
+ *        ESP_ERR_NOT_FOUND if the device isn't known.
+ */
+inline esp_err_t forget(const char* mac_str) {
+    uint8_t val[6];
+    if (!parse_mac(mac_str, val)) return ESP_ERR_INVALID_ARG;
+    ble_addr_t addr;
+    {
+        KnownLock lock;
+        const int k = find_known(val);
+        if (k < 0) return ESP_ERR_NOT_FOUND;
+        addr = known_devices[k].addr;
+        for (int i = k; i + 1 < known_device_total; ++i) known_devices[i] = known_devices[i + 1];
+        known_devices[--known_device_total] = KnownDevice{};
+        save_known();
+    }
+    ble_store_util_delete_peer(&addr);
+    disconnect_by_mac(mac_str); // ESP_ERR_NOT_FOUND if not connected: fine
+    return ESP_OK;
 }
 
 /**
@@ -379,6 +607,9 @@ inline esp_err_t init() {
         err = nvs_flash_init();
     }
     if (err != ESP_OK) return err;
+
+    known_mutex = xSemaphoreCreateMutexStatic(&known_mutex_buffer);
+    load_known();
 
     if (esp_hosted_connect_to_slave() != 0) {
         ESP_LOGE(TAG, "Failed to connect to ESP-Hosted co-processor");
@@ -410,6 +641,11 @@ inline esp_err_t init() {
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    // Bond and exchange LTK + identity keys, so bonds (persisted in NVS via
+    // CONFIG_BT_NIMBLE_NVS_PERSIST, forced on by APP_ENABLE_BLUETOOTH) work after a reboot.
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
     const int peer_rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 20, 32, 32);
     if (peer_rc != 0) {

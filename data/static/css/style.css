@@ -704,7 +704,83 @@ button:hover {
 }
 
 .master-volume-meter {
-  padding: 0 0.5rem 0 0;
+  padding: 0.2rem 0.5rem 0.2rem 0.4rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.master-volume-meter:hover,
+.master-volume-meter[aria-expanded="true"] {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.master-volume-meter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Vertical Master Volume slider dropped down below the header VOL meter. */
+.master-volume-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.master-volume-popover {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.master-volume-popover[hidden] {
+  display: none;
+}
+
+.master-volume-popover-value {
+  min-width: 3ch;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text);
+}
+
+.master-volume-popover-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 1.5rem;
+  height: 160px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.master-volume-popover-slider:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.6);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.master-volume-popover-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.master-volume-popover-hint {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  white-space: nowrap;
 }
 
 .cpu-load-bar-fill.warn {
@@ -5083,6 +5159,188 @@ input[type="range"].port-slider + .port-value {
   border-bottom: 0;
 }
 
+/* Bluetooth LE dialog (bleSettingsOverlay): wide enough that name, MAC line and the
+   row actions never wrap; long names ellipsize instead of forcing a horizontal scrollbar. */
+.ble-settings-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+}
+
+.ble-settings-modal h3 {
+  margin: 0;
+}
+
+.ble-settings-modal [hidden] {
+  display: none !important;
+}
+
+.ble-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ble-section h4 {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.ble-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ble-section-head h4 {
+  flex: 1;
+}
+
+.ble-status {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.ble-list {
+  max-height: 300px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.ble-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.ble-row:last-child {
+  border-bottom: 0;
+}
+
+.ble-row:hover {
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.ble-dot {
+  flex-shrink: 0;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.ble-dot-on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+}
+
+.ble-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ble-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ble-badge {
+  flex-shrink: 0;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  border-radius: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.ble-meta {
+  margin-top: 0.15rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.65;
+}
+
+.ble-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ble-row-actions button,
+.ble-section-head button {
+  min-width: 6.5rem;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.ble-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.25rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ble-empty {
+  margin: 0;
+  padding: 0.9rem;
+  border: 1px dashed var(--card-border);
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+  text-align: center;
+  opacity: 0.7;
+}
+
+@media (max-width: 640px) {
+  .ble-settings-modal {
+    padding: 1.25rem 1rem;
+  }
+
+  .ble-row {
+    flex-wrap: wrap;
+  }
+
+  .ble-info {
+    min-width: 9rem;
+  }
+
+  .ble-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-left: auto;
+  }
+
+  .ble-row-actions button,
+  .ble-section-head button {
+    min-width: 0;
+  }
+}
+
 /* Add-pin row (gpioSettingsOverlay): pin/direction/pull selects on their own
    line, then Inverted + Add spread out below - the checkbox used to sit
    stranded at the end of one wide row of dropdowns with nothing tying it
@@ -5138,12 +5396,6 @@ input[type="range"].port-slider + .port-value {
 }
 
 .ble-connect-modal { min-width: min(620px, 92vw); }
-.ble-device-list { max-height: 280px; overflow-y: auto; border: 1px solid #3f4655; border-radius: 4px; }
-.ble-device-row { padding: 8px; border-bottom: 1px solid #343a46; cursor: pointer; }
-.ble-device-row:hover { background: #2a2f3a; }
-.ble-device-row.ble-device-connecting { background: #3a3520; cursor: default; }
-.ble-device-row.ble-device-connected { background: #1f3a26; cursor: default; }
-.ble-device-row.ble-device-busy { cursor: default; opacity: 0.6; }
 
 .color-swatch-grid {
   display: grid;

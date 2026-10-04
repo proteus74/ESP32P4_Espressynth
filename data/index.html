@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261003-master-volume-row-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20261004-volume-popover-1">
 </head>
 <body>
 
@@ -20,7 +20,6 @@
       <button id="menuExport">Export</button>
       <button id="menuImport">Import</button>
       <button id="menuFileExplorer">File Explorer</button>
-      <button id="menuBleConnect">BLE Connect</button>
       <button id="menuSettings">Settings</button>
     </div>
   </div>
@@ -88,10 +87,19 @@
   <span class="app-title">ESPRESSYNTH</span>
 
   <div class="header-right">
-    <div class="cpu-load master-volume-meter" title="Master Volume">
-      <span class="cpu-load-label">VOL</span>
-      <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="masterVolumeMeterFill"></div></div>
-      <span class="cpu-load-value" id="masterVolumeMeterValue">–</span>
+    <div class="master-volume-wrap">
+      <div class="cpu-load master-volume-meter" id="masterVolumeMeter" title="Master Volume" role="button" tabindex="0"
+        aria-haspopup="true" aria-expanded="false" aria-controls="masterVolumePopover">
+        <span class="cpu-load-label">VOL</span>
+        <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="masterVolumeMeterFill"></div></div>
+        <span class="cpu-load-value" id="masterVolumeMeterValue">–</span>
+      </div>
+      <div class="master-volume-popover" id="masterVolumePopover" hidden>
+        <span class="master-volume-popover-value" id="masterVolumePopoverValue">100%</span>
+        <input type="range" id="masterVolumePopoverInput" class="master-volume-popover-slider"
+          min="0" max="100" step="1" value="100" aria-label="Master Volume">
+        <span class="master-volume-popover-hint" id="masterVolumePopoverHint" hidden>MIDI CC</span>
+      </div>
     </div>
     <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
       <span class="master-clock-badge-icon">⏱️</span>
@@ -217,6 +225,12 @@
         <legend>Network</legend>
         <p id="networkSummaryText" class="modal-field-readout">–</p>
         <button type="button" id="openNetworkSettings" class="btn-secondary">Configure Network…</button>
+      </fieldset>
+
+      <fieldset id="settingsBleSection" class="settings-section settings-section-full" hidden>
+        <legend>Bluetooth LE</legend>
+        <p id="bleSummaryText" class="modal-field-readout">–</p>
+        <button type="button" id="openBleSettings" class="btn-secondary">Configure Bluetooth…</button>
       </fieldset>
 
       <fieldset class="settings-section settings-section-full">
@@ -419,6 +433,29 @@
   </div>
 </div>
 
+<div id="bleSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal ble-settings-modal" role="dialog" aria-modal="true" aria-labelledby="bleSettingsTitle">
+    <h3 id="bleSettingsTitle">Bluetooth LE</h3>
+    <section class="ble-section">
+      <h4>Known Devices</h4>
+      <div id="bleKnownList" class="ble-list"></div>
+      <p id="bleKnownEmpty" class="ble-empty">No known devices yet. Scan below and connect to one to add it.</p>
+    </section>
+    <section class="ble-section">
+      <div class="ble-section-head">
+        <h4>Nearby Devices</h4>
+        <span id="bleStatus" class="ble-status"></span>
+        <button id="bleScan" type="button" class="btn-secondary">Scan</button>
+      </div>
+      <div id="bleFoundList" class="ble-list" hidden></div>
+      <p id="bleFoundEmpty" class="ble-empty">Press Scan to look for devices nearby.</p>
+    </section>
+    <div class="modal-actions">
+      <button id="bleSettingsClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="infoOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Info</h3>
@@ -434,18 +471,6 @@
     <div id="infoI2CDevices" class="modal-field-readout">–</div>
     <div class="modal-actions">
       <button id="infoClose" class="btn-secondary">Close</button>
-    </div>
-  </div>
-</div>
-
-<div id="bleConnectOverlay" class="modal-overlay hidden">
-  <div class="modal ble-connect-modal">
-    <h3>BLE Connect</h3>
-    <p id="bleConnectStatus" class="modal-field-readout">Loading Bluetooth status…</p>
-    <div id="bleDeviceList" class="ble-device-list"></div>
-    <div class="modal-actions">
-      <button id="bleScan" class="btn-secondary">Scan Devices</button>
-      <button id="bleConnectClose" class="btn-secondary">Close</button>
     </div>
   </div>
 </div>
@@ -1423,6 +1448,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261003-master-volume-row-1"></script>
+<script type="module" src="/static/js/main.js?v=20261004-volume-popover-1"></script>
 </body>
 </html>

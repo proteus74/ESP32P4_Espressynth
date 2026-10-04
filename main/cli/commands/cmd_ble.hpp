@@ -1,6 +1,6 @@
 #pragma once
 
-// "ble <scan|connect|disconnect|list> [mac]": single command for BLE discovery/connection
+// "ble <scan|connect|disconnect|list|forget|auto> [mac] [on|off]": single command for BLE discovery/connection
 // management. Only registered when Bluetooth LE is enabled (CONFIG_APP_ENABLE_BLUETOOTH);
 // backed by main/features/ble/ble_manager.hpp's device discovery and connection tracking.
 
@@ -16,7 +16,7 @@ namespace Feature::CLI::Commands {
 namespace {
 
 constexpr uint32_t BLE_SCAN_DURATION_MS = 4000;
-constexpr const char* BLE_USAGE = "Usage: ble <scan|connect|disconnect|list> [mac]\n";
+constexpr const char* BLE_USAGE = "Usage: ble <scan|list> | ble <connect|disconnect|forget> <mac> | ble auto <mac> <on|off>\n";
 
 inline int ble_scan() {
     printf("Scanning for BLE devices (%u ms)...\n", (unsigned)BLE_SCAN_DURATION_MS);
@@ -65,12 +65,8 @@ inline int ble_disconnect(const char* mac) {
 
 inline int ble_list() {
     const int count = Feature::BLE::connected_device_count();
-    if (count == 0) {
-        printf("No BLE devices connected.\n");
-        return 0;
-    }
-
     char mac[18];
+    if (count == 0) printf("No BLE devices connected.\n");
     for (int i = 0; i < count; ++i) {
         const Feature::BLE::ConnectedDevice device = Feature::BLE::connected_device_at(i);
         Feature::BLE::format_mac(device.addr, mac, sizeof(mac));
@@ -78,7 +74,22 @@ inline int ble_list() {
                device.device_class[0] != '\0' ? device.device_class : "-",
                device.name[0] != '\0' ? device.name : "(no name)");
     }
+
+    const int known = Feature::BLE::known_device_count();
+    if (known > 0) printf("Known devices:\n");
+    for (int i = 0; i < known; ++i) {
+        const Feature::BLE::KnownDevice device = Feature::BLE::known_device_at(i);
+        Feature::BLE::format_mac(device.addr, mac, sizeof(mac));
+        printf("%s  auto=%s  %s\n", mac, device.autoconnect ? "on " : "off",
+               device.name[0] != '\0' ? device.name : "(no name)");
+    }
     return 0;
+}
+
+inline int ble_report(esp_err_t err, const char* what, const char* mac) {
+    if (err == ESP_OK) return 0;
+    printf("%s %s failed: %s\n", what, mac, err == ESP_ERR_NOT_FOUND ? "unknown device" : esp_err_to_name(err));
+    return 1;
 }
 
 inline int cli_cmd_ble(int argc, char** argv) {
@@ -92,6 +103,10 @@ inline int cli_cmd_ble(int argc, char** argv) {
     if (std::strcmp(sub, "connect") == 0 && argc == 3) return ble_connect(argv[2]);
     if (std::strcmp(sub, "disconnect") == 0 && argc == 3) return ble_disconnect(argv[2]);
     if (std::strcmp(sub, "list") == 0 && argc == 2) return ble_list();
+    if (std::strcmp(sub, "forget") == 0 && argc == 3) return ble_report(Feature::BLE::forget(argv[2]), "Forget", argv[2]);
+    if (std::strcmp(sub, "auto") == 0 && argc == 4) {
+        return ble_report(Feature::BLE::set_autoconnect(argv[2], std::strcmp(argv[3], "on") == 0), "Auto-connect", argv[2]);
+    }
 
     printf("%s", BLE_USAGE);
     return 1;
@@ -102,8 +117,8 @@ inline int cli_cmd_ble(int argc, char** argv) {
 inline void register_ble() {
     const esp_console_cmd_t cmd = {
         .command = "ble",
-        .help = "Manage BLE: \"scan\" for devices, \"connect\"/\"disconnect\" <mac>, \"list\" connected devices",
-        .hint = "<scan|connect|disconnect|list> [mac]",
+        .help = "Manage BLE: \"scan\", \"connect\"/\"disconnect\"/\"forget\" <mac>, \"auto\" <mac> <on|off>, \"list\" connected + known devices",
+        .hint = "<scan|connect|disconnect|list|forget|auto> [mac] [on|off]",
         .func = &cli_cmd_ble,
         .argtable = nullptr,
         .func_w_context = nullptr,

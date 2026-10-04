@@ -931,6 +931,9 @@ menu "Espressynth"
             config APP_ENABLE_BLUETOOTH
                 bool "Enable Bluetooth LE Subsystem (ESP-Hosted / NimBLE)"
                 default n
+                # Bonding keys must survive reboots so remembered/auto-connect devices
+                # (ble_manager.hpp) reconnect without re-pairing.
+                select BT_NIMBLE_NVS_PERSIST if BT_NIMBLE_ENABLED
                 help
                     Enables Bluetooth LE via the same ESP-Hosted co-processor (ESP32-C6) used
                     for Wi-Fi: a NimBLE host stack runs on the ESP32-P4 and talks to the BT

@@ -287,94 +287,6 @@ document.getElementById("menuFileExplorer").addEventListener("click", (e) => {
   openFileExplorer();
 });
 
-const bleConnectOverlay = document.getElementById("bleConnectOverlay");
-const bleConnectStatus = document.getElementById("bleConnectStatus");
-const bleDeviceList = document.getElementById("bleDeviceList");
-const bleScanButton = document.getElementById("bleScan");
-
-let bleActionBusy = false;
-
-function renderBleDevices(data) {
-  if (!data.available) bleConnectStatus.textContent = data.error || "BLE unavailable";
-  else if (data.connected) bleConnectStatus.textContent = `Connected: ${data.name}`;
-  else if (data.connecting) bleConnectStatus.textContent = "Connecting…";
-  else if (data.scanning) bleConnectStatus.textContent = "Scanning Bluetooth LE devices…";
-  else bleConnectStatus.textContent = data.error || "Select a BLE-MIDI keyboard to connect";
-  bleDeviceList.replaceChildren();
-  for (const device of (data.devices || [])) {
-    const row = document.createElement("div");
-    row.className = "ble-device-row";
-    const isTarget = data.connectedId && device.id === data.connectedId;
-    if (isTarget && data.connected) row.classList.add("ble-device-connected");
-    else if (isTarget && data.connecting) row.classList.add("ble-device-connecting");
-    if (bleActionBusy) row.classList.add("ble-device-busy");
-    const label = document.createElement("span");
-    
-    
-    let suffix = " · BLE-MIDI";
-    if (isTarget && data.connected) suffix = " · connected";
-    else if (isTarget && data.connecting) suffix = " · connecting…";
-    label.textContent = `${device.name} · ${device.id} · ${device.rssi} dBm${suffix}`;
-    row.appendChild(label);
-    if (!bleActionBusy && !(isTarget && (data.connected || data.connecting))) {
-      row.addEventListener("click", () => connectBleDevice(device.id));
-    }
-    bleDeviceList.appendChild(row);
-  }
-}
-
-async function refreshBleDevices() {
-  const res = await fetch("/api/ble/devices");
-  const data = await res.json();
-  renderBleDevices(data);
-  return data;
-}
-
-async function connectBleDevice(id) {
-  bleActionBusy = true;
-  try {
-    const res = await fetch("/api/ble/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    for (let i = 0; i < 20; ++i) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const state = await refreshBleDevices();
-      if (!state.connecting) break;
-    }
-  } catch (err) { bleConnectStatus.textContent = `Error: ${err.message}`; }
-  finally { bleActionBusy = false; await refreshBleDevices(); }
-}
-
-document.getElementById("menuBleConnect").addEventListener("click", async (e) => {
-  e.stopPropagation();
-  menuItems.forEach((m) => m.classList.remove("open"));
-  bleConnectOverlay.classList.remove("hidden");
-  try { await refreshBleDevices(); } catch (err) { bleConnectStatus.textContent = `Error: ${err.message}`; }
-});
-
-document.getElementById("bleConnectClose").addEventListener("click", () => bleConnectOverlay.classList.add("hidden"));
-bleConnectOverlay.addEventListener("click", (e) => { if (e.target === bleConnectOverlay) bleConnectOverlay.classList.add("hidden"); });
-bleScanButton.addEventListener("click", async () => {
-  bleScanButton.disabled = true;
-  try {
-    const res = await fetch("/api/ble/scan", { method: "POST" });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    for (let i = 0; i < 9; ++i) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
-      const scan = await refreshBleDevices();
-      if (!scan.scanning) break;
-    }
-  } catch (err) { bleConnectStatus.textContent = `Error: ${err.message}`; }
-  finally { bleScanButton.disabled = false; }
-});
-
-
-
 const loadSamplesBtn = document.getElementById("loadSamplesBtn");
 function updateLoadSamplesButton(pendingCount = audioEngine.getDeferredSampleCount()) {
   loadSamplesBtn.hidden = pendingCount === 0;
@@ -764,6 +676,13 @@ async function openSettings() {
   } catch (err) {
     appendLog(`Could not load LED string settings: ${err.message}`);
   }
+  // /api/ble only exists when the firmware was built with Bluetooth LE.
+  try {
+    updateBleSummary(await fetchBleState());
+    document.getElementById("settingsBleSection").hidden = false;
+  } catch {
+    document.getElementById("settingsBleSection").hidden = true;
+  }
   deviceNameInput.focus();
 }
 
@@ -935,6 +854,173 @@ wifiScanButton.addEventListener("click", async () => {
   } finally {
     wifiScanButton.disabled = false;
   }
+});
+
+// Bluetooth LE: own modal (opened from Settings). Every action applies on the device right
+// away (POST /api/ble); the dialog polls GET /api/ble while open so connects, disconnects and
+// scan results show up live.
+const bleSettingsOverlay = document.getElementById("bleSettingsOverlay");
+const bleKnownList = document.getElementById("bleKnownList");
+const bleKnownEmpty = document.getElementById("bleKnownEmpty");
+const bleFoundList = document.getElementById("bleFoundList");
+const bleScanButton = document.getElementById("bleScan");
+const bleStatus = document.getElementById("bleStatus");
+const bleFoundEmpty = document.getElementById("bleFoundEmpty");
+let blePollTimer = null;
+
+async function fetchBleState() {
+  const res = await fetch("/api/ble");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function bleAction(action, params = {}) {
+  const res = await fetch(`/api/ble?${new URLSearchParams({ action, ...params })}`, { method: "POST" });
+  const result = await res.json().catch(() => ({}));
+  if (!res.ok || result.error) throw new Error(result.error || `HTTP ${res.status}`);
+}
+
+function bleButton(text, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn-secondary";
+  button.textContent = text;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await onClick();
+    } catch (err) {
+      showToast(`Bluetooth: ${err.message}`);
+    }
+    refreshBleSettings();
+  });
+  return button;
+}
+
+// One device row: optional status dot, name over a muted MAC/signal/class line, actions right.
+function bleRow({ name, mac, details = [], badge = "", status = null }, ...controls) {
+  const row = document.createElement("div");
+  row.className = "ble-row";
+  if (status) {
+    const dot = document.createElement("span");
+    dot.className = `ble-dot ble-dot-${status}`;
+    dot.title = status === "on" ? "Connected" : "Not connected";
+    row.appendChild(dot);
+  }
+  const info = document.createElement("div");
+  info.className = "ble-info";
+  const title = document.createElement("div");
+  title.className = "ble-name";
+  title.textContent = name || "Unnamed device";
+  if (badge) {
+    const tag = document.createElement("span");
+    tag.className = "ble-badge";
+    tag.textContent = badge;
+    title.appendChild(tag);
+  }
+  const meta = document.createElement("div");
+  meta.className = "ble-meta";
+  meta.textContent = [mac, ...details].join(" · ");
+  info.append(title, meta);
+  const actions = document.createElement("div");
+  actions.className = "ble-row-actions";
+  actions.append(...controls);
+  row.append(info, actions);
+  return row;
+}
+
+function updateBleSummary(state) {
+  document.getElementById("bleSummaryText").textContent = state.ready
+    ? `${(state.connected || []).length} connected, ${(state.known || []).length} known`
+    : "Bluetooth not ready";
+}
+
+function renderBleSettings(state) {
+  updateBleSummary(state);
+  bleScanButton.disabled = !state.ready || state.scanning;
+  bleScanButton.textContent = state.scanning ? "Scanning…" : "Scan";
+  bleStatus.textContent = state.ready ? "" : "Bluetooth not ready";
+
+  const known = state.known || [];
+  const connectedCls = new Map((state.connected || []).map((device) => [device.mac, device.cls]));
+  bleKnownList.replaceChildren(...known.map((device) => {
+    const auto = document.createElement("label");
+    auto.className = "ble-toggle";
+    auto.title = "Reconnect automatically whenever this device is nearby";
+    const autoInput = document.createElement("input");
+    autoInput.type = "checkbox";
+    autoInput.checked = device.auto;
+    autoInput.addEventListener("change", async () => {
+      try {
+        await bleAction("auto", { mac: device.mac, on: autoInput.checked ? "1" : "0" });
+      } catch (err) {
+        showToast(`Bluetooth: ${err.message}`);
+      }
+      refreshBleSettings();
+    });
+    const autoText = document.createElement("span");
+    autoText.textContent = "Auto-connect";
+    auto.append(autoInput, autoText);
+    return bleRow(
+      {
+        name: device.name,
+        mac: device.mac,
+        details: [device.connected ? "Connected" : "Not connected"],
+        badge: connectedCls.get(device.mac) || "",
+        status: device.connected ? "on" : "off",
+      },
+      auto,
+      device.connected
+        ? bleButton("Disconnect", () => bleAction("disconnect", { mac: device.mac }))
+        : bleButton("Connect", () => bleAction("connect", { mac: device.mac })),
+      bleButton("Forget", () => bleAction("forget", { mac: device.mac })),
+    );
+  }));
+  bleKnownList.hidden = known.length === 0;
+  bleKnownEmpty.hidden = known.length > 0;
+
+  const skip = new Set([...known, ...(state.connected || [])].map((device) => device.mac));
+  const found = (state.found || []).filter((device) => !skip.has(device.mac)).sort((a, b) => b.rssi - a.rssi);
+  bleFoundList.replaceChildren(...found.map((device) => bleRow(
+    { name: device.name, mac: device.mac, details: [`${device.rssi} dBm`], badge: device.cls },
+    bleButton("Connect", () => bleAction("connect", { mac: device.mac })),
+  )));
+  bleFoundList.hidden = found.length === 0;
+  bleFoundEmpty.hidden = found.length > 0 || state.scanning;
+}
+
+async function refreshBleSettings() {
+  try {
+    renderBleSettings(await fetchBleState());
+  } catch (err) {
+    bleStatus.textContent = `Error: ${err.message}`;
+  }
+}
+
+function closeBleSettings() {
+  clearInterval(blePollTimer);
+  blePollTimer = null;
+  bleSettingsOverlay.classList.add("hidden");
+}
+
+document.getElementById("openBleSettings").addEventListener("click", () => {
+  bleSettingsOverlay.classList.remove("hidden");
+  refreshBleSettings();
+  clearInterval(blePollTimer);
+  blePollTimer = setInterval(refreshBleSettings, 1500);
+});
+document.getElementById("bleSettingsClose").addEventListener("click", closeBleSettings);
+bleSettingsOverlay.addEventListener("click", (e) => {
+  if (e.target === bleSettingsOverlay) closeBleSettings();
+});
+bleScanButton.addEventListener("click", async () => {
+  bleScanButton.disabled = true;
+  try {
+    await bleAction("scan");
+  } catch (err) {
+    showToast(`Bluetooth: ${err.message}`);
+  }
+  refreshBleSettings();
 });
 
 document.getElementById("settingsSave").addEventListener("click", () => {
@@ -12504,6 +12590,11 @@ const globalMidiSettingsOverlay = document.getElementById("globalMidiSettingsOve
 const globalMidiSummaryText = document.getElementById("globalMidiSummaryText");
 const masterVolumeInput = document.getElementById("masterVolumeInput");
 const masterVolumeValue = document.getElementById("masterVolumeValue");
+const masterVolumeMeter = document.getElementById("masterVolumeMeter");
+const masterVolumePopover = document.getElementById("masterVolumePopover");
+const masterVolumePopoverInput = document.getElementById("masterVolumePopoverInput");
+const masterVolumePopoverValue = document.getElementById("masterVolumePopoverValue");
+const masterVolumePopoverHint = document.getElementById("masterVolumePopoverHint");
 
 // get() -> [cc, channel] (null = unlearned); send(cc, channel) updates the local mirror and
 // persists on the firmware (-1 = cleared).
@@ -12587,6 +12678,10 @@ function updateMasterVolumeUi() {
     masterVolumeInput.disabled = learned;
   }
   if (masterVolumeValue) masterVolumeValue.textContent = `${pct}%`;
+  masterVolumePopoverInput.value = String(pct);
+  masterVolumePopoverInput.disabled = learned;
+  masterVolumePopoverValue.textContent = `${pct}%`;
+  masterVolumePopoverHint.hidden = !learned;
   const meterFill = document.getElementById("masterVolumeMeterFill");
   if (meterFill) meterFill.style.width = `${pct}%`;
   const meterValue = document.getElementById("masterVolumeMeterValue");
@@ -12650,6 +12745,36 @@ globalMidiSettingsOverlay?.querySelectorAll("[data-global-clear]").forEach((btn)
 });
 masterVolumeInput?.addEventListener("input", () => {
   setManualMasterVolume(Number(masterVolumeInput.value) / 100);
+});
+
+// Header VOL meter: click opens a vertical slider below it (outside click / Escape closes).
+// Disabled while a MIDI CC is learned for Master Volume - the controller owns it then.
+function setMasterVolumePopoverOpen(open) {
+  masterVolumePopover.hidden = !open;
+  masterVolumeMeter.setAttribute("aria-expanded", String(open));
+  if (open) masterVolumePopoverInput.focus();
+}
+masterVolumeMeter.addEventListener("click", () => setMasterVolumePopoverOpen(masterVolumePopover.hidden));
+masterVolumeMeter.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  setMasterVolumePopoverOpen(masterVolumePopover.hidden);
+});
+masterVolumePopoverInput.addEventListener("input", () => {
+  setManualMasterVolume(Number(masterVolumePopoverInput.value) / 100);
+});
+masterVolumePopover.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  setManualMasterVolume(masterVolume + (e.deltaY < 0 ? 0.02 : -0.02));
+}, { passive: false });
+document.addEventListener("pointerdown", (e) => {
+  if (!masterVolumePopover.hidden && !e.target.closest(".master-volume-wrap")) setMasterVolumePopoverOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !masterVolumePopover.hidden) {
+    setMasterVolumePopoverOpen(false);
+    masterVolumeMeter.focus();
+  }
 });
 
 function closeGlobalMidiSettings() {
@@ -24285,15 +24410,6 @@ fetch("/api/masterclock").then((r) => r.json()).then(applyMasterClockBroadcast).
 
 
 
-
-
-
-// Firmware exposes BLE pairing through its native configuration surface, not this legacy web
-// API - hide the control whose /api/ble/* routes do not exist. Settings stays: it also holds
-// Device Name + preset-nav Learn (backed by the real /api/settings/device route), even though
-// its Ethernet/Wi-Fi section is the same kind of dead /api/settings/network call and will just
-// silently fail to hydrate (openSettings() already logs-and-continues on that fetch).
-document.getElementById("menuBleConnect")?.remove();
 
 
 
