@@ -6,6 +6,14 @@
 // (github.com/Elecrow-RD/-CrowPanel-Advanced-5inch-ESP32-P4-HMI-AI-Display-800x480-IPS-Touch-Screen,
 // factory_sourcecode/V1.0/ESP32-P4-Advance-5inch-lvgl: bsp_display.h, bsp_stc8h1kxx.h, sdkconfig.defaults).
 
+// The CrowPanel's only console port is the CH340 USB-UART on UART0 (COM port). The P4's own
+// USB-Serial-JTAG would sit on GPIO24/25, which carry the PDM microphone here - with that console
+// selected the firmware boots silently (no logs, no CLI). Usually a leftover from switching an
+// existing sdkconfig over from another board.
+#if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
+#error "CrowPanel 5\": set menuconfig -> Component config -> ESP-STDIO -> Channel for console output -> Default: UART0"
+#endif
+
 namespace Board::CrowPanel5Inch {
 
 constexpr const char* BOARD_NAME = "Elecrow CrowPanel Advanced 5\" (ESP32-P4)";
