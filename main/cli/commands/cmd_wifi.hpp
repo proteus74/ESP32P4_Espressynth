@@ -1,8 +1,10 @@
 #pragma once
 
-// "wifi <status|scan|connect|disconnect> [ssid] [password]": single command for Wi-Fi
-// status/discovery/connection management. Only registered when Wi-Fi is enabled
-// (CONFIG_APP_ENABLE_WIFI); backed by main/features/wifi/wifi_manager.hpp.
+// "wifi <status|scan|connect|disconnect|forget> [ssid] [password]": single command for Wi-Fi
+// status/discovery/connection management. "connect" also saves the credentials in NVS so they
+// survive a reboot (taking precedence over the menuconfig ones); "forget" clears them. Only
+// registered when Wi-Fi is enabled (CONFIG_APP_ENABLE_WIFI); backed by
+// main/features/wifi/wifi_manager.hpp.
 
 #include "esp_console.h"
 #include "esp_wifi.h"
@@ -15,7 +17,7 @@ namespace Feature::CLI::Commands {
 
 namespace {
 
-constexpr const char* WIFI_USAGE = "Usage: wifi <status|scan|connect|disconnect> [ssid] [password]\n";
+constexpr const char* WIFI_USAGE = "Usage: wifi <status|scan|connect|disconnect|forget> [ssid] [password]\n";
 
 inline const char* auth_mode_name(wifi_auth_mode_t mode) {
     switch (mode) {
@@ -31,6 +33,13 @@ inline const char* auth_mode_name(wifi_auth_mode_t mode) {
 }
 
 inline int wifi_status() {
+    char saved_ssid[33] = {};
+    char saved_password[65] = {};
+    if (Feature::WiFi::load_saved_credentials(saved_ssid, sizeof(saved_ssid), saved_password, sizeof(saved_password))) {
+        printf("Saved network: %s (from \"wifi connect\"; \"wifi forget\" to clear)\n", saved_ssid);
+    } else {
+        printf("Saved network: none (boot uses the menuconfig SSID \"%s\")\n", CONFIG_WIFI_SSID);
+    }
     if (!Feature::WiFi::is_connected()) {
         printf("Not connected.\n");
         return 0;
@@ -80,7 +89,22 @@ inline int wifi_connect(const char* ssid, const char* password) {
         printf("Connect failed: %s\n", esp_err_to_name(err));
         return 1;
     }
-    printf("Connecting to %s...\n", ssid);
+    const esp_err_t save_err = Feature::WiFi::save_credentials(ssid, password);
+    if (save_err != ESP_OK) {
+        printf("Connecting to %s... (could not save credentials: %s)\n", ssid, esp_err_to_name(save_err));
+        return 0;
+    }
+    printf("Connecting to %s... credentials saved, used again after reboot.\n", ssid);
+    return 0;
+}
+
+inline int wifi_forget() {
+    const esp_err_t err = Feature::WiFi::clear_saved_credentials();
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        printf("Forget failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("Saved credentials cleared - next boot uses the menuconfig SSID \"%s\".\n", CONFIG_WIFI_SSID);
     return 0;
 }
 
@@ -107,6 +131,7 @@ inline int cli_cmd_wifi(int argc, char** argv) {
         return wifi_connect(argv[2], argc == 4 ? argv[3] : nullptr);
     }
     if (std::strcmp(sub, "disconnect") == 0 && argc == 2) return wifi_disconnect();
+    if (std::strcmp(sub, "forget") == 0 && argc == 2) return wifi_forget();
 
     printf("%s", WIFI_USAGE);
     return 1;
@@ -117,8 +142,9 @@ inline int cli_cmd_wifi(int argc, char** argv) {
 inline void register_wifi() {
     const esp_console_cmd_t cmd = {
         .command = "wifi",
-        .help = "Manage Wi-Fi: \"status\", \"scan\" for networks, \"connect\" <ssid> [password], \"disconnect\"",
-        .hint = "<status|scan|connect|disconnect> [ssid] [password]",
+        .help = "Manage Wi-Fi: \"status\", \"scan\" for networks, \"connect\" <ssid> [password] (saved for the "
+                "next boot), \"disconnect\", \"forget\" the saved network",
+        .hint = "<status|scan|connect|disconnect|forget> [ssid] [password]",
         .func = &cli_cmd_wifi,
         .argtable = nullptr,
         .func_w_context = nullptr,

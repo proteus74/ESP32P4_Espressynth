@@ -8,6 +8,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "lwip/ip4_addr.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
@@ -149,6 +150,43 @@ inline bool is_captive_portal_active() {
 }
 #endif
 
+// Station credentials saved at runtime (CLI "wifi connect") in NVS. They take precedence over
+// the build-time CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD at boot; "wifi forget" clears them.
+constexpr const char* CREDENTIALS_NVS_NAMESPACE = "wifi_cred";
+
+/** @brief Load saved credentials; false if none are stored. Buffers must hold 33 / 65 bytes. */
+inline bool load_saved_credentials(char* ssid, size_t ssid_len, char* password, size_t password_len) {
+    nvs_handle_t nvs;
+    if (nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return false;
+    bool ok = nvs_get_str(nvs, "ssid", ssid, &ssid_len) == ESP_OK && ssid[0] != '\0';
+    if (ok && nvs_get_str(nvs, "pass", password, &password_len) != ESP_OK) password[0] = '\0';
+    nvs_close(nvs);
+    return ok;
+}
+
+/** @brief Persist credentials so they survive a reboot (an empty password = open network). */
+inline esp_err_t save_credentials(const char* ssid, const char* password) {
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) return err;
+    err = nvs_set_str(nvs, "ssid", ssid);
+    if (err == ESP_OK) err = nvs_set_str(nvs, "pass", password != nullptr ? password : "");
+    if (err == ESP_OK) err = nvs_commit(nvs);
+    nvs_close(nvs);
+    return err;
+}
+
+/** @brief Forget the saved credentials; the next boot uses the build-time ones again. */
+inline esp_err_t clear_saved_credentials() {
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) return err;
+    err = nvs_erase_all(nvs);
+    if (err == ESP_OK) err = nvs_commit(nvs);
+    nvs_close(nvs);
+    return err;
+}
+
 /**
  * @brief Connect (or switch) to an access point. Overwrites the station config and
  *        (re)connects; safe to call whether or not a connection is already active.
@@ -267,11 +305,18 @@ inline esp_err_t init() {
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-    if (strlen(CONFIG_WIFI_SSID) > 0) {
+    // Saved (CLI) credentials win over the build-time ones.
+    static char ssid[33] = CONFIG_WIFI_SSID;
+    static char password[65] = CONFIG_WIFI_PASSWORD;
+    if (load_saved_credentials(ssid, sizeof(ssid), password, sizeof(password))) {
+        ESP_LOGI(TAG, "Using saved Wi-Fi credentials for \"%s\" (CLI: wifi forget to reset)", ssid);
+    }
+    if (strlen(ssid) > 0) {
         wifi_config_t wifi_config{};
-        std::strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), CONFIG_WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
-        std::strncpy(reinterpret_cast<char*>(wifi_config.sta.password), CONFIG_WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
-        wifi_config.sta.threshold.authmode = strlen(CONFIG_WIFI_PASSWORD) == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+        // Fields need no terminator at full length (32-char SSID / 64-char PSK are valid).
+        std::memcpy(wifi_config.sta.ssid, ssid, strnlen(ssid, sizeof(wifi_config.sta.ssid)));
+        std::memcpy(wifi_config.sta.password, password, strnlen(password, sizeof(wifi_config.sta.password)));
+        wifi_config.sta.threshold.authmode = strlen(password) == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     }
 
