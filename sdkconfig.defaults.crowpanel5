@@ -15,6 +15,7 @@ CONFIG_APP_I2C0_SPEED_100KHZ=y
 # NS4168 speaker amp is the primary output; synth engine + web UI on.
 CONFIG_APP_ENABLE_AUDIO=y
 CONFIG_ONBOARD_AUDIO_NS4168=y
+CONFIG_ONBOARD_AUDIO_PDM_MIC=y
 CONFIG_APP_ENABLE_SDCARD=y
 
 # Wi-Fi on by default, BLE off by default (enable under Application Features if needed).

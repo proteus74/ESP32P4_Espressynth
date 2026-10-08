@@ -33,6 +33,9 @@
 #if defined(CONFIG_ONBOARD_AUDIO_NS4168)
     #include "features/audio/ns4168_manager.hpp"
 #endif
+#if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
+    #include "features/audio/pdm_mic_manager.hpp"
+#endif
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     #include "features/usb/device/usb_device_audio.hpp"
@@ -644,6 +647,12 @@ inline esp_err_t init() {
                                    sizeof(initialPresetName));
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     s_engine.setUsbAudioTap(&tap_submit, &tap_mix);
+#endif
+
+#if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
+    if (Feature::Audio::PdmMic::available()) {
+        s_engine.setMicInput(&Feature::Audio::PdmMic::read_block);
+    }
 #endif
 
 #if defined(CONFIG_APP_MIDI_CC_FEEDBACK_OUT)

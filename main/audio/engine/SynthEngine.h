@@ -355,6 +355,12 @@ public:
         mixHostIn_ = mixHostIn;
     }
 
+    // Optional microphone source for the Mic-In widget: called once per block on the render
+    // task, must fill `frames` mono samples (+/-1.0) without blocking (zeros if no data yet).
+    // Plain function pointer, same reasoning as TapSubmit/TapMix above.
+    using MicRead = void (*)(float *block, size_t frames);
+    void setMicInput(MicRead read) { micRead_ = read; }
+
     // Optional MIDI-CC-out sink: fires whenever a MIDI-learned Knob's value
     // changes so a controller with LED rings/motorized faders can mirror it
     // back (e.g. a preset loaded with different values than the hardware is
@@ -789,6 +795,7 @@ private:
 
     TapSubmit submitOut_ = nullptr;
     TapMix mixHostIn_ = nullptr;
+    MicRead micRead_ = nullptr;
     MidiCcOut midiCcOut_ = nullptr;
     MidiFeedbackOut midiFeedbackOut_ = nullptr;
     MidiConnectionGeneration midiConnectionGeneration_ = nullptr;
@@ -1536,6 +1543,7 @@ inline void SynthEngine::taskLoop()
         gout.esL = esL; gout.esR = esR;
         gout.wmL = wmL; gout.wmR = wmR;
         gout.nsL = nsL; gout.nsR = nsR;
+        if (micRead_ != nullptr) micRead_(nodes::micin::micInputBlock(), synth::kBlockSize);
         liveGraph_->renderBlock(gout, synth::kBlockSize);
         synchronizeMidiControls();
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);

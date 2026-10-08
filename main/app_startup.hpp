@@ -63,6 +63,9 @@
 #if defined(CONFIG_ONBOARD_AUDIO_NS4168)
     #include "features/audio/ns4168_manager.hpp"
 #endif
+#if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
+    #include "features/audio/pdm_mic_manager.hpp"
+#endif
 
 #if defined(CONFIG_APP_ENABLE_SYNTH)
     #include "features/synth/synth_manager.hpp"
@@ -295,6 +298,14 @@ inline void init() {
     const esp_err_t ns4168_err = Feature::Audio::NS4168::init();
     if (ns4168_err != ESP_OK) {
         ESP_LOGW(TAG, "NS4168 amplifier unavailable: %s", esp_err_to_name(ns4168_err));
+    }
+#endif
+
+#if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
+    ESP_LOGI(TAG, "Feature: PDM microphone enabled -> Initializing...");
+    const esp_err_t mic_err = Feature::Audio::PdmMic::init();
+    if (mic_err != ESP_OK) {
+        ESP_LOGW(TAG, "PDM microphone unavailable: %s", esp_err_to_name(mic_err));
     }
 #endif
 

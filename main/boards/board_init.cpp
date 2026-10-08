@@ -191,6 +191,21 @@ esp_err_t stc8_set_gpio(uint8_t gpio, bool level) {
     return stc8_write_reg(CurrentBoard::STC8_REG_SET_GPIO + gpio, level ? 1 : 0);
 }
 
+esp_err_t read_battery(BatteryStatus& out) {
+    // Elecrow's Battery_info_t at register 0x00, read one register at a time like their driver:
+    // u32 adc_voltage, u32 bat_voltage (mV), u8 bat_level (%), u8 bat_state, u8 led_state.
+    uint8_t raw[11] = {};
+    for (uint8_t i = 0; i < sizeof(raw); ++i) {
+        const esp_err_t err = stc8_read_reg(CurrentBoard::STC8_REG_BATTERY + i, &raw[i], 1);
+        if (err != ESP_OK) return err;
+    }
+    out.millivolts = static_cast<uint32_t>(raw[4]) | (static_cast<uint32_t>(raw[5]) << 8) |
+                     (static_cast<uint32_t>(raw[6]) << 16) | (static_cast<uint32_t>(raw[7]) << 24);
+    out.percent = raw[8] > 100 ? 100 : raw[8];
+    out.state = raw[9];
+    return ESP_OK;
+}
+
 esp_err_t set_backlight_percent(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;

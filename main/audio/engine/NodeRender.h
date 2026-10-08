@@ -24,6 +24,7 @@
 #include "nodes/ChorusNode.h"
 #include "nodes/ClockNode.h"
 #include "nodes/CvInNode.h"
+#include "nodes/MicInNode.h"
 #include "nodes/CvOutNode.h"
 #include "nodes/DigitalInNode.h"
 #include "nodes/DigitalOutNode.h"
@@ -96,6 +97,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::CvIn:
         nodes::cvin::render(inst, frames);
+        break;
+    case NodeType::MicIn:
+        nodes::micin::render(inst, frames);
         break;
     case NodeType::CvOut:
         nodes::cvout::render(inst, frames);

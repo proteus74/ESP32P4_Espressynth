@@ -37,6 +37,14 @@ esp_err_t stc8_read_reg(uint8_t reg, uint8_t* data, size_t len);
 esp_err_t stc8_set_gpio(uint8_t gpio, bool level);
 /** @brief LCD backlight 0-100 %: switches the STC8 backlight rail and sets its PWM duty. */
 esp_err_t set_backlight_percent(int percent);
+
+/** Battery state as reported by the STC8 co-MCU (Elecrow Battery_info_t). */
+struct BatteryStatus {
+    uint32_t millivolts;  // battery voltage after the divider
+    uint8_t percent;      // charge level 0-100
+    uint8_t state;        // 0 idle, 1 charging, 2 full, 3 not charging, 4 error
+};
+esp_err_t read_battery(BatteryStatus& out);
 #endif
 
 } // namespace Board

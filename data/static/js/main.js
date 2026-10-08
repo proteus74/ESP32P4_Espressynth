@@ -1,7 +1,7 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261008-ns4168-out-1";
+import { AudioEngine } from "./audio-engine.js?v=20261008-mic-battery-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -96,10 +96,38 @@ function closeInfo() {
 
 
 
+// Header battery indicator (only when the firmware reports "battery": true in /api/version).
+const BATTERY_STATE_ICONS = { charging: "⚡", full: "🔌" };
+function startBatteryIndicator() {
+  const el = document.getElementById("batteryIndicator");
+  const valueEl = document.getElementById("batteryIndicatorValue");
+  if (!el || !valueEl) return;
+  el.hidden = false;
+  const update = async () => {
+    try {
+      const res = await fetch("/api/battery");
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json();
+      const volts = (Number(data.millivolts) || 0) / 1000;
+      const prefix = BATTERY_STATE_ICONS[data.state] || "";
+      valueEl.textContent = `${prefix}${data.percent}% · ${volts.toFixed(2)} V`;
+      el.title = `Battery: ${volts.toFixed(2)} V, ${data.percent}% (${data.state})`;
+      el.classList.toggle("battery-low", Number(data.percent) <= 15 && data.state !== "charging");
+    } catch (err) {
+      valueEl.textContent = "–";
+      el.title = "Battery status unavailable";
+    }
+  };
+  update();
+  setInterval(update, 15000);
+}
+
 // Hide hardware output widgets whose chip this firmware doesn't drive (flags from /api/version).
 // Older firmware has no "es8311"/"ns4168" flags: es8311 then defaults to present, ns4168 to absent.
 async function applyOutputAvailability() {
   let flags = { es8311: true, ns4168: false, wm8960: false };
+  let pdmMic = false;
+  let battery = false;
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
@@ -108,6 +136,8 @@ async function applyOutputAvailability() {
       ns4168: data.ns4168 === true,
       wm8960: data.wm8960 === true,
     };
+    pdmMic = data.pdmMic === true;
+    battery = data.battery === true;
   } catch (err) {
     // keep defaults
   }
@@ -118,6 +148,11 @@ async function applyOutputAvailability() {
       if (idx >= 0) cat.types.splice(idx, 1);
     }
   }
+  if (!pdmMic && cat) {
+    const idx = cat.types.indexOf("mic-in");
+    if (idx >= 0) cat.types.splice(idx, 1);
+  }
+  if (battery) startBatteryIndicator();
   globalThis.__es8311Enabled = flags.es8311;
   globalThis.__ns4168Enabled = flags.ns4168;
   globalThis.__wm8960Enabled = flags.wm8960;
@@ -1724,6 +1759,13 @@ const WIDGET_TYPES = {
     ],
     outputs: [],
   },
+  "mic-in": {
+    label: "Mic-In",
+    icon: "🎤",
+    // Onboard PDM microphone (firmware-only source, like CV In: no browser-side preview).
+    inputs: [],
+    outputs: [{ id: "out", label: "Out" }],
+  },
   "ns4168-out": {
     label: "NS4168-Out",
     icon: "🔊",
@@ -2160,7 +2202,7 @@ const WIDGET_CATEGORIES = [
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
-  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out"] },
+  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out", "mic-in"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"] },
 ];
@@ -2301,6 +2343,7 @@ const AUDIO_PORTS = {
   "es8311-out": { in: ["left", "right"] },
   "wm8960-out": { in: ["left", "right"] },
   "ns4168-out": { in: ["left", "right"] },
+  "mic-in": { out: ["out"] },
   "vu-meter": { in: ["in"] },
   "vu-meter-horizontal": { in: ["in"] },
   oscilloscope: { in: ["in1", "in2"] },
@@ -2580,7 +2623,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"];
+const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in"];
 
 
 

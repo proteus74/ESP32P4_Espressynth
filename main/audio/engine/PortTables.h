@@ -829,6 +829,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::CvIn:
     case NodeType::DigitalIn:
         return is(portName, "value") ? 0 : -1;
+    case NodeType::MicIn:
+        return is(portName, "out") ? 0 : -1;
     case NodeType::StepArpeggiator:
         if (is(portName, "cv"))
             return 0;
@@ -1060,7 +1062,7 @@ inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::GraphicEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder || type == NodeType::Overdrive ||
-           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower;
+           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower || type == NodeType::MicIn;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely

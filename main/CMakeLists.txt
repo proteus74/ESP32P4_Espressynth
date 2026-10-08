@@ -1,4 +1,13 @@
-﻿set(COMPONENT_SRCS
+﻿# EEZ Studio UI (generated, never edited by hand): one export per display layout, picked by
+# Kconfig "Display Output -> EEZ UI layout". Only the chosen folder is compiled and on the
+# include path - every layout exports the same file and symbol names.
+if(CONFIG_APP_UI_LAYOUT_800_480)
+    set(EEZ_UI_DIR "../eezstudio/src/ui/800_480")
+else()
+    set(EEZ_UI_DIR "../eezstudio/src/ui/1024_800")
+endif()
+
+set(COMPONENT_SRCS
     "main.cpp"
     "wifi_remote_compat.c"
     "boards/board_init.cpp"
@@ -15,10 +24,10 @@
     "features/synth/MemoryDiagnostics.cpp"
     "features/io/i2c_device_registry.cpp"
     "features/display/eez_ui_bridge.cpp"
-    "../eezstudio/src/ui/images.c"
-    "../eezstudio/src/ui/screens.c"
-    "../eezstudio/src/ui/styles.c"
-    "../eezstudio/src/ui/ui.c"
+    "${EEZ_UI_DIR}/images.c"
+    "${EEZ_UI_DIR}/screens.c"
+    "${EEZ_UI_DIR}/styles.c"
+    "${EEZ_UI_DIR}/ui.c"
 )
 
 set(COMPONENT_ADD_INCLUDEDIRS
@@ -29,7 +38,7 @@ set(COMPONENT_ADD_INCLUDEDIRS
     "cli"
     "audio/engine"
     "features/synth"
-    "../eezstudio/src/ui"
+    "${EEZ_UI_DIR}"
 )
 
 # NOTE: REQUIRES is resolved before Kconfig, so it cannot depend on CONFIG_ options

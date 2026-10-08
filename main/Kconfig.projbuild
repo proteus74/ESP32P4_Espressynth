@@ -95,6 +95,15 @@ menu "Espressynth"
                     Full-scale value written to the STC8 PWM register. The vendor firmware
                     does not document the range; 100 = percent is the assumption.
 
+            config CROWPANEL_BATTERY_STATUS
+                bool "Show the battery status (STC8 co-MCU) in the web UI"
+                default y
+                help
+                    Reads voltage, charge level and charging state of the battery on the
+                    PH2.0 battery connector from the STC8 co-MCU and shows it next to the
+                    audio button in the web UI header (GET /api/battery). Turn off if no
+                    battery is ever connected.
+
             config CROWPANEL_AUDIO_SD_ACTIVE_HIGH
                 bool "NS4168 amp enabled when STC8 AUDIO_SD output is high"
                 default n
@@ -346,6 +355,7 @@ menu "Espressynth"
                 config ONBOARD_AUDIO_NS4168_I2S_PORT
                     int "I2S Port Number (0-2)"
                     range 0 2
+                    default 1 if BOARD_CROWPANEL_5INCH
                     default 0
                     help
                         Selects which I2S peripheral instance (I2S0, I2S1 or I2S2)
@@ -380,6 +390,39 @@ menu "Espressynth"
                         Leave at -1 if CTRL is hard-wired. On the CrowPanel the amp
                         is switched by the STC8 co-MCU instead (see
                         CROWPANEL_AUDIO_SD_ACTIVE_HIGH), so this stays -1 there.
+            endif
+
+            config ONBOARD_AUDIO_PDM_MIC
+                bool "Enable PDM microphone input (Mic-In widget)"
+                default n
+                help
+                    Onboard PDM MEMS microphone (CrowPanel Advanced: MMICT5838 on
+                    GPIO24/25, or any PDM mic) as the source of the "Mic-In" widget
+                    under External Audio. The ESP32-P4 receives PDM on I2S0 only, so
+                    every other I2S audio device must use port 1 or 2 (checked at
+                    compile time).
+
+            if ONBOARD_AUDIO_PDM_MIC
+                config ONBOARD_AUDIO_PDM_MIC_PIN_CLK
+                    int "PDM CLK GPIO"
+                    range -1 54
+                    default 24 if BOARD_CROWPANEL_5INCH
+                    default -1
+
+                config ONBOARD_AUDIO_PDM_MIC_PIN_DIN
+                    int "PDM DATA GPIO"
+                    range -1 54
+                    default 25 if BOARD_CROWPANEL_5INCH
+                    default -1
+
+                config ONBOARD_AUDIO_PDM_MIC_GAIN
+                    int "Digital gain (x)"
+                    range 1 64
+                    default 8
+                    help
+                        Multiplier applied to the PCM samples before they reach the
+                        Mic-In widget (a bare MEMS mic is quiet). Patch a Gain/VCA
+                        widget behind Mic-In for finer, live adjustment.
             endif
 
             config ONBOARD_AUDIO_ES8311
@@ -534,7 +577,7 @@ menu "Espressynth"
                 int "I2S DMA descriptor count (onboard codecs)"
                 range 2 16
                 default 6
-                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960 || ONBOARD_AUDIO_PDM_MIC
                 help
                     Part 1 of the I2S output buffer's size, shared by every
                     onboard I2S codec (ES8311 and/or WM8960 -- NOT the USB
@@ -580,7 +623,7 @@ menu "Espressynth"
                 int "I2S DMA frames per descriptor (onboard codecs)"
                 range 32 960
                 default 240
-                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960 || ONBOARD_AUDIO_PDM_MIC
                 help
                     Part 2 of the I2S output buffer's size -- see
                     AUDIO_I2S_DMA_DESC_NUM above for the full explanation,
@@ -680,6 +723,20 @@ menu "Espressynth"
             default 600 if BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
             default CUSTOM_DISPLAY_HEIGHT if BOARD_CUSTOM_P4
             default 480
+
+        choice APP_UI_LAYOUT
+            prompt "EEZ UI layout"
+            default APP_UI_LAYOUT_800_480 if BOARD_CROWPANEL_5INCH
+            default APP_UI_LAYOUT_1024_600
+            help
+                Which EEZ Studio UI export (eezstudio/src/ui/<layout>) is compiled in.
+                Only the selected one is built. Defaults follow the board's panel.
+
+            config APP_UI_LAYOUT_1024_600
+                bool "1024x600 (eezstudio/src/ui/1024_800)"
+            config APP_UI_LAYOUT_800_480
+                bool "800x480 (eezstudio/src/ui/800_480)"
+        endchoice
 
         if APP_DISPLAY_OUTPUT_MIPI
             choice APP_DISPLAY_MIPI_TYPE

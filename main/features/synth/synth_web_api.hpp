@@ -33,6 +33,7 @@
 
 #include "features/filesystem/littlefs_manager.hpp"
 #include "features/io/gpio_manager.hpp"
+#include "boards/board_init.hpp"
 #include "features/io/led_strip_manager.hpp"
 #include "features/io/i2c_device_registry.h"
 #include "features/sd_card/sd_card_manager.hpp"
@@ -1458,12 +1459,32 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
 
 // ---- /api/version, /api/diagnostics/memory ----
 
+#if defined(CONFIG_CROWPANEL_BATTERY_STATUS)
+// ---- /api/battery (header battery indicator) ----
+esp_err_t battery_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    Board::BatteryStatus status{};
+    if (Board::read_battery(status) != ESP_OK) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "{\"error\":\"battery status unavailable\"}");
+        return ESP_OK;
+    }
+    static const char *const kStates[] = {"idle", "charging", "full", "discharging", "error"};
+    const char *state = status.state < sizeof(kStates) / sizeof(kStates[0]) ? kStates[status.state] : "unknown";
+    char json[96];
+    snprintf(json, sizeof(json), "{\"millivolts\":%lu,\"percent\":%u,\"state\":\"%s\"}",
+             static_cast<unsigned long>(status.millivolts), static_cast<unsigned>(status.percent), state);
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+#endif
+
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[360];
+    char json[400];
     snprintf(json, sizeof(json),
-             "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
+             "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"pdmMic\":%s,\"battery\":%s,\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
              "\"gpioOutputs\":%s,\"gitVersion\":\"%s\"}",
              FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
@@ -1472,6 +1493,16 @@ esp_err_t version_handler(httpd_req_t *req) {
              "false",
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_CROWPANEL_BATTERY_STATUS)
              "true",
 #else
              "false",
@@ -1950,6 +1981,13 @@ inline void register_web_routes() {
         .uri = "/api/version", .method = HTTP_GET, .handler = &version_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &version_uri);
+
+#if defined(CONFIG_CROWPANEL_BATTERY_STATUS)
+    static const httpd_uri_t battery_uri = {
+        .uri = "/api/battery", .method = HTTP_GET, .handler = &battery_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &battery_uri);
+#endif
 
     static const httpd_uri_t i2c_devices_uri = {
         .uri = "/api/system/i2c", .method = HTTP_GET, .handler = &i2c_devices_handler, .user_ctx = nullptr,

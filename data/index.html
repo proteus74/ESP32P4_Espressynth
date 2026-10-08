@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261008-ns4168-out-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20261008-mic-battery-1">
 </head>
 <body>
 
@@ -106,6 +106,7 @@
       <span id="masterClockBpmLabel">120</span> BPM
     </button>
     <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
+    <span id="batteryIndicator" class="battery-indicator" title="Battery" hidden>🔋 <span id="batteryIndicatorValue">–</span></span>
     <button id="loadSamplesBtn" class="load-samples-btn" type="button" hidden
       title="Sample loading is off in Settings - click to download the samples for this preset now">Load Samples</button>
     <span id="midiNoDevice" class="midi-name">No device</span>
@@ -1448,6 +1449,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261008-ns4168-out-1"></script>
+<script type="module" src="/static/js/main.js?v=20261008-mic-battery-1"></script>
 </body>
 </html>
