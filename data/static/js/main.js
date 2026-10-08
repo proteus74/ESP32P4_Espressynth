@@ -1,7 +1,7 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261003-master-volume-1";
+import { AudioEngine } from "./audio-engine.js?v=20261008-ns4168-out-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -96,25 +96,31 @@ function closeInfo() {
 
 
 
-async function applyWm8960Availability() {
-  let wm8960 = false;
+// Hide hardware output widgets whose chip this firmware doesn't drive (flags from /api/version).
+// Older firmware has no "es8311"/"ns4168" flags: es8311 then defaults to present, ns4168 to absent.
+async function applyOutputAvailability() {
+  let flags = { es8311: true, ns4168: false, wm8960: false };
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
-    wm8960 = data.wm8960 === true;
+    flags = {
+      es8311: data.es8311 !== false,
+      ns4168: data.ns4168 === true,
+      wm8960: data.wm8960 === true,
+    };
   } catch (err) {
-    wm8960 = false;
+    // keep defaults
   }
-  if (!wm8960) {
-    const cat = WIDGET_CATEGORIES.find((c) => c.label === "External Audio");
-    if (cat) {
-      const idx = cat.types.indexOf("wm8960-out");
+  const cat = WIDGET_CATEGORIES.find((c) => c.label === "External Audio");
+  for (const [chip, enabled] of Object.entries(flags)) {
+    if (!enabled && cat) {
+      const idx = cat.types.indexOf(`${chip}-out`);
       if (idx >= 0) cat.types.splice(idx, 1);
     }
-    globalThis.__wm8960Enabled = false;
-  } else {
-    globalThis.__wm8960Enabled = true;
   }
+  globalThis.__es8311Enabled = flags.es8311;
+  globalThis.__ns4168Enabled = flags.ns4168;
+  globalThis.__wm8960Enabled = flags.wm8960;
 }
 
 // Populated by applyCvIoAvailability() below - the Settings dialog's GPIO section reuses
@@ -164,7 +170,7 @@ async function applyCvIoAvailability() {
   }
 }
 
-applyWm8960Availability();
+applyOutputAvailability();
 const cvIoAvailabilityReady = applyCvIoAvailability();
 
 document.getElementById("menubarLogo").addEventListener("click", (e) => {
@@ -1718,6 +1724,17 @@ const WIDGET_TYPES = {
     ],
     outputs: [],
   },
+  "ns4168-out": {
+    label: "NS4168-Out",
+    icon: "🔊",
+    inputs: [
+      { id: "left", label: "In L" },
+      { id: "right", label: "In R" },
+      { id: "gain", label: "Volume" },
+      { id: "muted", label: "Mute (Gate)" },
+    ],
+    outputs: [],
+  },
   gain: {
     label: "Gain/VCA",
     icon: "🔉",
@@ -2143,7 +2160,7 @@ const WIDGET_CATEGORIES = [
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
-  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out"] },
+  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"] },
 ];
@@ -2283,6 +2300,7 @@ const AUDIO_PORTS = {
   "usb-out": { in: ["left", "right"] },
   "es8311-out": { in: ["left", "right"] },
   "wm8960-out": { in: ["left", "right"] },
+  "ns4168-out": { in: ["left", "right"] },
   "vu-meter": { in: ["in"] },
   "vu-meter-horizontal": { in: ["in"] },
   oscilloscope: { in: ["in1", "in2"] },
@@ -2553,7 +2571,7 @@ const FX_PAGE_TYPES = [
   "master-volume",
   "midi-in", "adsr",
   "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light", "audio-out",
-  "usb-out", "es8311-out", "wm8960-out",
+  "usb-out", "es8311-out", "wm8960-out", "ns4168-out",
 ];
 
 
@@ -2568,7 +2586,7 @@ const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down
 
 const LINK_WIDGET_TYPES = ["audio-output-link", "audio-input-link"];
 const LINKED_IO_WIDGET_TYPES = [...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES];
-const OUTPUT_SINGLETON_TYPES = ["audio-out", "usb-out", "es8311-out", "wm8960-out"];
+const OUTPUT_SINGLETON_TYPES = ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out"];
 
 function makePageState(kind, title, canvasEl, canvasContentEl, connectionsLayerEl, lassoBoxEl) {
   return {
@@ -4140,7 +4158,8 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(body);
   }
 
-  if (type === "audio-out" || type === "usb-out" || type === "es8311-out" || type === "wm8960-out") {
+  if (type === "audio-out" || type === "usb-out" || type === "es8311-out" || type === "wm8960-out" ||
+      type === "ns4168-out") {
     const state = { muted: false, gain: CV_MAX_VOLTS };
     audioEngine.createNode(id, type, state);
     audioOutStates.set(id, state);
@@ -5298,7 +5317,7 @@ function createWidget(type, label, x, y, forcedId) {
         }
       }
       const isAudioOut = type === "audio-out" || type === "usb-out" ||
-        type === "es8311-out" || type === "wm8960-out";
+        type === "es8311-out" || type === "wm8960-out" || type === "ns4168-out";
       if (type === "audio-input-link" && /^gain[1-8]$/.test(port.id)) {
         const channel = Number(port.id.slice(4)) - 1;
         const state = audioInputLinkStates.get(id);
@@ -6826,13 +6845,16 @@ function loadInitTemplate() {
   
   
   const outDefs = [
-    { type: "audio-out", label: "JS Audio-Out", x: 60, y: 100 },
-    { type: "usb-out", label: "USB-Out", x: 320, y: 100 },
-    { type: "es8311-out", label: "ES8311-Out", x: 580, y: 100 },
+    { type: "audio-out", label: "JS Audio-Out" },
+    { type: "usb-out", label: "USB-Out" },
   ];
-  if (globalThis.__wm8960Enabled) {
-    outDefs.push({ type: "wm8960-out", label: "WM8960-Out", x: 840, y: 100 });
-  }
+  if (globalThis.__es8311Enabled !== false) outDefs.push({ type: "es8311-out", label: "ES8311-Out" });
+  if (globalThis.__wm8960Enabled) outDefs.push({ type: "wm8960-out", label: "WM8960-Out" });
+  if (globalThis.__ns4168Enabled) outDefs.push({ type: "ns4168-out", label: "NS4168-Out" });
+  outDefs.forEach((def, index) => {
+    def.x = 60 + index * 260;
+    def.y = 100;
+  });
   outDefs.forEach((def) => {
     const outEl = createWidget(def.type, def.label, def.x, def.y);
     [
@@ -13295,7 +13317,7 @@ function tickAudioMonitors() {
       peak.classList.toggle("visible", state.peakVolts > 0.001);
     }
   });
-  document.querySelectorAll('.widget-instance[data-widget-type="audio-out"], .widget-instance[data-widget-type="usb-out"], .widget-instance[data-widget-type="es8311-out"], .widget-instance[data-widget-type="wm8960-out"]').forEach((el) => {
+  document.querySelectorAll('.widget-instance[data-widget-type="audio-out"], .widget-instance[data-widget-type="usb-out"], .widget-instance[data-widget-type="es8311-out"], .widget-instance[data-widget-type="wm8960-out"], .widget-instance[data-widget-type="ns4168-out"]').forEach((el) => {
     ["left", "right"].forEach((channel) => {
       const fill = el.querySelector(`[data-role="audio-out-meter-${channel}"]`);
       if (!fill) return;
@@ -21053,7 +21075,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   }
 
   if (el.dataset.widgetType === "audio-out" || el.dataset.widgetType === "usb-out" ||
-      el.dataset.widgetType === "es8311-out" || el.dataset.widgetType === "wm8960-out") {
+      el.dataset.widgetType === "es8311-out" || el.dataset.widgetType === "wm8960-out" ||
+      el.dataset.widgetType === "ns4168-out") {
     const state = audioOutStates.get(widgetId);
     if (state) {
       const num = Number(value);
@@ -22696,6 +22719,10 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => setAudioOutParams(id, params || {}, false),
   },
   "wm8960-out": {
+    getParams: (id) => ({ ...audioOutStates.get(id) }),
+    applyParams: (id, params) => setAudioOutParams(id, params || {}, false),
+  },
+  "ns4168-out": {
     getParams: (id) => ({ ...audioOutStates.get(id) }),
     applyParams: (id, params) => setAudioOutParams(id, params || {}, false),
   },

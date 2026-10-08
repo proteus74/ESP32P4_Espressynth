@@ -207,8 +207,8 @@ class Graph
 {
 public:
     // Per-target stereo output buffers, filled by renderBlock(). Each of the
-    // three hardware sinks (USB / ES8311 / WM8960) has its own pair, driven
-    // by the corresponding output widget (UsbOut/Es8311Out/Wm8960Out) in the
+    // hardware sinks (USB / ES8311 / WM8960 / NS4168) has its own pair, driven
+    // by the corresponding output widget (UsbOut/Es8311Out/Wm8960Out/Ns4168Out) in the
     // graph. A sink with no matching widget stays silent (zeros).
     struct Outputs
     {
@@ -218,6 +218,8 @@ public:
         float *esR = nullptr;
         float *wmL = nullptr;
         float *wmR = nullptr;
+        float *nsL = nullptr;
+        float *nsR = nullptr;
     };
 
     void renderBlock(Outputs &out, size_t frames);
@@ -320,6 +322,7 @@ public:
     int16_t usbOutWidget = -1;
     int16_t es8311OutWidget = -1;
     int16_t wm8960OutWidget = -1;
+    int16_t ns4168OutWidget = -1;
     uint8_t monitorVoiceIndex = 0;
 
     // Per-voice-slot "still audibly sounding" flag, refreshed once per
@@ -1071,6 +1074,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     fillOutput(usbOutWidget, out.usbL, out.usbR);
     fillOutput(es8311OutWidget, out.esL, out.esR);
     fillOutput(wm8960OutWidget, out.wmL, out.wmR);
+    fillOutput(ns4168OutWidget, out.nsL, out.nsR);
     {
         const float outputPercent =
             100.0f * static_cast<float>(esp_timer_get_time() - phaseOutputStartUs) / kGraphBlockBudgetUs;
@@ -2428,7 +2432,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
             }
         }
         else if ((slot.type == NodeType::AudioOut || slot.type == NodeType::UsbOut ||
-                  slot.type == NodeType::Es8311Out || slot.type == NodeType::Wm8960Out) &&
+                  slot.type == NodeType::Es8311Out || slot.type == NodeType::Wm8960Out ||
+                  slot.type == NodeType::Ns4168Out) &&
                  strcmp(key, "muted") == 0 && cJSON_IsBool(item))
         {
             const bool muted = cJSON_IsTrue(item);

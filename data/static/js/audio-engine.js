@@ -3150,7 +3150,8 @@ export class AudioEngine {
       case "audio-out":
       case "usb-out":
       case "es8311-out":
-      case "wm8960-out": {
+      case "wm8960-out":
+      case "ns4168-out": {
         const leftGain = ctx.createGain();
         const rightGain = ctx.createGain();
         // leftGain/rightGain double as the AUDIO_PEAK_VOLTS -> native +/-1.0
@@ -4750,7 +4751,7 @@ export class AudioEngine {
       analyser = entry.analyser;
       buffer = entry.buffer;
     } else if (entry.type === "audio-out" || entry.type === "usb-out" || entry.type === "es8311-out" ||
-             entry.type === "wm8960-out") {
+             entry.type === "wm8960-out" || entry.type === "ns4168-out") {
       analyser = channel === "right" ? entry.rightAnalyser : entry.leftAnalyser;
       buffer = channel === "right" ? entry.rightBuffer : entry.leftBuffer;
     }
@@ -5629,6 +5630,7 @@ export class AudioEngine {
     case "usb-out":
     case "es8311-out":
     case "wm8960-out":
+    case "ns4168-out":
         if (paramName === "muted") {
           entry.muteGain.gain.setTargetAtTime(value ? 0 : 1, now, 0.01);
         } else if (paramName === "gain") {
@@ -6382,7 +6384,7 @@ export class AudioEngine {
   _resolveInputFromEntry(entry, port) {
     if (!entry) return null;
     if (entry.type === "audio-out" || entry.type === "usb-out" || entry.type === "es8311-out" ||
-      entry.type === "wm8960-out") {
+      entry.type === "wm8960-out" || entry.type === "ns4168-out") {
       if (port === "left") return entry.leftGain;
       if (port === "right") return entry.rightGain;
     }

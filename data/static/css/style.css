@@ -1227,7 +1227,8 @@ body.show-node-cpu .widget-cpu-badge {
 .widget-instance[data-widget-type="audio-out"] .port-row-in > .port-label,
 .widget-instance[data-widget-type="usb-out"] .port-row-in > .port-label,
 .widget-instance[data-widget-type="es8311-out"] .port-row-in > .port-label,
-.widget-instance[data-widget-type="wm8960-out"] .port-row-in > .port-label {
+.widget-instance[data-widget-type="wm8960-out"] .port-row-in > .port-label,
+.widget-instance[data-widget-type="ns4168-out"] .port-row-in > .port-label {
   flex-basis: 48px;
 }
 

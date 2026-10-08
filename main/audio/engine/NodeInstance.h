@@ -408,6 +408,7 @@ struct NodeInstance
         case NodeType::UsbOut:
         case NodeType::Es8311Out:
         case NodeType::Wm8960Out:
+        case NodeType::Ns4168Out:
             new (&audioOut) AudioOutState();
             break;
         case NodeType::VuMeter:

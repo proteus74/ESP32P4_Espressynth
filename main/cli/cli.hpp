@@ -116,6 +116,7 @@ inline void register_command(const esp_console_cmd_t& cmd) {
 #endif
 
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311) || defined(CONFIG_ONBOARD_AUDIO_WM8960) || \
+    defined(CONFIG_ONBOARD_AUDIO_NS4168) || \
     (defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2))
     #include "cli/commands/cmd_audio.hpp"
 #endif
@@ -194,6 +195,7 @@ inline esp_err_t init() {
     Commands::register_ping();
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311) || defined(CONFIG_ONBOARD_AUDIO_WM8960) || \
+    defined(CONFIG_ONBOARD_AUDIO_NS4168) || \
     (defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2))
     Commands::register_audio();
 #endif

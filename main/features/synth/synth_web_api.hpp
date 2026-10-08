@@ -1461,11 +1461,21 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[320];
+    char json[360];
     snprintf(json, sizeof(json),
-             "{\"version\":\"%s\",\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
+             "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
              "\"gpioOutputs\":%s,\"gitVersion\":\"%s\"}",
              FIRMWARE_VERSION,
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+             "true",
+#else
+             "false",
+#endif
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
              "true",
 #else

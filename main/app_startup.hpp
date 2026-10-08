@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 #include "app_core.hpp"
 #include "boards/board_config.hpp"
@@ -57,6 +58,10 @@
 
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     #include "features/audio/wm8960_manager.hpp"
+#endif
+
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    #include "features/audio/ns4168_manager.hpp"
 #endif
 
 #if defined(CONFIG_APP_ENABLE_SYNTH)
@@ -118,6 +123,12 @@ inline void network_init_task(void*) {
     if (ble_err != ESP_OK) {
         ESP_LOGW("MainApp", "Bluetooth LE unavailable: %s", esp_err_to_name(ble_err));
     }
+#else
+    // Feature::BLE::init() normally performs this handshake; with BLE off nothing else would
+    // reset the C6 and open the SDIO link, so Wi-Fi init would time out.
+    if (esp_hosted_connect_to_slave() != 0) {
+        ESP_LOGW("MainApp", "ESP-Hosted co-processor link failed");
+    }
 #endif
 
 #if defined(CONFIG_APP_ENABLE_COPROCESSOR_OTA)
@@ -132,6 +143,9 @@ inline void network_init_task(void*) {
     if (wifi_err != ESP_OK) {
         ESP_LOGW("MainApp", "Wi-Fi unavailable: %s", esp_err_to_name(wifi_err));
     }
+#endif
+#if defined(CONFIG_APP_ENABLE_LVGL) && defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+    Feature::LVGL::resync_display();
 #endif
 #endif
 
@@ -276,9 +290,17 @@ inline void init() {
     }
 #endif
 
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    ESP_LOGI(TAG, "Feature: NS4168 amplifier enabled -> Initializing...");
+    const esp_err_t ns4168_err = Feature::Audio::NS4168::init();
+    if (ns4168_err != ESP_OK) {
+        ESP_LOGW(TAG, "NS4168 amplifier unavailable: %s", esp_err_to_name(ns4168_err));
+    }
+#endif
+
 #if defined(CONFIG_APP_ENABLE_SYNTH)
-    // After both onboard codec(s) above (needs an open ES8311 handle, an optional WM8960 TX
-    // handle) and LittleFS earlier (needs /littlefs mounted for presets/samples/soundfonts).
+    // After the onboard codec(s) above (an open ES8311 handle and/or WM8960/NS4168 TX
+    // handles) and LittleFS earlier (needs /littlefs mounted for presets/samples/soundfonts).
     ESP_LOGI(TAG, "Feature: Synth Engine enabled -> Initializing...");
     const esp_err_t synth_err = Feature::Synth::init();
     if (synth_err != ESP_OK) {

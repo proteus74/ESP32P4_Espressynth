@@ -30,6 +30,10 @@
     #include "features/audio/wm8960_manager.hpp"
 #endif
 
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    #include "features/audio/ns4168_manager.hpp"
+#endif
+
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     #include "features/usb/device/usb_device_audio.hpp"
 #endif
@@ -533,6 +537,9 @@ inline uint32_t dma_underrun_count() {
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     total += Feature::Audio::WM8960::underrunCount();
 #endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    total += Feature::Audio::NS4168::underrunCount();
+#endif
     return total;
 }
 
@@ -547,6 +554,9 @@ inline void reset_dma_underrun_count() {
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     Feature::Audio::WM8960::resetUnderrunCount();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    Feature::Audio::NS4168::resetUnderrunCount();
 #endif
 }
 
@@ -582,6 +592,9 @@ inline void dma_underrun_tick() {
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     if (Feature::Audio::WM8960::lastUnderrunUs() > last_us) last_us = Feature::Audio::WM8960::lastUnderrunUs();
 #endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    if (Feature::Audio::NS4168::lastUnderrunUs() > last_us) last_us = Feature::Audio::NS4168::lastUnderrunUs();
+#endif
     ESP_LOGW(TAG, "Audio-Underrun: DMA ring ran dry (+%lu, %lu total since last reset, last at t=%lld us)",
              static_cast<unsigned long>(new_events), static_cast<unsigned long>(count),
              static_cast<long long>(last_us));
@@ -594,13 +607,27 @@ inline void dma_underrun_tick() {
  *        the enabled codec manager(s)' init() have both already succeeded.
  */
 inline esp_err_t init() {
-#if !defined(CONFIG_ONBOARD_AUDIO_ES8311)
-    ESP_LOGE(TAG, "Synth engine requires ONBOARD_AUDIO_ES8311 (primary output) to be enabled");
+#if !defined(CONFIG_ONBOARD_AUDIO_ES8311) && !defined(CONFIG_ONBOARD_AUDIO_WM8960) && \
+    !defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    ESP_LOGE(TAG, "Synth engine requires an onboard audio output (ES8311, WM8960 or NS4168)");
     return ESP_ERR_NOT_SUPPORTED;
 #else
-    esp_codec_dev_handle_t codec = Feature::Audio::ES8311::get_handle();
-    if (codec == nullptr) {
-        ESP_LOGE(TAG, "ES8311 codec not initialized - cannot start synth engine");
+    // Every hardware sink is optional; the engine needs at least one, since its blocking DMA
+    // writes pace the render loop.
+    esp_codec_dev_handle_t codec = nullptr;
+    i2s_chan_handle_t secondaryI2sTxHandle = nullptr;
+    i2s_chan_handle_t ns4168I2sTxHandle = nullptr;
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    codec = Feature::Audio::ES8311::get_handle();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    secondaryI2sTxHandle = Feature::Audio::WM8960::get_tx_handle();
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    ns4168I2sTxHandle = Feature::Audio::NS4168::get_tx_handle();
+#endif
+    if (codec == nullptr && secondaryI2sTxHandle == nullptr && ns4168I2sTxHandle == nullptr) {
+        ESP_LOGE(TAG, "No audio output initialized - cannot start synth engine");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -615,11 +642,6 @@ inline esp_err_t init() {
     char initialPresetName[presetpaths::kMaxNameLen];
     presetpaths::resolveActivePath(initialPresetPath, sizeof(initialPresetPath), initialPresetName,
                                    sizeof(initialPresetName));
-    i2s_chan_handle_t secondaryI2sTxHandle = nullptr;
-#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
-    secondaryI2sTxHandle = Feature::Audio::WM8960::get_tx_handle();
-#endif
-
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     s_engine.setUsbAudioTap(&tap_submit, &tap_mix);
 #endif
@@ -643,7 +665,7 @@ inline esp_err_t init() {
     s_presetNavQueue = xQueueCreate(1, sizeof(int));
     xTaskCreatePinnedToCore(&preset_nav_task, "preset_nav", 4096, nullptr, 3, nullptr, 0);
 
-    s_engine.begin(codec, secondaryI2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
+    s_engine.begin(codec, secondaryI2sTxHandle, ns4168I2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
 
     ESP_LOGI(TAG, "Synth engine started (preset: %s)",
              initialPresetName[0] != '\0' ? initialPresetName : "current.json");

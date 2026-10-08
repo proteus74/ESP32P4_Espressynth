@@ -28,4 +28,15 @@ esp_err_t init();
  */
 i2c_master_bus_handle_t get_i2c_bus_handle(int port = 0);
 
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+/** @brief Write one byte to an STC8H1K co-MCU register (see crowpanel_5inch.hpp for the map). */
+esp_err_t stc8_write_reg(uint8_t reg, uint8_t value);
+/** @brief Read len bytes starting at an STC8H1K co-MCU register. */
+esp_err_t stc8_read_reg(uint8_t reg, uint8_t* data, size_t len);
+/** @brief Set one STC8 GPIO output (STC8_GPIO_OUT_*). */
+esp_err_t stc8_set_gpio(uint8_t gpio, bool level);
+/** @brief LCD backlight 0-100 %: switches the STC8 backlight rail and sets its PWM duty. */
+esp_err_t set_backlight_percent(int percent);
+#endif
+
 } // namespace Board

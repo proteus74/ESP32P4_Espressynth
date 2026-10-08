@@ -214,6 +214,7 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         nodes::output::parsePreset(p, out);
         break;
     case NodeType::MidiIn:

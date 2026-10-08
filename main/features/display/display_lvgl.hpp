@@ -7,12 +7,18 @@
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_err.h"
+#include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_ldo_regulator.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_mipi_dsi.h"
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+#include "crow_rgb_lcd.h"
+#endif
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
+#include "esp_netif_ip_addr.h"
+#include "esp_netif_types.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "eez_ui_bridge.hpp"
@@ -26,8 +32,8 @@
     #include "esp_lcd_jd9365.h"
     #include "features/display/jd9365_init.h"
 #endif
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
-    // JC1060P470C 7": JD9165 panel, GT911 touch, natively landscape (no rotation).
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
+    // JC1060P470C 7" (JD9165) and CrowPanel 5" (RGB): GT911 touch, natively landscape (no rotation).
     #include "esp_lcd_touch_gt911.h"
 #else
     // JC8012P4A1 and friends: JD9365 panel, GSL3680 touch, portrait panel driven landscape.
@@ -86,8 +92,8 @@ namespace Feature::LVGL {
 
 namespace {
 
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
-// LVGL renders straight into the panel's orientation here, so the DPI driver's own
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
+// LVGL renders straight into the panel's orientation here, so the panel driver's own
 // double buffer is all that's needed.
 constexpr size_t FRAME_BUFFER_COUNT = 2;
 #else
@@ -488,6 +494,76 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 }
 #endif
 
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+
+// CrowPanel RGB pipeline (ESP32-P4 rev < 3, see components/crow_rgb_lcd):
+//  - LVGL renders into two strip buffers in internal RAM; this flush callback copies them straight
+//    into the driver's single PSRAM frame buffer, which the LCD DMA streams out continuously (no
+//    bounce buffers: their refill ISR costs a whole CPU core on the P4).
+//  - esp_lcd_panel_draw_bitmap() is bypassed on purpose: in stream mode it re-links the running
+//    GDMA descriptor chain on every call, which only adds risk to an already fragile scan-out.
+//  - The PSRAM traffic of a redraw can still knock the scan-out out of sync (this chip revision
+//    has no LCD underrun detection), so every finished frame requests a restart in the next
+//    vertical blank. Together with the 16 MHz pixel clock this keeps the picture steady.
+constexpr int RGB_DRAW_BUFFER_LINES = 16;
+static uint8_t* s_rgb_frame_buffer = nullptr;
+
+void rgb_flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
+    constexpr int width = CurrentBoard::DISPLAY_NATIVE_WIDTH;
+    constexpr size_t bytes_per_pixel = sizeof(uint16_t);
+    const size_t row_bytes = static_cast<size_t>(lv_area_get_width(area)) * bytes_per_pixel;
+    // The LCD DMA reads PSRAM directly, so each freshly written row is pushed out of the cache.
+    for (int32_t y = area->y1; y <= area->y2; ++y) {
+        uint8_t* dst = s_rgb_frame_buffer + (static_cast<size_t>(y) * width + area->x1) * bytes_per_pixel;
+        std::memcpy(dst, px_map + static_cast<size_t>(y - area->y1) * row_bytes, row_bytes);
+        esp_cache_msync(dst, row_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    }
+#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+    if (lv_display_flush_is_last(display) &&
+        s_splash_frame_pending.exchange(false, std::memory_order_acq_rel)) {
+        s_splash_visible_since.store(xTaskGetTickCount(), std::memory_order_release);
+    }
+#endif
+    if (lv_display_flush_is_last(display)) {
+        // Redraw traffic can knock the P4 scan-out out of sync; resync it in the next vblank.
+        crow_lcd_rgb_panel_restart(s_panel);
+    }
+    lv_display_flush_ready(display);
+}
+
+// Must be called with the LVGL port lock held (lvgl_port_init() already done).
+lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
+    void* frame_buffer = nullptr;
+    if (crow_lcd_rgb_panel_get_frame_buffer(panel, 1, &frame_buffer) != ESP_OK || frame_buffer == nullptr) {
+        return nullptr;
+    }
+    s_rgb_frame_buffer = static_cast<uint8_t*>(frame_buffer);
+
+    const size_t draw_buffer_bytes = static_cast<size_t>(CurrentBoard::DISPLAY_NATIVE_WIDTH) *
+                                     RGB_DRAW_BUFFER_LINES * sizeof(uint16_t);
+    void* draw_buffer_a = heap_caps_aligned_alloc(64, draw_buffer_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void* draw_buffer_b = heap_caps_aligned_alloc(64, draw_buffer_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (draw_buffer_a == nullptr || draw_buffer_b == nullptr) {
+        heap_caps_free(draw_buffer_a);
+        heap_caps_free(draw_buffer_b);
+        return nullptr;
+    }
+
+    lv_display_t* display = lv_display_create(CurrentBoard::DISPLAY_NATIVE_WIDTH,
+                                              CurrentBoard::DISPLAY_NATIVE_HEIGHT);
+    if (display == nullptr) {
+        heap_caps_free(draw_buffer_a);
+        heap_caps_free(draw_buffer_b);
+        return nullptr;
+    }
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_buffers(display, draw_buffer_a, draw_buffer_b, draw_buffer_bytes,
+                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, rgb_flush_cb);
+    return display;
+}
+#endif // CONFIG_APP_DISPLAY_OUTPUT_RGB
+
 #if defined(CONFIG_APP_ENABLE_MIPI_DSI)
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
@@ -790,6 +866,17 @@ void show_splash_screen(lv_display_t* display) {
  * Waits only for any part of the three-second minimum that has not elapsed since the first
  * displayed splash frame, then fades into the complete LVGL UI.
  */
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+/**
+ * @brief Resync the RGB scan-out in the next vertical blank (see crow_lcd_rgb_panel_restart()).
+ *        Bringing up the ESP-Hosted SDIO link can knock the scan-out out of sync without any
+ *        redraw following that would trigger the per-flush resync.
+ */
+inline void resync_display() {
+    if (s_panel != nullptr) crow_lcd_rgb_panel_restart(s_panel);
+}
+#endif
+
 inline void finish_startup_screen() {
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
     constexpr const char* TAG = "FeatureLVGL";
@@ -858,6 +945,50 @@ inline esp_err_t init() {
 #if defined(CONFIG_APP_DISPLAY_OUTPUT_SPI)
     ESP_RETURN_ON_ERROR(Feature::SPIDisplay::init(), TAG, "SPI display initialization failed");
     esp_lcd_panel_handle_t panel = Feature::SPIDisplay::panel;
+#elif defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+    ESP_LOGI(TAG, "Initializing RGB display for %s (%dx%d)", CurrentBoard::BOARD_NAME,
+             CurrentBoard::DISPLAY_NATIVE_WIDTH, CurrentBoard::DISPLAY_NATIVE_HEIGHT);
+
+    esp_lcd_rgb_panel_config_t rgb_panel_config = {};
+    rgb_panel_config.clk_src = LCD_CLK_SRC_DEFAULT;
+    rgb_panel_config.timings.pclk_hz = CurrentBoard::DISPLAY_PIXEL_CLOCK_HZ;
+    rgb_panel_config.timings.h_res = CurrentBoard::DISPLAY_NATIVE_WIDTH;
+    rgb_panel_config.timings.v_res = CurrentBoard::DISPLAY_NATIVE_HEIGHT;
+    rgb_panel_config.timings.hsync_pulse_width = CurrentBoard::DISPLAY_HSYNC_PULSE_WIDTH;
+    rgb_panel_config.timings.hsync_back_porch = CurrentBoard::DISPLAY_HSYNC_BACK_PORCH;
+    rgb_panel_config.timings.hsync_front_porch = CurrentBoard::DISPLAY_HSYNC_FRONT_PORCH;
+    rgb_panel_config.timings.vsync_pulse_width = CurrentBoard::DISPLAY_VSYNC_PULSE_WIDTH;
+    rgb_panel_config.timings.vsync_back_porch = CurrentBoard::DISPLAY_VSYNC_BACK_PORCH;
+    rgb_panel_config.timings.vsync_front_porch = CurrentBoard::DISPLAY_VSYNC_FRONT_PORCH;
+    rgb_panel_config.timings.flags.pclk_active_neg = true;
+    rgb_panel_config.timings.flags.pclk_idle_high = true;
+    rgb_panel_config.data_width = 16;
+    rgb_panel_config.in_color_format = LCD_COLOR_FMT_RGB565;
+    rgb_panel_config.out_color_format = LCD_COLOR_FMT_RGB565;
+    rgb_panel_config.num_fbs = 1;
+    // No bounce buffers: on the P4 the refill ISR (a CPU memcpy of the whole frame out of PSRAM,
+    // ~36 MB/s) eats an entire core. The LCD DMA streams straight from PSRAM instead, with top AXI
+    // priority (see components/crow_rgb_lcd) so redraw traffic can't starve it.
+    rgb_panel_config.bounce_buffer_size_px = 0;
+    rgb_panel_config.dma_burst_size = 64;
+    rgb_panel_config.hsync_gpio_num = CurrentBoard::PIN_RGB_HSYNC;
+    rgb_panel_config.vsync_gpio_num = CurrentBoard::PIN_RGB_VSYNC;
+    rgb_panel_config.de_gpio_num = CurrentBoard::PIN_RGB_DE;
+    rgb_panel_config.pclk_gpio_num = CurrentBoard::PIN_RGB_PCLK;
+    rgb_panel_config.disp_gpio_num = GPIO_NUM_NC;
+    for (int i = 0; i < 16; ++i) {
+        rgb_panel_config.data_gpio_nums[i] = CurrentBoard::PIN_RGB_DATA[i];
+    }
+    rgb_panel_config.flags.fb_in_psram = true;
+
+    esp_lcd_panel_handle_t panel = nullptr;
+    ESP_RETURN_ON_ERROR(crow_lcd_new_rgb_panel(&rgb_panel_config, &panel), TAG,
+                        "RGB panel creation failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "RGB panel reset failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "RGB panel initialization failed");
+    s_panel = panel;
+    // Backlight sits behind the STC8 co-MCU: enable only once the panel is scanning.
+    ESP_RETURN_ON_ERROR(Board::set_backlight_percent(100), TAG, "Backlight enable failed");
 #else
     ESP_LOGI(TAG, "Initializing MIPI-DSI display for %s (%dx%d native)",
              CurrentBoard::BOARD_NAME,
@@ -1047,6 +1178,8 @@ inline esp_err_t init() {
         }, LV_EVENT_FLUSH_FINISH, nullptr);
     }
 #endif
+#elif defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+    lv_display_t* display = create_rgb_display(panel);
 #elif defined(CONFIG_BOARD_JC1060P470C_7_INCH)
     // The panel is natively landscape, so LVGL renders in the panel's own orientation.
     lv_display_t* display = create_direct_display(panel);
@@ -1090,7 +1223,7 @@ inline esp_err_t init() {
 
 #endif // CONFIG_APP_ENABLE_MIPI_DSI
 
-#if defined(CONFIG_APP_ENABLE_MIPI_DSI)
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) || defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
     i2c_master_bus_handle_t touch_i2c_bus = Board::get_i2c_bus_handle(0);
     if (touch_i2c_bus == nullptr) {
         lvgl_port_unlock();
@@ -1099,7 +1232,7 @@ inline esp_err_t init() {
     }
     esp_lcd_panel_io_handle_t touch_io = nullptr;
     esp_lcd_panel_io_i2c_config_t touch_io_config = {};
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
     touch_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
     touch_io_config.lcd_cmd_bits = 16; // GT911 uses 16-bit register addresses
 #else
@@ -1120,7 +1253,7 @@ inline esp_err_t init() {
         touch_config.int_gpio_num = CurrentBoard::PIN_TOUCH_INT;
         touch_config.levels.reset = 0;
         touch_config.levels.interrupt = 0;
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
         // GT911 reports in the panel's own landscape coordinates, so no remapping.
         touch_config.x_max = CurrentBoard::DISPLAY_NATIVE_WIDTH;
         touch_config.y_max = CurrentBoard::DISPLAY_NATIVE_HEIGHT;
@@ -1153,7 +1286,7 @@ inline esp_err_t init() {
     ESP_LOGI(TAG, "Touch ready on I2C0 (RST GPIO%d, INT GPIO%d, 16 ms polling)",
              CurrentBoard::PIN_TOUCH_RST, CurrentBoard::PIN_TOUCH_INT);
 
-#endif // CONFIG_APP_ENABLE_MIPI_DSI
+#endif // CONFIG_APP_ENABLE_MIPI_DSI || CONFIG_APP_DISPLAY_OUTPUT_RGB
 
 #if (defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_HID)) || \
     (defined(CONFIG_APP_ENABLE_BLUETOOTH) && defined(CONFIG_BLE_ENABLE_HID_HOST))

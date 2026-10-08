@@ -7,7 +7,7 @@
 // wired up here. "tone" writes raw PCM instead, so it works on either backend.
 
 #include "driver/i2s_std.h" // i2s_chan_handle_t / i2s_channel_write(), used by the WM8960 path
-                            // below even when ONBOARD_AUDIO_WM8960 itself is off (see wm8960_tx)
+                            // below even when ONBOARD_AUDIO_WM8960 itself is off (see raw_tx)
 #include "esp_codec_dev.h"
 #include "esp_console.h"
 #include "freertos/FreeRTOS.h"
@@ -17,6 +17,9 @@
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     #include "features/audio/wm8960_manager.hpp"
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    #include "features/audio/ns4168_manager.hpp"
 #endif
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
     #include "features/usb/device/usb_device_audio.hpp"
@@ -221,13 +224,19 @@ inline int cli_cmd_tone(int argc, char** argv) {
         es8311_codec = Feature::Audio::ES8311::get_handle();
     }
 #endif
-    i2s_chan_handle_t wm8960_tx = nullptr;
+    // Raw I2S TX for the codecs without esp_codec_dev (WM8960, NS4168).
+    i2s_chan_handle_t raw_tx = nullptr;
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     if (es8311_codec == nullptr && i2s_port == CONFIG_ONBOARD_AUDIO_WM8960_I2S_PORT) {
-        wm8960_tx = Feature::Audio::WM8960::get_tx_handle();
+        raw_tx = Feature::Audio::WM8960::get_tx_handle();
     }
 #endif
-    if (es8311_codec == nullptr && wm8960_tx == nullptr) {
+#if defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    if (es8311_codec == nullptr && raw_tx == nullptr && i2s_port == CONFIG_ONBOARD_AUDIO_NS4168_I2S_PORT) {
+        raw_tx = Feature::Audio::NS4168::get_tx_handle();
+    }
+#endif
+    if (es8311_codec == nullptr && raw_tx == nullptr) {
         printf("No audio codec configured on I2S port %lu.\n", static_cast<unsigned long>(i2s_port));
         return 1;
     }
@@ -251,10 +260,10 @@ inline int cli_cmd_tone(int argc, char** argv) {
             return true;
         }
 #endif
-#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
-        if (wm8960_tx != nullptr) {
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960) || defined(CONFIG_ONBOARD_AUDIO_NS4168)
+        if (raw_tx != nullptr) {
             size_t bytes_written = 0;
-            if (i2s_channel_write(wm8960_tx, samples, bytes, &bytes_written, 1000) != ESP_OK ||
+            if (i2s_channel_write(raw_tx, samples, bytes, &bytes_written, 1000) != ESP_OK ||
                 bytes_written != bytes) {
                 printf("Failed to write tone to audio output.\n");
                 return false;
@@ -274,10 +283,10 @@ inline int cli_cmd_tone(int argc, char** argv) {
         esp_codec_dev_write(es8311_codec, silence, sizeof(silence));
     }
 #endif
-#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
-    if (wm8960_tx != nullptr) {
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960) || defined(CONFIG_ONBOARD_AUDIO_NS4168)
+    if (raw_tx != nullptr) {
         size_t bytes_written = 0;
-        i2s_channel_write(wm8960_tx, silence, sizeof(silence), &bytes_written, 1000);
+        i2s_channel_write(raw_tx, silence, sizeof(silence), &bytes_written, 1000);
     }
 #endif
 
@@ -286,9 +295,41 @@ inline int cli_cmd_tone(int argc, char** argv) {
     return 0;
 }
 
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+// Bring-up helper for the STC8 co-MCU outputs: "stc8 <gpio 0-3> <0|1>" (0 TP_RST, 1 CSI_RST,
+// 2 AUDIO_SD, 3 LCD_BL_POWER) or "stc8 pwm <0-255>" (backlight duty).
+inline int cli_cmd_stc8(int argc, char** argv) {
+    if (argc != 3) {
+        printf("Usage: stc8 <gpio 0-3> <0|1> | stc8 pwm <0-255>\n");
+        return 1;
+    }
+    const bool is_pwm = std::strcmp(argv[1], "pwm") == 0;
+    const int value = std::atoi(argv[2]);
+    const esp_err_t err = is_pwm
+        ? Board::stc8_write_reg(CurrentBoard::STC8_REG_SET_PWM + CurrentBoard::STC8_PWM_LCD_BL,
+                                static_cast<uint8_t>(value))
+        : Board::stc8_set_gpio(static_cast<uint8_t>(std::atoi(argv[1])), value != 0);
+    printf("%s\n", err == ESP_OK ? "OK" : esp_err_to_name(err));
+    return err == ESP_OK ? 0 : 1;
+}
+#endif
+
 } // namespace
 
 inline void register_audio() {
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+    const esp_console_cmd_t stc8_cmd = {
+        .command = "stc8",
+        .help = "Drive an STC8 co-MCU output: <gpio 0-3> <0|1>, or pwm <0-255>",
+        .hint = "<gpio|pwm> <value>",
+        .func = &cli_cmd_stc8,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    };
+    register_command(stc8_cmd);
+#endif
+
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
     const esp_console_cmd_t volume_cmd = {
         .command = "audio-volume",

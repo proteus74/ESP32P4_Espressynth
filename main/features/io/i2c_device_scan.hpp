@@ -81,7 +81,7 @@ inline void scan_gp8413(int port) {
     }
     for (int i = 0; i < count; ++i) {
         const uint8_t addr = found[i];
-#if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
         if (port == 0 && addr == 0x5D) {
             ESP_LOGW(SCAN_TAG,
                      "GP8413: skipping I2C0 0x5D; address is reserved by the JC1060 GT911 touch controller");

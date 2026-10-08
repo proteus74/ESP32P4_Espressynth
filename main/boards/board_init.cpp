@@ -8,6 +8,9 @@
 
 static const char* TAG = "BoardInit";
 static i2c_master_bus_handle_t s_i2c_bus_handle[2] = {nullptr, nullptr};
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+static i2c_master_dev_handle_t s_stc8_dev = nullptr;
+#endif
 
 // Compile-time pin sanity checks for the "I2C Subsystem" Kconfig pins - they're free-form
 // GPIO numbers (like the WM8960 pins), so a bad choice is caught here instead of at runtime.
@@ -133,6 +136,26 @@ esp_err_t init() {
     }
 #endif
 
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+    // STC8H1K co-MCU on I2C0: backlight, touch reset, amp shutdown, battery. The ESP-Hosted
+    // driver owns the C6 reset line on this board (CONFIG_ESP_HOSTED_HOST_RESET_GPIO).
+    if (s_i2c_bus_handle[0] != nullptr) {
+        i2c_device_config_t stc8_cfg = {};
+        stc8_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+        stc8_cfg.device_address = CurrentBoard::STC8_I2C_ADDR;
+        stc8_cfg.scl_speed_hz = i2c_bus_frequency_hz(0);
+        esp_err_t stc8_ret = i2c_master_bus_add_device(s_i2c_bus_handle[0], &stc8_cfg, &s_stc8_dev);
+        if (stc8_ret != ESP_OK) {
+            ESP_LOGE(TAG, "STC8 co-MCU device setup failed: %s", esp_err_to_name(stc8_ret));
+            s_stc8_dev = nullptr;
+        } else {
+            ESP_LOGI(TAG, "STC8 co-MCU ready at 0x%02X", CurrentBoard::STC8_I2C_ADDR);
+        }
+    } else {
+        ESP_LOGE(TAG, "STC8 co-MCU needs I2C0 (enable it in the I2C Subsystem Kconfig)");
+    }
+#endif
+
 #if defined(CONFIG_BOARD_JC8012P4A1) || defined(CONFIG_BOARD_JC1060P470C_7_INCH) || \
     defined(CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD)
     // Board-specific init: ESP32-C6 Reset line
@@ -151,5 +174,31 @@ esp_err_t init() {
 
     return ESP_OK;
 }
+
+#if defined(CONFIG_BOARD_CROWPANEL_5INCH)
+esp_err_t stc8_write_reg(uint8_t reg, uint8_t value) {
+    if (s_stc8_dev == nullptr) return ESP_ERR_INVALID_STATE;
+    const uint8_t buf[2] = {reg, value};
+    return i2c_master_transmit(s_stc8_dev, buf, sizeof(buf), 100);
+}
+
+esp_err_t stc8_read_reg(uint8_t reg, uint8_t* data, size_t len) {
+    if (s_stc8_dev == nullptr) return ESP_ERR_INVALID_STATE;
+    return i2c_master_transmit_receive(s_stc8_dev, &reg, 1, data, len, 100);
+}
+
+esp_err_t stc8_set_gpio(uint8_t gpio, bool level) {
+    return stc8_write_reg(CurrentBoard::STC8_REG_SET_GPIO + gpio, level ? 1 : 0);
+}
+
+esp_err_t set_backlight_percent(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    esp_err_t ret = stc8_set_gpio(CurrentBoard::STC8_GPIO_OUT_LCD_BL_POWER, percent > 0);
+    if (ret != ESP_OK) return ret;
+    const uint8_t duty = static_cast<uint8_t>(percent * CONFIG_CROWPANEL_BACKLIGHT_PWM_MAX / 100);
+    return stc8_write_reg(CurrentBoard::STC8_REG_SET_PWM + CurrentBoard::STC8_PWM_LCD_BL, duty);
+}
+#endif
 
 } // namespace Board

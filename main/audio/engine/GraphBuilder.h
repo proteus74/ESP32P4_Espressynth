@@ -160,7 +160,7 @@ inline bool hasStereoOutput(NodeType type)
 {
     return type == NodeType::Chorus || type == NodeType::EspEq || ports::isGlobalOnly(type) ||
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
-           type == NodeType::Wm8960Out || type == NodeType::WavePlayer ||
+           type == NodeType::Wm8960Out || type == NodeType::Ns4168Out || type == NodeType::WavePlayer ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
            type == NodeType::LinkedInput || type == NodeType::LinkedOutput ||
            type == NodeType::StepArpeggiator || type == NodeType::DrumSequencer || type == NodeType::Pan || type == NodeType::OutputSwitch ||
@@ -717,6 +717,7 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         nodes::output::build(inst, p);
         break;
     case NodeType::AudioInputLink:
@@ -894,6 +895,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             g->wm8960OutWidget = static_cast<int16_t>(i);
         }
+        else if (w.type == NodeType::Ns4168Out && g->ns4168OutWidget < 0)
+        {
+            g->ns4168OutWidget = static_cast<int16_t>(i);
+        }
     }
     g->widgetCount = doc.widgetCount;
 
@@ -919,7 +924,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     {
         // Keep a silent graph rather than crashing on a null placement-new target.
         g->widgetCount = 0;
-        g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+        g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
         return g;
     }
     g->instances = static_cast<NodeInstance *>(rawInstances);
@@ -984,7 +989,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 ESP_LOGE(kGraphBuilderTag, "Output buffer allocation failed");
                 g->destroy();
                 g->widgetCount = 0;
-                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                 return g;
             }
             // Big-state payload (see NodeInstance.h) - only the one field
@@ -1087,7 +1092,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 ESP_LOGE(kGraphBuilderTag, "Node-State-Allokation fehlgeschlagen");
                 g->destroy();
                 g->widgetCount = 0;
-                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                 return g;
             }
             if (linkBuses)
@@ -1114,7 +1119,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     ESP_LOGE(kGraphBuilderTag, "Link bus buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
-                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                     return g;
                 }
             }
@@ -1147,7 +1152,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     ESP_LOGE(kGraphBuilderTag, "OutputMultiplexer buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
-                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                     return g;
                 }
             }
@@ -1169,7 +1174,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                     ESP_LOGE(kGraphBuilderTag, "DrumSequencer buffer allocation failed");
                     g->destroy();
                     g->widgetCount = 0;
-                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                    g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                     return g;
                 }
             }
@@ -1179,7 +1184,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 ESP_LOGE(kGraphBuilderTag, "Comb filter delay buffer allocation failed");
                 g->destroy();
                 g->widgetCount = 0;
-                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                 return g;
             }
             if (w.type == NodeType::MidiIn && doc.widgets[i].isFxPage)
@@ -1776,7 +1781,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 ESP_LOGE(kGraphBuilderTag, "Input buffer allocation failed");
                 g->destroy();
                 g->widgetCount = 0;
-                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = -1;
+                g->usbOutWidget = g->es8311OutWidget = g->wm8960OutWidget = g->ns4168OutWidget = -1;
                 delete[] adjacency;
                 delete[] inDegree;
                 return g;
@@ -1990,6 +1995,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         if (g->usbOutWidget >= 0) needed[g->usbOutWidget] = true;
         if (g->es8311OutWidget >= 0) needed[g->es8311OutWidget] = true;
         if (g->wm8960OutWidget >= 0) needed[g->wm8960OutWidget] = true;
+        if (g->ns4168OutWidget >= 0) needed[g->ns4168OutWidget] = true;
         for (uint16_t w = 0; w < g->widgetCount; ++w)
         {
             if (g->widgets[w].type == NodeType::CvIn || g->widgets[w].type == NodeType::CvOut ||

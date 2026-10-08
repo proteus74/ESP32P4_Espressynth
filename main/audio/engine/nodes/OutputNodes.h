@@ -9,8 +9,8 @@
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
 
-// The four hardware-sink output widgets (AudioOut/UsbOut/Es8311Out/
-// Wm8960Out) - identical shape (left/right level trim, gain, mute with
+// The hardware-sink output widgets (AudioOut/UsbOut/Es8311Out/
+// Wm8960Out/Ns4168Out) - identical shape (left/right level trim, gain, mute with
 // smoothing, a SoftLimiter), only which physical sink SynthEngine reads the
 // rendered block from differs. AudioOutState (value member) stays in
 // NodeState.h.

@@ -252,6 +252,7 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         return nodes::output::setParam(inst, name, value);
 
     case NodeType::AudioInputLink:

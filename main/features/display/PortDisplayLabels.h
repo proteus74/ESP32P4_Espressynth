@@ -14,7 +14,7 @@ inline const char *display(NodeType type, const char *id)
         (type == NodeType::AudioOutputLink || type == NodeType::LinkedInput)) return id + 2;
     if (strcmp(id, "gain") == 0) {
         if (type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
-            type == NodeType::Wm8960Out) return "Volume";
+            type == NodeType::Wm8960Out || type == NodeType::Ns4168Out) return "Volume";
         if (type == NodeType::CombFilter) return "Output Gain";
     }
     if (strcmp(id, "feedback") == 0) {

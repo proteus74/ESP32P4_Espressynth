@@ -488,6 +488,7 @@ inline int audioInIndex(NodeType type, const char *portName)
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         if (is(portName, "left"))
             return 0;
         if (is(portName, "right"))
@@ -947,6 +948,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         return 4;
     case NodeType::CvOut:
     case NodeType::DigitalOut:
@@ -1032,7 +1034,7 @@ inline bool isLinkType(NodeType type)
 inline bool hasNoOutputs(NodeType type)
 {
     return type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
-           type == NodeType::Wm8960Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
+           type == NodeType::Wm8960Out || type == NodeType::Ns4168Out || type == NodeType::VuMeter || type == NodeType::Oscilloscope ||
            type == NodeType::Spectrum || type == NodeType::MidiIn || type == NodeType::CvOut ||
            type == NodeType::DigitalOut || type == NodeType::RgbLed;
     // Note: Button/UpDownButton/Switch are deliberately NOT listed here even
@@ -1154,6 +1156,7 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::UsbOut:
     case NodeType::Es8311Out:
     case NodeType::Wm8960Out:
+    case NodeType::Ns4168Out:
         return portIdx >= 2; // gain + muted are scalar CV inputs
     default:
         return false;

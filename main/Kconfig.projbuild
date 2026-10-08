@@ -33,6 +33,16 @@ menu "Espressynth"
                     This board uses an ESP32-P4 v1.x and therefore requires the pre-v3
                     compatibility mode and a 360 MHz CPU clock.
 
+            config BOARD_CROWPANEL_5INCH
+                bool "Elecrow CrowPanel Advanced 5\" (800x480 RGB, NS4168, C6 Hosted)"
+                select ESP32P4_SELECTS_REV_LESS_V3
+                help
+                    Board support for the Elecrow CrowPanel Advanced 5-inch ESP32-P4 HMI
+                    display. Includes a 16-bit parallel RGB panel (800x480), GT911 touch,
+                    an STC8H1K co-MCU on I2C (backlight PWM, touch reset, amp enable,
+                    battery), NS4168 I2S class-D speaker amp, PDM microphone, TF card slot
+                    and an ESP32-C6 hosted co-processor over SDIO.
+
             config BOARD_CUSTOM_P4
                 bool "Custom ESP32-P4 Board"
                 help
@@ -64,6 +74,33 @@ menu "Espressynth"
                 int "Backlight GPIO (-1 to disable)"
                 range -1 54
                 default -1
+        endmenu
+    endif
+
+    if BOARD_CROWPANEL_5INCH
+        menu "CrowPanel 5\" Settings"
+            config CROWPANEL_STC8_I2C_ADDR
+                hex "STC8H1K co-MCU I2C address"
+                default 0x2F
+                help
+                    The on-board STC8H1K microcontroller (same I2C bus as the GT911 touch
+                    controller) drives the LCD backlight PWM, the touch reset line, the
+                    NS4168 amp shutdown line and reports battery/charge state.
+
+            config CROWPANEL_BACKLIGHT_PWM_MAX
+                int "STC8 backlight PWM value for 100% brightness"
+                range 1 255
+                default 100
+                help
+                    Full-scale value written to the STC8 PWM register. The vendor firmware
+                    does not document the range; 100 = percent is the assumption.
+
+            config CROWPANEL_AUDIO_SD_ACTIVE_HIGH
+                bool "NS4168 amp enabled when STC8 AUDIO_SD output is high"
+                default n
+                help
+                    AUDIO_SD is the amplifier's shutdown input: Elecrow's vendor code drives it
+                    low to enable the amp, so the default is off (= enable with a low level).
         endmenu
     endif
 
@@ -130,14 +167,17 @@ menu "Espressynth"
             if APP_ENABLE_I2C0
                 config I2C0_PIN_SDA
                     int "I2C0 SDA GPIO"
+                    default 45 if BOARD_CROWPANEL_5INCH
                     default 7
 
                 config I2C0_PIN_SCL
                     int "I2C0 SCL GPIO"
+                    default 46 if BOARD_CROWPANEL_5INCH
                     default 8
 
                 choice APP_I2C0_SPEED
                     prompt "I2C0 Bus Speed"
+                    default APP_I2C0_SPEED_100KHZ if BOARD_CROWPANEL_5INCH
                     default APP_I2C0_SPEED_50KHZ
                     help
                         Clock used by every device attached to I2C0. All
@@ -291,6 +331,57 @@ menu "Espressynth"
 
         if APP_ENABLE_AUDIO
 
+            config ONBOARD_AUDIO_NS4168
+                bool "Enable NS4168 I2S Class-D Amplifier (no codec, no I2C)"
+                default n
+                help
+                    NS4168 mono class-D speaker amp (onboard on the Elecrow CrowPanel
+                    Advanced boards, or any NS4168 breakout): plain I2S input
+                    (BCLK/LRCK/DOUT, no MCLK, no register interface). It is its own
+                    output sink with its own "NS4168-Out" widget in the web UI and can
+                    run alongside the ES8311 and/or WM8960 codecs on a different I2S
+                    port. Volume and mute are applied in software by the synth engine.
+
+            if ONBOARD_AUDIO_NS4168
+                config ONBOARD_AUDIO_NS4168_I2S_PORT
+                    int "I2S Port Number (0-2)"
+                    range 0 2
+                    default 0
+                    help
+                        Selects which I2S peripheral instance (I2S0, I2S1 or I2S2)
+                        drives the NS4168. Must differ from the ES8311/WM8960 I2S
+                        port if those codecs are enabled too (checked at compile
+                        time).
+
+                config ONBOARD_AUDIO_NS4168_PIN_BCLK
+                    int "I2S BCLK GPIO"
+                    range -1 54
+                    default 22 if BOARD_CROWPANEL_5INCH
+                    default -1
+
+                config ONBOARD_AUDIO_NS4168_PIN_LRCK
+                    int "I2S LRCLK (word-select) GPIO"
+                    range -1 54
+                    default 21 if BOARD_CROWPANEL_5INCH
+                    default -1
+
+                config ONBOARD_AUDIO_NS4168_PIN_DOUT
+                    int "I2S DOUT GPIO (ESP32 -> NS4168 SDATA)"
+                    range -1 54
+                    default 23 if BOARD_CROWPANEL_5INCH
+                    default -1
+
+                config ONBOARD_AUDIO_NS4168_PIN_CTRL
+                    int "CTRL (shutdown) GPIO, driven high to enable the amp (-1 = not wired)"
+                    range -1 54
+                    default -1
+                    help
+                        Optional GPIO wired to the NS4168 CTRL pin (low = shutdown).
+                        Leave at -1 if CTRL is hard-wired. On the CrowPanel the amp
+                        is switched by the STC8 co-MCU instead (see
+                        CROWPANEL_AUDIO_SD_ACTIVE_HIGH), so this stays -1 there.
+            endif
+
             config ONBOARD_AUDIO_ES8311
                 bool "Enable ES8311 Audio Codec (I2S + I2C)"
                 default n
@@ -443,7 +534,7 @@ menu "Espressynth"
                 int "I2S DMA descriptor count (onboard codecs)"
                 range 2 16
                 default 6
-                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960
                 help
                     Part 1 of the I2S output buffer's size, shared by every
                     onboard I2S codec (ES8311 and/or WM8960 -- NOT the USB
@@ -489,7 +580,7 @@ menu "Espressynth"
                 int "I2S DMA frames per descriptor (onboard codecs)"
                 range 32 960
                 default 240
-                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_WM8960
+                depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960
                 help
                     Part 2 of the I2S output buffer's size -- see
                     AUDIO_I2S_DMA_DESC_NUM above for the full explanation,
@@ -555,6 +646,7 @@ menu "Espressynth"
         choice APP_DISPLAY_OUTPUT
             prompt "Output Type"
             default APP_DISPLAY_OUTPUT_MIPI if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default APP_DISPLAY_OUTPUT_RGB if BOARD_CROWPANEL_5INCH
             default APP_DISPLAY_OUTPUT_NONE
 
             config APP_DISPLAY_OUTPUT_NONE
@@ -563,6 +655,8 @@ menu "Espressynth"
                 bool "MIPI"
             config APP_DISPLAY_OUTPUT_SPI
                 bool "SPI"
+            config APP_DISPLAY_OUTPUT_RGB
+                bool "RGB (parallel, 16-bit)"
         endchoice
 
         config APP_ENABLE_MIPI_DSI
@@ -843,7 +937,7 @@ menu "Espressynth"
 
         config APP_ENABLE_HOSTED_COPROCESSOR
             bool "Enable Host Processor (ESP32-C6 / SDIO)"
-            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CROWPANEL_5INCH
             default n
             help
                 Confirms an ESP32-C6 co-processor is actually wired up over SDIO to run
@@ -978,6 +1072,7 @@ menu "Espressynth"
             default 4 if BOARD_JC8012P4A1
             default 4 if BOARD_JC1060P470C_7_INCH
             default 4 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default 4 if BOARD_CROWPANEL_5INCH
             default 1
             range 1 4
             depends on SOC_SDMMC_IO_POWER_EXTERNAL

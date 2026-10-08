@@ -1,0 +1,38 @@
+# Board selection for the Elecrow CrowPanel Advanced 5" ESP32-P4 HMI (800x480 RGB, GT911,
+# NS4168 amp, STC8 co-MCU, ESP32-C6 hosted over SDIO). Combine with the common
+# sdkconfig.defaults - see the header comment there for the idf.py -D SDKCONFIG_DEFAULTS
+# invocation. Display/touch/audio pins and the I2C0 bus (GPIO45/46) default correctly
+# via the "if BOARD_CROWPANEL_5INCH" conditionals in main/Kconfig.projbuild.
+CONFIG_BOARD_CROWPANEL_5INCH=y
+
+# GT911 + STC8 co-MCU bus: the STC8 does not answer at 400 kHz (probe timeouts), 50/100 kHz work.
+# CONFIG_APP_I2C0_SPEED_50KHZ is not set
+CONFIG_APP_I2C0_SPEED_100KHZ=y
+
+# Console/log stays on UART0: the flash/debug USB-C goes through the board's USB-UART bridge
+# (COM port), not the P4's native USB Serial/JTAG.
+
+# NS4168 speaker amp is the primary output; synth engine + web UI on.
+CONFIG_APP_ENABLE_AUDIO=y
+CONFIG_ONBOARD_AUDIO_NS4168=y
+CONFIG_APP_ENABLE_SDCARD=y
+
+# Wi-Fi on by default, BLE off by default (enable under Application Features if needed).
+CONFIG_APP_ENABLE_WIFI=y
+CONFIG_APP_ENABLE_WEBSERVER=y
+# CONFIG_APP_ENABLE_BLUETOOTH is not set
+
+# ESP-Hosted SDIO link to the on-board ESP32-C6. The RGB panel owns GPIO14-19 (the default
+# SDMMC slot 1 IOMUX pins), so the link runs through the GPIO matrix on 49-54 (pins and reset GPIO20 per Elecrow's factory
+# sdkconfig; the default active-low reset polarity is correct, verified on hardware).
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD=54
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK=53
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0=52
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1=51
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2=50
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3=49
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=20
+
+# Keep the RGB bounce-buffer DMA ISR running while flash/cache operations are in progress
+# (LittleFS/NVS writes otherwise starve it and the picture shifts sideways).
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y

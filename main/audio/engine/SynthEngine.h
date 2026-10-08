@@ -54,12 +54,16 @@ public:
     // via i2s_channel_write() rather than esp_codec_dev - this project's WM8960
     // support (features/audio/wm8960_manager.hpp) is a hand-rolled raw-I2S
     // driver, not wrapped in esp_codec_dev.
+    // `ns4168I2sTxHandle` is the same idea for the NS4168 amp
+    // (Feature::Audio::NS4168::get_tx_handle()), fed from the Ns4168Out widget.
+    // Any of the three hardware sinks may be absent (nullptr); at least one must
+    // be present, since the blocking writes pace the render loop.
     // `presetChangedQueue` and `liveParamQueue` are the same queues
     // Feature::Web's synth API routes were given. `initialPresetPath` is loaded
     // once at startup before the first preset-changed notification (if any)
     // arrives.
     void begin(esp_codec_dev_handle_t codecHandle, i2s_chan_handle_t secondaryI2sTxHandle,
-               QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue, const char *initialPresetPath);
+               i2s_chan_handle_t ns4168I2sTxHandle, QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue, const char *initialPresetPath);
 
     // Enqueues a USB-MIDI event for the render task to apply before its next
     // block. Non-blocking; drops the event if the queue is full rather than
@@ -401,7 +405,7 @@ public:
     }
 
     // Per-sink output routing. The master stream (graph's AudioOut) is
-    // weighted per output target (USB-mic-IN, ES8311, WM8960) individually
+    // weighted per output target (USB-mic-IN, ES8311, WM8960, NS4168) individually
     // via gain/mute. Only read/written on the render task (ws "paramUpdate"
     // is wired there) - hence no locks needed.
     struct SinkParams
@@ -409,7 +413,7 @@ public:
         float gain = 1.0f;
         bool muted = false;
     };
-    // index: 0=USB, 1=ES8311, 2=WM8960
+    // index: 0=USB, 1=ES8311, 2=WM8960, 3=NS4168
     const SinkParams &sink(size_t index) const { return sink_[index]; }
 
     // Applies an already-parsed reserved "@out:*" paramUpdate to a hardware
@@ -768,6 +772,7 @@ private:
 
     esp_codec_dev_handle_t codecHandle_ = nullptr;
     i2s_chan_handle_t secondaryI2sTxHandle_ = nullptr;
+    i2s_chan_handle_t ns4168I2sTxHandle_ = nullptr;
     QueueHandle_t presetChangedQueue_ = nullptr;
     QueueHandle_t liveParamQueue_ = nullptr;
     QueueHandle_t liveWavetableQueue_ = nullptr; // any task -> render task, LiveWavetableMsg (see postLiveWavetable)
@@ -790,7 +795,7 @@ private:
     uint32_t midiFeedbackGeneration_ = 0;
     uint16_t midiFeedbackWidget_ = 0;
 
-    SinkParams sink_[3];
+    SinkParams sink_[4];
 
     // Master-output fade, multiplied across ALL sinks over a preset reload
     // (in addition to their own gain), to avoid the click that a hard graph
@@ -1144,7 +1149,7 @@ inline SynthEngine::TimingSnapshot SynthEngine::consumeTimingSnapshot()
 }
 
 inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_handle_t secondaryI2sTxHandle,
-                                QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue,
+                                i2s_chan_handle_t ns4168I2sTxHandle, QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue,
                                 const char *initialPresetPath)
 {
     dsp::initSineLut();    // once, here - never recomputed once the render task starts
@@ -1154,6 +1159,7 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
 
     codecHandle_ = codecHandle;
     secondaryI2sTxHandle_ = secondaryI2sTxHandle;
+    ns4168I2sTxHandle_ = ns4168I2sTxHandle;
     presetChangedQueue_ = presetChangedQueue;
     liveParamQueue_ = liveParamQueue;
     snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", initialPresetPath);
@@ -1206,6 +1212,7 @@ inline bool SynthEngine::applyOutputParam(const char *widgetId, cJSON *params)
     if (strcmp(widgetId, "@out:usb") == 0) idx = 0;
     else if (strcmp(widgetId, "@out:es8311") == 0) idx = 1;
     else if (strcmp(widgetId, "@out:wm8960") == 0) idx = 2;
+    else if (strcmp(widgetId, "@out:ns4168") == 0) idx = 3;
     else return false;
 
     if (cJSON_IsObject(params))
@@ -1442,9 +1449,12 @@ inline void SynthEngine::taskLoop()
     static float esR[synth::kBlockSize];
     static float wmL[synth::kBlockSize];
     static float wmR[synth::kBlockSize];
+    static float nsL[synth::kBlockSize];
+    static float nsR[synth::kBlockSize];
     static int16_t usbChunk[synth::kBlockSize * 2];
     static int16_t esChunk[synth::kBlockSize * 2];
     static int16_t wmChunk[synth::kBlockSize * 2];
+    static int16_t nsChunk[synth::kBlockSize * 2];
 
     while (true)
     {
@@ -1525,6 +1535,7 @@ inline void SynthEngine::taskLoop()
         gout.usbL = usbL; gout.usbR = usbR;
         gout.esL = esL; gout.esR = esR;
         gout.wmL = wmL; gout.wmR = wmR;
+        gout.nsL = nsL; gout.nsR = nsR;
         liveGraph_->renderBlock(gout, synth::kBlockSize);
         synchronizeMidiControls();
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
@@ -1815,56 +1826,71 @@ inline void SynthEngine::taskLoop()
             esp_codec_dev_write(codecHandle_, esChunk, sizeof(esChunk));
             esWriteUs = esp_timer_get_time() - esWriteStartUs;
         }
-        int64_t wmConvertUs = 0;
-        int64_t wmWriteUs = 0;
-        if (secondaryI2sTxHandle_ != nullptr)
+        // Raw-I2S sinks (WM8960, NS4168): float -> int16 with the sink's gain/mute and the master
+        // fade, a click detector, then a blocking DMA write.
+        struct RawSinkState
         {
-            const int64_t wmConvertStartUs = esp_timer_get_time();
-            const SinkParams &wmSyn = sink_[2];
-            static int16_t s_lastWmL = 0;
-            static int64_t s_lastWmClickLogUs = 0;
-            int32_t wmMaxStep = 0;
-            int16_t wmPrev = s_lastWmL;
-            if (wmSyn.muted || wmSyn.gain <= 0.0f)
+            int16_t lastL = 0;
+            int64_t lastClickLogUs = 0;
+        };
+        auto writeRawI2sSink = [&](i2s_chan_handle_t handle, const SinkParams &syn, const float *L,
+                                   const float *R, int16_t *chunk, RawSinkState &state, const char *name,
+                                   int64_t &convertUs, int64_t &writeUs) {
+            const int64_t convertStartUs = esp_timer_get_time();
+            int32_t maxStep = 0;
+            int16_t prev = state.lastL;
+            if (syn.muted || syn.gain <= 0.0f)
             {
-                memset(wmChunk, 0, sizeof(wmChunk));
-                wmMaxStep = wmPrev < 0 ? -static_cast<int32_t>(wmPrev) : static_cast<int32_t>(wmPrev);
-                wmPrev = 0;
+                memset(chunk, 0, sizeof(int16_t) * synth::kBlockSize * 2);
+                maxStep = prev < 0 ? -static_cast<int32_t>(prev) : static_cast<int32_t>(prev);
+                prev = 0;
             }
             else
             {
                 for (size_t i = 0; i < synth::kBlockSize; ++i)
                 {
-                    const float gain = wmSyn.gain * fadeMulBlock[i];
-                    float l = wmL[i] * gain, r = wmR[i] * gain;
+                    const float gain = syn.gain * fadeMulBlock[i];
+                    float l = L[i] * gain, r = R[i] * gain;
                     if (l > 1.0f) l = 1.0f; else if (l < -1.0f) l = -1.0f;
                     if (r > 1.0f) r = 1.0f; else if (r < -1.0f) r = -1.0f;
-                    wmChunk[i * 2 + 0] = static_cast<int16_t>(l * 32767.0f);
-                    wmChunk[i * 2 + 1] = static_cast<int16_t>(r * 32767.0f);
-                    const int32_t step = static_cast<int32_t>(wmChunk[i * 2]) - static_cast<int32_t>(wmPrev);
+                    chunk[i * 2 + 0] = static_cast<int16_t>(l * 32767.0f);
+                    chunk[i * 2 + 1] = static_cast<int16_t>(r * 32767.0f);
+                    const int32_t step = static_cast<int32_t>(chunk[i * 2]) - static_cast<int32_t>(prev);
                     const int32_t absStep = step < 0 ? -step : step;
-                    if (absStep > wmMaxStep) wmMaxStep = absStep;
-                    wmPrev = wmChunk[i * 2];
+                    if (absStep > maxStep) maxStep = absStep;
+                    prev = chunk[i * 2];
                 }
             }
-            s_lastWmL = wmPrev;
-            const int64_t wmNowUs = esp_timer_get_time();
-            if (wmMaxStep > 20000 && wmNowUs - s_lastWmClickLogUs > 100000) {
-                s_lastWmClickLogUs = wmNowUs;
-                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity WM8960: maxStep=%ld", static_cast<long>(wmMaxStep));
+            state.lastL = prev;
+            const int64_t nowUs = esp_timer_get_time();
+            if (maxStep > 20000 && nowUs - state.lastClickLogUs > 100000) {
+                state.lastClickLogUs = nowUs;
+                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity %s: maxStep=%ld", name, static_cast<long>(maxStep));
             }
-            wmConvertUs = esp_timer_get_time() - wmConvertStartUs;
-            const int64_t wmWriteStartUs = esp_timer_get_time();
-            size_t wmBytesWritten = 0;
-            i2s_channel_write(secondaryI2sTxHandle_, wmChunk, sizeof(wmChunk), &wmBytesWritten, portMAX_DELAY);
-            wmWriteUs = esp_timer_get_time() - wmWriteStartUs;
-        }
+            convertUs = esp_timer_get_time() - convertStartUs;
+            const int64_t writeStartUs = esp_timer_get_time();
+            size_t bytesWritten = 0;
+            i2s_channel_write(handle, chunk, sizeof(int16_t) * synth::kBlockSize * 2, &bytesWritten, portMAX_DELAY);
+            writeUs = esp_timer_get_time() - writeStartUs;
+        };
+        static RawSinkState s_wmState;
+        static RawSinkState s_nsState;
+        int64_t wmConvertUs = 0;
+        int64_t wmWriteUs = 0;
+        int64_t nsConvertUs = 0;
+        int64_t nsWriteUs = 0;
+        if (secondaryI2sTxHandle_ != nullptr)
+            writeRawI2sSink(secondaryI2sTxHandle_, sink_[2], wmL, wmR, wmChunk, s_wmState, "WM8960",
+                            wmConvertUs, wmWriteUs);
+        if (ns4168I2sTxHandle_ != nullptr)
+            writeRawI2sSink(ns4168I2sTxHandle_, sink_[3], nsL, nsR, nsChunk, s_nsState, "NS4168",
+                            nsConvertUs, nsWriteUs);
 
         // CPU load excludes only the blocking DMA waits. Both codec conversion
         // paths and their signal-discontinuity scans are real Core-1 work and
         // therefore belong in the render budget and overload watchdog.
         const uint32_t processUs = static_cast<uint32_t>(
-            static_cast<int64_t>(preWriteProcessUs) + esConvertUs + wmConvertUs);
+            static_cast<int64_t>(preWriteProcessUs) + esConvertUs + wmConvertUs + nsConvertUs);
         uint32_t peak = renderPeakUs_.load(std::memory_order_relaxed);
         if (processUs > peak) renderPeakUs_.store(processUs, std::memory_order_relaxed);
         size_t timingBin = processUs / kTimingHistogramBinWidthUs;
@@ -1881,13 +1907,13 @@ inline void SynthEngine::taskLoop()
                 ESP_LOGW(kSynthEngineTag,
                          "Audio-Overrun: %lu us > %lu us Budget (preset=%lld us, midi=%lu Ev/%lld us, "
                          "liveParams=%lu/%lld us, render=%lld us, postRender=%lld us, esConvert=%lld us, "
-                         "wmConvert=%lld us)",
+                         "wmConvert=%lld us, nsConvert=%lld us)",
                          static_cast<unsigned long>(processUs), static_cast<unsigned long>(kSynthEngineBlockBudgetUs),
                          static_cast<long long>(presetReloadUs), static_cast<unsigned long>(midiEventCount),
                          static_cast<long long>(midiUs), static_cast<unsigned long>(liveParamCount),
                          static_cast<long long>(liveParamUs), static_cast<long long>(renderUs),
                          static_cast<long long>(postRenderUs), static_cast<long long>(esConvertUs),
-                         static_cast<long long>(wmConvertUs));
+                         static_cast<long long>(wmConvertUs), static_cast<long long>(nsConvertUs));
             }
         }
         const float instLoadPercent = 100.0f * static_cast<float>(processUs) / kSynthEngineBlockBudgetUs;
@@ -1921,7 +1947,7 @@ inline void SynthEngine::taskLoop()
         // waiting for the next buffer - points to a real system stall during
         // a write call (see comment above). "else if": no double log if the
         // processUs overrun above already fired.
-        const int64_t totalIterUs = static_cast<int64_t>(processUs) + esWriteUs + wmWriteUs;
+        const int64_t totalIterUs = static_cast<int64_t>(processUs) + esWriteUs + wmWriteUs + nsWriteUs;
         // Rate-limited to >=100ms between log lines: at the default 115200 baud, one of these
         // ~250-char lines takes ~20ms to transmit over UART/USB-CDC - blocking, since the
         // ESP_LOGW call itself doesn't return until the driver has queued/sent the bytes. Left
@@ -1939,11 +1965,11 @@ inline void SynthEngine::taskLoop()
             s_lastStallLogUs = timingNowUs;
             ESP_LOGW(kSynthEngineTag,
                      "Codec-Write-Stall: Iteration gesamt %lld us > %.0f us (2x Budget) trotz process=%lu us - "
-                     "esWrite=%lld us, wmWrite=%lld us (haengt vermutlich mit einem System-weiten Stall waehrend "
+                     "esWrite=%lld us, wmWrite=%lld us, nsWrite=%lld us (haengt vermutlich mit einem System-weiten Stall waehrend "
                      "des Wartens auf DMA zusammen, z.B. Flash-Cache-Sperre oder eine lange ISR anderswo)",
                      static_cast<long long>(totalIterUs), static_cast<double>(2.0f * kSynthEngineBlockBudgetUs),
                      static_cast<unsigned long>(processUs), static_cast<long long>(esWriteUs),
-                     static_cast<long long>(wmWriteUs));
+                     static_cast<long long>(wmWriteUs), static_cast<long long>(nsWriteUs));
         }
     }
 }

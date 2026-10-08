@@ -91,7 +91,12 @@ inline esp_err_t init() {
 #endif
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot_config.width = 4;
+    // Boards that only wire D0 (CrowPanel: D1-D3 are RGB/touch pins) run the slot in 1-bit mode.
+    const bool one_bit_bus = CurrentBoard::PIN_SDMMC_D1 == GPIO_NUM_NC;
+    if (one_bit_bus) {
+        host.flags &= ~SDMMC_HOST_FLAG_4BIT;
+    }
+    slot_config.width = one_bit_bus ? 1 : 4;
     slot_config.clk = CurrentBoard::PIN_SDMMC_CLK;
     slot_config.cmd = CurrentBoard::PIN_SDMMC_CMD;
     slot_config.d0 = CurrentBoard::PIN_SDMMC_D0;

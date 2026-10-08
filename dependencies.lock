@@ -55,7 +55,7 @@ dependencies:
       type: service
     version: 1.6.2
   espressif/esp_hosted:
-    component_hash: 29069693948fba65d3b45012778d49a36a751fc2d2d7760f82e39f685fc0dbcb
+    component_hash: d72bce4d4a9fd6d4b610f3437735f58c70cfe40abfc969b53396dbb2e1d4c49b
     dependencies:
     - name: idf
       require: private
@@ -76,7 +76,7 @@ dependencies:
     - esp32h4
     - esp32h21
     - esp32p4
-    version: 3.0.7
+    version: 3.0.9
   espressif/esp_lcd_ili9341:
     component_hash: 840387ee0c90a473e43fdc75570f77c52f06423aa331d95479bde8b418c43547
     dependencies:
