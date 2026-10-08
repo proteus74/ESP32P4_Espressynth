@@ -504,7 +504,7 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 //    GDMA descriptor chain on every call, which only adds risk to an already fragile scan-out.
 //  - The PSRAM traffic of a redraw can still knock the scan-out out of sync (this chip revision
 //    has no LCD underrun detection), so every finished frame requests a restart in the next
-//    vertical blank. Together with the 16 MHz pixel clock this keeps the picture steady.
+//    vertical blank. The reduced pixel clock lowers PSRAM scan-out demand.
 constexpr int RGB_DRAW_BUFFER_LINES = 16;
 static uint8_t* s_rgb_frame_buffer = nullptr;
 

@@ -15,9 +15,8 @@ constexpr int DISPLAY_WIDTH         = CONFIG_APP_DISPLAY_WIDTH;
 constexpr int DISPLAY_HEIGHT        = CONFIG_APP_DISPLAY_HEIGHT;
 constexpr int DISPLAY_NATIVE_WIDTH  = CONFIG_APP_DISPLAY_WIDTH;
 constexpr int DISPLAY_NATIVE_HEIGHT = CONFIG_APP_DISPLAY_HEIGHT;
-constexpr int DISPLAY_REFRESH_HZ    = 37;
-constexpr int DISPLAY_PIXEL_CLOCK_HZ = 16 * 1000 * 1000; // Elecrow uses 18 MHz; 16 MHz leaves the
-                                                         // PSRAM-fed scan-out enough slack during redraws
+constexpr int DISPLAY_REFRESH_HZ    = 28;
+constexpr int DISPLAY_PIXEL_CLOCK_HZ = 12 * 1000 * 1000; // Reduce PSRAM scan-out demand under synth/UI load.
 constexpr int DISPLAY_HSYNC_PULSE_WIDTH = 4;
 constexpr int DISPLAY_HSYNC_BACK_PORCH  = 8;
 constexpr int DISPLAY_HSYNC_FRONT_PORCH = 8;
