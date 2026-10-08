@@ -658,9 +658,6 @@ menu "Espressynth"
 
         config APP_ENABLE_SSD1306
             bool "Enable I2C SSD1306 Output"
-            select LV_USE_DRAW_SW
-            select LV_DRAW_SW_SUPPORT_I1
-            select LV_FONT_MONTSERRAT_12
             default n
             depends on APP_ENABLE_I2C && (APP_ENABLE_I2C0 || APP_ENABLE_I2C1)
 

@@ -74,6 +74,7 @@ bool eez_list_tabs(EezTabList *list);
 bool eez_list_page_controls(const char *page_id, EezPageControls *out);
 bool eez_send_control_param(const char *widget_id, bool is_button, uint8_t control_index, const char *key, float value);
 bool eez_read_knob_activity(KnobActivity *activity);
+bool oled_read_knob_activity(KnobActivity *activity);
 void eez_network_ip(char *out, size_t out_size);
 bool eez_list_presets(EezPresetList *list);
 bool eez_synth_load_preset(const char *name);

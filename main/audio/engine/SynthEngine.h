@@ -310,9 +310,10 @@ public:
 
     uint32_t takeControlDebugDropped() { return controlDebugDropped_.exchange(0, std::memory_order_relaxed); }
 
-    bool readKnobActivity(KnobActivity &out) const
+    // sink: 0 = LVGL display, 1 = SSD1306 OLED; each display drains its own queue.
+    bool readKnobActivity(KnobActivity &out, int sink = 0) const
     {
-        return knobActivityQueue_ != nullptr && xQueueReceive(knobActivityQueue_, &out, 0) == pdTRUE;
+        return knobActivityQueues_[sink] != nullptr && xQueueReceive(knobActivityQueues_[sink], &out, 0) == pdTRUE;
     }
 
     // Set whenever a build (see buildFromFile) had to use fewer voices than
@@ -381,7 +382,7 @@ public:
 
     bool publishEnvelopeActivity(const char *widgetId, const char *parameter)
     {
-        if (liveGraph_ == nullptr || knobActivityQueue_ == nullptr) return false;
+        if (liveGraph_ == nullptr || !hasKnobActivitySink()) return false;
         for (uint16_t w = 0; w < liveGraph_->widgetCount; ++w)
         {
             const auto &widget = liveGraph_->widgets[w];
@@ -393,12 +394,7 @@ public:
             snprintf(activity.sourceId, sizeof(activity.sourceId), "%s", widget.id);
             snprintf(activity.name, sizeof(activity.name), "%s", widget.label[0] ? widget.label : widget.id);
             fillEnvelopeActivity(activity, liveGraph_->instances[widget.instanceBase]);
-            if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
-            {
-                KnobActivity discarded{};
-                xQueueReceive(knobActivityQueue_, &discarded, 0);
-                xQueueSend(knobActivityQueue_, &activity, 0);
-            }
+            pushKnobActivity(activity);
             return true;
         }
         return false;
@@ -693,7 +689,7 @@ private:
             if (midiCcDebugQueue_ != nullptr)
                 xQueueSend(midiCcDebugQueue_, &snapshot, 0);
         }
-        if (!(snapshot.isKnob || snapshot.isButton) || knobActivityQueue_ == nullptr) return;
+        if (!(snapshot.isKnob || snapshot.isButton) || !hasKnobActivitySink()) return;
         KnobActivity activity{};
         activity.updatedUs = esp_timer_get_time();
         activity.presetSequence = presetChangeSequence();
@@ -717,12 +713,21 @@ private:
                 activity.targetValueRaw = target.raw;
                 publishEnvelopeActivity(target.targetId, target.paramName);
             }
-            if (xQueueSend(knobActivityQueue_, &activity, 0) != pdTRUE)
-            {
-                KnobActivity discarded{};
-                xQueueReceive(knobActivityQueue_, &discarded, 0);
-                xQueueSend(knobActivityQueue_, &activity, 0);
-            }
+            pushKnobActivity(activity);
+        }
+    }
+
+    bool hasKnobActivitySink() const { return knobActivityQueues_[0] != nullptr || knobActivityQueues_[1] != nullptr; }
+
+    // Drop the oldest entry when a display falls behind; the latest state matters most.
+    void pushKnobActivity(const KnobActivity &activity)
+    {
+        for (QueueHandle_t queue : knobActivityQueues_)
+        {
+            if (queue == nullptr || xQueueSend(queue, &activity, 0) == pdTRUE) continue;
+            KnobActivity discarded{};
+            xQueueReceive(queue, &discarded, 0);
+            xQueueSend(queue, &activity, 0);
         }
     }
 
@@ -906,7 +911,7 @@ private:
     std::atomic<float> midiControlValue_{0.0f};
     std::atomic<uint32_t> midiControlSequence_{0};
     QueueHandle_t midiCcDebugQueue_ = nullptr;
-    QueueHandle_t knobActivityQueue_ = nullptr;
+    QueueHandle_t knobActivityQueues_[2] = {};
     MidiCcDebugSnapshot midiCcDebugScratch_{};
     std::atomic<uint32_t> controlDebugDropped_{0};
     std::atomic<uint32_t> voicesCapEventId_{0};
@@ -1158,8 +1163,12 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
     midiCcDebugQueue_ = xQueueCreateWithCaps(16, sizeof(MidiCcDebugSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #if defined(CONFIG_APP_ENABLE_LVGL)
-    knobActivityQueue_ = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (knobActivityQueue_ == nullptr) ESP_LOGE(kSynthEngineTag, "Knob display queue allocation failed");
+    knobActivityQueues_[0] = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (knobActivityQueues_[0] == nullptr) ESP_LOGE(kSynthEngineTag, "Knob display queue allocation failed");
+#endif
+#if defined(CONFIG_APP_ENABLE_SSD1306)
+    knobActivityQueues_[1] = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (knobActivityQueues_[1] == nullptr) ESP_LOGE(kSynthEngineTag, "OLED knob queue allocation failed");
 #endif
     if (midiCcDebugQueue_ == nullptr) ESP_LOGE(kSynthEngineTag, "Control console log queue allocation failed");
     liveWavetableQueue_ = xQueueCreate(4, sizeof(LiveWavetableMsg));

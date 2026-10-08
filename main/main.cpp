@@ -249,6 +249,14 @@ extern "C" bool eez_read_knob_activity(KnobActivity *activity) {
 #endif
 }
 
+extern "C" bool oled_read_knob_activity(KnobActivity *activity) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    return activity != nullptr && Feature::Synth::engine().readKnobActivity(*activity, 1);
+#else
+    return false;
+#endif
+}
+
 extern "C" bool eez_synth_status(EezSynthStatus *status) {
     if (status == nullptr) return false;
     *status = {};

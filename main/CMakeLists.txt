@@ -1,5 +1,6 @@
 ﻿set(COMPONENT_SRCS
     "main.cpp"
+    "wifi_remote_compat.c"
     "boards/board_init.cpp"
     "features/display/jd9365_init.c"
     "features/display/jd9165_panel_init.c"

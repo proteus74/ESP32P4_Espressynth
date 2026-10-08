@@ -295,7 +295,15 @@ Messabweichung: Generation 1 bis 31 enthält einen zusätzlichen Reload außerha
 - [x] 30-Minuten-Lauf abschließen, Abweichungen und Endwerte eintragen; BLE-Reconnect prüfen.
 - [ ] Drei BLE-Geräte, HID und MIDI parallel, neue Paarung/Bond-Key-Persistenz und echte BLE-MIDI-Bursts unter WLAN-Upload testen. Hardware fehlt; drei Verbindungen bleiben konfiguriert.
 - [ ] WLAN-SSID konfigurieren, reale WiFi-Datenlast und wiederholte STA/AP-Fallback-/Reconnect-Zyklen prüfen. Keine Zugangsdaten vorhanden; Ethernet ist kein Ersatz für diesen Test.
-- [ ] WiFi-only-Linkerproblem für separates Funkprofil lösen; Matrix B bleibt offen.
+- [ ] WiFi-only-Laufzeitmessung ergänzen; Linkerproblem im Nachtrag unten behoben.
 - [ ] Andere große DSP-Presets, USB-Audio-Mixing, volle CV-/Dateiexplorer-Last und längeren Dauertest zusätzlich abnehmen.
 
 **Abschließender Geräteabgleich:** Finale Kompilierung erfolgreich; SHA-256 des Build-Binaries stimmt mit hochgeladener Firmware überein. Webdiagnose: 113.043 Bytes intern frei (110,4 KiB), größter Block 45.056 Bytes (44 KiB), DMA-fähig intern frei 67.247 Bytes; FatSuperSaw aktiv, BLE bereit und ein gespeichertes Auto-Gerät verbunden, MIDI-Drops 0. Momentwert schwankt mit Netzwerkaktivität; vergleichbarer Gewinn bleibt 57,3 KiB. Einzelne Funk-/Hardware-Abnahmen bleiben oben ausdrücklich offen.
+
+### Nachtrag: WiFi-only-Buildfehler
+
+Nach dem Audit war lokal `CONFIG_APP_ENABLE_WIFI=y`, `CONFIG_APP_ENABLE_BLUETOOTH=n` und SDK-Bluetooth weiterhin eingeschaltet. Dieses Profil reproduzierte den oben dokumentierten Linkerfehler. Ursache: IDF 6.1 definiert auf P4 ohne native WiFi-Hardware `g_wifi_osi_funcs` als schwaches Objekt eines leeren Structs, also mit Größe null. Binutils verwirft dessen Section beim Linken mit `--enable-non-contiguous-regions`; verbliebene Referenzen verursachen anschließend RISC-V-Relocation-Fehler. Kein nachgewiesener RAM-Überlauf.
+
+`main/wifi_remote_compat.c` ersetzt ausschließlich bei Remote-WiFi ohne native WiFi-Hardware den unbenutzten Platzhalter durch ein starkes Ein-Byte-Objekt. Hosted überträgt die Konfigurationswerte per RPC, keine OSI-Funktionstabelle. Native WiFi-Konfigurationen behalten ihre echte Tabelle. Die globale RAM-Aufteilung und SDK-Dateien bleiben unverändert. Die Datei wird über `main/CMakeLists.txt` registriert. WiFi-only-Build und Gegenprüfung mit WiFi + BLE erfolgreich. Anschließend ursprüngliche WiFi-only-Konfiguration wiederhergestellt und erneut gebaut; Laufzeitmessung der Matrix B weiterhin offen.
+
+Der vorhandene Buildcache verwendet `C:/Espressif/tools/python/v6.1/venv/Scripts/python.exe`. Eine Shell mit anderer IDF-Python-Umgebung meldet separat einen Cache-Konflikt. Zur Prüfung wurde dieselbe Python-Umgebung wie im vorhandenen Cache verwendet.
