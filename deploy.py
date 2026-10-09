@@ -5,7 +5,7 @@ Creates EspressiveSynths-Merge.bin containing:
   - factory app firmware
   - coprocessor firmware (slave_fw partition)
   - www partition (web server static files)
-  - littlefs partition (seed data)
+  - littlefs partition (seed data) Hallo
 """
 
 import os
