@@ -25,6 +25,7 @@
 #include "nodes/SampleHoldNode.h"
 #include "nodes/MonoflopNode.h"
 #include "nodes/ConstNode.h"
+#include "nodes/MidiProgramNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/DxEnvelopeNode.h"
@@ -266,6 +267,8 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::Const:
         return nodes::constant::setParam(inst, name, value);
+    case NodeType::MidiProgram:
+        return nodes::midiprogram::setParam(inst, name, value);
 
     case NodeType::Button:
         return nodes::button::setParamButton(inst, name, value);

@@ -35,6 +35,7 @@ writeFileSync(path.join(directory, "test.cpp"), `
 #include <cmath>
 #include <limits>
 #include <initializer_list>
+#include <atomic>
 #include "${nativeRoot}/NodeTypes.h"
 #include "${nativeRoot}/DeviceSettings.h"
 namespace cv {constexpr float kMaxVolts=10;}
@@ -46,6 +47,7 @@ struct NodeInstance {
  Controls *knob=nullptr,*button=nullptr;
  struct UpDown {float currentOutput(){return 0;}} *upDownButton=nullptr;
  struct {float value=0;} constant;
+ struct {float value=0;} midiProgram;
  float gain=0;
 };
 inline bool setFloatFieldByName(NodeInstance &inst,NodeType,const char *name,float value){if(strcmp(name,"gain")==0)inst.gain=value;return true;}
@@ -56,10 +58,11 @@ ${declaration(graph,"inline void pushControlRouteValue(")}
 ${declaration(graph,"inline void updateMasterVolumeControlRoutes(")}
 void connect(Graph *g){int fromIdx=0,toIdx=1,toPort=0;auto fromType=NodeType::MasterVolume;
  struct {const char *fromPort,*toPort;} cd{"value","gain"};
- for(int once=0;once<1;++once){${declaration(builder,"if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume)")}}
+ for(int once=0;once<1;++once){${declaration(builder,"if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume ||")}}
 }
 void seed(Graph *g){${declaration(builder,"    for (uint16_t r = 0; r < g->controlRouteCount; ++r)",seedStart)}}
 int64_t esp_timer_get_time(){return 1000000;}
+std::atomic<int64_t> s_masterVolumeDirtyUs{0};
 void *s_presetNavQueue=nullptr;
 void xQueueOverwrite(void *,const int *){}
 ${declaration(midi,"inline void handleDeviceSettingsMidi(")}

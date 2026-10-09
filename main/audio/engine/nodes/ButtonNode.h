@@ -111,8 +111,10 @@ struct UpDownButtonState
 {
     int16_t ccUp = -1;
     int8_t channelUp = -1;
+    uint8_t midiTypeUp = kButtonMidiCc;
     int16_t ccDown = -1;
     int8_t channelDown = -1;
+    uint8_t midiTypeDown = kButtonMidiCc;
     float minVal = 0.0f;
     float maxVal = 10.0f;
     float step = 1.0f;
@@ -185,8 +187,10 @@ inline void buildUpDownButton(NodeInstance &inst, const WidgetParams &p)
 {
     inst.upDownButton->ccUp = p.upDownCcUp;
     inst.upDownButton->channelUp = p.upDownChannelUp;
+    inst.upDownButton->midiTypeUp = p.upDownMidiTypeUp;
     inst.upDownButton->ccDown = p.upDownCcDown;
     inst.upDownButton->channelDown = p.upDownChannelDown;
+    inst.upDownButton->midiTypeDown = p.upDownMidiTypeDown;
     inst.upDownButton->minVal = p.upDownMin;
     inst.upDownButton->maxVal = p.upDownMax;
     inst.upDownButton->step = p.upDownStep;
@@ -361,6 +365,8 @@ inline void parsePresetButton(cJSON *p, WidgetParams &out)
 
 inline void parsePresetUpDownButton(cJSON *p, WidgetParams &out)
 {
+    out.upDownMidiTypeUp = strcmp(presetparser::getString(p, "midiTypeUp", "cc"), "program") == 0 ? kButtonMidiProgram : kButtonMidiCc;
+    out.upDownMidiTypeDown = strcmp(presetparser::getString(p, "midiTypeDown", "cc"), "program") == 0 ? kButtonMidiProgram : kButtonMidiCc;
     cJSON *ccUp = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "ccUp") : nullptr;
     out.upDownCcUp = cJSON_IsNumber(ccUp) ? static_cast<int16_t>(ccUp->valueint) : -1;
     cJSON *chUp = p != nullptr ? cJSON_GetObjectItemCaseSensitive(p, "channelUp") : nullptr;

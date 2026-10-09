@@ -1,7 +1,7 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261008-mic-battery-1";
+import { AudioEngine } from "./audio-engine.js?v=20261009-program-change-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -1349,6 +1349,12 @@ const WIDGET_TYPES = {
       { id: "gate", label: "Gate" },
     ],
   },
+  "midi-program": {
+    label: "Program Change",
+    icon: "🎹",
+    inputs: [],
+    outputs: [{ id: "value", label: "Program (0–127)" }],
+  },
   "midi-filter": {
     label: "MIDI-Filter",
     icon: "🎹",
@@ -2194,7 +2200,7 @@ const WIDGET_TYPES = {
 
 
 const WIDGET_CATEGORIES = [
-  { label: "Midi", types: ["midi-in", "midi-split", "midi-filter"] },
+  { label: "Midi", types: ["midi-in", "midi-split", "midi-filter", "midi-program"] },
   { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["lfo", "wavetable", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const", "master-volume"] },
@@ -2623,7 +2629,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in"];
+const DUAL_PAGE_TYPES = ["midi-program", "midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in"];
 
 
 
@@ -3622,6 +3628,30 @@ function createWidget(type, label, x, y, forcedId) {
     voiceSlotsLabel.className = "midi-in-voice-slots hidden";
     voiceSlotsLabel.dataset.role = "midi-in-voice-slots";
     body.appendChild(voiceSlotsLabel);
+    el.appendChild(body);
+  }
+
+  if (type === "midi-program") {
+    midiProgramStates.set(id, { channel: 0, value: 0 });
+    audioEngine.createNode(id, type, { value: 0 });
+    const body = document.createElement("div");
+    body.className = "widget-instance-body midi-filter-body";
+    const label = document.createElement("label");
+    label.textContent = "Kanal";
+    const select = document.createElement("select");
+    select.dataset.role = "midi-program-channel";
+    for (let channel = 0; channel < 16; channel += 1) select.add(new Option(String(channel + 1), String(channel)));
+    select.addEventListener("change", () => {
+      pushHistorySnapshot();
+      midiProgramStates.get(id).channel = Number(select.value);
+      sendLiveParamUpdate(id, { channel: Number(select.value) });
+      markDirty();
+    });
+    label.appendChild(select);
+    const readout = document.createElement("output");
+    readout.dataset.role = "midi-program-value";
+    readout.textContent = "0";
+    body.append(label, readout);
     el.appendChild(body);
   }
 
@@ -5109,8 +5139,10 @@ function createWidget(type, label, x, y, forcedId) {
     upDownButtonStates.set(id, {
       ccUp: null,
       channelUp: null,
+      midiTypeUp: "cc",
       ccDown: null,
       channelDown: null,
+      midiTypeDown: "cc",
       min: 0,
       max: CV_MAX_VOLTS,
       step: 1,
@@ -6756,6 +6788,7 @@ function removeWidget(id, force = false) {
   midiVoiceSlotStates.delete(id);
   midiSplitStates.delete(id);
   midiFilterStates.delete(id);
+  midiProgramStates.delete(id);
   multiplierStates.delete(id);
   adderStates.delete(id);
   divideStates.delete(id);
@@ -8618,13 +8651,11 @@ function routeMidiToButtons(data) {
     bindings.controls.slice(0, state.count).forEach((binding, buttonIndex) => {
       if ((binding.midiType || "cc") !== input.midiType || binding.cc === null || binding.channel !== data.channel) return;
       const matched = binding.cc === input.number;
-      if (!matched && input.midiType !== "program") return;
+      if (!matched) return;
       const control = buttonLayer(state).controls[buttonIndex];
-      // Program Change: the matching program presses, any other one releases.
-      const above = input.midiType === "program" ? matched : input.above;
-      if (!matched && !control.wasAbove) return;
+      const above = input.above;
       const list = parseValueList(control.listText);
-      if (binding.switchMode) {
+      if (binding.switchMode || input.midiType === "program") {
         if (above) {
           if (list && list.length >= 2) control.listIndex = (control.listIndex + 1) % list.length;
           else control.wasAbove = !control.wasAbove;
@@ -8648,7 +8679,10 @@ function buttonMidiInput(data) {
   if (data.midiType === "note_on" || data.midiType === "note_off") {
     return { midiType: "note", number: data.note, above: data.midiType === "note_on" && data.velocity > 0 };
   }
-  if (data.midiType === "program_change") return { midiType: "program", number: data.program, above: true };
+  if (data.midiType === "program_change" && Number.isInteger(data.program) && data.program >= 0 && data.program <= 127 &&
+      Number.isInteger(data.channel) && data.channel >= 0 && data.channel < 16) {
+    return { midiType: "program", number: data.program, above: true };
+  }
   return null;
 }
 
@@ -9122,28 +9156,30 @@ function updateUpDownButtonVisual(widgetId) {
   const ccLabel = el.querySelector('[data-role="up-down-button-cc-label"]');
   if (ccLabel) {
     const upTxt =
-      state.ccUp === null ? "–" : `${state.ccUp}${state.channelUp === null ? "" : ` (Ch ${state.channelUp + 1})`}`;
+      state.ccUp === null ? "–" : `${state.midiTypeUp === "program" ? "PC " : ""}${state.ccUp}${state.channelUp === null ? "" : ` (Ch ${state.channelUp + 1})`}`;
     const downTxt =
       state.ccDown === null
         ? "–"
-        : `${state.ccDown}${state.channelDown === null ? "" : ` (Ch ${state.channelDown + 1})`}`;
+        : `${state.midiTypeDown === "program" ? "PC " : ""}${state.ccDown}${state.channelDown === null ? "" : ` (Ch ${state.channelDown + 1})`}`;
     ccLabel.textContent = `▲ ${upTxt}  ▼ ${downTxt}`;
   }
 
 }
 
 function routeMidiToUpDownButtons(data) {
-  if (data.type !== "midi" || data.midiType !== "control_change") return;
+  const input = buttonMidiInput(data);
+  if (!input || !["cc", "program"].includes(input.midiType)) return;
 
   if (upDownMidiLearnTargetIdUp) {
     const state = upDownButtonStates.get(upDownMidiLearnTargetIdUp);
     if (state) {
-      state.ccUp = data.control;
+      state.ccUp = input.number;
       state.channelUp = data.channel;
-      upDownButtonCcUpDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
+      state.midiTypeUp = input.midiType;
+      upDownButtonCcUpDisplay.value = `${input.midiType === "program" ? "PC " : ""}${input.number} (Ch ${data.channel + 1})`;
       upDownButtonLearnUpBtn.textContent = "Learn";
       updateUpDownButtonVisual(upDownMidiLearnTargetIdUp);
-      sendLiveParamUpdate(upDownMidiLearnTargetIdUp, { ccUp: data.control, channelUp: data.channel });
+      sendLiveParamUpdate(upDownMidiLearnTargetIdUp, { ccUp: input.number, channelUp: data.channel, midiTypeUp: input.midiType });
       savePresetNow(); 
     }
     upDownMidiLearnTargetIdUp = null;
@@ -9152,12 +9188,13 @@ function routeMidiToUpDownButtons(data) {
   if (upDownMidiLearnTargetIdDown) {
     const state = upDownButtonStates.get(upDownMidiLearnTargetIdDown);
     if (state) {
-      state.ccDown = data.control;
+      state.ccDown = input.number;
       state.channelDown = data.channel;
-      upDownButtonCcDownDisplay.value = `${data.control} (Ch ${data.channel + 1})`;
+      state.midiTypeDown = input.midiType;
+      upDownButtonCcDownDisplay.value = `${input.midiType === "program" ? "PC " : ""}${input.number} (Ch ${data.channel + 1})`;
       upDownButtonLearnDownBtn.textContent = "Learn";
       updateUpDownButtonVisual(upDownMidiLearnTargetIdDown);
-      sendLiveParamUpdate(upDownMidiLearnTargetIdDown, { ccDown: data.control, channelDown: data.channel });
+      sendLiveParamUpdate(upDownMidiLearnTargetIdDown, { ccDown: input.number, channelDown: data.channel, midiTypeDown: input.midiType });
       savePresetNow(); 
     }
     upDownMidiLearnTargetIdDown = null;
@@ -9168,10 +9205,10 @@ function routeMidiToUpDownButtons(data) {
   
   
   
-  // Following an incoming CC only updates the display - the device already applied it.
+  // Following incoming MIDI only updates the display - the device already applied it.
   withDeviceSyncMuted(() => upDownButtonStates.forEach((state, widgetId) => {
-    const matchedUp = state.ccUp !== null && state.ccUp === data.control && state.channelUp === data.channel;
-    const matchedDown = state.ccDown !== null && state.ccDown === data.control && state.channelDown === data.channel;
+    const matchedUp = (state.midiTypeUp || "cc") === input.midiType && state.ccUp !== null && state.ccUp === input.number && state.channelUp === data.channel;
+    const matchedDown = (state.midiTypeDown || "cc") === input.midiType && state.ccDown !== null && state.ccDown === input.number && state.channelDown === data.channel;
     if (!matchedUp && !matchedDown) return;
 
     const list = parseVoltageValueList(state.listText);
@@ -9211,9 +9248,9 @@ function openUpDownButtonSettings(widgetId) {
   if (!state) return;
   pendingUpDownButtonId = widgetId;
   upDownButtonCcUpDisplay.value =
-    state.ccUp === null ? "" : `${state.ccUp}${state.channelUp === null ? "" : ` (Ch ${state.channelUp + 1})`}`;
+    state.ccUp === null ? "" : `${state.midiTypeUp === "program" ? "PC " : ""}${state.ccUp}${state.channelUp === null ? "" : ` (Ch ${state.channelUp + 1})`}`;
   upDownButtonCcDownDisplay.value =
-    state.ccDown === null ? "" : `${state.ccDown}${state.channelDown === null ? "" : ` (Ch ${state.channelDown + 1})`}`;
+    state.ccDown === null ? "" : `${state.midiTypeDown === "program" ? "PC " : ""}${state.ccDown}${state.channelDown === null ? "" : ` (Ch ${state.channelDown + 1})`}`;
   upDownButtonMinInput.value = state.min;
   upDownButtonMaxInput.value = state.max;
   upDownButtonStepInput.value = state.step;
@@ -9242,7 +9279,7 @@ upDownButtonLearnUpBtn.addEventListener("click", () => {
   if (!pendingUpDownButtonId) return;
   upDownMidiLearnTargetIdUp = pendingUpDownButtonId;
   upDownMidiLearnTargetIdDown = null;
-  upDownButtonLearnUpBtn.textContent = "Waiting for CC…";
+  upDownButtonLearnUpBtn.textContent = "Waiting for CC / Program Change…";
   upDownButtonLearnDownBtn.textContent = "Learn";
 });
 
@@ -9250,7 +9287,7 @@ upDownButtonLearnDownBtn.addEventListener("click", () => {
   if (!pendingUpDownButtonId) return;
   upDownMidiLearnTargetIdDown = pendingUpDownButtonId;
   upDownMidiLearnTargetIdUp = null;
-  upDownButtonLearnDownBtn.textContent = "Waiting for CC…";
+  upDownButtonLearnDownBtn.textContent = "Waiting for CC / Program Change…";
   upDownButtonLearnUpBtn.textContent = "Learn";
 });
 
@@ -9702,6 +9739,17 @@ document.getElementById("linkedOutputSettingsSave").addEventListener("click", ()
 
 const midiInStates = new Map();
 const midiFilterStates = new Map();
+const midiProgramStates = new Map();
+
+function updateMidiProgramValue(id, value) {
+  const state = midiProgramStates.get(id);
+  if (!state) return;
+  state.value = clamp(Math.round(Number(value) || 0), 0, 127);
+  const readout = document.getElementById(id)?.querySelector('[data-role="midi-program-value"]');
+  if (readout) readout.textContent = String(state.value);
+  audioEngine.setParam(id, "value", state.value, 0);
+  propagate(id, "value", state.value);
+}
 
 
 
@@ -11088,6 +11136,7 @@ function refreshControlGraph() {
   const sources = [];
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
+  midiProgramStates.forEach((state, id) => push(id, "value", state.value));
   document.querySelectorAll('[data-widget-type="master-volume"]').forEach(el => push(el.id, "value", masterVolume * CV_MAX_VOLTS));
   knobStates.forEach((state, id) => {
     const layerIndex = state.activeLayer;
@@ -21880,6 +21929,11 @@ function routeRawMidi(sourceId, portId, data, path = new Set(), delivered = new 
 
 function routeMidiToWidgets(data) {
   if (data.type !== "midi") return;
+  if (data.midiType === "program_change" && Number.isInteger(data.program) && data.program >= 0 && data.program <= 127) {
+    withDeviceSyncMuted(() => midiProgramStates.forEach((state, id) => {
+      if (data.channel === state.channel) updateMidiProgramValue(id, data.program);
+    }));
+  }
   if (data.midiType === "note_on" && data.velocity === 0) data = { ...data, midiType: "note_off" };
   const delivered = new Set();
   midiInStates.forEach((state, id) => {
@@ -21929,6 +21983,18 @@ function applyFilterWidgetParams(id, params, curtis = false) {
 const graphicEqCvEngine = makeEffectCvEngine("graphic-eq");
 
 const WIDGET_ENGINES = {
+  "midi-program": {
+    getParams: (id) => ({ ...midiProgramStates.get(id) }),
+    applyParams: (id, params) => {
+      const state = midiProgramStates.get(id);
+      if (!state || !params) return;
+      const channel = Number(params.channel);
+      state.channel = Number.isInteger(channel) && channel >= 0 && channel < 16 ? channel : 0;
+      const select = document.getElementById(id)?.querySelector('[data-role="midi-program-channel"]');
+      if (select) select.value = String(state.channel);
+      updateMidiProgramValue(id, params.value);
+    },
+  },
   annotation: {
     getParams: (id) => getAnnotationParams(id),
     applyParams: (id, params) => applyAnnotationParams(id, params),
@@ -22209,6 +22275,8 @@ const WIDGET_ENGINES = {
       const state = upDownButtonStates.get(id);
       if (state && params) {
         Object.assign(state, params);
+        state.midiTypeUp = params.midiTypeUp === "program" ? "program" : "cc";
+        state.midiTypeDown = params.midiTypeDown === "program" ? "program" : "cc";
         state.min = clampVoltage(state.min);
         state.max = clampVoltage(state.max, CV_MAX_VOLTS);
         if (state.max < state.min) [state.min, state.max] = [state.max, state.min];

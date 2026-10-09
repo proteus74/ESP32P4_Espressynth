@@ -614,6 +614,12 @@ struct ConstState
     float value = 0.0f;
 };
 
+struct MidiProgramState
+{
+    int8_t channel = 0;
+    float value = 0.0f;
+};
+
 // KnobState is defined (state + render/build/destroy/setParam logic
 // together) in nodes/KnobNode.h.
 

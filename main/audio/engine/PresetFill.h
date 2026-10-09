@@ -35,6 +35,7 @@
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/CombFilterNode.h"
 #include "nodes/ConstNode.h"
+#include "nodes/MidiProgramNode.h"
 #include "nodes/DelayNode.h"
 #include "nodes/DetuneNode.h"
 #include "nodes/DxEnvelopeNode.h"
@@ -228,6 +229,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::Const:
         nodes::constant::parsePreset(p, out);
+        break;
+    case NodeType::MidiProgram:
+        nodes::midiprogram::parsePreset(p, out);
         break;
     case NodeType::Knob:
         nodes::knob::parsePreset(p, out);

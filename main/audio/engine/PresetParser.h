@@ -292,8 +292,10 @@ struct WidgetParams
     // up-down-button - shares valueList/valueListCount above
     int16_t upDownCcUp = -1;
     int8_t upDownChannelUp = -1;
+    uint8_t upDownMidiTypeUp = 0;
     int16_t upDownCcDown = -1;
     int8_t upDownChannelDown = -1;
+    uint8_t upDownMidiTypeDown = 0;
     float upDownMin = 0.0f;
     float upDownMax = 10.0f;
     float upDownStep = 1.0f;

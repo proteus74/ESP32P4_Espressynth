@@ -154,6 +154,7 @@ struct ControlRoute
         Button,
         UpDownButton,
         MasterVolume,
+        MidiProgram,
     };
 
     uint16_t sourceWidget = 0; // midi-in, const, knob, or button widget index
@@ -663,6 +664,7 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
         case ControlRoute::Kind::Button:
         case ControlRoute::Kind::UpDownButton:
         case ControlRoute::Kind::MasterVolume:
+        case ControlRoute::Kind::MidiProgram:
         case ControlRoute::Kind::Const:
             break; // handled in the CC branch above, never reached here
         }
@@ -1283,8 +1285,8 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
     // Button MIDI learn: CC, Note On/Off or Program Change (ButtonControl::midiType;
     // its `cc` field holds the CC/note/program number). CC >= 64 and Note On
     // (velocity > 0) press, CC < 64 and Note Off release. Program Change has no
-    // release: the matching program presses, any other program on the same
-    // channel releases - so a PC-bound button follows the selected program.
+    // release: each matching program toggles the button or advances its list.
+    // Other programs do not affect the binding.
     uint8_t buttonMidiType = 0xFF;
     switch (event.codeIndex)
     {
@@ -1294,7 +1296,7 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
     case 0xC: buttonMidiType = nodes::button::kButtonMidiProgram; break;
     default: break;
     }
-    if (buttonMidiType != 0xFF)
+    if (buttonMidiType != 0xFF && event.data1 <= 127)
     {
         const uint8_t channel0 = event.status & 0x0F;
         const uint8_t number = event.data1;
@@ -1309,15 +1311,14 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     binding.channel < 0 || static_cast<uint8_t>(binding.channel) != channel0)
                     continue;
                 const bool matched = static_cast<uint8_t>(binding.cc) == number;
-                if (!matched && buttonMidiType != nodes::button::kButtonMidiProgram) continue;
+                if (!matched) continue;
                 const uint8_t controlIndex = ButtonState::controlIndex(buttonIndex, b.activeLayer);
                 ButtonControl &control = b.controls[controlIndex];
                 bool above = matched;
                 if (buttonMidiType == nodes::button::kButtonMidiCc) above = event.data2 >= 64;
                 else if (buttonMidiType == nodes::button::kButtonMidiNote) above = event.codeIndex == 0x9 && event.data2 > 0;
-                else if (!matched && !control.wasAbove) continue; // other program, nothing to release
 
-                if (binding.switchMode)
+                if (binding.switchMode || buttonMidiType == nodes::button::kButtonMidiProgram)
                 {
                     if (above)
                     {
@@ -1343,6 +1344,66 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                 recordControlDebug(w, controlIndex, false, channel0, number,
                                    buttonMidiType == nodes::button::kButtonMidiProgram ? (above ? 127 : 0) : event.data2);
             }
+        }
+    }
+
+    if (event.codeIndex == 0xC && event.data1 <= 127)
+    {
+        for (uint16_t w = 0; w < widgetCount; ++w)
+        {
+            if (widgets[w].type != NodeType::MidiProgram) continue;
+            auto &program = instances[widgets[w].instanceBase].midiProgram;
+            if (program.channel != (event.status & 0x0F)) continue;
+            program.value = event.data1;
+            pushControlRouteValue(*this, w, ControlRoute::Kind::MidiProgram, program.value);
+        }
+    }
+
+    // Relative CC and Program Change each count as one up/down tick.
+    if ((event.codeIndex == 0xB || event.codeIndex == 0xC) && event.data1 <= 127)
+    {
+        for (uint16_t w = 0; w < widgetCount; ++w)
+        {
+            if (widgets[w].type != NodeType::UpDownButton) continue;
+            NodeInstance &udInst = instances[widgets[w].instanceBase];
+            UpDownButtonState &ud = *udInst.upDownButton;
+            bool matchedUp = ud.midiTypeUp == buttonMidiType && ud.ccUp >= 0 && static_cast<uint8_t>(ud.ccUp) == event.data1 &&
+                              ud.channelUp >= 0 && static_cast<uint8_t>(ud.channelUp) == (event.status & 0x0F);
+            bool matchedDown = ud.midiTypeDown == buttonMidiType && ud.ccDown >= 0 && static_cast<uint8_t>(ud.ccDown) == event.data1 &&
+                                ud.channelDown >= 0 && static_cast<uint8_t>(ud.channelDown) == (event.status & 0x0F);
+            if (!matchedUp && !matchedDown)
+            {
+                continue;
+            }
+            if (matchedUp)
+            {
+                if (ud.valueListCount >= 2)
+                {
+                    if (ud.listIndex + 1 < ud.valueListCount)
+                        ++ud.listIndex;
+                }
+                else
+                {
+                    ud.currentValue += ud.step;
+                    if (ud.currentValue > ud.maxVal)
+                        ud.currentValue = ud.maxVal;
+                }
+            }
+            if (matchedDown)
+            {
+                if (ud.valueListCount >= 2)
+                {
+                    if (ud.listIndex > 0)
+                        --ud.listIndex;
+                }
+                else
+                {
+                    ud.currentValue -= ud.step;
+                    if (ud.currentValue < ud.minVal)
+                        ud.currentValue = ud.minVal;
+                }
+            }
+            pushControlRouteValue(*this, w, ControlRoute::Kind::UpDownButton, ud.currentOutput());
         }
     }
 
@@ -1378,53 +1439,6 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
                     recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
                 }
-            }
-            else if (widgets[w].type == NodeType::UpDownButton)
-            {
-                // Every CC message on ccUp/ccDown counts as one tick,
-                // regardless of its value (0 and 127 are treated identically)
-                // - matches relative/encoder-style MIDI controllers that send
-                // a fixed value per direction rather than a momentary
-                // above/below-64 press. No edge detection needed.
-                NodeInstance &udInst = instances[widgets[w].instanceBase];
-                UpDownButtonState &ud = *udInst.upDownButton;
-                bool matchedUp = ud.ccUp >= 0 && static_cast<uint8_t>(ud.ccUp) == ccNumber &&
-                                  ud.channelUp >= 0 && static_cast<uint8_t>(ud.channelUp) == ccChannel0;
-                bool matchedDown = ud.ccDown >= 0 && static_cast<uint8_t>(ud.ccDown) == ccNumber &&
-                                    ud.channelDown >= 0 && static_cast<uint8_t>(ud.channelDown) == ccChannel0;
-                if (!matchedUp && !matchedDown)
-                {
-                    continue;
-                }
-                if (matchedUp)
-                {
-                    if (ud.valueListCount >= 2)
-                    {
-                        if (ud.listIndex + 1 < ud.valueListCount)
-                            ++ud.listIndex;
-                    }
-                    else
-                    {
-                        ud.currentValue += ud.step;
-                        if (ud.currentValue > ud.maxVal)
-                            ud.currentValue = ud.maxVal;
-                    }
-                }
-                if (matchedDown)
-                {
-                    if (ud.valueListCount >= 2)
-                    {
-                        if (ud.listIndex > 0)
-                            --ud.listIndex;
-                    }
-                    else
-                    {
-                        ud.currentValue -= ud.step;
-                        if (ud.currentValue < ud.minVal)
-                            ud.currentValue = ud.minVal;
-                    }
-                }
-                pushControlRouteValue(*this, w, ControlRoute::Kind::UpDownButton, ud.currentOutput());
             }
             else if (widgets[w].type == NodeType::Switch)
             {
@@ -2235,6 +2249,18 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
                 instances[slot.instanceBase + v].upDownButton->ccUp = cc;
             }
         }
+        else if (slot.type == NodeType::UpDownButton &&
+                 (strcmp(key, "midiTypeUp") == 0 || strcmp(key, "midiTypeDown") == 0))
+        {
+            const uint8_t type = cJSON_IsString(item) && strcmp(item->valuestring, "program") == 0
+                ? nodes::button::kButtonMidiProgram : nodes::button::kButtonMidiCc;
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+            {
+                auto &ud = *instances[slot.instanceBase + v].upDownButton;
+                if (strcmp(key, "midiTypeUp") == 0) ud.midiTypeUp = type;
+                else ud.midiTypeDown = type;
+            }
+        }
         else if (slot.type == NodeType::UpDownButton && strcmp(key, "channelUp") == 0)
         {
             const int8_t ch = cJSON_IsNumber(item) ? static_cast<int8_t>(item->valueint) : -1;
@@ -2527,6 +2553,11 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     {
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Const,
                                instances[slot.instanceBase].constant.value);
+    }
+    else if (slot.type == NodeType::MidiProgram)
+    {
+        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::MidiProgram,
+                              instances[slot.instanceBase].midiProgram.value);
     }
     else if ((slot.type == NodeType::Switch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectIn2"))) ||
              (slot.type == NodeType::OutputSwitch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectOut2"))))

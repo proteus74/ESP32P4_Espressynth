@@ -107,14 +107,21 @@ outputs.length = 0;
 note(true); note(true, 60, 0); note(true, 61); cc(127);
 assert.deepEqual(outputs, [10, 0]);
 
-// Program Change: the matching program presses, another program releases.
+// Program Change: every matching event toggles; other programs/channels do nothing.
 const program = (number) => context.routeMidiToButtons({ type: "midi", midiType: "program_change", channel: 2, program: number });
 context.buttonMidiLearnTargetId = { widgetId: "button-1", index: 0 };
 program(5);
 assert.deepEqual([button.cc, button.channel, button.midiType], [5, 2, "program"]);
 outputs.length = 0;
 program(5); program(7); program(8);
-assert.deepEqual(outputs, [10, 0]);
+context.routeMidiToButtons({ type: "midi", midiType: "program_change", channel: 1, program: 5 });
+assert.deepEqual(outputs.splice(0), [10]);
+program(5); program(5);
+assert.deepEqual(outputs.splice(0), [0, 10]);
+button.listText = "0, 4, 7";
+button.listIndex = 0;
+program(5); program(5); program(7); program(5);
+assert.deepEqual(outputs.splice(0), [4, 7, 0]);
 const pcSaved = JSON.parse(JSON.stringify(context.buttonEngine.getParams("button-1")));
 assert.equal(pcSaved.bindings[0].midiType, "program");
 context.buttonEngine.applyParams("button-1", pcSaved);
