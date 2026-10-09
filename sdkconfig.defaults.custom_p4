@@ -1,6 +1,0 @@
-# Board selection for a custom ESP32-P4 board. Pin mapping and feature toggles are entirely
-# up to you - see main/boards/custom_p4.hpp and menuconfig's "Custom Board Settings" /
-# "Application Features" menus. Combine with the common sdkconfig.defaults - see the header
-# comment there for the idf.py -D SDKCONFIG_DEFAULTS invocation (and turn off the ESP-Hosted
-# Wi-Fi/BT settings there if your board has no ESP32-C6 co-processor).
-CONFIG_BOARD_CUSTOM_P4=y
