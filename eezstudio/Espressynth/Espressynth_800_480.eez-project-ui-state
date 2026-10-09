@@ -1,6 +1,6 @@
 {
   "navigation": {
-    "selectedUserPageObject": "[Espressynth_800_480.eez-project]:/userPages/1",
+    "selectedUserPageObject": "[Espressynth_800_480.eez-project]:/userPages/0",
     "subnavigationSelectedItems": {}
   },
   "layoutModel": {
@@ -206,10 +206,10 @@
                 {
                   "type": "tab",
                   "id": "#5b389730-8b3d-4a95-a3a0-9038896971f0",
-                  "name": "page_preset_list",
+                  "name": "Main",
                   "component": "editor",
                   "config": {
-                    "objectPath": "[Espressynth_800_480.eez-project]:/userPages/1",
+                    "objectPath": "[Espressynth_800_480.eez-project]:/userPages/0",
                     "permanent": false
                   },
                   "icon": "svg:page"
@@ -1068,8 +1068,7 @@
         "0": {
           "2": {},
           "3": {}
-        },
-        "$selected": true
+        }
       },
       "transform": {
         "translate": {
