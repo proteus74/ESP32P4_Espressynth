@@ -36,6 +36,8 @@ menu "Espressynth"
             config BOARD_CROWPANEL_5INCH
                 bool "Elecrow CrowPanel Advanced 5\" (800x480 RGB, NS4168, C6 Hosted)"
                 select ESP32P4_SELECTS_REV_LESS_V3
+                # LittleFS/NVS writes otherwise starve the RGB DMA ISR and the picture shifts.
+                select LCD_RGB_ISR_IRAM_SAFE
                 help
                     Board support for the Elecrow CrowPanel Advanced 5-inch ESP32-P4 HMI
                     display. Includes a 16-bit parallel RGB panel (800x480), GT911 touch,
@@ -49,19 +51,34 @@ menu "Espressynth"
                     Define a custom pinout and configuration for your own ESP32-P4 board.
         endchoice
 
+        # Board capabilities. Hidden (no prompt), so they always follow the selected
+        # board. Features a board physically lacks depend on these and disappear from
+        # menuconfig. Pins of fixed boards are prompt-less too ("int "..." if BOARD_CUSTOM_P4"):
+        # a symbol without a visible prompt is recomputed from its default on every run,
+        # so switching boards can never leave stale pins of the previous board behind.
+        # Only the Custom board exposes everything.
+        config BOARD_HAS_ETHERNET
+            bool
+            default y if BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+
+        config BOARD_HAS_ES8311
+            bool
+            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+
+        # Panel connector accepts different displays (output type/size stay selectable).
+        config BOARD_HAS_VARIABLE_DISPLAY
+            bool
+            default y if WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+
         if BOARD_JC8012P4A1
-        menu "JC8012P4A1 Settings"
             config JC8012P4A1_PIN_LCD_RST
-                int "Panel reset GPIO (-1 to disable)"
-                range -1 54
+                int
                 default 27
 
             config JC8012P4A1_PIN_BACKLIGHT
-                int "Backlight GPIO (-1 to disable)"
-                range -1 54
+                int
                 default 23
-        endmenu
-    endif
+        endif
 
     if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
         menu "Waveshare ESP32-P4-WIFI6-DEV-KIT Settings"
@@ -157,7 +174,7 @@ menu "Espressynth"
     menu "I2C Subsystem"
 
         config APP_ENABLE_I2C
-            bool "Enable I2C Subsystem"
+            bool "Enable I2C Subsystem" if BOARD_CUSTOM_P4
             default y
             help
                 Master switch for the ESP32-P4's I2C controllers (I2C0/I2C1),
@@ -167,7 +184,7 @@ menu "Espressynth"
         if APP_ENABLE_I2C
 
             config APP_ENABLE_I2C0
-                bool "Enable I2C Port 0"
+                bool "Enable I2C Port 0" if BOARD_CUSTOM_P4
                 default y
                 help
                     Primary I2C bus. Most boards' onboard peripherals (audio
@@ -175,12 +192,12 @@ menu "Espressynth"
 
             if APP_ENABLE_I2C0
                 config I2C0_PIN_SDA
-                    int "I2C0 SDA GPIO"
+                    int "I2C0 SDA GPIO" if BOARD_CUSTOM_P4
                     default 45 if BOARD_CROWPANEL_5INCH
                     default 7
 
                 config I2C0_PIN_SCL
-                    int "I2C0 SCL GPIO"
+                    int "I2C0 SCL GPIO" if BOARD_CUSTOM_P4
                     default 46 if BOARD_CROWPANEL_5INCH
                     default 8
 
@@ -331,6 +348,7 @@ menu "Espressynth"
 
         config APP_ENABLE_AUDIO
             bool "Enable Audio Subsystem"
+            default y if !BOARD_CUSTOM_P4
             default n
             help
                 Master switch for all audio functionality: the onboard ES8311
@@ -342,6 +360,7 @@ menu "Espressynth"
 
             config ONBOARD_AUDIO_NS4168
                 bool "Enable NS4168 I2S Class-D Amplifier (no codec, no I2C)"
+                default y if BOARD_CROWPANEL_5INCH
                 default n
                 help
                     NS4168 mono class-D speaker amp (onboard on the Elecrow CrowPanel
@@ -353,7 +372,7 @@ menu "Espressynth"
 
             if ONBOARD_AUDIO_NS4168
                 config ONBOARD_AUDIO_NS4168_I2S_PORT
-                    int "I2S Port Number (0-2)"
+                    int "I2S Port Number (0-2)" if !BOARD_CROWPANEL_5INCH
                     range 0 2
                     default 1 if BOARD_CROWPANEL_5INCH
                     default 0
@@ -364,25 +383,25 @@ menu "Espressynth"
                         time).
 
                 config ONBOARD_AUDIO_NS4168_PIN_BCLK
-                    int "I2S BCLK GPIO"
+                    int "I2S BCLK GPIO" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default 22 if BOARD_CROWPANEL_5INCH
                     default -1
 
                 config ONBOARD_AUDIO_NS4168_PIN_LRCK
-                    int "I2S LRCLK (word-select) GPIO"
+                    int "I2S LRCLK (word-select) GPIO" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default 21 if BOARD_CROWPANEL_5INCH
                     default -1
 
                 config ONBOARD_AUDIO_NS4168_PIN_DOUT
-                    int "I2S DOUT GPIO (ESP32 -> NS4168 SDATA)"
+                    int "I2S DOUT GPIO (ESP32 -> NS4168 SDATA)" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default 23 if BOARD_CROWPANEL_5INCH
                     default -1
 
                 config ONBOARD_AUDIO_NS4168_PIN_CTRL
-                    int "CTRL (shutdown) GPIO, driven high to enable the amp (-1 = not wired)"
+                    int "CTRL (shutdown) GPIO, driven high to enable the amp (-1 = not wired)" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default -1
                     help
@@ -394,6 +413,7 @@ menu "Espressynth"
 
             config ONBOARD_AUDIO_PDM_MIC
                 bool "Enable PDM microphone input (Mic-In widget)"
+                default y if BOARD_CROWPANEL_5INCH
                 default n
                 help
                     Onboard PDM MEMS microphone (CrowPanel Advanced: MMICT5838 on
@@ -404,13 +424,13 @@ menu "Espressynth"
 
             if ONBOARD_AUDIO_PDM_MIC
                 config ONBOARD_AUDIO_PDM_MIC_PIN_CLK
-                    int "PDM CLK GPIO"
+                    int "PDM CLK GPIO" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default 24 if BOARD_CROWPANEL_5INCH
                     default -1
 
                 config ONBOARD_AUDIO_PDM_MIC_PIN_DIN
-                    int "PDM DATA GPIO"
+                    int "PDM DATA GPIO" if !BOARD_CROWPANEL_5INCH
                     range -1 54
                     default 25 if BOARD_CROWPANEL_5INCH
                     default -1
@@ -427,6 +447,8 @@ menu "Espressynth"
 
             config ONBOARD_AUDIO_ES8311
                 bool "Enable ES8311 Audio Codec (I2S + I2C)"
+                depends on BOARD_HAS_ES8311
+                default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
                 default n
                 help
                     ES8311 mono audio codec support, e.g. the one found onboard the
@@ -439,7 +461,7 @@ menu "Espressynth"
 
             if ONBOARD_AUDIO_ES8311
                 config ONBOARD_AUDIO_ES8311_I2S_PORT
-                    int "I2S Port Number (0-2)"
+                    int "I2S Port Number (0-2)" if BOARD_CUSTOM_P4
                     range 0 2
                     default 0
                     help
@@ -449,7 +471,7 @@ menu "Espressynth"
                         ONBOARD_AUDIO_WM8960_I2S_PORT if both codecs are enabled.
 
                 config ONBOARD_AUDIO_ES8311_I2C_PORT
-                    int "I2C Port Number (0-1)"
+                    int "I2C Port Number (0-1)" if BOARD_CUSTOM_P4
                     range 0 1
                     default 0
                     help
@@ -458,7 +480,7 @@ menu "Espressynth"
                         be enabled there, or ES8311 init fails at runtime.
 
                 config ONBOARD_AUDIO_ES8311_PIN_MCLK
-                    int "I2S MCLK GPIO (-1 to disable)"
+                    int "I2S MCLK GPIO (-1 to disable)" if BOARD_CUSTOM_P4
                     default 13 if BOARD_JC8012P4A1
                     default 13 if BOARD_JC1060P470C_7_INCH
                     default 13 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
@@ -468,7 +490,7 @@ menu "Espressynth"
                         derives its clock without an explicit MCLK line.
 
                 config ONBOARD_AUDIO_ES8311_PIN_BCLK
-                    int "I2S BCLK GPIO"
+                    int "I2S BCLK GPIO" if BOARD_CUSTOM_P4
                     default 12 if BOARD_JC8012P4A1
                     default 12 if BOARD_JC1060P470C_7_INCH
                     default 12 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
@@ -477,21 +499,21 @@ menu "Espressynth"
                         -1 (GPIO_NUM_NC) leaves the codec disabled at runtime.
 
                 config ONBOARD_AUDIO_ES8311_PIN_LRCK
-                    int "I2S LRCLK (word-select) GPIO"
+                    int "I2S LRCLK (word-select) GPIO" if BOARD_CUSTOM_P4
                     default 10 if BOARD_JC8012P4A1
                     default 10 if BOARD_JC1060P470C_7_INCH
                     default 10 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
                     default -1
 
                 config ONBOARD_AUDIO_ES8311_PIN_DOUT
-                    int "I2S DOUT GPIO (ESP32 -> ES8311 DAC, speaker data)"
+                    int "I2S DOUT GPIO (ESP32 -> ES8311 DAC, speaker data)" if BOARD_CUSTOM_P4
                     default 9 if BOARD_JC8012P4A1
                     default 9 if BOARD_JC1060P470C_7_INCH
                     default 9 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
                     default -1
 
                 config ONBOARD_AUDIO_ES8311_PIN_DIN
-                    int "I2S DIN GPIO (ES8311 ADC -> ESP32, microphone data)"
+                    int "I2S DIN GPIO (ES8311 ADC -> ESP32, microphone data)" if BOARD_CUSTOM_P4
                     default 11 if BOARD_JC8012P4A1
                     default 48 if BOARD_JC1060P470C_7_INCH
                     default 11 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
@@ -500,7 +522,7 @@ menu "Espressynth"
                         Set to -1 for playback-only operation.
 
                 config ONBOARD_AUDIO_ES8311_PIN_PA
-                    int "PA enable GPIO, active high (-1 to disable)"
+                    int "PA enable GPIO, active high (-1 to disable)" if BOARD_CUSTOM_P4
                     default 20 if BOARD_JC8012P4A1
                     default 11 if BOARD_JC1060P470C_7_INCH
                     default 53 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
@@ -692,14 +714,20 @@ menu "Espressynth"
             default APP_DISPLAY_OUTPUT_RGB if BOARD_CROWPANEL_5INCH
             default APP_DISPLAY_OUTPUT_NONE
 
+            # Fixed-panel boards only offer their own panel type. (A choice needs a visible
+            # prompt to keep a selection, so the members are restricted instead.)
             config APP_DISPLAY_OUTPUT_NONE
                 bool "NONE"
+                depends on BOARD_HAS_VARIABLE_DISPLAY
             config APP_DISPLAY_OUTPUT_MIPI
                 bool "MIPI"
+                depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH
             config APP_DISPLAY_OUTPUT_SPI
                 bool "SPI"
+                depends on BOARD_HAS_VARIABLE_DISPLAY
             config APP_DISPLAY_OUTPUT_RGB
                 bool "RGB (parallel, 16-bit)"
+                depends on BOARD_CUSTOM_P4 || BOARD_CROWPANEL_5INCH
         endchoice
 
         config APP_ENABLE_MIPI_DSI
@@ -707,7 +735,7 @@ menu "Espressynth"
             default y if APP_DISPLAY_OUTPUT_MIPI
 
         config APP_DISPLAY_WIDTH
-            int "Display Width (px)"
+            int "Display Width (px)" if BOARD_HAS_VARIABLE_DISPLAY
             range 1 4096
             default 240 if APP_DISPLAY_OUTPUT_SPI
             default 1280 if BOARD_JC8012P4A1
@@ -716,7 +744,7 @@ menu "Espressynth"
             default 800
 
         config APP_DISPLAY_HEIGHT
-            int "Display Height (px)"
+            int "Display Height (px)" if BOARD_HAS_VARIABLE_DISPLAY
             range 1 4096
             default 320 if APP_DISPLAY_OUTPUT_SPI
             default 800 if BOARD_JC8012P4A1
@@ -734,8 +762,10 @@ menu "Espressynth"
 
             config APP_UI_LAYOUT_1024_600
                 bool "1024x600 (eezstudio/src/ui/1024_800)"
+                depends on BOARD_HAS_VARIABLE_DISPLAY || !BOARD_CROWPANEL_5INCH
             config APP_UI_LAYOUT_800_480
                 bool "800x480 (eezstudio/src/ui/800_480)"
+                depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_CROWPANEL_5INCH
         endchoice
 
         if APP_DISPLAY_OUTPUT_MIPI
@@ -746,8 +776,10 @@ menu "Espressynth"
 
                 config APP_DISPLAY_MIPI_JD9165
                     bool "JD9165"
+                    depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_JC1060P470C_7_INCH
                 config APP_DISPLAY_MIPI_JD9365
                     bool "JD9365"
+                    depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_JC8012P4A1
             endchoice
         endif
 
@@ -993,7 +1025,7 @@ menu "Espressynth"
     menu "ESP32-C6 Host Co Processor"
 
         config APP_ENABLE_HOSTED_COPROCESSOR
-            bool "Enable Host Processor (ESP32-C6 / SDIO)"
+            bool "Enable Host Processor (ESP32-C6 / SDIO)" if BOARD_CUSTOM_P4
             default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CROWPANEL_5INCH
             default n
             help
@@ -1125,7 +1157,7 @@ menu "Espressynth"
                 Enables SDMMC Slot storage driver.
 
         config SDMMC_LDO_CHANNEL
-            int "SDMMC on-chip LDO channel"
+            int "SDMMC on-chip LDO channel" if BOARD_CUSTOM_P4
             default 4 if BOARD_JC8012P4A1
             default 4 if BOARD_JC1060P470C_7_INCH
             default 4 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
@@ -1162,10 +1194,10 @@ menu "Espressynth"
         config APP_ENABLE_ETHERNET
             bool "Enable Ethernet / LAN (RMII EMAC)"
             default n
-            depends on !BOARD_JC8012P4A1
+            depends on BOARD_HAS_ETHERNET
             help
                 Enables 100M RJ45 Ethernet connection using the internal EMAC and PHY.
-                Not available on the JC8012P4A1 board, which has no Ethernet PHY.
+                Only offered on boards with an Ethernet PHY (BOARD_HAS_ETHERNET).
 
         config APP_ENABLE_WEBSERVER
             bool "Enable Web Server (HTTP, Wi-Fi + Ethernet)"
@@ -1189,4 +1221,45 @@ endmenu
 
 choice ESP32P4_REV_MIN
     default ESP32P4_REV_MIN_100 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+    default ESP32P4_REV_MIN_0 if BOARD_CROWPANEL_5INCH
 endchoice
+
+# Board defaults for symbols owned by other components. Project Kconfigs are parsed
+# before "Component config", so these defaults win over the components' own - but only
+# for a fresh sdkconfig: these symbols have visible prompts there, so a value already in
+# the sdkconfig is kept. main/boards/board_config.hpp static_asserts the board-critical
+# ones so a stale value fails the build instead of the hardware.
+choice ESP_CONSOLE_UART
+    default ESP_CONSOLE_USB_SERIAL_JTAG if BOARD_JC1060P470C_7_INCH
+endchoice
+
+# The P4 has one internal FS PHY, shared by the USB-Serial/JTAG secondary console and the
+# TinyUSB device (usb_device_manager.hpp checks this at compile time).
+choice ESP_CONSOLE_SECONDARY
+    default ESP_CONSOLE_SECONDARY_NONE if APP_ENABLE_USB_DEVICE
+endchoice
+
+if BOARD_CROWPANEL_5INCH
+    # C6 SDIO runs over the GPIO matrix here (the RGB panel occupies the IOMUX pins).
+    config ESP_HOSTED_HOST_SDIO_PIN_CMD
+        int
+        default 54
+    config ESP_HOSTED_HOST_SDIO_PIN_CLK
+        int
+        default 53
+    config ESP_HOSTED_HOST_SDIO_PIN_D0
+        int
+        default 52
+    config ESP_HOSTED_HOST_SDIO_PIN_D1
+        int
+        default 51
+    config ESP_HOSTED_HOST_SDIO_PIN_D2
+        int
+        default 50
+    config ESP_HOSTED_HOST_SDIO_PIN_D3
+        int
+        default 49
+    config ESP_HOSTED_HOST_RESET_GPIO
+        int
+        default 20
+endif

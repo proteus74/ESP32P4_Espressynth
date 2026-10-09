@@ -58,7 +58,7 @@ $env:IDF_PATH = 'C:\esp\v6.1-rc1\esp-idf'
 idf.py menuconfig
 ```
 
-Select the target board, enable the features you need, and adjust audio, USB, Wi-Fi, display, and networking settings.
+Select the target board, enable the features you need, and adjust audio, USB, Wi-Fi, display, and networking settings. Everything lives in the single `sdkconfig`; the board selection fills in its fixed pins (see [Configuration model](#configuration-model-one-sdkconfig)).
 
 ### 3) Build the firmware
 
@@ -118,9 +118,10 @@ The project supports multiple target boards through board definitions and compil
 - JC8012P4A1
 - JC1060P470C 7-inch board
 - Waveshare ESP32-P4 Wi-Fi 6 Dev Kit
+- Elecrow CrowPanel Advanced 5"
 - Custom ESP32-P4 board definition
 
-Board logic is centralized in the `main/boards` directory and selected through `Kconfig.projbuild`. This keeps board-specific GPIO mappings, display parameters, touch drivers, and peripheral wiring isolated from the application logic.
+Board logic is centralized in the `main/boards` directory and selected through `Kconfig.projbuild` (see [Configuration model](#configuration-model-one-sdkconfig)). This keeps board-specific GPIO mappings, display parameters, touch drivers, and peripheral wiring isolated from the application logic.
 
 This is important because ESP32-P4 projects often require different display, touch, audio, and I2C mappings depending on the hardware vendor.
 
@@ -328,10 +329,6 @@ ESP32P4_Template/
 ├── partitions.csv
 ├── sdkconfig
 ├── sdkconfig.defaults
-├── sdkconfig.defaults.custom_p4
-├── sdkconfig.defaults.jc1060
-├── sdkconfig.defaults.jc8012p4a1
-├── sdkconfig.defaults.waveshare
 ├── data/
 ├── documentation/
 ├── coprocessor_fw/
@@ -449,20 +446,19 @@ The host-side firmware then checks the C6 firmware version and, if needed, pushe
 
 > In other words: the P4 acts as the transport and staging host, while the C6 is the actual Wi-Fi/BLE co-processor.
 
-### Typical board configuration flow
+### Configuration model: one `sdkconfig`
 
-From `menuconfig`, the following are commonly adjusted:
+The project has exactly one configuration: the `sdkconfig` in the project root, edited with `idf.py menuconfig`. Always build from it with plain `idf.py build` / `idf.py -p <port> flash` - no separate build directories (`-B`), no alternative `SDKCONFIG` files and no per-board `SDKCONFIG_DEFAULTS` combinations. `sdkconfig.defaults` only seeds a freshly created `sdkconfig` with board-independent settings; once the `sdkconfig` exists, menuconfig is authoritative.
 
-- selected board target
-- audio subsystem enable/disable
-- ES8311 or WM8960 codec configuration
-- USB host/device classes
-- Wi-Fi/ETH/BLE enablement
-- LVGL display configuration
-- storage options
-- developer/debug features
+The board is selected under **Espressynth → Board Configuration → Target Board**, and the board then derives everything that is fixed by its hardware (`main/Kconfig.projbuild`):
 
-The Kconfig system is the main control surface for customizing the firmware for a specific board or use case.
+- **Fixed pins have no input field** on the built-in boards: I2C0, the onboard codec/amp (ES8311, NS4168, PDM mic), SDMMC LDO channel, panel pins. Kconfig recomputes them from the board on every run, so switching boards can never leave the previous board's pins behind. Only **Custom ESP32-P4 Board** exposes all of them.
+- **Missing hardware disappears** from the menus, e.g. Ethernet only exists on boards with a PHY (`BOARD_HAS_ETHERNET`), ES8311 only on boards that carry one (`BOARD_HAS_ES8311`), the C6 co-processor switch only on the Custom board.
+- **Fixed panels** (JC8012P4A1, JC1060P470C, CrowPanel 5") only offer their own display type, resolution and UI layout; the Waveshare kit and the Custom board keep them selectable.
+- **Features stay switchable** on every board: audio, SD card, Wi-Fi/BLE, web server, USB host/device classes, I2C speed, I2C1.
+- **Add-on hardware** (WM8960 codec HAT, NS4168 or PDM breakouts, ADS1115/GP8413 CV modules, WS2812, GPIO widgets) is not part of any board: enable and wire it in menuconfig on whatever board it is attached to.
+
+Values owned by other components (ESP-Hosted C6 SDIO pins and reset GPIO, console channel, chip revision, `LCD_RGB_ISR_IRAM_SAFE`) are seeded per board for a fresh `sdkconfig`, but keep their prompt there, so an existing value is not overwritten. The board-critical ones are therefore checked at compile time: `main/boards/board_config.hpp` static_asserts the ESP-Hosted SDIO pins against the board header, and `usb_device_manager.hpp` rejects a USB-Serial/JTAG secondary console in USB Device mode. A wrong leftover value fails the build with the menuconfig path to fix instead of failing on the hardware.
 
 ---
 

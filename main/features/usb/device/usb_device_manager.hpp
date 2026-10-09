@@ -17,6 +17,11 @@
 
 #if defined(CONFIG_APP_ENABLE_USB_DEVICE)
 #include "usb_device_descriptors.hpp"
+// The USB-Serial/JTAG secondary console holds the P4's only internal FS PHY, which the TinyUSB
+// device needs as well.
+#if defined(CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG)
+#error "USB Device mode: set menuconfig -> Component config -> ESP-STDIO -> Channel for console secondary output -> No secondary console"
+#endif
 #endif
 
 #if defined(CONFIG_USB_DEV_ENABLE_CDC)

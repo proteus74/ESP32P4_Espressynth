@@ -78,7 +78,4 @@ Desktop.ini
 *.sln.docstates # Visual Studio
 build_verify/
 .vscode/settings.json
-build_crow/
-sdkconfig.crowpanel5
-sdkconfig.crowpanel5.old
 sdkconfig.defaults.*.local

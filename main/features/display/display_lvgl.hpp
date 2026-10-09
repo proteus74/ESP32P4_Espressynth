@@ -996,7 +996,10 @@ inline esp_err_t init() {
 
     if (CurrentBoard::PIN_BACKLIGHT != GPIO_NUM_NC) {
         gpio_config_t backlight_config = {};
-        backlight_config.pin_bit_mask = 1ULL << CurrentBoard::PIN_BACKLIGHT;
+        // Non-const copy: with PIN_BACKLIGHT == -1 (Waveshare default) a constant shift
+        // trips -Werror=shift-count-negative although this branch never runs.
+        gpio_num_t backlight_pin = CurrentBoard::PIN_BACKLIGHT;
+        backlight_config.pin_bit_mask = 1ULL << backlight_pin;
         backlight_config.mode = GPIO_MODE_OUTPUT;
         ESP_RETURN_ON_ERROR(gpio_config(&backlight_config), TAG, "Backlight GPIO setup failed");
         // The backlight is active high on both Guition panels. The known-good drivers

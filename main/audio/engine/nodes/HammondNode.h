@@ -28,9 +28,6 @@ namespace nodes::hammond
 constexpr int kDrawbarCount = 9;
 constexpr int kAmplitudePort = 0, kPitchCvPort = 1, kTunePort = 2, kGainPort = 3, kDrawbar1Port = 4;
 static_assert(kDrawbar1Port + kDrawbarCount <= static_cast<int>(synth::kMaxAudioInPorts), "fits port budget");
-static_assert(synth::kSineLutSize == 4096, "Hammond fixed-point lookup expects a 4096-entry sine LUT");
-
-constexpr uint32_t kSineLutIndexShift = 20;
 constexpr float kPhaseUnitsPerHz = 4294967296.0f / static_cast<float>(synth::kSampleRate);
 
 inline uint32_t phaseStep(float hz, float ratio)
@@ -39,9 +36,12 @@ inline uint32_t phaseStep(float hz, float ratio)
     return static_cast<uint32_t>(static_cast<uint64_t>(scaled));
 }
 
+// Linearly interpolated: a plain truncated 4096-entry lookup leaves a phase-
+// truncation error of up to ~-56 dB per partial as inharmonic spurs - summed
+// over several drawbars that is an audible buzz under the tone.
 inline float sineLookup(uint32_t phase)
 {
-    return dsp::sineLutTable[phase >> kSineLutIndexShift];
+    return dsp::sineLookupInt(phase);
 }
 
 // Classic Hammond drawbar footages' harmonic ratio relative to the played

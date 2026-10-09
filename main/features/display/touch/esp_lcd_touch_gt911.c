@@ -91,6 +91,9 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
 
     /* Interrupt input */
     if (gt911->config.int_gpio_num != GPIO_NUM_NC) {
+        /* Release the output reservation taken above - otherwise gpio_config() warns
+           "conflict found" when the pin switches to input. */
+        gpio_reset_pin(gt911->config.int_gpio_num);
         const gpio_config_t int_gpio_config = {
             .mode = GPIO_MODE_INPUT,
             .intr_type = (gt911->config.levels.interrupt ? GPIO_INTR_POSEDGE : GPIO_INTR_NEGEDGE),

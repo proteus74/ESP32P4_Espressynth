@@ -2,19 +2,12 @@
 # ESP-Hosted/NimBLE and flash-layout settings this template's WiFi/BLE/OTA features need.
 # Espressif IoT Development Framework (ESP-IDF) 6.1.0 Project Minimal Configuration
 #
-# Settings here apply to every board this template supports. Board selection and anything
-# tied to one physical board/peripheral combo (audio codec choice, Ethernet, USB Device mode,
-# ...) lives in a matching sdkconfig.defaults.<board> file instead, so switching boards
-# doesn't drag another board's peripheral choices along with it (see main/Kconfig.projbuild
-# and main/boards/board_config.hpp for the board list).
-#
-# To configure for a specific board from a clean sdkconfig:
-#   Remove-Item sdkconfig -ErrorAction SilentlyContinue
-#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.jc1060" reconfigure
-# (swap the second file for sdkconfig.defaults.jc8012p4a1 / .waveshare / .custom_p4)
-# idf.py only fills in symbols not already present in sdkconfig from these files, so this only
-# has full effect on a fresh/deleted sdkconfig - once generated, menuconfig changes persist on
-# their own regardless of these files.
+# Settings here apply to every board this template supports. Board-specific values (pins,
+# panel, onboard codec, ESP-Hosted SDIO pins, ...) are not set here: selecting the board in
+# menuconfig (Espressynth -> Board Configuration) derives them in main/Kconfig.projbuild.
+# idf.py only fills in symbols not already present in sdkconfig from this file, so after the
+# first configure menuconfig/sdkconfig is authoritative. Add-on hardware (WM8960 HAT, NS4168 or
+# PDM breakouts, ...) is enabled and wired in menuconfig as well.
 
 CONFIG_IDF_TARGET="esp32p4"
 

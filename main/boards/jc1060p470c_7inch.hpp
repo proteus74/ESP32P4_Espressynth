@@ -62,6 +62,8 @@ constexpr gpio_num_t PIN_SDIO_D2   = GPIO_NUM_16;
 constexpr gpio_num_t PIN_SDIO_D3   = GPIO_NUM_17;
 constexpr gpio_num_t PIN_C6_RESET  = GPIO_NUM_54;  // C6_CHIP_PU
 constexpr gpio_num_t PIN_C6_WAKEUP = GPIO_NUM_6;
+// C6 reset line as the ESP-Hosted driver must see it (checked in board_config.hpp).
+constexpr gpio_num_t HOSTED_RESET_GPIO = PIN_C6_RESET;
 
 // TF Card Slot (SDMMC Slot 0). TF_VCC is fed straight from ESP_LDO_VO4, so there is no
 // separate power-enable GPIO on this board.

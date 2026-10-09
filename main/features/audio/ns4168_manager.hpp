@@ -140,6 +140,12 @@ inline esp_err_t init() {
             },
         },
     };
+    // The I2S default clock on P4 < v3 is the 40 MHz XTAL: 44.1 kHz * 256 needs a fractional
+    // divider (~3.54), whose period jitter puts inharmonic sidebands on every tone - plainly
+    // audible as a metallic ring on pure sines (Hammond). The APLL hits 44.1 kHz * 512 exactly,
+    // the same frequency pdm_mic_manager.hpp tunes it to, so both can share it.
+    std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_APLL;
+    std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_512;
     if ((err = i2s_channel_init_std_mode(tx_handle, &std_cfg)) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to configure I2S standard mode: %s", esp_err_to_name(err));
         i2s_del_channel(tx_handle);

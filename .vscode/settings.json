@@ -31,7 +31,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=c:\\Users\\jlassen\\ESP32P4_Template\\build"
+    "--compile-commands-dir=c:\\Users\\jlassen\\Documents\\GIT_Projects\\Audio\\ESP32P4_Espressynth\\build"
   ],
   "idf.flashType": "UART",
   "files.exclude": {

@@ -81,6 +81,8 @@ constexpr gpio_num_t PIN_SDIO_D3   = GPIO_NUM_49;
 // Driven by the ESP-Hosted driver itself (CONFIG_ESP_HOSTED_HOST_RESET_GPIO), not by board_init.
 constexpr gpio_num_t PIN_C6_RESET  = GPIO_NUM_NC;
 constexpr gpio_num_t PIN_C6_WAKEUP = GPIO_NUM_NC;
+// C6 reset line, owned by the ESP-Hosted driver (checked in board_config.hpp).
+constexpr gpio_num_t HOSTED_RESET_GPIO = GPIO_NUM_20;
 
 // TF Card Slot (SDMMC Slot 0, 1-bit only: D1-D3 pins double as RGB HSYNC/VSYNC and touch INT)
 constexpr gpio_num_t PIN_SDMMC_CLK = GPIO_NUM_43;
