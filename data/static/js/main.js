@@ -10479,6 +10479,7 @@ async function uploadFileExplorerFiles(files) {
       });
     }
   } finally {
+    suspendWsWatchdog(WS_WATCHDOG_BUSY_GRACE_MS);
     fileExplorerUploadProgress.classList.add("hidden");
     fileExplorerModal.classList.remove("uploading");
   }
@@ -24329,6 +24330,8 @@ function startWsWatchdog(socket) {
   wsWatchdogTimer = setInterval(() => {
     if (currentSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
     if (lastWsMessageAt === 0) return;
+    // Upload handlers occupy httpd until the response, regardless of file size.
+    if (fileExplorerModal.classList.contains("uploading")) return;
     const now = Date.now();
     if (now < wsWatchdogSuspendedUntil) return;
     if (now - Math.max(lastWsMessageAt, wsWatchdogSuspendedUntil) > WS_STALE_TIMEOUT_MS) {

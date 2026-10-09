@@ -1502,7 +1502,12 @@ static void process_enumeration(tuh_xfer_t* xfer) {
   // Retry a few times while enumerating since device can be unstable when starting up
   static uint8_t failed_count = 0;
   static uint8_t hub_reset_status_count = 0;
-  if (XFER_RESULT_FAILED == xfer->result) {
+  // Do not parse stale control-buffer bytes after a short descriptor reply.
+  // Split control IN behind a hub can sporadically complete with no data.
+  bool const short_descriptor = xfer->setup &&
+      xfer->setup->bmRequestType == 0x80 && xfer->setup->bRequest == TUSB_REQ_GET_DESCRIPTOR &&
+      xfer->actual_len < tu_le16toh(xfer->setup->wLength);
+  if (XFER_RESULT_FAILED == xfer->result || short_descriptor) {
     enum {
       ATTEMPT_COUNT_MAX = 3,
       ATTEMPT_DELAY_MS = 100

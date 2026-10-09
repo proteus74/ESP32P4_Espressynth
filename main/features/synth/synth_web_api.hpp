@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -73,9 +74,16 @@ constexpr size_t kMaxWsClients = 12; // must cover Feature::Web::begin()'s confi
 constexpr size_t kMaxWsFrameLen = 8192; // includes the complete GPIO/device-settings messages
 
 struct BroadcastWork {
+    std::atomic<bool> *pending = nullptr;
     // CV status can contain one live-voltage entry per widget.
     char json[4096];
 };
+
+// A long HTTP transfer must not queue a new copy of periodic status every tick.
+// Keep at most one outstanding frame per kind, leaving control slots for events.
+std::atomic<bool> cpu_status_pending{false};
+std::atomic<bool> node_status_pending{false};
+std::atomic<bool> cv_status_pending{false};
 
 void broadcast_work(void *arg) {
     BroadcastWork *work = static_cast<BroadcastWork *>(arg);
@@ -97,7 +105,9 @@ void broadcast_work(void *arg) {
             }
         }
     }
+    std::atomic<bool> *pending = work->pending;
     heap_caps_free(work);
+    if (pending != nullptr) pending->store(false);
 }
 } // namespace
 
@@ -106,16 +116,22 @@ void broadcast_work(void *arg) {
  *        to call from any task (e.g. the USB-MIDI dispatch task) - a no-op if the web server
  *        isn't running yet.
  */
-inline void broadcast_json(const char *json) {
+inline void broadcast_json(const char *json, std::atomic<bool> *pending = nullptr) {
     httpd_handle_t server = Feature::Web::handle();
     if (server == nullptr) return;
+    if (pending != nullptr && pending->exchange(true)) return;
     auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork),
                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (work == nullptr) return;
+    if (work == nullptr) {
+        if (pending != nullptr) pending->store(false);
+        return;
+    }
+    work->pending = pending;
     const int length = snprintf(work->json, sizeof(work->json), "%s", json);
     if (length < 0 || static_cast<size_t>(length) >= sizeof(work->json) ||
         httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
         heap_caps_free(work);
+        if (pending != nullptr) pending->store(false);
     }
 }
 
@@ -160,7 +176,7 @@ inline void broadcast_cv_status_tick() {
     }
     if (offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
         snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
-        broadcast_json(json);
+        broadcast_json(json, &cv_status_pending);
     }
 }
 
@@ -314,7 +330,7 @@ inline void broadcast_status_tick() {
              static_cast<unsigned long>(stats.dxShapeConfigured), static_cast<unsigned long>(stats.instancesTotal),
              static_cast<unsigned long>(stats.instancesRendered),
              static_cast<unsigned long>(stats.instancesRenderedWhileIdle));
-    if (json_length > 0 && static_cast<size_t>(json_length) < sizeof(json)) broadcast_json(json);
+    if (json_length > 0 && static_cast<size_t>(json_length) < sizeof(json)) broadcast_json(json, &cpu_status_pending);
 
     static char node_cpu_json[1536];
     int offset = snprintf(node_cpu_json, sizeof(node_cpu_json), "{\"type\":\"nodeCpu\",\"w\":[");
@@ -332,7 +348,7 @@ inline void broadcast_status_tick() {
     }
     if (offset > 0 && static_cast<size_t>(offset) < sizeof(node_cpu_json)) {
         snprintf(node_cpu_json + offset, sizeof(node_cpu_json) - static_cast<size_t>(offset), "]}");
-        broadcast_json(node_cpu_json);
+        broadcast_json(node_cpu_json, &node_status_pending);
     }
 
 }
@@ -384,7 +400,7 @@ bool is_safe_bare_name(const char *name) {
 // entirely internal RAM at that point (see Feature::Web's static_file_handler for the identical
 // hazard), and a buffer the cache-disabled DMA/read path itself writes into needs the same care.
 esp_err_t stream_file_chunked(httpd_req_t *req, FILE *file) {
-    constexpr size_t kBufferSize = 8192;
+    constexpr size_t kBufferSize = 2048; // leave internal RAM for SDIO/TCP packets
     auto *buffer = static_cast<char *>(heap_caps_malloc(kBufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (buffer == nullptr) {
         fclose(file);

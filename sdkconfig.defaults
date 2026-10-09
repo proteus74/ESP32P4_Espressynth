@@ -36,6 +36,10 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # chip's only supported PSRAM settings and are already the Kconfig defaults once CONFIG_SPIRAM
 # is on. ---
 CONFIG_SPIRAM=y
+# Keep TCP/IP buffers out of the internal DMA heap needed by ESP-Hosted SDIO.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# P4 SDMMC DMA can use PSRAM; graph rebuilds must not exhaust its RX staging buffers.
+CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
 
 # --- Flash layout: all supported boards ship 16 MB of flash; the default single-app table only
 # used 2 MB (and left the app 96% full). Custom table adds "slave_fw", a staging
@@ -86,6 +90,9 @@ CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
 # This project pins every task it creates to MAIN_CORE or AUDIO_CORE (see main/app_core.hpp);
 # pin lwip's tcpip_thread the same way instead of leaving it as CONFIG_LWIP_TCPIP_TASK_AFFINITY_NO_AFFINITY.
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+CONFIG_FREERTOS_TIMER_TASK_AFFINITY_CPU0=y
+# Let the scheduler tick preempt USB/SDIO interrupts on the busy main core.
+CONFIG_FREERTOS_CORETIMER_SYSTIMER_LVL3=y
 
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y

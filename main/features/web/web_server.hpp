@@ -32,7 +32,8 @@ constexpr const char* PARTITION_LABEL = "www";
 namespace {
 
 constexpr const char* TAG = "FeatureWeb";
-constexpr size_t FILE_READ_CHUNK_SIZE = 8192;
+// Internal RAM is also needed for SDIO/TCP packets while streaming large assets.
+constexpr size_t FILE_READ_CHUNK_SIZE = 2048;
 
 httpd_handle_t server = nullptr;
 
@@ -103,12 +104,8 @@ esp_err_t static_file_handler(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
-    // NOT PSRAM: littlefs's lfs_bd_read() bypasses its own cache for large, block-aligned
-    // reads (lfs.c, "bypass cache?") and has the underlying esp_partition_read() write
-    // straight into *this* buffer -- while the flash cache is disabled, same hazard as
-    // the task stack above. A read of this size against a partition using 4096-byte
-    // blocks (see the littlefs-python --block-size in the root CMakeLists.txt) reliably
-    // hits that bypass, so this can't be PSRAM either.
+    // Keep the filesystem buffer internal: raw flash reads can bypass LittleFS's
+    // cache and write into the caller's buffer while the flash cache is disabled.
     auto* buffer = static_cast<uint8_t*>(
         heap_caps_malloc(FILE_READ_CHUNK_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (buffer == nullptr) {

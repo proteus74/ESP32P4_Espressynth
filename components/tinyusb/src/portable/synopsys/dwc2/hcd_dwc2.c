@@ -99,6 +99,7 @@ typedef struct {
     uint8_t halted_nyet : 1;
   };
   uint8_t result;
+  uint8_t retry_uframes; // Deferred bulk IN retry; channel keeps partial transfer state.
 
   uint16_t xferred_bytes;  // bytes that accumulate transferred though USB bus for the whole hcd_edpt_xfer(), which can
                            // be composed of multiple channel_xfer_start() (retry with NAK/NYET)
@@ -192,6 +193,7 @@ TU_ATTR_ALWAYS_INLINE static inline uint8_t req_queue_avail(const dwc2_regs_t* d
 TU_ATTR_ALWAYS_INLINE static inline void channel_dealloc(dwc2_regs_t* dwc2, uint8_t ch_id) {
   hcd_xfer_t* xfer = &_hcd_data.xfer[ch_id];
   xfer->allocated = false;
+  xfer->retry_uframes = 0;
   dwc2->haintmsk &= ~TU_BIT(ch_id);
 }
 
@@ -786,8 +788,17 @@ static void channel_xfer_in_retry(dwc2_regs_t* dwc2, uint8_t ch_id, uint32_t hci
       // already halted, de-allocate channel (called from DMA isr)
       channel_dealloc(dwc2, ch_id);
     }
+  } else if (hcchar.ep_type == HCCHAR_EPTYPE_BULK) {
+    // Idle MIDI bulk IN can NAK/NYET hundreds of thousands of times per second.
+    // Keep the halted channel and its DMA/partial-transfer state, but mask it
+    // until SOF: NAK waits 1 ms; NYET/error retries wait one microframe.
+    xfer->retry_uframes = (hcint & HCINT_NAK) ? 8 : 1;
+    dwc2->haintmsk &= ~TU_BIT(ch_id);
+    if (!(dwc2->gintmsk & GINTMSK_SOFM)) {
+      dwc2->gintsts = GINTSTS_SOF;
+      dwc2->gintmsk |= GINTMSK_SOFM;
+    }
   } else {
-    // for control/bulk: retry immediately
     channel_send_in_token(dwc2, channel);
   }
 }
@@ -1225,7 +1236,7 @@ static void handle_channel_irq(uint8_t rhport, bool in_isr) {
   const uint8_t max_channel = dwc2_channel_count(dwc2);
 
   for (uint8_t ch_id = 0; ch_id < max_channel; ch_id++) {
-    if (tu_bit_test(dwc2->haint, ch_id)) {
+    if (tu_bit_test(dwc2->haint & dwc2->haintmsk, ch_id)) {
       dwc2_channel_t* channel = &dwc2->channel[ch_id];
       hcd_xfer_t* xfer = &_hcd_data.xfer[ch_id];
       TU_ASSERT(xfer->ep_id < CFG_TUH_DWC2_ENDPOINT_MAX,);
@@ -1266,7 +1277,7 @@ static void handle_channel_irq(uint8_t rhport, bool in_isr) {
   }
 }
 
-// SOF is enabled for scheduled periodic transfer
+// SOF is enabled for periodic transfers and deferred bulk IN retries.
 static bool handle_sof_irq(uint8_t rhport, bool in_isr) {
   (void) in_isr;
   dwc2_regs_t* dwc2 = DWC2_REG(rhport);
@@ -1276,6 +1287,26 @@ static bool handle_sof_irq(uint8_t rhport, bool in_isr) {
 
   // If highspeed then SOF is 125us, else 1ms
   const uint32_t ucount = (hprt_speed_get(dwc2) == TUSB_SPEED_HIGH ? 1 : 8);
+
+  for (uint8_t ch_id = 0; ch_id < dwc2_channel_count(dwc2); ch_id++) {
+    hcd_xfer_t* xfer = &_hcd_data.xfer[ch_id];
+    if (!xfer->allocated || xfer->retry_uframes == 0) continue;
+    if (!_hcd_data.edpt[xfer->ep_id].hcchar_bm.enable) {
+      channel_dealloc(dwc2, ch_id);
+      continue;
+    }
+    xfer->retry_uframes -= tu_min8(ucount, xfer->retry_uframes);
+    if (xfer->retry_uframes == 0) {
+      dwc2_channel_t* channel = &dwc2->channel[ch_id];
+      channel->hcint = 0xFFFFFFFFU;
+      dwc2->haintmsk |= TU_BIT(ch_id);
+      if (!channel_send_in_token(dwc2, channel)) {
+        dwc2->haintmsk &= ~TU_BIT(ch_id);
+        xfer->retry_uframes = (uint8_t) ucount;
+      }
+    }
+    more_isr = true;
+  }
 
   for(uint8_t ep_id = 0; ep_id < CFG_TUH_DWC2_ENDPOINT_MAX; ep_id++) {
     hcd_endpoint_t* edpt = &_hcd_data.edpt[ep_id];

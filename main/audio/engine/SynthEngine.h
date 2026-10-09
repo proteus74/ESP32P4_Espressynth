@@ -1188,8 +1188,7 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     builtGraphQueue_ = xQueueCreate(1, sizeof(BuiltGraphMsg));
     retiredGraphQueue_ = xQueueCreate(2, sizeof(Graph *));
 
-    // Pinned to core 1: this is the only task allowed on that core, so it
-    // never contends with Ethernet/USB/httpd/etc for CPU time.
+    // Audio and MIDI run on core 1; networking and background tasks use core 0.
     xTaskCreatePinnedToCore(&SynthEngine::taskEntry, "synth_engine", kSynthEngineTaskStackSize, this,
                              configMAX_PRIORITIES - 2, &taskHandle_, 1);
 

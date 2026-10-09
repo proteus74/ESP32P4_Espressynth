@@ -2,9 +2,9 @@
 
 #include "freertos/FreeRTOS.h"
 
-// Central core-affinity policy for the whole app: every task this project creates is
-// pinned (xTaskCreatePinnedToCore), never left as tskNO_AFFINITY, so the split below is
-// actually enforced rather than "usually true, sometimes migrates".
+// Central core-affinity policy: project tasks use explicit affinity; app_core.cpp
+// defaults unbound dependency tasks (including ESP-Hosted) to MAIN_CORE.
+// IDF's per-core IPC and idle tasks retain their required affinity.
 //
 // AUDIO_CORE carries everything that moves or generates audio sample data: the onboard
 // codec <-> USB Audio (UAC2) bridge tasks and the USB MIDI relay. MAIN_CORE carries

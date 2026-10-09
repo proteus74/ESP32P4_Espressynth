@@ -34,6 +34,7 @@ project(ESP32P4_Espressynth)
 # constant-propagation additionally surfaces the identical out-of-bounds access as
 # -Warray-bounds, so both need silencing here.
 idf_build_get_property(build_components BUILD_COMPONENTS)
+include("${CMAKE_CURRENT_LIST_DIR}/tools/httpd_session_close.cmake")
 # Put RGB565 blending and arc/rounded-edge masking hot paths in IRAM. Keep
 # other formats in flash to preserve internal RAM for audio. Use a stable
 # section name because LVGL annotates declarations as well as definitions.
