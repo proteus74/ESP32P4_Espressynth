@@ -499,6 +499,7 @@ extern "C" void app_main(void) {
         Feature::Synth::broadcast_cv_status_tick();
 #endif
         Feature::Synth::log_midi_cc_debug_tick();
+        Feature::Synth::log_render_diagnostics_tick();
         if (++synthTicks < 20) continue;
         synthTicks = 0;
 #else

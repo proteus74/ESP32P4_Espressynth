@@ -96,7 +96,11 @@ struct HammondState
     uint8_t modulationStride = 4;
 };
 
-inline void render(NodeInstance &inst, size_t frames)
+// IRAM_ATTR: same reason as Oscillator's render() (see DspPrimitives.h's sineLookup()
+// comment). Measured on CrowPanel 5": from flash, a 5-voice Hammond block took ~1.0 ms
+// median but up to ~2.9 ms whenever display/Wi-Fi traffic evicted it from the shared L2
+// cache - the source of the Audio-Overruns while turning MIDI knobs.
+IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
     constexpr float kCenterVolts = cv::kMaxVolts * 0.5f;
@@ -327,7 +331,9 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     {
         s.drawbarCv[k] = p.hammondDrawbar[k];
         s.ratio[k] = p.hammondRatio[k];
-        s.drawbarSmooth[k].setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
+        // Slower than gainSmooth (~8 ms vs ~0.5 ms): a fast-turned MIDI knob jumps a drawbar
+        // 10-20 CC steps per message, and a 0.5 ms ramp over such a jump clicks audibly.
+        s.drawbarSmooth[k].setCutoff(20.0f, static_cast<float>(synth::kSampleRate));
     }
 }
 

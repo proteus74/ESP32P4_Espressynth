@@ -14,6 +14,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #if defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
 #include "crow_rgb_lcd.h"
+#include "driver/ppa.h" // rgb_flush_dma()
 #endif
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
@@ -507,16 +508,53 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 //    vertical blank. The reduced pixel clock lowers PSRAM scan-out demand.
 constexpr int RGB_DRAW_BUFFER_LINES = 16;
 static uint8_t* s_rgb_frame_buffer = nullptr;
+// Copies each strip into the PSRAM frame buffer by DMA (PPA SRM at scale 1, no rotation).
+// A CPU memcpy would stream the whole redraw through the L2 cache both cores share and evict
+// the audio render task's code/data on core 1 - measured as render blocks taking up to 2x
+// longer (Audio-Overrun) while knob overlays redraw. nullptr = CPU fallback.
+static ppa_client_handle_t s_rgb_ppa_client = nullptr;
+
+bool rgb_flush_dma(const lv_area_t* area, uint8_t* px_map) {
+    if (s_rgb_ppa_client == nullptr) return false;
+    ppa_srm_oper_config_t copy = {};
+    copy.in.buffer = px_map;
+    copy.in.pic_w = lv_area_get_width(area);
+    copy.in.pic_h = lv_area_get_height(area);
+    copy.in.block_w = copy.in.pic_w;
+    copy.in.block_h = copy.in.pic_h;
+    copy.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+    copy.out.buffer = s_rgb_frame_buffer;
+    copy.out.buffer_size = CurrentBoard::DISPLAY_NATIVE_WIDTH * CurrentBoard::DISPLAY_NATIVE_HEIGHT * sizeof(uint16_t);
+    copy.out.pic_w = CurrentBoard::DISPLAY_NATIVE_WIDTH;
+    copy.out.pic_h = CurrentBoard::DISPLAY_NATIVE_HEIGHT;
+    copy.out.block_offset_x = area->x1;
+    copy.out.block_offset_y = area->y1;
+    copy.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+    copy.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
+    copy.scale_x = 1.0f;
+    copy.scale_y = 1.0f;
+    copy.mode = PPA_TRANS_MODE_BLOCKING;
+    const esp_err_t err = ppa_do_scale_rotate_mirror(s_rgb_ppa_client, &copy);
+    if (err != ESP_OK) {
+        ESP_LOGW("FeatureLVGL", "PPA flush failed (%s), using CPU copy", esp_err_to_name(err));
+        s_rgb_ppa_client = nullptr; // chisle: leaks the client, but this path is a one-time fallback
+        return false;
+    }
+    return true;
+}
 
 void rgb_flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     constexpr int width = CurrentBoard::DISPLAY_NATIVE_WIDTH;
     constexpr size_t bytes_per_pixel = sizeof(uint16_t);
     const size_t row_bytes = static_cast<size_t>(lv_area_get_width(area)) * bytes_per_pixel;
-    // The LCD DMA reads PSRAM directly, so each freshly written row is pushed out of the cache.
-    for (int32_t y = area->y1; y <= area->y2; ++y) {
-        uint8_t* dst = s_rgb_frame_buffer + (static_cast<size_t>(y) * width + area->x1) * bytes_per_pixel;
-        std::memcpy(dst, px_map + static_cast<size_t>(y - area->y1) * row_bytes, row_bytes);
-        esp_cache_msync(dst, row_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    // CPU fallback. The LCD DMA reads PSRAM directly, so each freshly written row is pushed
+    // out of the cache.
+    if (!rgb_flush_dma(area, px_map)) {
+        for (int32_t y = area->y1; y <= area->y2; ++y) {
+            uint8_t* dst = s_rgb_frame_buffer + (static_cast<size_t>(y) * width + area->x1) * bytes_per_pixel;
+            std::memcpy(dst, px_map + static_cast<size_t>(y - area->y1) * row_bytes, row_bytes);
+            esp_cache_msync(dst, row_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        }
     }
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
     if (lv_display_flush_is_last(display) &&
@@ -538,6 +576,12 @@ lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
         return nullptr;
     }
     s_rgb_frame_buffer = static_cast<uint8_t*>(frame_buffer);
+    ppa_client_config_t ppa_client_config = {};
+    ppa_client_config.oper_type = PPA_OPERATION_SRM;
+    if (ppa_register_client(&ppa_client_config, &s_rgb_ppa_client) != ESP_OK) {
+        s_rgb_ppa_client = nullptr;
+        ESP_LOGW("FeatureLVGL", "PPA client unavailable, RGB flush uses CPU copy");
+    }
 
     const size_t draw_buffer_bytes = static_cast<size_t>(CurrentBoard::DISPLAY_NATIVE_WIDTH) *
                                      RGB_DRAW_BUFFER_LINES * sizeof(uint16_t);

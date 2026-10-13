@@ -227,8 +227,11 @@ public:
     void handleMidiEvent(const UsbMidiEvent &event);
     void recordControlDebug(uint16_t widget, uint8_t side, bool fromUi, uint8_t channel = 0,
                             uint8_t cc = 0, uint8_t raw = 0);
+    // Emits at most `maxEvents` pending entries (oldest first); the rest stay
+    // queued and keep coalescing until a later block has time for them.
     void flushControlDebug(MidiCcDebugSnapshot &scratch,
-                          void (*emit)(const MidiCcDebugSnapshot &, void *), void *context);
+                          void (*emit)(const MidiCcDebugSnapshot &, void *), void *context,
+                          uint8_t maxEvents);
     uint16_t activeSoundFontVoiceCount() const;
     void midiVoiceUsage(uint16_t &active, uint16_t &maximum) const;
 
@@ -1132,7 +1135,8 @@ inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &ev
 inline void Graph::recordControlDebug(uint16_t widget, uint8_t side, bool fromUi,
                                      uint8_t channel, uint8_t cc, uint8_t raw)
 {
-    // Coalesce successive positions of the same control within one audio block.
+    // Coalesce successive positions of the same control until it is flushed
+    // (possibly several blocks later - see flushControlDebug's maxEvents).
     for (uint8_t i = 0; i < controlDebugEventCount; ++i)
     {
         auto &event = controlDebugEvents[i];
@@ -1149,9 +1153,11 @@ inline void Graph::recordControlDebug(uint16_t widget, uint8_t side, bool fromUi
 }
 
 inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
-                                     void (*emit)(const MidiCcDebugSnapshot &, void *), void *context)
+                                     void (*emit)(const MidiCcDebugSnapshot &, void *), void *context,
+                                     uint8_t maxEvents)
 {
-    for (uint8_t i = 0; i < controlDebugEventCount; ++i)
+    const uint8_t flushCount = controlDebugEventCount < maxEvents ? controlDebugEventCount : maxEvents;
+    for (uint8_t i = 0; i < flushCount; ++i)
     {
         const auto &event = controlDebugEvents[i];
         const auto &source = widgets[event.widget];
@@ -1266,7 +1272,8 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
         }
         emit(snapshot, context);
     }
-    controlDebugEventCount = 0;
+    controlDebugEventCount = static_cast<uint8_t>(controlDebugEventCount - flushCount);
+    memmove(controlDebugEvents, controlDebugEvents + flushCount, controlDebugEventCount * sizeof(controlDebugEvents[0]));
 }
 
 inline void Graph::handleMidiEvent(const UsbMidiEvent &event)

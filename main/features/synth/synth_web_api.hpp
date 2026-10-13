@@ -84,6 +84,9 @@ struct BroadcastWork {
 std::atomic<bool> cpu_status_pending{false};
 std::atomic<bool> node_status_pending{false};
 std::atomic<bool> cv_status_pending{false};
+// MIDI activity log: at most one frame in flight. Called from usb_midi_task, which must drain
+// the USB packet queue fast (a full queue silently drops packets, including Note Offs).
+std::atomic<bool> midi_event_pending{false};
 
 void broadcast_work(void *arg) {
     BroadcastWork *work = static_cast<BroadcastWork *>(arg);
@@ -109,6 +112,18 @@ void broadcast_work(void *arg) {
     heap_caps_free(work);
     if (pending != nullptr) pending->store(false);
 }
+
+// No browser connected -> nothing to send. Checked before allocating/queuing so idle
+// broadcasts (every MIDI event, status ticks) cost no httpd ctrl-socket traffic.
+bool has_ws_client(httpd_handle_t server) {
+    int client_fds[kMaxWsClients];
+    size_t fd_count = kMaxWsClients;
+    if (httpd_get_client_list(server, &fd_count, client_fds) != ESP_OK) return false;
+    for (size_t i = 0; i < fd_count; ++i) {
+        if (httpd_ws_get_fd_info(server, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) return true;
+    }
+    return false;
+}
 } // namespace
 
 /**
@@ -118,7 +133,7 @@ void broadcast_work(void *arg) {
  */
 inline void broadcast_json(const char *json, std::atomic<bool> *pending = nullptr) {
     httpd_handle_t server = Feature::Web::handle();
-    if (server == nullptr) return;
+    if (server == nullptr || !has_ws_client(server)) return;
     if (pending != nullptr && pending->exchange(true)) return;
     auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork),
                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -141,11 +156,15 @@ inline void broadcast_json(const char *json, std::atomic<bool> *pending = nullpt
  *        updates live. Safe to call from any task; a no-op if the web server isn't running.
  */
 inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
-    if (Feature::Web::handle() == nullptr) return;
+    // Skip (not queue) while the previous frame is still in flight: the browser log may miss
+    // entries during a fast knob sweep, the caller never waits on httpd.
+    if (midi_event_pending.load(std::memory_order_relaxed)) return;
+    httpd_handle_t server = Feature::Web::handle();
+    if (server == nullptr || !has_ws_client(server)) return;
     const UsbMidiEvent event = from_transport(status, data1, data2);
     char json[256];
     if (event.toJson(json, sizeof(json), static_cast<uint32_t>(esp_timer_get_time() / 1000), "MIDI") > 0) {
-        broadcast_json(json);
+        broadcast_json(json, &midi_event_pending);
     }
 }
 
@@ -293,7 +312,7 @@ inline void broadcast_status_tick() {
              "{\"type\":\"cpuLoad\",\"core0\":%.1f,\"core1\":%.1f,"
              "\"tasks\":{\"lvgl\":%.1f,\"httpd\":%.1f,\"main\":%.1f},\"peakUs\":%lu,\"budgetUs\":%lu,"
              "\"p50Us\":%lu,\"p95Us\":%lu,\"p99Us\":%lu,\"timingSamples\":%lu,"
-             "\"underruns\":%lu,\"renderOverruns\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
+             "\"underruns\":%lu,\"renderOverruns\":%lu,\"clipped\":%lu,\"midiDrops\":%lu,\"sfVoices\":%u,"
              "\"psFreeKb\":%lu,\"psTotalKb\":%lu,\"sysFreeKb\":%lu,\"sysTotalKb\":%lu,"
              "\"sysLargestKb\":%lu,\"sysMinKb\":%lu,\"psLargestKb\":%lu,\"psMinKb\":%lu,"
              "\"synthStackHwmBytes\":%lu,\"reloadGeneration\":%lu,\"reloadPhase\":%u,"
@@ -310,7 +329,12 @@ inline void broadcast_status_tick() {
              static_cast<unsigned long>(timing.p50Us), static_cast<unsigned long>(timing.p95Us),
              static_cast<unsigned long>(timing.p99Us), static_cast<unsigned long>(timing.sampleCount),
              static_cast<unsigned long>(dma_underrun_count()), static_cast<unsigned long>(engine().renderOverrunCount()),
-             static_cast<unsigned long>(engine().midiDropCount()),
+             static_cast<unsigned long>(engine().clippedSampleCount()),
+             static_cast<unsigned long>(engine().midiDropCount()
+#if defined(CONFIG_APP_ENABLE_USB_HOST) && defined(CONFIG_USB_HOST_CLASS_MIDI)
+                                        + Feature::MIDI::rx_drop_count()
+#endif
+                                        ),
              engine().activeSoundFontVoices(), ps_free_kb, ps_total_kb, sys_free_kb, sys_total_kb,
              static_cast<unsigned long>(memory.internalLargest / 1024), static_cast<unsigned long>(memory.internalMinimum / 1024),
              static_cast<unsigned long>(memory.psramLargest / 1024), static_cast<unsigned long>(memory.psramMinimum / 1024),
@@ -1747,8 +1771,10 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     cJSON_IsNumber(velocity) && channel->valueint >= 0 && channel->valueint < 16 &&
                     note->valueint >= 0 && note->valueint < 128 && velocity->valueint >= 0 &&
                     velocity->valueint < 128) {
+                    // "cc": note = controller number, velocity = value (same path as a hardware CC).
                     const bool on = strcmp(midi_type->valuestring, "note_on") == 0;
-                    const uint8_t status = static_cast<uint8_t>((on ? 0x90 : 0x80) | channel->valueint);
+                    const bool cc = strcmp(midi_type->valuestring, "cc") == 0;
+                    const uint8_t status = static_cast<uint8_t>((cc ? 0xB0 : on ? 0x90 : 0x80) | channel->valueint);
                     const uint8_t data1 = static_cast<uint8_t>(note->valueint);
                     const uint8_t data2 = static_cast<uint8_t>(velocity->valueint);
                     dispatch_midi(status, data1, data2);

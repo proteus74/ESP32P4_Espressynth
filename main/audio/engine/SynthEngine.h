@@ -232,6 +232,8 @@ public:
     };
     TimingSnapshot consumeTimingSnapshot();
     uint32_t renderOverrunCount() const { return renderOverrunCount_.load(std::memory_order_relaxed); }
+    // Samples hard-limited at +/-1.0 on a raw I2S sink since boot (output overdriven).
+    uint32_t clippedSampleCount() const { return clippedSamples_.load(std::memory_order_relaxed); }
     uint32_t midiDropCount() const { return midiDropCount_.load(std::memory_order_relaxed); }
     uint16_t activeSoundFontVoices() const { return activeSoundFontVoices_.load(std::memory_order_relaxed); }
     bool presetLoadActive() const { return presetLoadActive_.load(std::memory_order_acquire); }
@@ -313,6 +315,50 @@ public:
     }
 
     uint32_t takeControlDebugDropped() { return controlDebugDropped_.exchange(0, std::memory_order_relaxed); }
+
+    // Render-task diagnostics, printed by Feature::Synth::log_render_diagnostics_tick() on
+    // app_main's task. The render task must never call ESP_LOG itself: stdout is one locked
+    // stream, so it would wait behind other tasks' console lines (~7 ms each at 115200 baud)
+    // and could stall longer than the I2S DMA ring lasts.
+    template <typename T>
+    struct DiagReport
+    {
+        std::atomic<uint32_t> seq{0};
+        T data{};
+        void publish(const T &value) // single writer: the render task
+        {
+            seq.fetch_add(1, std::memory_order_acq_rel); // odd: write in progress
+            data = value;
+            seq.fetch_add(1, std::memory_order_release);
+        }
+        bool take(T &out, uint32_t &lastSeq) const // diagnostics only - a torn read is skipped
+        {
+            const uint32_t s = seq.load(std::memory_order_acquire);
+            if ((s & 1u) != 0 || s == lastSeq) return false;
+            out = data;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (seq.load(std::memory_order_relaxed) != s) return false;
+            lastSeq = s;
+            return true;
+        }
+    };
+    struct OverrunReport
+    {
+        uint32_t processUs, budgetUs, presetUs, midiEvents, midiUs, liveParams, liveParamUs, renderUs,
+            postRenderUs, esConvertUs, wmConvertUs, nsConvertUs;
+    };
+    struct StallReport
+    {
+        uint32_t totalUs, processUs, esWriteUs, wmWriteUs, nsWriteUs;
+    };
+    struct DiscontinuityReport
+    {
+        const char *sink;
+        int32_t maxStep;
+    };
+    DiagReport<OverrunReport> overrunReport;
+    DiagReport<StallReport> stallReport;
+    DiagReport<DiscontinuityReport> discontinuityReport;
 
     // sink: 0 = LVGL display, 1 = SSD1306 OLED; each display drains its own queue.
     bool readKnobActivity(KnobActivity &out, int sink = 0) const
@@ -905,6 +951,7 @@ private:
     static constexpr size_t kTimingHistogramBinCount = 128;
     std::atomic<uint32_t> timingHistogram_[kTimingHistogramBinCount] = {};
     std::atomic<uint32_t> renderOverrunCount_{0};
+    std::atomic<uint32_t> clippedSamples_{0};
     std::atomic<uint32_t> midiDropCount_{0};
     std::atomic<uint16_t> activeSoundFontVoices_{0};
     // Loader stages, not byte-exact file progress: SoundFont/WAV parsing has
@@ -925,6 +972,10 @@ private:
     QueueHandle_t midiCcDebugQueue_ = nullptr;
     QueueHandle_t knobActivityQueues_[2] = {};
     MidiCcDebugSnapshot midiCcDebugScratch_{};
+    // Render-task-only: newest CC awaiting publishMidiControlActivity (see taskLoop).
+    UsbMidiEvent pendingControlActivity_{};
+    bool pendingControlActivityValid_ = false;
+    uint8_t uiFeedbackDeferredBlocks_ = 0;
     std::atomic<uint32_t> controlDebugDropped_{0};
     std::atomic<uint32_t> voicesCapEventId_{0};
     std::atomic<uint16_t> voicesCapRequested_{0};
@@ -960,7 +1011,7 @@ private:
 namespace
 {
 constexpr const char *kSynthEngineTag = "synth_engine";
-constexpr UBaseType_t kSynthEngineMidiQueueDepth = 32;
+constexpr UBaseType_t kSynthEngineMidiQueueDepth = 128;
 constexpr uint32_t kSynthEngineTaskStackSize = 12288; // FatSuperSaw boot/reload/render used <3 KiB; retain headroom for USB mixing and other DSP paths.
 constexpr uint32_t kSynthEngineLoaderTaskStackSize = 6144; // boot/reload/load testing leaves >2 KiB; no render-task DSP buffers
 
@@ -972,6 +1023,13 @@ constexpr float kSynthEngineBlockBudgetUs = 1000000.0f * static_cast<float>(synt
 // readable percentage display in the browser, without smearing real load
 // spikes.
 constexpr float kSynthEngineLoadEmaAlpha = 0.05f;
+// Knob/CC display feedback runs only while the block has used less than this
+// share of its budget so far (the rest is left for output conversion/writes).
+constexpr float kSynthEngineUiFeedbackBudgetFraction = 0.65f;
+// ...unless it has been deferred this many blocks in a row (~50 ms): then one
+// control is flushed anyway, so a permanently busy patch still updates its
+// display. A single late block is absorbed by the I2S DMA ring (~30 ms).
+constexpr uint8_t kSynthEngineUiFeedbackMaxDeferredBlocks = 17;
 
 // Overload watchdog (see SynthEngine::taskLoop, overloadStartUs_): how far
 // above budget audioCoreLoadPercent_ must sit, and for how long continuously,
@@ -1514,7 +1572,12 @@ inline void SynthEngine::taskLoop()
             {
                 liveGraph_->handleMidiEvent(event);
                 handleMasterClockMidi(event);
-                publishMidiControlActivity(event);
+                // Display-only: keep the newest CC, publish it later when the block has time.
+                if (event.codeIndex == 0xB)
+                {
+                    pendingControlActivity_ = event;
+                    pendingControlActivityValid_ = true;
+                }
                 ++midiEventCount;
             }
             if (midiEventCount != 0)
@@ -1547,10 +1610,34 @@ inline void SynthEngine::taskLoop()
         synchronizeMidiControls();
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
         const int64_t renderUs = esp_timer_get_time() - renderStartUs;
-        liveGraph_->flushControlDebug(midiCcDebugScratch_, [](const MidiCcDebugSnapshot &snapshot, void *context)
+        // UI/console feedback for knobs and CCs is lower priority than audio: only
+        // spend time on it when this block is well inside its budget, and then for
+        // at most one control. Pending entries keep coalescing to their newest value,
+        // so a skipped block only delays the display, never the sound.
+        const bool uiFeedbackPending = pendingControlActivityValid_ || liveGraph_->controlDebugEventCount != 0;
+        if (!uiFeedbackPending)
         {
-            static_cast<SynthEngine *>(context)->publishMidiCcDebugSnapshot(snapshot);
-        }, this);
+            uiFeedbackDeferredBlocks_ = 0;
+        }
+        else if (static_cast<float>(esp_timer_get_time() - iterStartUs) >=
+                     kSynthEngineBlockBudgetUs * kSynthEngineUiFeedbackBudgetFraction &&
+                 uiFeedbackDeferredBlocks_ < kSynthEngineUiFeedbackMaxDeferredBlocks)
+        {
+            ++uiFeedbackDeferredBlocks_;
+        }
+        else
+        {
+            uiFeedbackDeferredBlocks_ = 0;
+            if (pendingControlActivityValid_)
+            {
+                pendingControlActivityValid_ = false;
+                publishMidiControlActivity(pendingControlActivity_);
+            }
+            liveGraph_->flushControlDebug(midiCcDebugScratch_, [](const MidiCcDebugSnapshot &snapshot, void *context)
+            {
+                static_cast<SynthEngine *>(context)->publishMidiCcDebugSnapshot(snapshot);
+            }, this, 1);
+        }
         if (liveGraph_->controlDebugDropped != 0)
         {
             controlDebugDropped_.fetch_add(liveGraph_->controlDebugDropped, std::memory_order_relaxed);
@@ -1826,7 +1913,7 @@ inline void SynthEngine::taskLoop()
             const int64_t esNowUs = esp_timer_get_time();
             if (esMaxStep > 20000 && esNowUs - s_lastEsClickLogUs > 100000) {
                 s_lastEsClickLogUs = esNowUs;
-                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity ES8311: maxStep=%ld", static_cast<long>(esMaxStep));
+                discontinuityReport.publish({"ES8311", esMaxStep});
             }
             esConvertUs = esp_timer_get_time() - esConvertStartUs;
             const int64_t esWriteStartUs = esp_timer_get_time();
@@ -1845,6 +1932,7 @@ inline void SynthEngine::taskLoop()
                                    int64_t &convertUs, int64_t &writeUs) {
             const int64_t convertStartUs = esp_timer_get_time();
             int32_t maxStep = 0;
+            uint32_t clippedSamples = 0;
             int16_t prev = state.lastL;
             if (syn.muted || syn.gain <= 0.0f)
             {
@@ -1858,6 +1946,7 @@ inline void SynthEngine::taskLoop()
                 {
                     const float gain = syn.gain * fadeMulBlock[i];
                     float l = L[i] * gain, r = R[i] * gain;
+                    if (fabsf(l) > 1.0f || fabsf(r) > 1.0f) ++clippedSamples;
                     if (l > 1.0f) l = 1.0f; else if (l < -1.0f) l = -1.0f;
                     if (r > 1.0f) r = 1.0f; else if (r < -1.0f) r = -1.0f;
                     chunk[i * 2 + 0] = static_cast<int16_t>(l * 32767.0f);
@@ -1869,10 +1958,11 @@ inline void SynthEngine::taskLoop()
                 }
             }
             state.lastL = prev;
+            if (clippedSamples != 0) clippedSamples_.fetch_add(clippedSamples, std::memory_order_relaxed);
             const int64_t nowUs = esp_timer_get_time();
             if (maxStep > 20000 && nowUs - state.lastClickLogUs > 100000) {
                 state.lastClickLogUs = nowUs;
-                ESP_LOGW(kSynthEngineTag, "Signal-Discontinuity %s: maxStep=%ld", name, static_cast<long>(maxStep));
+                discontinuityReport.publish({name, maxStep});
             }
             convertUs = esp_timer_get_time() - convertStartUs;
             const int64_t writeStartUs = esp_timer_get_time();
@@ -1911,16 +2001,12 @@ inline void SynthEngine::taskLoop()
             if (timingNowUs - s_lastOverrunLogUs > 100000)
             {
                 s_lastOverrunLogUs = timingNowUs;
-                ESP_LOGW(kSynthEngineTag,
-                         "Audio-Overrun: %lu us > %lu us Budget (preset=%lld us, midi=%lu Ev/%lld us, "
-                         "liveParams=%lu/%lld us, render=%lld us, postRender=%lld us, esConvert=%lld us, "
-                         "wmConvert=%lld us, nsConvert=%lld us)",
-                         static_cast<unsigned long>(processUs), static_cast<unsigned long>(kSynthEngineBlockBudgetUs),
-                         static_cast<long long>(presetReloadUs), static_cast<unsigned long>(midiEventCount),
-                         static_cast<long long>(midiUs), static_cast<unsigned long>(liveParamCount),
-                         static_cast<long long>(liveParamUs), static_cast<long long>(renderUs),
-                         static_cast<long long>(postRenderUs), static_cast<long long>(esConvertUs),
-                         static_cast<long long>(wmConvertUs), static_cast<long long>(nsConvertUs));
+                overrunReport.publish({processUs, static_cast<uint32_t>(kSynthEngineBlockBudgetUs),
+                                       static_cast<uint32_t>(presetReloadUs), static_cast<uint32_t>(midiEventCount),
+                                       static_cast<uint32_t>(midiUs), static_cast<uint32_t>(liveParamCount),
+                                       static_cast<uint32_t>(liveParamUs), static_cast<uint32_t>(renderUs),
+                                       static_cast<uint32_t>(postRenderUs), static_cast<uint32_t>(esConvertUs),
+                                       static_cast<uint32_t>(wmConvertUs), static_cast<uint32_t>(nsConvertUs)});
             }
         }
         const float instLoadPercent = 100.0f * static_cast<float>(processUs) / kSynthEngineBlockBudgetUs;
@@ -1970,13 +2056,8 @@ inline void SynthEngine::taskLoop()
             timingNowUs - s_lastStallLogUs > 100000)
         {
             s_lastStallLogUs = timingNowUs;
-            ESP_LOGW(kSynthEngineTag,
-                     "Codec-Write-Stall: Iteration gesamt %lld us > %.0f us (2x Budget) trotz process=%lu us - "
-                     "esWrite=%lld us, wmWrite=%lld us, nsWrite=%lld us (haengt vermutlich mit einem System-weiten Stall waehrend "
-                     "des Wartens auf DMA zusammen, z.B. Flash-Cache-Sperre oder eine lange ISR anderswo)",
-                     static_cast<long long>(totalIterUs), static_cast<double>(2.0f * kSynthEngineBlockBudgetUs),
-                     static_cast<unsigned long>(processUs), static_cast<long long>(esWriteUs),
-                     static_cast<long long>(wmWriteUs), static_cast<long long>(nsWriteUs));
+            stallReport.publish({static_cast<uint32_t>(totalIterUs), processUs, static_cast<uint32_t>(esWriteUs),
+                                 static_cast<uint32_t>(wmWriteUs), static_cast<uint32_t>(nsWriteUs)});
         }
     }
 }

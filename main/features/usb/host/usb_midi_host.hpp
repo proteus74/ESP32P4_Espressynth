@@ -34,6 +34,7 @@ inline uint8_t connected_idx = 0;
 inline uint8_t connected_address = 0;
 inline bool connected = false;
 inline std::atomic<uint32_t> connection_generation{0};
+inline std::atomic<uint32_t> rx_dropped{0}; // packets lost because midi_task fell behind
 
 // Outgoing messages: TinyUSB host is not thread-safe, so send() (called from httpd, the synth
 // engine, ...) only queues; tx_drain() runs inside the USB host task via usbh_defer_func().
@@ -103,6 +104,8 @@ inline uint8_t connected_device_address() {
     return connected_address;
 }
 inline uint32_t connection_sequence() { return connection_generation.load(std::memory_order_acquire); }
+/** @brief Incoming packets dropped since boot because the relay queue was full. */
+inline uint32_t rx_drop_count() { return rx_dropped.load(std::memory_order_relaxed); }
 
 /**
  * @brief Send raw MIDI stream bytes (e.g. {0x90, 0x3C, 0x7F} for Note On) to the
@@ -130,7 +133,8 @@ inline esp_err_t send(const uint8_t* bytes, size_t length, uint8_t cable = 0) {
 
 extern "C" __attribute__((used)) void usb_midi_host_start() {
     using namespace Feature::MIDI;
-    queue = xQueueCreate(64, sizeof(midi_packet_t));
+    // 256 x 4 B: absorbs a fast multi-knob sweep while the render task holds core 1.
+    queue = xQueueCreate(256, sizeof(midi_packet_t));
     tx_queue = xQueueCreate(64, sizeof(tx_message_t));
     // MIDI is sound data, so this relay task runs on the audio core (see app_core.hpp),
     // separate from the mixed USB Host task (HID + raw MIDI byte parsing) that feeds it.
@@ -172,7 +176,7 @@ extern "C" __attribute__((used)) void tuh_midi_rx_cb(uint8_t idx, uint32_t bytes
         if (cin != 0x0 && cin != 0x1 && queue != nullptr) {
             midi_packet_t event{};
             std::memcpy(event.data, packet, sizeof(event.data));
-            xQueueSend(queue, &event, 0);
+            if (xQueueSend(queue, &event, 0) != pdTRUE) rx_dropped.fetch_add(1, std::memory_order_relaxed);
         }
         bytes -= 4;
     }

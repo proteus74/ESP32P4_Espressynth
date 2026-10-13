@@ -167,6 +167,35 @@ inline void log_p0_baseline_tick() {
     }
 }
 
+/**
+ * @brief Prints the render task's overrun/stall/discontinuity reports (see
+ *        SynthEngine::DiagReport) from the calling task - never from the render task itself.
+ *        Poll from app_main's loop; each report is already rate-limited at the source.
+ */
+inline void log_render_diagnostics_tick()
+{
+    static uint32_t overrun_seq = 0, stall_seq = 0, discontinuity_seq = 0;
+    SynthEngine::OverrunReport o{};
+    if (engine().overrunReport.take(o, overrun_seq))
+        ESP_LOGW("synth_engine",
+                 "Audio-Overrun: %lu us > %lu us Budget (preset=%lu us, midi=%lu Ev/%lu us, liveParams=%lu/%lu us, "
+                 "render=%lu us, postRender=%lu us, esConvert=%lu us, wmConvert=%lu us, nsConvert=%lu us)",
+                 (unsigned long)o.processUs, (unsigned long)o.budgetUs, (unsigned long)o.presetUs,
+                 (unsigned long)o.midiEvents, (unsigned long)o.midiUs, (unsigned long)o.liveParams,
+                 (unsigned long)o.liveParamUs, (unsigned long)o.renderUs, (unsigned long)o.postRenderUs,
+                 (unsigned long)o.esConvertUs, (unsigned long)o.wmConvertUs, (unsigned long)o.nsConvertUs);
+    SynthEngine::StallReport s{};
+    if (engine().stallReport.take(s, stall_seq))
+        ESP_LOGW("synth_engine",
+                 "Codec-Write-Stall: Iteration gesamt %lu us (>2x Budget) trotz process=%lu us - esWrite=%lu us, "
+                 "wmWrite=%lu us, nsWrite=%lu us (vermutlich System-weiter Stall waehrend des Wartens auf DMA)",
+                 (unsigned long)s.totalUs, (unsigned long)s.processUs, (unsigned long)s.esWriteUs,
+                 (unsigned long)s.wmWriteUs, (unsigned long)s.nsWriteUs);
+    SynthEngine::DiscontinuityReport d{};
+    if (engine().discontinuityReport.take(d, discontinuity_seq))
+        ESP_LOGW("synth_engine", "Signal-Discontinuity %s: maxStep=%ld", d.sink, (long)d.maxStep);
+}
+
 inline void log_midi_cc_debug_tick()
 {
     static MidiCcDebugSnapshot snapshot{};
