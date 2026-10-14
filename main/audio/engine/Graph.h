@@ -488,6 +488,22 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 }
                 target.fmOsc.gatePrev = noteOn;
             }
+            else if (target.type == NodeType::Fm8)
+            {
+                if (target.fm8 != nullptr)
+                {
+                    if (noteOn)
+                    {
+                        target.fm8->pendingOn = true;
+                        target.fm8->pendingNote = note;
+                        target.fm8->idle = false;
+                    }
+                    else
+                    {
+                        nodes::fm8::gateOff(*target.fm8);
+                    }
+                }
+            }
             else if (target.type == NodeType::Adsr)
             {
                 // Idle voices may not have rendered since the last Knob update.
@@ -724,7 +740,8 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     bool hasEnvelope = false;
     for (uint16_t w = 0; w < widgetCount; ++w)
     {
-        if ((widgets[w].type != NodeType::Adsr && widgets[w].type != NodeType::DxEnvelope) ||
+        if ((widgets[w].type != NodeType::Adsr && widgets[w].type != NodeType::DxEnvelope &&
+             widgets[w].type != NodeType::Fm8) ||
             widgets[w].outgoingEdgeCount == 0)
         {
             continue;
@@ -741,13 +758,15 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
         // would never observe the very edge that should wake it, a
         // permanent deadlock. Force the voice live whenever that port is
         // actually wired, regardless of the envelope's current idle state.
-        const int gatePort = widgets[w].type == NodeType::Adsr ? 4 : 8;
+        const int gatePort = widgets[w].type == NodeType::Adsr ? 4 : (widgets[w].type == NodeType::Fm8 ? 1 : 8);
         for (uint16_t v = 0; v < widgets[w].instanceCount; ++v)
         {
             NodeInstance &envelope = instances[widgets[w].instanceBase + v];
             const bool idle = widgets[w].type == NodeType::Adsr
                 ? envelope.adsr->ramp.isIdle()
-                : envelope.dxEnvelope->scheduler.isIdle();
+                : (widgets[w].type == NodeType::Fm8
+                       ? (envelope.fm8->idle && !envelope.fm8->pendingOn)
+                       : envelope.dxEnvelope->scheduler.isIdle());
             const bool gateWired = (envelope.audioConnectedPortMask & synth::portBit(gatePort)) != 0;
             if (!idle || gateWired)
             {
@@ -1173,7 +1192,7 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
         snapshot.controlIndex = event.side;
         snapshot.isKnob = source.type == NodeType::Knob;
         const char *label = source.label[0] ? source.label : source.id;
-        const char *kind = source.type == NodeType::Knob ? "Knob" : source.type == NodeType::Button ? "Button" :
+        const char *kind = source.type == NodeType::Knob ? "CC-Slider" : source.type == NodeType::Button ? "CC Button" :
                            source.type == NodeType::Switch ? "Switch" : "Output Switch";
         if (snapshot.isKnob)
         {
@@ -2682,6 +2701,9 @@ inline void Graph::destroy()
             break;
         case NodeType::FmOscillator:
             nodes::fmoscillator::destroy(inst);
+            break;
+        case NodeType::Fm8:
+            nodes::fm8::destroy(inst);
             break;
         case NodeType::StepArpeggiator:
             nodes::steparp::destroy(inst);

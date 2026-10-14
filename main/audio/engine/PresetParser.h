@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 
+#include "Fm8Patch.h"
 #include "NodeTypes.h"
 #include "SynthConfig.h"
 #include "Wavetable.h"
@@ -36,6 +37,14 @@ struct WidgetParams
     // 0V = no FM, see FmOscillatorNode.h). Reuses waveType/tuneVolts/
     // amplitude/gain above (same fields/defaults as oscillator).
     float fmIndex = 0.0f;
+    // fm8 widget: the whole patch (flat preset keys op1_coarse/mx2_5/out4...), tune + gain port values.
+    fm8::Patch fm8Patch;
+    float fm8Tune = 5.0f;
+    float fm8Gain = 10.0f;
+    // fm-oscillator ratio coarse/fine CVs (see FmOscillatorState::ratioCoarseCv).
+    float fmRatioCoarse = 10.0f / 31.0f;
+    float fmRatioFine = 0.0f;
+    float fmDetune = 5.0f; // fm-oscillator "detune" CV, 5V = 0 cents
     // WaveGen/FM-operator internal one-sample feedback, 0-10V. Shared field
     // because both oscillator types expose the same "feedback" parameter.
     float oscillatorFeedback = 0.0f;
@@ -58,6 +67,7 @@ struct WidgetParams
     float lfoZeroPoint = 5.0f;
     bool lfoOneShot = false;
     bool lfoGlobal = false;
+    float lfoDelay = 0.0f; // lfo "delay" fade-in, seconds
     // wavetable widget (shares lfoRate/lfoMaxRate/lfoGain/lfoOneShot/
     // lfoGlobal above). wavetableBank is a counted reference owned by this
     // WidgetParams - released by ~PresetDoc().
@@ -320,7 +330,7 @@ struct WidgetParams
     char sampleFile[40] = {};
     int rootNoteMidi = 60; // C4 (scientific pitch notation, A4=69)
     // soundfont-player
-    char soundFontVolume[8] = "flash";
+    char soundFontVolume[8] = "sd";
     char soundFontPath[160] = {};
     int soundFontBank = 0;
     int soundFontProgram = 0;

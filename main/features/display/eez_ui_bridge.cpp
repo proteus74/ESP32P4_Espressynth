@@ -453,7 +453,7 @@ void init()
     s_data_requests = xQueueCreate(3, sizeof(DataRequest));
     s_data_results = xQueueCreate(3, sizeof(DataResult));
     if (s_data_requests == nullptr || s_data_results == nullptr ||
-        xTaskCreatePinnedToCore(data_worker, "uiStorage", 8 * 1024, nullptr, 2, nullptr, App::MAIN_CORE) != pdPASS) {
+        xTaskCreatePinnedToCore(data_worker, "uiStorage", 6 * 1024, nullptr, 2, nullptr, App::MAIN_CORE) != pdPASS) {
         if (s_data_requests != nullptr) vQueueDelete(s_data_requests);
         if (s_data_results != nullptr) vQueueDelete(s_data_results);
         s_data_requests = s_data_results = nullptr;

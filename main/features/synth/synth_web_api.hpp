@@ -84,9 +84,30 @@ struct BroadcastWork {
 std::atomic<bool> cpu_status_pending{false};
 std::atomic<bool> node_status_pending{false};
 std::atomic<bool> cv_status_pending{false};
-// MIDI activity log: at most one frame in flight. Called from usb_midi_task, which must drain
-// the USB packet queue fast (a full queue silently drops packets, including Note Offs).
-std::atomic<bool> midi_event_pending{false};
+// MIDI events for the browser (knob display + MIDI log). httpd's work queue is small and
+// drops silently when full, so nothing here is sent straight from the MIDI task:
+//  - control changes are LATEST-WINS per (channel, controller): a fast multi-fader sweep
+//    would otherwise flood the queue, and a dropped frame loses that fader's FINAL value.
+//    Packed value: 0 = nothing pending, else 0x80 | value.
+//  - every other event (notes, program change, ...) keeps its order in a small FIFO.
+// broadcast_midi_tick() drains both; a frame httpd refuses stays pending and is retried.
+constexpr size_t kCcSlots = 16 * 128;
+constexpr uint8_t kMaxCcFramesPerTick = 8;
+constexpr size_t kMidiFifoLen = 64;
+struct MidiFrame {
+    uint8_t status, data1, data2;
+};
+std::atomic<uint8_t> cc_latest[kCcSlots];
+std::atomic<bool> cc_pending{false};
+std::atomic<uint16_t> cc_scan_start{0};
+std::atomic<bool> midi_tick_busy{false};
+
+QueueHandle_t midi_fifo() {
+    static StaticQueue_t control;
+    static uint8_t storage[kMidiFifoLen * sizeof(MidiFrame)];
+    static QueueHandle_t handle = xQueueCreateStatic(kMidiFifoLen, sizeof(MidiFrame), storage, &control);
+    return handle;
+}
 
 void broadcast_work(void *arg) {
     BroadcastWork *work = static_cast<BroadcastWork *>(arg);
@@ -129,17 +150,20 @@ bool has_ws_client(httpd_handle_t server) {
 /**
  * @brief Broadcasts an already-serialized JSON text frame to every connected /ws client. Safe
  *        to call from any task (e.g. the USB-MIDI dispatch task) - a no-op if the web server
- *        isn't running yet.
+ *        isn't running yet. Returns false only when the frame was wanted but httpd's work
+ *        queue (or memory) refused it, i.e. when a caller that cares should try again.
  */
-inline void broadcast_json(const char *json, std::atomic<bool> *pending = nullptr) {
-    httpd_handle_t server = Feature::Web::handle();
-    if (server == nullptr || !has_ws_client(server)) return;
-    if (pending != nullptr && pending->exchange(true)) return;
+inline bool broadcast_json(const char *json, std::atomic<bool> *pending = nullptr);
+
+// Queues one frame for httpd's worker; no client check (callers that must not lose the frame
+// to a momentary enumeration miss decide that themselves).
+inline bool queue_broadcast(httpd_handle_t server, const char *json, std::atomic<bool> *pending) {
+    if (pending != nullptr && pending->exchange(true)) return true;
     auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork),
                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (work == nullptr) {
         if (pending != nullptr) pending->store(false);
-        return;
+        return false;
     }
     work->pending = pending;
     const int length = snprintf(work->json, sizeof(work->json), "%s", json);
@@ -147,25 +171,105 @@ inline void broadcast_json(const char *json, std::atomic<bool> *pending = nullpt
         httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
         heap_caps_free(work);
         if (pending != nullptr) pending->store(false);
+        return false;
+    }
+    return true;
+}
+
+inline bool broadcast_json(const char *json, std::atomic<bool> *pending) {
+    httpd_handle_t server = Feature::Web::handle();
+    if (server == nullptr || !has_ws_client(server)) return true;
+    return queue_broadcast(server, json, pending);
+}
+
+inline bool broadcast_midi_frame(httpd_handle_t server, uint8_t status, uint8_t data1, uint8_t data2) {
+    const UsbMidiEvent event = from_transport(status, data1, data2);
+    char json[256];
+    if (event.toJson(json, sizeof(json), static_cast<uint32_t>(esp_timer_get_time() / 1000), "MIDI") <= 0) {
+        return true; // nothing to send
+    }
+    return queue_broadcast(server, json, nullptr);
+}
+
+// httpd_get_client_list() can momentarily miss a session while the httpd task is busy. For
+// the status ticks that only skips a frame; for MIDI it would silently throw a fader's final
+// value away, so "a browser was connected a moment ago" still counts as connected.
+inline bool midi_listeners_present(httpd_handle_t server) {
+    static std::atomic<int64_t> last_seen_us{INT64_MIN / 2};
+    const int64_t now = esp_timer_get_time();
+    if (has_ws_client(server)) {
+        last_seen_us.store(now, std::memory_order_relaxed);
+        return true;
+    }
+    return now - last_seen_us.load(std::memory_order_relaxed) < 2000000;
+}
+
+/**
+ * @brief Delivers queued MIDI events to the browser: first the FIFO (notes etc., in order),
+ *        then the newest value of every control change (at most kMaxCcFramesPerTick per call,
+ *        the rest next time). Anything httpd refuses stays pending for the next call. Called
+ *        from app_main's 50 ms loop and right around every non-CC event.
+ */
+inline void broadcast_midi_tick() {
+    if (midi_tick_busy.exchange(true, std::memory_order_acquire)) return; // another task is on it
+    struct Unlock {
+        ~Unlock() { midi_tick_busy.store(false, std::memory_order_release); }
+    } unlock;
+
+    httpd_handle_t server = Feature::Web::handle();
+    const bool deliver = server != nullptr && midi_listeners_present(server); // else just discard
+    QueueHandle_t fifo = midi_fifo();
+    MidiFrame frame;
+    while (xQueuePeek(fifo, &frame, 0) == pdTRUE) {
+        if (deliver && !broadcast_midi_frame(server, frame.status, frame.data1, frame.data2)) return;
+        xQueueReceive(fifo, &frame, 0);
+    }
+
+    if (!cc_pending.exchange(false, std::memory_order_acq_rel)) return;
+    const uint16_t start = cc_scan_start.load(std::memory_order_relaxed);
+    uint8_t sent = 0;
+    for (size_t n = 0; n < kCcSlots; ++n) {
+        const uint16_t slot = static_cast<uint16_t>((start + n) % kCcSlots);
+        if (cc_latest[slot].load(std::memory_order_relaxed) == 0) continue;
+        if (deliver && sent >= kMaxCcFramesPerTick) {
+            cc_scan_start.store(slot, std::memory_order_relaxed); // continue here next tick
+            cc_pending.store(true, std::memory_order_release);
+            return;
+        }
+        const uint8_t packed = cc_latest[slot].exchange(0, std::memory_order_acq_rel);
+        if (packed == 0 || !deliver) continue;
+        if (!broadcast_midi_frame(server, static_cast<uint8_t>(0xB0 | (slot >> 7)), static_cast<uint8_t>(slot & 0x7F),
+                                  static_cast<uint8_t>(packed & 0x7F))) {
+            // httpd is busy: put the value back (unless a newer one arrived) and retry later.
+            uint8_t none = 0;
+            cc_latest[slot].compare_exchange_strong(none, packed, std::memory_order_acq_rel);
+            cc_scan_start.store(slot, std::memory_order_relaxed);
+            cc_pending.store(true, std::memory_order_release);
+            return;
+        }
+        ++sent;
     }
 }
 
 /**
- * @brief Broadcasts an incoming MIDI event to the browser (the {status,data1,data2} shape
- *        shared by every transport - see dispatch_midi()) so the web UI's MIDI activity log
- *        updates live. Safe to call from any task; a no-op if the web server isn't running.
+ * @brief Reports an incoming MIDI event to the browser (the {status,data1,data2} shape shared
+ *        by every transport - see dispatch_midi()) so the web UI's MIDI log and knob display
+ *        follow live. Control changes are coalesced (latest value wins, see cc_latest);
+ *        everything else is queued in order and sent at once. Never blocks; safe to call
+ *        from any task.
  */
 inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
-    // Skip (not queue) while the previous frame is still in flight: the browser log may miss
-    // entries during a fast knob sweep, the caller never waits on httpd.
-    if (midi_event_pending.load(std::memory_order_relaxed)) return;
-    httpd_handle_t server = Feature::Web::handle();
-    if (server == nullptr || !has_ws_client(server)) return;
-    const UsbMidiEvent event = from_transport(status, data1, data2);
-    char json[256];
-    if (event.toJson(json, sizeof(json), static_cast<uint32_t>(esp_timer_get_time() / 1000), "MIDI") > 0) {
-        broadcast_json(json, &midi_event_pending);
+    if ((status & 0xF0) == 0xB0) {
+        cc_latest[((status & 0x0F) << 7) | (data1 & 0x7F)].store(static_cast<uint8_t>(0x80 | (data2 & 0x7F)),
+                                                                 std::memory_order_relaxed);
+        cc_pending.store(true, std::memory_order_release);
+        return;
     }
+    if (Feature::Web::handle() == nullptr) return;
+    broadcast_midi_tick(); // older events first, so a CC (e.g. sustain) stays ahead of this note
+    const MidiFrame frame{status, data1, data2};
+    xQueueSend(midi_fifo(), &frame, 0); // only drops if 64 events are already waiting
+    broadcast_midi_tick();
 }
 
 /** Broadcasts live CV input values and CV device state at the UI refresh rate. */
@@ -1306,14 +1410,16 @@ void append_soundfonts(const char *root, const char *volume, char *json, size_t 
 esp_err_t soundfonts_list_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     char json[4096];
-    int offset = snprintf(json, sizeof(json), "{\"soundfonts\":[");
-    bool first = true;
-    append_soundfonts(Feature::LittleFS::MOUNT_POINT, "flash", json, sizeof(json), offset, first);
-    if (Feature::SDCard::is_mounted()) {
-        append_soundfonts(Feature::SDCard::MOUNT_POINT, "sd", json, sizeof(json), offset, first);
+    // SoundFonts are SD-only; sdMounted lets the UI say why the list is empty.
+    if (!Feature::SDCard::is_mounted()) {
+        httpd_resp_sendstr(req, "{\"soundfonts\":[],\"sdMounted\":false}");
+        return ESP_OK;
     }
+    int offset = snprintf(json, sizeof(json), "{\"sdMounted\":true,\"soundfonts\":[");
+    bool first = true;
+    append_soundfonts(Feature::SDCard::MOUNT_POINT, "sd", json, sizeof(json), offset, first);
     if (offset <= 0 || static_cast<size_t>(offset) >= sizeof(json) - 2) {
-        httpd_resp_sendstr(req, "{\"soundfonts\":[]}");
+        httpd_resp_sendstr(req, "{\"soundfonts\":[],\"sdMounted\":true}");
         return ESP_OK;
     }
     snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
@@ -1779,16 +1885,22 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     const uint8_t data2 = static_cast<uint8_t>(velocity->valueint);
                     dispatch_midi(status, data1, data2);
 
-                    UsbMidiEvent event = from_transport(status, data1, data2);
-                    char midi_json[256];
-                    if (event.toJson(midi_json, sizeof(midi_json),
-                                      static_cast<uint32_t>(esp_timer_get_time() / 1000),
-                                      "Web MIDI test") > 0) {
-                        httpd_ws_frame_t reply = {};
-                        reply.type = HTTPD_WS_TYPE_TEXT;
-                        reply.payload = reinterpret_cast<uint8_t *>(midi_json);
-                        reply.len = strlen(midi_json);
-                        httpd_ws_send_frame(req, &reply);
+                    if (cc) {
+                        // Reaches every browser through the same coalescing broadcast as a
+                        // real controller's CC, so this also exercises that path.
+                        broadcast_midi_event(status, data1, data2);
+                    } else {
+                        UsbMidiEvent event = from_transport(status, data1, data2);
+                        char midi_json[256];
+                        if (event.toJson(midi_json, sizeof(midi_json),
+                                          static_cast<uint32_t>(esp_timer_get_time() / 1000),
+                                          "Web MIDI test") > 0) {
+                            httpd_ws_frame_t reply = {};
+                            reply.type = HTTPD_WS_TYPE_TEXT;
+                            reply.payload = reinterpret_cast<uint8_t *>(midi_json);
+                            reply.len = strlen(midi_json);
+                            httpd_ws_send_frame(req, &reply);
+                        }
                     }
                     handled_locally = true;
                 }
@@ -1813,7 +1925,11 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsBool(round)) mc.roundBpm = cJSON_IsTrue(round);
                     if (cJSON_IsNumber(cc)) mc.midiCc = cc->valueint;
                     if (cJSON_IsNumber(channel)) mc.midiChannel = channel->valueint;
-                    synth::saveMasterClockToFs();
+                    // "live": the header BPM slider while dragging - RAM only, no flash write per
+                    // step; its release sends the final value without "live" and that one saves.
+                    if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "live"))) {
+                        synth::saveMasterClockToFs();
+                    }
                     handled_locally = true;
                 } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@deviceSettings") == 0 &&
                            cJSON_IsObject(params)) {
@@ -1836,8 +1952,12 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     cJSON *volumeChannel = cJSON_GetObjectItemCaseSensitive(params, "volumeChannel");
                     if (cJSON_IsNumber(volumeCc)) ds.volumeCc = volumeCc->valueint >= 0 && volumeCc->valueint <= 127 ? volumeCc->valueint : -1;
                     if (cJSON_IsNumber(volumeChannel)) ds.volumeChannel = volumeChannel->valueint >= 0 && volumeChannel->valueint <= 15 ? volumeChannel->valueint : -1;
-                    if (cJSON_IsNumber(volume) && !synth::hasLearnedMasterVolume()) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
-                    synth::saveDeviceSettingsToFs();
+                    // The UI may set the volume even with a learned CC: last writer (knob or UI) wins.
+                    if (cJSON_IsNumber(volume)) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
+                    // "live": header VOL slider while dragging - RAM only, saved on release.
+                    if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "live"))) {
+                        synth::saveDeviceSettingsToFs();
+                    }
                     // WS2812 string pin/count - persisted only, applied at the next boot.
                     cJSON *ledPin = cJSON_GetObjectItemCaseSensitive(params, "ledPin");
                     cJSON *ledCount = cJSON_GetObjectItemCaseSensitive(params, "ledCount");

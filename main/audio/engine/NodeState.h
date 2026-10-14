@@ -89,6 +89,13 @@ struct FmOscillatorState
     // Wavetable.h) and the manual morph position 0-10V, overridden by the "morph" port (12).
     wavetable::Bank *wavetableBank = nullptr;
     float morphCv = 0.0f;
+    // DX7-style frequency ratio on top of Tune (ports 13/14, control-only, 0-10V): coarse snaps
+    // to 0.5, 1, 2 ... 31 (32 equal steps), fine adds 0..99 %. Default = 1:1. Ignored while a
+    // cable/route feeds "tune" (see FmOscillatorNode.h's ratioVolts()).
+    float ratioCoarseCv = 10.0f / 31.0f;
+    float ratioFineCv = 0.0f;
+    // "detune" (port 15, control-only 0-10V, 5V = none): +-10 cents, see detuneVoltsFromCv().
+    float detuneCv = 5.0f;
 };
 
 namespace wavetable
@@ -99,6 +106,9 @@ struct Bank;
 struct LfoState
 {
     PhaseOsc phaseGen;
+    // LFO delay: seconds to fade the swing in after a reset edge (0 = off), and the time since then.
+    float delaySec = 0.0f;
+    float delayElapsed = 0.0f;
     WaveType wave = WaveType::Sine;
     float rate = 2.0f;
     float maxRateHz = 50.0f;

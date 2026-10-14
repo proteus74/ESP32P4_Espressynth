@@ -192,16 +192,20 @@ inline void init() {
 #endif
 
 #if defined(CONFIG_APP_ENABLE_LITTLEFS)
-    // Deliberately ahead of LVGL below (was the other way round before the boot splash
-    // screen existed): Feature::LVGL::init() now reads its splash image from
-    // /littlefs/system/splash.png (see display_lvgl.hpp), which needs this mount to already
-    // be up. Each feature still checks its own Kconfig guard independently - either can stay
-    // disabled without the other breaking, this only fixes their relative order when both
-    // are on.
+    // Mounted ahead of LVGL so UI code that reads presets/settings during init finds it. (The
+    // boot splash no longer lives here - it is /www/static/img/splash.jpg, mounted below.)
     ESP_LOGI(TAG, "Feature: LittleFS enabled -> Initializing...");
     const esp_err_t littlefs_err = Feature::LittleFS::init();
     if (littlefs_err != ESP_OK) {
         ESP_LOGW(TAG, "LittleFS unavailable: %s", esp_err_to_name(littlefs_err));
+    }
+#endif
+
+#if defined(CONFIG_APP_ENABLE_WEBSERVER) && defined(CONFIG_APP_ENABLE_LVGL)
+    // The boot splash is /www/static/img/splash.jpg (display_lvgl.hpp), so the www partition
+    // must be mounted before LVGL. Feature::Web::begin() below reuses this mount.
+    if (Feature::Web::mount() != ESP_OK) {
+        ESP_LOGW(TAG, "www partition unavailable - no boot splash");
     }
 #endif
 

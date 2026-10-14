@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -8,6 +9,8 @@
 #include "lvgl.h"
 #include "screens.h"
 #include "eez_ui_bridge.hpp"
+#include "esp_log.h"
+#include "features/display/MidiButtonCard.h"
 #include "features/synth/KnobActivity.h"
 
 // The Knob/Button controls of one preset page as touch-editable cards inside wndmain.
@@ -19,7 +22,7 @@ class PageControlsView
     {
         EezPageControl control;
         lv_obj_t *root;
-        lv_obj_t *arc;    // nullptr on button cards
+        lv_obj_t *bar;    // nullptr on button cards
         lv_obj_t *button; // nullptr on knob cards
         lv_obj_t *value;
         lv_obj_t *nodeValue;
@@ -66,24 +69,31 @@ class PageControlsView
         {
             snprintf(text, sizeof(text), "%.4g", static_cast<double>(card.control.value));
             setText(card.value, text);
-            if (card.control.switch_mode && card.control.list_count < 2)
+            if (card.button != nullptr && card.control.switch_mode && card.control.list_count < 2)
             {
                 if (card.control.was_above) lv_obj_add_state(card.button, LV_STATE_CHECKED);
                 else lv_obj_remove_state(card.button, LV_STATE_CHECKED);
             }
             return;
         }
-        if (lv_arc_get_value(card.arc) != card.control.raw) lv_arc_set_value(card.arc, card.control.raw);
+        if (lv_bar_get_value(card.bar) != card.control.raw) lv_bar_set_value(card.bar, card.control.raw, LV_ANIM_OFF);
         snprintf(text, sizeof(text), "%u", static_cast<unsigned>(card.control.raw));
         setText(card.value, text);
         snprintf(text, sizeof(text), "%.2f", static_cast<double>(card.control.value));
         setText(card.nodeValue, text);
     }
 
-    static void onArcChanged(lv_event_t *e)
+    // Finger position on the bar sets the raw value (0..127), same paramUpdate as a browser drag.
+    static void onBarTouch(lv_event_t *e)
     {
         Card &card = *static_cast<Card *>(lv_event_get_user_data(e));
-        const int32_t raw = lv_arc_get_value(card.arc);
+        lv_point_t point;
+        lv_indev_get_point(lv_indev_get_act(), &point);
+        lv_area_t area;
+        lv_obj_get_coords(card.bar, &area);
+        const int32_t width = lv_area_get_width(&area);
+        int32_t raw = (point.x - area.x1) * 127 / (width - 1);
+        raw = std::clamp<int32_t>(raw, 0, 127);
         if (raw == card.control.raw) return;
         card.control.raw = static_cast<uint8_t>(raw);
         eez_send_control_param(card.control.widget_id, false, card.control.control_index, "raw", static_cast<float>(raw));
@@ -172,7 +182,7 @@ public:
             Card card{};
             card.control = controls.controls[i];
             card.root = lv_obj_create(panel_);
-            lv_obj_set_size(card.root, 150, card.control.is_button ? 150 : 194);
+            lv_obj_set_size(card.root, card.control.is_button ? 150 : 155, card.control.is_button ? 150 : 95);
             lv_obj_set_style_pad_all(card.root, 0, 0);
             lv_obj_set_style_border_width(card.root, 0, 0);
             lv_obj_set_style_bg_opa(card.root, LV_OPA_TRANSP, 0);
@@ -192,18 +202,26 @@ public:
                 port = handles[2];
                 name = handles[3];
                 card.nodeValue = handles[4];
-                card.button = lv_obj_get_parent(card.value);
+                card.button = midiButtonOf(card.root);
             }
             else
             {
                 create_user_widget_knob(card.root, 0);
-                card.arc = handles[0];
-                card.value = handles[1];
-                device = handles[2];
-                port = handles[3];
-                name = handles[4];
-                card.nodeValue = handles[5];
-                lv_arc_set_range(card.arc, 0, 127);
+                const KnobHandles knob = KnobHandles::from(handles);
+                if (!knob.valid())
+                {
+                    objects = screenObjects;
+                    ESP_LOGE("PageControls", "Knob widget handle order does not match firmware (screens.c re-exported?)");
+                    lv_obj_delete(card.root);
+                    continue;
+                }
+                card.bar = knob.bar;
+                card.value = knob.value;
+                device = knob.device;
+                port = knob.port;
+                name = knob.name;
+                card.nodeValue = knob.nodeValue;
+                lv_bar_set_range(card.bar, 0, 127);
             }
             objects = screenObjects;
             lv_label_set_text(name, card.control.name);
@@ -212,13 +230,17 @@ public:
             lv_label_set_text(card.nodeValue, "");
             cards_.push_back(card);
             Card &stored = cards_.back();
-            if (stored.arc != nullptr)
-                lv_obj_add_event_cb(stored.arc, onArcChanged, LV_EVENT_VALUE_CHANGED, &stored);
+            if (stored.control.is_button)
+            {
+                if (stored.button != nullptr) lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESSED, &stored);
+                if (stored.button != nullptr) lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_RELEASED, &stored);
+                if (stored.button != nullptr) lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESS_LOST, &stored);
+            }
             else
             {
-                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESSED, &stored);
-                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_RELEASED, &stored);
-                lv_obj_add_event_cb(stored.button, onButton, LV_EVENT_PRESS_LOST, &stored);
+                lv_obj_add_flag(stored.bar, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_add_event_cb(stored.bar, onBarTouch, LV_EVENT_PRESSED, &stored);
+                lv_obj_add_event_cb(stored.bar, onBarTouch, LV_EVENT_PRESSING, &stored);
             }
             refresh(stored);
         }
@@ -259,8 +281,8 @@ public:
                 strcmp(card.control.widget_id, activity.sourceId) != 0)
                 continue;
             shown = true;
-            // While a finger is on the arc, the touch is the newest value - don't jump back.
-            if (!card.control.is_button && !lv_obj_has_state(card.arc, LV_STATE_PRESSED))
+            // While a finger is on the bar, the touch is the newest value - don't jump back.
+            if (!card.control.is_button && !lv_obj_has_state(card.bar, LV_STATE_PRESSED))
                 card.control.raw = activity.raw;
             card.control.value = activity.sourceValue;
             if (defer) card.dirty = true;

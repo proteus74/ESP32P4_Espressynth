@@ -51,6 +51,8 @@ inline void applyPortOverrides(NodeInstance &inst, bool hasPhasePort)
         const float deg = portSample(inst, 6, 0);
         s.phaseOffsetDeg = deg < -180.0f ? -180.0f : (deg > 180.0f ? 180.0f : deg);
     }
+    // "delay" (port 7, LFO only): 0-10V -> 0..5 s fade-in after a reset edge.
+    if (hasPhasePort && fed(7)) s.delaySec = volts(7) * 0.5f;
 }
 
 // Global mode, called by Graph::renderBlock once per block for a voiced Lfo
@@ -147,19 +149,6 @@ inline void render(NodeInstance &inst, size_t frames)
     // + auto mode reproduces the old fixed-5V-center/full-swing behavior
     // exactly.
     applyPortOverrides(inst, true);
-    const float halfSwing = s.gain * 0.5f;
-    const float clampLo = 0.0f;
-    const float clampHi = cv::kMaxVolts;
-    // "zeroPoint" (port 3, control-only - see isControlOnlyInput): same
-    // dual-source-fed check as reset/oneShot/global above. A connected CV
-    // SUBSTITUTES the "Fixed" Offset slider's own zeroPoint outright (same
-    // pattern as Oscillator's tuneVolts), read once per block like every
-    // other control-only input here - a center-shift has no need for
-    // per-sample resolution. Not wired: falls back to the widget's own
-    // Offset slider, unchanged from before.
-    const bool zeroPointFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
-    const float zeroPointVolts = zeroPointFed ? portSample(inst, 3, 0) : s.zeroPoint;
-    const float center = s.zeroPointFixed ? zeroPointVolts : halfSwing;
     // Degrees -> 0..1 fraction, added on every phaseGen evaluation (see
     // PhaseOsc::currentSample/process) - so a reset
     // (phaseGen.resetPhase() below) automatically lands exactly at this
@@ -196,6 +185,31 @@ inline void render(NodeInstance &inst, size_t frames)
             s.oneShotAccum = 0.0f;
         }
     }
+    const float fullSwing = s.gain * 0.5f;
+    // LFO delay (DX7 style): after a reset edge the swing fades in linearly over delaySec
+    // while the center stays put. Block-stepped (one value per block), which is plenty for a
+    // multi-second fade. Without a patched reset the LFO fades in once after the preset loads.
+    if (resetEdge)
+        s.delayElapsed = 0.0f;
+    float fade = 1.0f;
+    if (s.delaySec > 0.0f)
+    {
+        fade = s.delayElapsed >= s.delaySec ? 1.0f : s.delayElapsed / s.delaySec;
+        s.delayElapsed += static_cast<float>(frames) / kSampleRate;
+    }
+    const float halfSwing = fullSwing * fade;
+    const float clampLo = 0.0f;
+    const float clampHi = cv::kMaxVolts;
+    // "zeroPoint" (port 3, control-only - see isControlOnlyInput): same
+    // dual-source-fed check as reset/oneShot/global above. A connected CV
+    // SUBSTITUTES the "Fixed" Offset slider's own zeroPoint outright (same
+    // pattern as Oscillator's tuneVolts), read once per block like every
+    // other control-only input here - a center-shift has no need for
+    // per-sample resolution. Not wired: falls back to the widget's own
+    // Offset slider, unchanged from before.
+    const bool zeroPointFed = controlPortConnected(inst, 3) || (inst.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
+    const float zeroPointVolts = zeroPointFed ? portSample(inst, 3, 0) : s.zeroPoint;
+    const float center = s.zeroPointFixed ? zeroPointVolts : fullSwing;
     // LinearUp/LinearDown: free-running they repeat like a sawtooth (wrapping
     // ramp); with One Shot they run exactly one non-wrapping ramp from the
     // reset edge and then HOLD the end value (a Sawtooth would fall back to
@@ -302,6 +316,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.lfo.zeroPoint = p.lfoZeroPoint;
     inst.lfo.oneShot = p.lfoOneShot;
     inst.lfo.global = p.lfoGlobal;
+    inst.lfo.delaySec = p.lfoDelay;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -336,6 +351,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.zeroPoint = value;
         return true;
     }
+    if (strcmp(name, "delay") == 0)
+    {
+        inst.lfo.delaySec = value < 0.0f ? 0.0f : (value > 5.0f ? 5.0f : value);
+        return true;
+    }
     return false;
 }
 
@@ -350,6 +370,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.lfoZeroPoint = presetparser::getFloat(p, "zeroPoint", 5.0f);
     out.lfoOneShot = presetparser::getBool(p, "oneShot", false);
     out.lfoGlobal = presetparser::getBool(p, "global", false);
+    out.lfoDelay = presetparser::getFloat(p, "delay", 0.0f);
 }
 
 } // namespace nodes::lfo

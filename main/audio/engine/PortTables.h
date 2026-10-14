@@ -158,6 +158,27 @@ inline int audioInIndex(NodeType type, const char *portName)
         // like the Wavetable widget's own morph. Only audible with WaveType::Wavetable.
         if (is(portName, "morph"))
             return 12;
+        // DX7-style frequency ratio (control-only CV): coarse 0.5/1..31, fine +0..99 %.
+        if (is(portName, "ratioCoarse"))
+            return 13;
+        if (is(portName, "ratioFine"))
+            return 14;
+        // Operator detune, +-10 cents (control-only CV, 5V = 0).
+        if (is(portName, "detune"))
+            return 15;
+        return -1;
+    case NodeType::Fm8:
+        // Control-rate inputs: MIDI/CV cables are read once per block (see nodes/Fm8Node.h).
+        if (is(portName, "pitchCv"))
+            return 0;
+        if (is(portName, "gate"))
+            return 1;
+        if (is(portName, "velocity"))
+            return 2;
+        if (is(portName, "tune"))
+            return 3;
+        if (is(portName, "gain"))
+            return 4;
         return -1;
     case NodeType::Hammond:
         // Oscillator's port set minus "waveform" (see nodes/HammondNode.h -
@@ -208,6 +229,9 @@ inline int audioInIndex(NodeType type, const char *portName)
             return 5;
         if (is(portName, "phase"))
             return 6;
+        // LFO delay (fade-in after reset), 0-10V -> 0..5 s.
+        if (is(portName, "delay"))
+            return 7;
         return -1;
     case NodeType::Wavetable:
         // reset/oneShot/global: same indices and semantics as the LFO's
@@ -591,6 +615,7 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "time4")) return 7;
         if (is(portName, "gate")) return 8;
         if (is(portName, "velocity")) return 9; // 0-10V -> 0..1 output scale, see DxEnvelopeNode.h
+        if (is(portName, "rateScale")) return 10; // DX7 rate scaling, 5V = 1x, see DxEnvelopeNode.h
         return -1;
     case NodeType::StepArpeggiator:
         if (is(portName, "clock"))
@@ -678,6 +703,8 @@ inline int audioOutIndex(NodeType type, const char *portName)
     case NodeType::Oscillator:
         return is(portName, "value") ? 0 : -1;
     case NodeType::FmOscillator:
+        return is(portName, "value") ? 0 : -1;
+    case NodeType::Fm8:
         return is(portName, "value") ? 0 : -1;
     case NodeType::Hammond:
         return is(portName, "value") ? 0 : -1; // mono, like Oscillator - only outL is ever written
@@ -875,11 +902,13 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Oscillator:
         return 7; // existing five inputs + internal-feedback depth (CV) + "gate"
     case NodeType::FmOscillator:
-        return 13; // existing nine + SuperSaw detune/mix + "gate" + "morph"
+        return 16; // existing nine + SuperSaw detune/mix + "gate" + "morph" + ratio coarse/fine + detune
+    case NodeType::Fm8:
+        return 5; // "pitchCv"+"gate"+"velocity"+"tune"+"gain" (all control-rate)
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 7; // "reset" + "oneShot" + "global" + "zeroPoint" + "rate" + "gain" + "phase" (CV)
+        return 8; // "reset" + "oneShot" + "global" + "zeroPoint" + "rate" + "gain" + "phase" + "delay" (CV)
     case NodeType::Wavetable:
         return 6; // "reset" + "oneShot" + "global" + "morph" + "rate" + "gain" (CV)
     case NodeType::Detune:
@@ -979,7 +1008,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Adsr:
         return 6; // "att"+"dec"+"sus"+"rel"+"gate"+"velocity" (CV)
     case NodeType::DxEnvelope:
-        return 10; // four level plus four time CV inputs, plus "gate" and "velocity" (CV)
+        return 11; // four level plus four time CV inputs, plus "gate", "velocity" and "rateScale" (CV)
     case NodeType::StepArpeggiator:
         return 24; // "clock"+"gate"+"pitch"+"direction"+"pulseTime"+"rate"+"pattern"+"switchAtEnd" + "step1".."step16" (CV)
     case NodeType::DrumSequencer:
@@ -1101,7 +1130,10 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
         // "gain"(4) AND "fmIn"(5) stay genuinely audio-rate; "fmIn" being
         // read per-sample is the entire point of this node.
         return portIdx == 1 || portIdx == 2 || portIdx == 3 || portIdx == 6 || portIdx == 7 ||
-               portIdx == 8 || portIdx == 9 || portIdx == 10 || portIdx == 11; // + "gate"(11)
+               portIdx == 8 || portIdx == 9 || portIdx == 10 || portIdx == 11 || // + "gate"(11)
+               portIdx == 13 || portIdx == 14 || portIdx == 15; // + ratio coarse/fine + detune
+    case NodeType::Fm8:
+        return true; // all five inputs are block-rate
     case NodeType::Hammond:
         // Only "pitchCv"(1)/"tune"(2) are control-only, exactly like
         // Oscillator. "amplitude"(0), "gain"(3) AND all nine drawbars

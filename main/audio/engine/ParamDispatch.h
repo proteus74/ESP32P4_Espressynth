@@ -33,6 +33,7 @@
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/CombFilterNode.h"
 #include "nodes/FmOscillatorNode.h"
+#include "nodes/Fm8Node.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -82,6 +83,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
 
     case NodeType::FmOscillator:
         return nodes::fmoscillator::setParam(inst, name, value);
+
+    case NodeType::Fm8:
+        return nodes::fm8::setParam(inst, name, value);
 
     case NodeType::Hammond:
         return nodes::hammond::setParam(inst, name, value);

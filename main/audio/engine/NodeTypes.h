@@ -83,6 +83,7 @@ enum class NodeType : uint8_t
     Ns4168Out,
     MicIn,
     MidiProgram,
+    Fm8,
     Unknown,
 };
 
@@ -151,6 +152,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Oscillator;
     if (strcmp(typeStr, "fm-oscillator") == 0)
         return NodeType::FmOscillator;
+    if (strcmp(typeStr, "fm8") == 0)
+        return NodeType::Fm8;
     if (strcmp(typeStr, "lfo") == 0)
         return NodeType::Lfo;
     if (strcmp(typeStr, "wavetable") == 0)

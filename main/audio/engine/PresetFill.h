@@ -41,6 +41,7 @@
 #include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
+#include "nodes/Fm8Node.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -90,6 +91,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::FmOscillator:
         nodes::fmoscillator::parsePreset(p, out);
+        break;
+    case NodeType::Fm8:
+        nodes::fm8::parsePreset(p, out);
         break;
     case NodeType::Hammond:
         nodes::hammond::parsePreset(p, out);

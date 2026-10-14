@@ -1,10 +1,17 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261009-program-change-1";
+import { AudioEngine } from "./audio-engine.js?v=20261014-dx-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
+import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261015-fm8-1";
+import { defaultFm8Keys, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-3";
+
+// Header/status-bar icons: index.html marks them with data-ui-icon, swapped for the SVG tiles here.
+document.querySelectorAll("[data-ui-icon]").forEach((el) => {
+  el.outerHTML = uiIconHtml(el.dataset.uiIcon);
+});
 
 const GRID = 20;
 const LINK_BUS_COUNT = 8;
@@ -350,7 +357,7 @@ audioStartBtn.addEventListener("click", () => {
   if (!audioEngine.isRunning()) audioEngine.resume();
   const muted = !audioEngine.isMasterMuted();
   audioEngine.setMasterMuted(muted);
-  audioStartBtn.textContent = muted ? "🔇" : "🔊";
+  audioStartBtn.innerHTML = uiIconHtml(muted ? "audio-off" : "audio-on");
   audioStartBtn.classList.toggle("active", !muted);
   audioStartBtn.title = muted ? "Start audio" : "Mute audio";
 });
@@ -1382,7 +1389,7 @@ const WIDGET_TYPES = {
     outputs: [],
   },
   knob: {
-    label: "Knob",
+    label: "CC-Slider",
     icon: "🎛️",
     inputs: [{ id: "layer", label: "Layer" }],
     outputs: [
@@ -1396,7 +1403,7 @@ const WIDGET_TYPES = {
     ],
   },
   button: {
-    label: "Button",
+    label: "CC Button",
     icon: "🔘",
     inputs: [{ id: "layer", label: "Layer" }],
     outputs: Array.from({ length: 16 }, (_, buttonIndex) =>
@@ -1407,7 +1414,7 @@ const WIDGET_TYPES = {
     ).flat(),
   },
   "up-down-button": {
-    label: "Up/Down Button",
+    label: "CC Up/Down Button",
     icon: "🔼",
     inputs: [],
     outputs: [{ id: "value", label: "" }],
@@ -1604,6 +1611,20 @@ const WIDGET_TYPES = {
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
+  // Complete 8-operator FM voice with modulation matrix; patch + DX7 SysEx import live in the
+  // settings dialog (right click / double click), see fm8.js and nodes/Fm8Node.h.
+  fm8: {
+    label: "FM8",
+    icon: "🎛️",
+    inputs: [
+      { id: "pitchCv", label: "Pitch" },
+      { id: "gate", label: "Gate" },
+      { id: "velocity", label: "Velocity" },
+      { id: "tune", label: "Tune" },
+      { id: "gain", label: "Gain" },
+    ],
+    outputs: [{ id: "value", label: "Out" }],
+  },
   "fm-oscillator": {
     label: "Oscillator",
     icon: "🔔",
@@ -1613,9 +1634,14 @@ const WIDGET_TYPES = {
     // self-feedback state, matching WaveGen.
     inputs: [
       { id: "fmIn", label: "FM In" },
-      { id: "fmIndex", label: "FM Ratio" },
+      { id: "fmIndex", label: "FM Depth" },
       { id: "pitchCv", label: "Pitch" },
       { id: "tune", label: "Tune" },
+      // DX7-style frequency ratio on top of Tune (ignored while Tune is patched).
+      { id: "ratioCoarse", label: "Ratio Coarse" },
+      { id: "ratioFine", label: "Ratio Fine" },
+      // Operator detune, +-10 cents around 5 V (the DX7's per-operator detune, but continuous).
+      { id: "detune", label: "Detune" },
       { id: "amplitude", label: "Amplitude" },
       { id: "waveform", label: "Waveform" },
       { id: "gate", label: "Gate" },
@@ -1882,6 +1908,8 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "gate", label: "Gate" },
       { id: "velocity", label: "Velocity" },
+      // DX7 rate scaling: 5 V = unchanged, +2 V = twice as fast (e.g. Midi-In Pitch -> Rate Scale).
+      { id: "rateScale", label: "Rate Scale" },
       { id: "level1", label: "Level 1" },
       { id: "time1", label: "Time 1" },
       { id: "level2", label: "Level 2" },
@@ -2135,6 +2163,8 @@ const WIDGET_TYPES = {
     inputs: [
       { id: "rate", label: "Rate" },
       { id: "phase", label: "Phase" },
+      // Fade-in after a Reset edge (0..5 s), like the DX7's LFO delay.
+      { id: "delay", label: "Delay" },
       { id: "reset", label: "Reset" },
       { id: "oneShot", label: "One Shot" },
       { id: "global", label: "Global" },
@@ -2201,11 +2231,11 @@ const WIDGET_TYPES = {
 
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-split", "midi-filter", "midi-program"] },
-  { label: "Generator", types: ["fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"] },
-  { label: "Modulator", types: ["lfo", "wavetable", "adsr", "dx-envelope", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
+  { label: "Generator", types: ["fm-oscillator", "fm8", "wave-player", "hammond", "soundfont-player", "mda-piano"] },
+  { label: "Modulator", types: ["adsr", "dx-envelope", "lfo", "wavetable", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
+  { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const", "master-volume"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "counter", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
-  { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out", "mic-in"] },
@@ -2223,7 +2253,7 @@ const AUDIO_PORTS = {
   
   
   oscillator: { in: ["amplitude", "gain", "pitchCv", "tune", "feedback"], out: ["value"] },
-  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback", "dutyCycle", "superSawDetune", "superSawMix"], out: ["value"] },
+  "fm-oscillator": { in: ["amplitude", "gain", "pitchCv", "tune", "fmIn", "fmIndex", "feedback", "dutyCycle", "superSawDetune", "superSawMix", "ratioCoarse", "ratioFine", "detune"], out: ["value"] },
   // All 13 are real audio-rate ports here (unlike Mixer's control-only
   // "gainN") - each of the 9 drawbar levels is independently CV-connectable.
   hammond: {
@@ -2302,6 +2332,8 @@ const AUDIO_PORTS = {
   // this table just never reflected it).
   adsr: { in: ["gate"], out: ["out"] },
   "dx-envelope": { in: ["gate"], out: ["out"] },
+  // FM8 is rendered by the device only; the browser preview has no node for it (like Clock).
+  fm8: { out: [] },
   "step-arpeggiator": {
     in: ["clock", "gate", "pitch", "direction", "pulseTime", "rate", "pattern", "switchAtEnd", ...Array.from({ length: 16 }, (_, i) => `step${i + 1}`)],
     // "cv"/"gateOut" are genuine audio-rate outputs in the C++ engine, but
@@ -2614,7 +2646,7 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "master-volume", "const", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "master-volume", "const", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan",
 ];
 const FX_PAGE_TYPES = [
   "master-volume",
@@ -3279,7 +3311,11 @@ function createWidget(type, label, x, y, forcedId) {
   const titleWrap = document.createElement("span");
   titleWrap.className = "widget-instance-title";
 
-  if (def.icon) {
+  // Same SVG tile as the Add Node picker; the emoji only for types without one.
+  const iconHtml = nodeIconHtml(type);
+  if (iconHtml) {
+    titleWrap.insertAdjacentHTML("beforeend", iconHtml);
+  } else if (def.icon) {
     const iconSpan = document.createElement("span");
     iconSpan.textContent = def.icon;
     titleWrap.appendChild(iconSpan);
@@ -3926,6 +3962,9 @@ function createWidget(type, label, x, y, forcedId) {
       superSawDetune: center,
       superSawMix: center,
       morph: 0,
+      ratioCoarse: FM_RATIO_COARSE_ONE_CV, // 1:1
+      ratioFine: 0,
+      detune: center, // 5 V = 0 cents
       wavetables: null, // created on first use (see fmOscillatorWavetableBank)
     };
     fmOscillatorStates.set(id, fmOscState);
@@ -4186,7 +4225,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "soundfont-player") {
-    const state = { volume: "flash", path: "", bank: 0, program: 0, maxVoices: 32,
+    const state = { volume: "sd", path: "", bank: 0, program: 0, maxVoices: 32,
       enableCc: false, enableModWheel: false, enablePitchWheel: false, gain: CV_MAX_VOLTS,
       maxBank: SOUNDFONT_DEFAULT_MAX_BANK, presetName: null };
     soundFontPlayerStates.set(id, state);
@@ -4557,6 +4596,33 @@ function createWidget(type, label, x, y, forcedId) {
     applyAdsrCollapsed(id);
   }
 
+  if (type === "fm8") {
+    const state = { keys: defaultFm8Keys() };
+    fm8States.set(id, state);
+    const body = document.createElement("div");
+    body.className = "widget-instance-body fm8-body";
+    const summary = document.createElement("div");
+    summary.className = "fm8-summary";
+    summary.dataset.role = "fm8-summary";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn-secondary fm8-edit-btn";
+    editBtn.textContent = "Edit / Load SysEx…";
+    body.append(summary, editBtn);
+    el.appendChild(body);
+    renderFm8Summary(summary, state);
+    editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    editBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openFm8Settings(id);
+    });
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openFm8Settings(id);
+    });
+  }
+
   if (type === "dx-envelope") {
     const state = createDxEnvelopeDefaults();
     dxEnvelopeStates.set(id, state);
@@ -4697,6 +4763,7 @@ function createWidget(type, label, x, y, forcedId) {
       maxRate: LFO_MAX_RATE_HZ,
       gain: CV_MAX_VOLTS,
       phase: 0,
+      delay: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
       oneShot: false,
@@ -4782,6 +4849,7 @@ function createWidget(type, label, x, y, forcedId) {
       maxRate: LFO_MAX_RATE_HZ,
       gain: CV_MAX_VOLTS,
       phase: 0,
+      delay: 0,
       zeroPointFixed: false,
       zeroPoint: 5,
       oneShot: false,
@@ -5089,6 +5157,7 @@ function createWidget(type, label, x, y, forcedId) {
       layerCount: 1,
       activeLayer: 0,
       layers: [createKnobLayer()],
+      orientation: "vertical",
       outputSide: "bottom",
     });
     audioEngine.createNode(id, "knob", { value: 0 });
@@ -5284,7 +5353,8 @@ function createWidget(type, label, x, y, forcedId) {
     slider.setAttribute("aria-describedby", `${id}-volume-value`);
     slider.addEventListener("mousedown", e => e.stopPropagation());
     slider.addEventListener("click", e => e.stopPropagation());
-    slider.addEventListener("input", () => setManualMasterVolume(Number(slider.value) / CV_MAX_VOLTS));
+    slider.addEventListener("input", () => setManualMasterVolume(Number(slider.value) / CV_MAX_VOLTS, true));
+    slider.addEventListener("change", () => setManualMasterVolume(Number(slider.value) / CV_MAX_VOLTS));
     const value = document.createElement("output");
     value.dataset.role = "master-volume-value";
     value.className = "port-value";
@@ -6279,6 +6349,68 @@ function createWidget(type, label, x, y, forcedId) {
           resetTune();
         });
       }
+      if (type === "fm-oscillator" && port.id === "detune") {
+        const fmOscState = fmOscillatorStates.get(id);
+        row.dataset.role = "fm-oscillator-detune-row";
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fmOscState.detune);
+        slider.dataset.role = "fm-oscillator-detune-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, "detune", parseFloat(slider.value)));
+        row.appendChild(slider);
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "fm-oscillator-detune-value";
+        valueSpan.textContent = fmDetuneLabel(fmOscState.detune);
+        row.appendChild(valueSpan);
+        const resetDetune = (e) => {
+          e.stopPropagation();
+          if (connections.some((c) => c.to.widgetId === id && c.to.portId === "detune")) return;
+          deliverToWidget(id, "detune", CV_MAX_VOLTS / 2);
+        };
+        row.querySelector(".port-label")?.addEventListener("dblclick", resetDetune);
+        valueSpan.addEventListener("dblclick", resetDetune);
+      }
+      // DX7-style frequency ratio on top of Tune (see FmOscillatorNode.h's ratioVolts()):
+      // Coarse snaps to 0.5, 1, 2 ... 31, Fine adds +0..99 %. Greyed out while Tune is patched.
+      if (type === "fm-oscillator" && (port.id === "ratioCoarse" || port.id === "ratioFine")) {
+        const fmOscState = fmOscillatorStates.get(id);
+        const role = port.id === "ratioCoarse" ? "ratio-coarse" : "ratio-fine";
+        row.dataset.role = `fm-oscillator-${role}-row`;
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = String(CV_MAX_VOLTS / (port.id === "ratioCoarse" ? 31 : 99));
+        slider.value = String(fmOscState[port.id]);
+        slider.dataset.role = `fm-oscillator-${role}-slider`;
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => deliverToWidget(id, port.id, parseFloat(slider.value)));
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = `fm-oscillator-${role}-value`;
+        const initial = fmRatioFromCv(fmOscState.ratioCoarse, fmOscState.ratioFine);
+        valueSpan.textContent = port.id === "ratioCoarse" ? `${initial.coarse}×` : `+${initial.fine}%`;
+        row.appendChild(valueSpan);
+        const reset = (e) => {
+          e.stopPropagation();
+          if (connections.some((c) => c.to.widgetId === id && c.to.portId === port.id)) return;
+          deliverToWidget(id, port.id, port.id === "ratioCoarse" ? FM_RATIO_COARSE_ONE_CV : 0);
+        };
+        row.querySelector(".port-label")?.addEventListener("dblclick", reset);
+        valueSpan.addEventListener("dblclick", reset);
+      }
       if (type === "fm-oscillator" && port.id === "gain") {
         const fmOscState = fmOscillatorStates.get(id);
 
@@ -6530,7 +6662,7 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = `${formatNumber(gainState.curve)} V`;
         row.appendChild(valueSpan);
       }
-      if (isLfoLikeType(type) && (port.id === "rate" || port.id === "gain" || port.id === "phase")) {
+      if (isLfoLikeType(type) && (port.id === "rate" || port.id === "gain" || port.id === "phase" || port.id === "delay")) {
         const lfoState = lfoStates.get(id);
         const cfg = LFO_SLIDER_CONFIG[port.id];
 
@@ -6821,6 +6953,7 @@ function removeWidget(id, force = false) {
   outputMultiplexerStates.delete(id);
   adsrStates.delete(id);
   dxEnvelopeStates.delete(id);
+  fm8States.delete(id);
   constStates.delete(id);
   voltmeterStates.delete(id);
   rgbLedStates.delete(id);
@@ -7157,11 +7290,28 @@ function knobValueParamName(knobIndex, layerIndex = 0) {
   return index === 0 ? "value" : `value${index + 1}`;
 }
 
+// Vertical sliders sit side by side, so their jacks go on the top or bottom edge;
+// horizontal sliders are stacked, so theirs go on the left or right edge.
+const KNOB_OUTPUT_SIDES = { vertical: ["top", "bottom"], horizontal: ["left", "right"] };
+const KNOB_DEFAULT_OUTPUT_SIDE = { vertical: "bottom", horizontal: "right" };
+
+function knobValidOutputSide(orientation, side) {
+  return KNOB_OUTPUT_SIDES[orientation]?.includes(side) ? side : KNOB_DEFAULT_OUTPUT_SIDE[orientation];
+}
+
 function renderKnobPorts(widgetId, portsEl) {
   const state = knobStates.get(widgetId);
   if (!state) return;
   portsEl.innerHTML = "";
-  portsEl.className = `widget-ports knob-output-ports knob-output-${state.outputSide}`;
+  portsEl.className = `widget-ports knob-output-ports knob-output-${state.outputSide} knob-orient-${state.orientation}`;
+  // Left/right jacks line up with the slider rows, so they live in the (positioned)
+  // body next to them; top/bottom jacks stay on the widget's own edge.
+  const widgetEl = document.getElementById(widgetId);
+  const body = widgetEl?.querySelector('[data-role="knob-body"]');
+  if (body) {
+    const parent = state.orientation === "horizontal" ? body : widgetEl;
+    if (portsEl.parentElement !== parent) parent.appendChild(portsEl);
+  }
   portsEl.style.setProperty("--knob-count", state.count);
   portsEl.style.setProperty("--knob-layer-count", state.layerCount);
   for (let knobIndex = 0; knobIndex < state.count; knobIndex += 1) {
@@ -7185,7 +7335,9 @@ function renderKnobControls(widgetId, gridElement = null) {
   if (!state || !grid) return;
   grid.innerHTML = "";
   const body = grid.closest('[data-role="knob-body"]');
-  const columns = state.count;
+  const horizontal = state.orientation === "horizontal";
+  // Vertical sliders share one row (a column each); horizontal ones are stacked.
+  const columns = horizontal ? 1 : state.count;
   const layer = knobLayer(state);
   if (!layer) return;
   grid.style.setProperty("--knob-count", state.count);
@@ -7194,44 +7346,76 @@ function renderKnobControls(widgetId, gridElement = null) {
     body.style.setProperty("--knob-count", state.count);
     body.style.setProperty("--knob-columns", columns);
     body.style.setProperty("--knob-layer-count", state.layerCount);
-    body.style.setProperty("--knob-column-min", `${Math.max(76, state.layerCount * 18 + (state.layerCount - 1) * 2)}px`);
+    body.style.setProperty("--knob-column-min", `${Math.max(60, state.layerCount * 18 + (state.layerCount - 1) * 2)}px`);
     body.classList.toggle("knob-single-layer", state.layerCount === 1);
+    body.classList.toggle("knob-orient-vertical", !horizontal);
+    body.classList.toggle("knob-orient-horizontal", horizontal);
+    body.classList.toggle("knob-side-left", horizontal && state.outputSide === "left");
+    body.classList.toggle("knob-side-right", horizontal && state.outputSide === "right");
   }
   for (let index = 0; index < state.count; index += 1) {
     const cell = document.createElement("div");
     cell.className = "knob-control";
-    const dial = document.createElement("div");
-    dial.className = "knob-dial";
-    const indicator = document.createElement("div");
-    indicator.className = "knob-indicator";
-    indicator.dataset.role = "knob-indicator";
-    dial.appendChild(indicator);
-    const cap = document.createElement("div");
-    cap.className = "knob-center-cap";
-    dial.appendChild(cap);
-    dial.addEventListener("mousedown", (event) => startKnobDrag(event, widgetId, index));
-    // Double-click resets this knob to its center position (raw 63.5, the
-    // middle of the 0-127 MIDI-CC range) - widget settings stay reachable
-    // via the widget-level dblclick handler elsewhere on the widget body.
-    dial.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setKnobRaw(widgetId, 63.5, index);
-      markDirty();
-    });
     const value = document.createElement("div");
     value.className = "knob-readout";
     value.dataset.role = "knob-readout";
     const label = document.createElement("div");
     label.className = "knob-cc-label";
     label.dataset.role = "knob-label";
-    indicator.style.transform = `rotate(${knobAngle(layer.controls[index].raw)}deg)`;
     value.textContent = formatNumber(mapKnobValue(layer.controls[index]));
-    label.textContent = layer.labels[index] || `Knob ${index + 1}`;
-    cell.append(dial, value, label);
+    label.textContent = layer.labels[index] || `Slider ${index + 1}`;
+    cell.append(createKnobSlider(widgetId, index, horizontal), value, label);
     grid.appendChild(cell);
     updateKnobVisual(widgetId, index);
   }
+}
+
+// One fader per control. `--pos` (0..1) is the only thing that moves it, set by
+// updateKnobVisual(); the track element IS the travel range, so pointer maths
+// needs no knowledge of thumb size or canvas zoom.
+function createKnobSlider(widgetId, index, horizontal) {
+  const slider = document.createElement("div");
+  slider.className = "knob-slider";
+  slider.dataset.role = "knob-slider";
+  slider.tabIndex = 0;
+  slider.setAttribute("role", "slider");
+  slider.setAttribute("aria-orientation", horizontal ? "horizontal" : "vertical");
+  slider.setAttribute("aria-valuemin", "0");
+  slider.setAttribute("aria-valuemax", "127");
+  const track = document.createElement("div");
+  track.className = "knob-slider-track";
+  const fill = document.createElement("div");
+  fill.className = "knob-slider-fill";
+  const thumb = document.createElement("div");
+  thumb.className = "knob-slider-thumb";
+  track.append(fill, thumb);
+  slider.appendChild(track);
+  slider.addEventListener("pointerdown", (event) => startKnobSliderDrag(event, widgetId, index, slider));
+  // Double-click resets this control to its center position (raw 63.5, the
+  // middle of the 0-127 MIDI-CC range) - widget settings stay reachable
+  // via the widget-level dblclick handler elsewhere on the widget body.
+  slider.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setKnobRaw(widgetId, 63.5, index);
+    markDirty();
+  });
+  slider.addEventListener("keydown", (event) => {
+    const control = knobLayer(knobStates.get(widgetId))?.controls[index];
+    if (!control) return;
+    const step = event.shiftKey ? 10 : 1;
+    const target = {
+      ArrowUp: control.raw + step, ArrowRight: control.raw + step,
+      ArrowDown: control.raw - step, ArrowLeft: control.raw - step,
+      Home: 0, End: 127,
+    }[event.key];
+    if (target === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setKnobRaw(widgetId, target, index);
+    markDirty();
+  });
+  return slider;
 }
 
 function knobLayerIndexFromCv(volts, layerCount) {
@@ -7867,10 +8051,6 @@ function setConstValue(widgetId, value) {
   sendLiveParamUpdate(widgetId, { value: state.value });
 }
 
-function knobAngle(raw) {
-  return -135 + (raw / 127) * 270;
-}
-
 function mapKnobValue(control) {
   const list = parseValueList(control.listText);
   if (list && list.length >= 2) {
@@ -7891,14 +8071,22 @@ function updateKnobVisual(widgetId, index = 0) {
   const cell = el.querySelectorAll(".knob-control")[index];
   if (!control || !cell) return;
 
-  const indicator = cell.querySelector('[data-role="knob-indicator"]');
-  if (indicator) indicator.style.transform = `rotate(${knobAngle(control.raw)}deg)`;
+  const text = formatNumber(mapKnobValue(control));
+  const name = layer.labels[index] || `Slider ${index + 1}`;
+
+  const slider = cell.querySelector('[data-role="knob-slider"]');
+  if (slider) {
+    slider.style.setProperty("--pos", String(clamp(control.raw / 127, 0, 1)));
+    slider.setAttribute("aria-valuenow", String(Math.round(control.raw)));
+    slider.setAttribute("aria-valuetext", text);
+    slider.setAttribute("aria-label", name);
+  }
 
   const readout = cell.querySelector('[data-role="knob-readout"]');
-  if (readout) readout.textContent = formatNumber(mapKnobValue(control));
+  if (readout) readout.textContent = text;
 
   const label = cell.querySelector('[data-role="knob-label"]');
-  if (label) label.textContent = layer.labels[index] || `Knob ${index + 1}`;
+  if (label) label.textContent = name;
 }
 
 function setKnobRaw(widgetId, raw, index = 0) {
@@ -7918,31 +8106,48 @@ function setKnobRaw(widgetId, raw, index = 0) {
   });
 }
 
-function startKnobDrag(e, widgetId, index = 0) {
-  e.preventDefault();
-  e.stopPropagation();
+// Grabbing the thumb keeps the point you grabbed it at; pressing the groove
+// jumps the thumb under the pointer and carries on dragging from there.
+function startKnobSliderDrag(event, widgetId, index, slider) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
   const state = knobStates.get(widgetId);
   const control = knobLayer(state)?.controls[index];
-  if (!control) return;
+  const track = slider.querySelector(".knob-slider-track");
+  if (!control || !track) return;
+  const horizontal = state.orientation === "horizontal";
 
-  const startY = e.clientY;
-  const startRaw = control.raw;
-  let moved = false;
+  // 0 = low end of the track, 1 = high end (bottom/top or left/right).
+  const fractionAt = (ev) => {
+    const rect = track.getBoundingClientRect();
+    const raw = horizontal ? (ev.clientX - rect.left) / rect.width : (rect.bottom - ev.clientY) / rect.height;
+    return Number.isFinite(raw) ? clamp(raw, 0, 1) : 0;
+  };
+  const grabbedThumb = Boolean(event.target.closest?.(".knob-slider-thumb"));
+  const grabOffset = grabbedThumb ? fractionAt(event) - control.raw / 127 : 0;
+  const apply = (ev) => setKnobRaw(widgetId, (fractionAt(ev) - grabOffset) * 127, index);
 
-  function onMove(ev) {
-    const dy = startY - ev.clientY;
-    if (Math.abs(dy) > 2) moved = true;
-    setKnobRaw(widgetId, startRaw + dy / 2, index);
-  }
+  slider.focus({ preventScroll: true });
+  slider.setPointerCapture(event.pointerId);
+  slider.classList.add("dragging");
+  if (!grabbedThumb) apply(event);
+  let moved = !grabbedThumb;
 
-  function onUp() {
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
+  const onMove = (ev) => {
+    moved = true;
+    apply(ev);
+  };
+  const onEnd = () => {
+    slider.removeEventListener("pointermove", onMove);
+    slider.removeEventListener("pointerup", onEnd);
+    slider.removeEventListener("pointercancel", onEnd);
+    slider.classList.remove("dragging");
     if (moved) markDirty();
-  }
-
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
+  };
+  slider.addEventListener("pointermove", onMove);
+  slider.addEventListener("pointerup", onEnd);
+  slider.addEventListener("pointercancel", onEnd);
 }
 
 function routeMidiToKnobs(data) {
@@ -7991,6 +8196,7 @@ const knobLayerNameInput = document.getElementById("knobLayerNameInput");
 const knobCcContextMenu = document.getElementById("knobCcContextMenu");
 const knobLayerContextMenu = document.getElementById("knobLayerContextMenu");
 const knobOutputSideInput = document.getElementById("knobOutputSideInput");
+const knobOrientationInput = document.getElementById("knobOrientationInput");
 const knobSettingsGrid = document.getElementById("knobSettingsGrid");
 let pendingKnobId = null;
 let pendingKnobIndex = 0;
@@ -8174,7 +8380,7 @@ function renderKnobSettingsGrid(widgetId) {
     updateKnobCardDisabledState(card);
     const actions = document.createElement("div");
     actions.className = "knob-settings-actions";
-    [["up", "↑", "Move knob left"], ["down", "↓", "Move knob right"], ["delete", "✕", "Delete knob"]].forEach(([action, text, title]) => {
+    [["up", "↑", "Move slider up"], ["down", "↓", "Move slider down"], ["delete", "✕", "Delete slider"]].forEach(([action, text, title]) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn-secondary";
@@ -8304,11 +8510,27 @@ function openKnobSettings(widgetId, index = 0) {
   pendingKnobId = widgetId;
   pendingKnobIndex = index;
   pendingKnobLayerIndex = state.activeLayer;
-  knobOutputSideInput.value = state.outputSide;
+  knobOrientationInput.value = state.orientation;
+  fillKnobOutputSideOptions(state.orientation, state.outputSide);
   renderKnobSettingsGrid(widgetId);
   midiLearnTargetId = null;
   knobSettingsOverlay.classList.remove("hidden");
 }
+
+// The jack sides on offer follow the slider orientation (see KNOB_OUTPUT_SIDES).
+function fillKnobOutputSideOptions(orientation, selected) {
+  knobOutputSideInput.replaceChildren(...KNOB_OUTPUT_SIDES[orientation].map((side) => {
+    const option = document.createElement("option");
+    option.value = side;
+    option.textContent = side[0].toUpperCase() + side.slice(1);
+    return option;
+  }));
+  knobOutputSideInput.value = knobValidOutputSide(orientation, selected);
+}
+
+knobOrientationInput.addEventListener("change", () => {
+  fillKnobOutputSideOptions(knobOrientationInput.value, null);
+});
 
 function closeKnobSettings() {
   knobSettingsOverlay.classList.add("hidden");
@@ -8364,7 +8586,8 @@ document.getElementById("knobSettingsSave").addEventListener("click", () => {
   const state = knobStates.get(pendingKnobId);
   if (state) {
     syncKnobSettingsGrid(pendingKnobId, pendingKnobLayerIndex);
-    state.outputSide = ["top", "bottom"].includes(knobOutputSideInput.value) ? knobOutputSideInput.value : "bottom";
+    state.orientation = knobOrientationInput.value === "horizontal" ? "horizontal" : "vertical";
+    state.outputSide = knobValidOutputSide(state.orientation, knobOutputSideInput.value);
     state.layers.forEach((layer, layerIndex) => {
       layer.controls.slice(0, state.count).forEach((control, knobIndex) => {
         const binding = state.layers[0].controls[knobIndex];
@@ -10739,12 +10962,14 @@ const soundFontPlayerVoicesInput = document.getElementById("soundFontPlayerVoice
 const soundFontPlayerPresetDisplay = document.getElementById("soundFontPlayerPresetDisplay");
 let pendingSoundFontPlayerId = null;
 let soundFontModalPreviewRequestId = 0;
+let soundFontSdMounted = true;
 
 async function fetchSoundFonts() {
   try {
     const res = await fetch("/api/soundfonts");
     if (!res.ok) return [];
     const data = await res.json();
+    soundFontSdMounted = data.sdMounted !== false;
     return Array.isArray(data.soundfonts) ? data.soundfonts : [];
   } catch (err) {
     appendLog(`SoundFont list could not be loaded: ${err.message}`);
@@ -10837,11 +11062,13 @@ async function openSoundFontPlayerSettings(widgetId) {
   if (!state) return;
   pendingSoundFontPlayerId = widgetId;
   const files = await fetchSoundFonts();
-  soundFontPlayerFileSelect.innerHTML = '<option value="">No SoundFont</option>';
+  soundFontPlayerFileSelect.innerHTML = soundFontSdMounted
+    ? '<option value="">No SoundFont</option>'
+    : '<option value="">No SoundFont (SD card not mounted)</option>';
   files.forEach((file) => {
     const opt = document.createElement("option");
     opt.value = soundFontKey(file);
-    opt.textContent = `${file.volume === "sd" ? "SD" : "Flash"}: ${file.name}`;
+    opt.textContent = `SD: ${file.name}`;
     opt.dataset.volume = file.volume;
     opt.dataset.path = file.path;
     soundFontPlayerFileSelect.appendChild(opt);
@@ -10873,7 +11100,7 @@ document.getElementById("soundFontPlayerSettingsSave").addEventListener("click",
   const state = soundFontPlayerStates.get(id);
   if (!state) return;
   const selected = soundFontPlayerFileSelect.selectedOptions[0];
-  state.volume = selected?.dataset.volume || "flash";
+  state.volume = "sd";
   state.path = selected?.dataset.path || "";
   state.maxVoices = clamp(parseInt(soundFontPlayerVoicesInput.value, 10) || 32, 4, 128);
   audioEngine.setSoundFontParams(id, { volume: state.volume, path: state.path, maxVoices: state.maxVoices });
@@ -11098,6 +11325,7 @@ function refreshAllDualModeWidgets() {
       audioEngine.setParam(id, "amplitude", 0, 0);
     }
     updateFmOscillatorGainVisual(id);
+    recomputeFmOscillatorFreq(id, undefined); // a (dis)connected Tune cable switches the ratio on/off
     updateFmOscillatorTuneVisual(id);
     updateFmOscillatorIndexVisual(id);
     updateFmOscillatorFeedbackVisual(id);
@@ -12587,9 +12815,23 @@ let masterClockRoundBpm = false;
 let masterClockCc = null;
 let masterClockChannel = null;
 
+// Header BPM meter + its slider popover (same look/behaviour as the VOL meter).
 function updateMasterClockBadge() {
+  const bpmText = formatNumber(masterClockBpm);
   const label = document.getElementById("masterClockBpmLabel");
-  if (label) label.textContent = formatNumber(masterClockBpm);
+  if (label) label.textContent = bpmText;
+  const fill = document.getElementById("masterClockMeterFill");
+  if (fill) fill.style.width = `${Math.min(100, (masterClockBpm / Math.max(1, masterClockMaxBpm)) * 100)}%`;
+  const input = document.getElementById("masterClockPopoverInput");
+  if (input) {
+    input.max = String(masterClockMaxBpm);
+    input.step = masterClockRoundBpm ? "1" : "0.1";
+    input.value = String(masterClockBpm);
+  }
+  const value = document.getElementById("masterClockPopoverValue");
+  if (value) value.textContent = bpmText;
+  const hint = document.getElementById("masterClockPopoverHint");
+  if (hint) hint.hidden = masterClockCc === null;
 }
 
 function updateMasterClockLearnUi() {
@@ -12646,7 +12888,9 @@ function routeMidiToMasterClock(data) {
   }
 }
 
-const masterClockBadge = document.getElementById("masterClockBadge");
+const masterClockMeter = document.getElementById("masterClockMeter");
+const masterClockPopover = document.getElementById("masterClockPopover");
+const masterClockPopoverInput = document.getElementById("masterClockPopoverInput");
 const masterClockSettingsOverlay = document.getElementById("masterClockSettingsOverlay");
 const masterClockBpmInput = document.getElementById("masterClockBpmInput");
 const masterClockMaxBpmInput = document.getElementById("masterClockMaxBpmInput");
@@ -12667,7 +12911,33 @@ function closeMasterClockSettings() {
   updateMasterClockLearnUi();
 }
 
-masterClockBadge?.addEventListener("click", openMasterClockSettings);
+// Click: tempo slider below the meter. Double-click: the full Master Clock dialog. Works even
+// with a learned CC - the UI value is sent to the firmware and the knob takes over on its next move.
+// "live" while dragging = RAM only on the firmware; the release ("change") persists it.
+function sendMasterClockBpm(bpm, live) {
+  setMasterClockBpm(bpm);
+  sendLiveParamUpdate("@masterClock", live ? { bpm: masterClockBpm, live: true } : { bpm: masterClockBpm });
+}
+masterClockMeter.addEventListener("click", () => setHeaderPopoverOpen(masterClockMeter, masterClockPopover, masterClockPopover.hidden));
+masterClockMeter.addEventListener("dblclick", () => {
+  setHeaderPopoverOpen(masterClockMeter, masterClockPopover, false);
+  openMasterClockSettings();
+});
+masterClockMeter.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  setHeaderPopoverOpen(masterClockMeter, masterClockPopover, masterClockPopover.hidden);
+});
+masterClockPopoverInput.addEventListener("input", () => sendMasterClockBpm(masterClockPopoverInput.value, true));
+masterClockPopoverInput.addEventListener("change", () => sendMasterClockBpm(masterClockPopoverInput.value, false));
+let masterClockWheelSaveTimer = null;
+masterClockPopover.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const step = masterClockRoundBpm ? 1 : 0.5;
+  sendMasterClockBpm(Math.min(masterClockMaxBpm, Math.max(0, masterClockBpm + (e.deltaY < 0 ? step : -step))), true);
+  clearTimeout(masterClockWheelSaveTimer); // persist once the wheel settles, not per notch
+  masterClockWheelSaveTimer = setTimeout(() => sendMasterClockBpm(masterClockBpm, false), 600);
+}, { passive: false });
 masterClockSettingsOverlay?.addEventListener("click", (e) => {
   if (e.target === masterClockSettingsOverlay) closeMasterClockSettings();
 });
@@ -12777,24 +13047,22 @@ function hasLearnedMasterVolume() {
     Number.isInteger(masterVolumeChannel) && masterVolumeChannel >= 0 && masterVolumeChannel <= 15;
 }
 
-function setManualMasterVolume(value) {
-  if (hasLearnedMasterVolume() || !Number.isFinite(value)) return;
+// Allowed even with a learned CC (last writer wins). live = slider still moving: the firmware
+// keeps it in RAM only and persists the final value sent without "live".
+function setManualMasterVolume(value, live = false) {
+  if (!Number.isFinite(value)) return;
   masterVolume = Math.max(0, Math.min(1, value));
   updateMasterVolumeUi();
-  sendLiveParamUpdate("@deviceSettings", { volume: masterVolume });
+  sendLiveParamUpdate("@deviceSettings", live ? { volume: masterVolume, live: true } : { volume: masterVolume });
 }
 
 function updateMasterVolumeUi() {
   const pct = Math.round(masterVolume * 100);
   const volts = masterVolume * CV_MAX_VOLTS;
   const learned = hasLearnedMasterVolume();
-  if (masterVolumeInput) {
-    masterVolumeInput.value = String(pct);
-    masterVolumeInput.disabled = learned;
-  }
+  if (masterVolumeInput) masterVolumeInput.value = String(pct);
   if (masterVolumeValue) masterVolumeValue.textContent = `${pct}%`;
   masterVolumePopoverInput.value = String(pct);
-  masterVolumePopoverInput.disabled = learned;
   masterVolumePopoverValue.textContent = `${pct}%`;
   masterVolumePopoverHint.hidden = !learned;
   const meterFill = document.getElementById("masterVolumeMeterFill");
@@ -12804,7 +13072,6 @@ function updateMasterVolumeUi() {
   document.querySelectorAll('[data-widget-type="master-volume"]').forEach(el => {
     const slider = el.querySelector('.master-volume-body input');
     slider.value = String(volts);
-    slider.disabled = learned;
     el.querySelector('[data-role="master-volume-value"]').textContent = `${volts.toFixed(2)} V`;
     audioEngine.setParam(el.id, "value", volts);
     propagate(el.id, "value", volts);
@@ -12859,37 +13126,52 @@ globalMidiSettingsOverlay?.querySelectorAll("[data-global-clear]").forEach((btn)
   });
 });
 masterVolumeInput?.addEventListener("input", () => {
+  setManualMasterVolume(Number(masterVolumeInput.value) / 100, true);
+});
+masterVolumeInput?.addEventListener("change", () => {
   setManualMasterVolume(Number(masterVolumeInput.value) / 100);
 });
 
-// Header VOL meter: click opens a vertical slider below it (outside click / Escape closes).
-// Disabled while a MIDI CC is learned for Master Volume - the controller owns it then.
-function setMasterVolumePopoverOpen(open) {
-  masterVolumePopover.hidden = !open;
-  masterVolumeMeter.setAttribute("aria-expanded", String(open));
-  if (open) masterVolumePopoverInput.focus();
+// Header VOL / BPM meters: click opens a vertical slider below the meter (outside click /
+// Escape closes it). Usable even with a learned MIDI CC - the UI value is sent to the
+// firmware and the controller takes over again on its next move ("MIDI CC" hint shows that).
+function setHeaderPopoverOpen(meter, popover, open) {
+  popover.hidden = !open;
+  meter.setAttribute("aria-expanded", String(open));
+  if (open) popover.querySelector("input")?.focus();
 }
-masterVolumeMeter.addEventListener("click", () => setMasterVolumePopoverOpen(masterVolumePopover.hidden));
+const headerPopovers = [[masterVolumeMeter, masterVolumePopover], [masterClockMeter, masterClockPopover]];
+masterVolumeMeter.addEventListener("click", () => setHeaderPopoverOpen(masterVolumeMeter, masterVolumePopover, masterVolumePopover.hidden));
 masterVolumeMeter.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
   e.preventDefault();
-  setMasterVolumePopoverOpen(masterVolumePopover.hidden);
+  setHeaderPopoverOpen(masterVolumeMeter, masterVolumePopover, masterVolumePopover.hidden);
 });
 masterVolumePopoverInput.addEventListener("input", () => {
+  setManualMasterVolume(Number(masterVolumePopoverInput.value) / 100, true);
+});
+masterVolumePopoverInput.addEventListener("change", () => {
   setManualMasterVolume(Number(masterVolumePopoverInput.value) / 100);
 });
+let masterVolumeWheelSaveTimer = null;
 masterVolumePopover.addEventListener("wheel", (e) => {
   e.preventDefault();
-  setManualMasterVolume(masterVolume + (e.deltaY < 0 ? 0.02 : -0.02));
+  setManualMasterVolume(masterVolume + (e.deltaY < 0 ? 0.02 : -0.02), true);
+  clearTimeout(masterVolumeWheelSaveTimer); // persist once the wheel settles, not per notch
+  masterVolumeWheelSaveTimer = setTimeout(() => setManualMasterVolume(masterVolume), 600);
 }, { passive: false });
 document.addEventListener("pointerdown", (e) => {
-  if (!masterVolumePopover.hidden && !e.target.closest(".master-volume-wrap")) setMasterVolumePopoverOpen(false);
+  headerPopovers.forEach(([meter, popover]) => {
+    if (!popover.hidden && !meter.parentElement.contains(e.target)) setHeaderPopoverOpen(meter, popover, false);
+  });
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !masterVolumePopover.hidden) {
-    setMasterVolumePopoverOpen(false);
-    masterVolumeMeter.focus();
-  }
+  if (e.key !== "Escape") return;
+  headerPopovers.forEach(([meter, popover]) => {
+    if (popover.hidden) return;
+    setHeaderPopoverOpen(meter, popover, false);
+    meter.focus();
+  });
 });
 
 function closeGlobalMidiSettings() {
@@ -12991,6 +13273,7 @@ const LFO_SLIDER_CONFIG = {
   rate: { min: 0, max: LFO_MAX_RATE_HZ, step: 0.01 },
   gain: { min: 0, max: 10, step: 0.01 },
   phase: { min: -180, max: 180, step: 1 },
+  delay: { min: 0, max: 5, step: 0.01 },
 };
 
 const LFO_PHASE_DETENTS = [-180, -90, 0, 90, 180];
@@ -13047,6 +13330,7 @@ function formatLfoValue(portId, value) {
   if (portId === "rate") return `${formatNumber(value)} Hz`;
   if (portId === "gain") return `${formatNumber(value)} V`;
   if (portId === "phase") return `${Math.round(value)}°`;
+  if (portId === "delay") return `${Number(value).toFixed(2)} s`;
   return formatNumber(value);
 }
 
@@ -13357,7 +13641,7 @@ function updateLfoVisual(widgetId) {
   const rateSlider = el.querySelector('[data-role="lfo-rate-slider"]');
   if (rateSlider) rateSlider.max = String(state.maxRate);
 
-  ["rate", "gain", "phase"].forEach((portId) => {
+  ["rate", "gain", "phase", "delay"].forEach((portId) => {
     const slider = el.querySelector(`[data-role="lfo-${portId}-slider"]`);
     if (slider) slider.value = String(state[portId]);
     const valueSpan = el.querySelector(`[data-role="lfo-${portId}-value"]`);
@@ -14249,17 +14533,53 @@ function recomputeFmOscillatorFreq(widgetId, voiceIndex) {
   const state = fmOscillatorStates.get(widgetId);
   if (!state) return;
   const center = CV_MAX_VOLTS / 2;
-  const totalVolts = state.pitchCv + (state.tuneVolts - center);
+  // Local preview only: Tune plus the ratio's octaves (the firmware derives the same itself).
+  const effectiveTune = state.tuneVolts + fmOscillatorRatioVolts(widgetId, state) + fmDetuneVolts(state.detune);
+  const totalVolts = state.pitchCv + (effectiveTune - center);
   const hz = hzFromPitchCv(totalVolts);
   state.freq = hz;
   if (voiceIndex !== undefined) {
     audioEngine.setVoiceParam(widgetId, voiceIndex, "frequency", hz, 0);
-    audioEngine.setVoiceParam(widgetId, voiceIndex, "tuneVolts", state.tuneVolts, 0);
+    audioEngine.setVoiceParam(widgetId, voiceIndex, "tuneVolts", effectiveTune, 0);
   } else {
     audioEngine.setParam(widgetId, "frequency", hz, 0);
-    audioEngine.setParam(widgetId, "tuneVolts", state.tuneVolts, 0);
+    audioEngine.setParam(widgetId, "tuneVolts", effectiveTune, 0);
   }
   updateFmOscillatorFreqLabel(widgetId);
+}
+
+// DX7-style frequency ratio, mirrored from the firmware's ratioVolts() (FmOscillatorNode.h) for
+// the browser preview and labels: coarse CV 0-10V snaps to 32 steps 0.5, 1, 2 ... 31, fine CV
+// 0-10V = +0..99 %. The firmware gets only the two CVs and derives the pitch itself.
+// Coarse step 1 = ratio 1:1, i.e. CV_MAX_VOLTS / 31 - a literal because CV_MAX_VOLTS is
+// declared further down in this module (reading it here would throw at load time).
+const FM_RATIO_COARSE_ONE_CV = 10 / 31;
+
+function fmRatioFromCv(coarseCv, fineCv) {
+  const step = clamp(Math.round((Number(coarseCv) || 0) * 31 / CV_MAX_VOLTS), 0, 31);
+  const coarse = step === 0 ? 0.5 : step;
+  const fine = Math.round(clamp(Number(fineCv) || 0, 0, CV_MAX_VOLTS) * 99 / CV_MAX_VOLTS);
+  return { coarse, fine, ratio: coarse * (1 + fine / 100) };
+}
+
+function fmOscillatorTunePatched(widgetId) {
+  return connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "tune");
+}
+
+// Operator detune: 0-10 V (5 V = none) -> +-10 cents, as volts (1 V/oct) and as a label.
+function fmDetuneVolts(cv) {
+  return ((clamp(Number(cv) || 0, 0, CV_MAX_VOLTS) - CV_MAX_VOLTS / 2) / (CV_MAX_VOLTS / 2)) * (10 / 1200);
+}
+
+function fmDetuneLabel(cv) {
+  const cents = fmDetuneVolts(cv) * 1200;
+  return `${cents > 0 ? "+" : ""}${cents.toFixed(1)} ct`;
+}
+
+// Octaves the ratio adds on top of Tune - 0 while Tune is patched (a patched Tune always wins).
+function fmOscillatorRatioVolts(widgetId, state) {
+  if (fmOscillatorTunePatched(widgetId)) return 0;
+  return Math.log2(fmRatioFromCv(state.ratioCoarse, state.ratioFine).ratio);
 }
 
 function updateFmOscillatorTuneVisual(widgetId) {
@@ -14277,6 +14597,29 @@ function updateFmOscillatorTuneVisual(widgetId) {
   if (valueSpan) {
     valueSpan.textContent = formatNumber(state.tuneVolts);
   }
+  updateFmOscillatorRatioVisual(widgetId);
+}
+
+function updateFmOscillatorRatioVisual(widgetId) {
+  const state = fmOscillatorStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el) return;
+  const tunePatched = fmOscillatorTunePatched(widgetId);
+  const { coarse, fine } = fmRatioFromCv(state.ratioCoarse, state.ratioFine);
+  [
+    ["ratioCoarse", "ratio-coarse", `${coarse}×`],
+    ["ratioFine", "ratio-fine", `+${fine}%`],
+  ].forEach(([param, role, text]) => {
+    const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === param);
+    el.querySelector(`[data-role="fm-oscillator-${role}-row"]`)?.classList.toggle("disabled", tunePatched);
+    const slider = el.querySelector(`[data-role="fm-oscillator-${role}-slider"]`);
+    if (slider) {
+      slider.value = String(state[param]);
+      slider.disabled = connected || tunePatched;
+    }
+    const valueSpan = el.querySelector(`[data-role="fm-oscillator-${role}-value"]`);
+    if (valueSpan) valueSpan.textContent = text;
+  });
 }
 
 function updateFmOscillatorGainVisual(widgetId) {
@@ -17993,6 +18336,40 @@ const ADSR_GRAPH_PADDING = 10;
 const ADSR_GRAPH_HOLD_WIDTH = 18;
 
 const dxEnvelopeStates = new Map();
+
+// ---- FM8 ----
+const fm8States = new Map();
+
+function refreshFm8Summary(widgetId) {
+  const state = fm8States.get(widgetId);
+  const summary = document.querySelector(`#${widgetId} [data-role="fm8-summary"]`);
+  if (state && summary) renderFm8Summary(summary, state);
+}
+
+// Sends patch keys to the device in small frames (the live-param queue message is limited);
+// every voice instance applies them through the engine's flat-key setParam.
+function sendFm8Keys(widgetId, keys) {
+  const entries = Object.entries(keys).filter(([, v]) => typeof v === "number" && Number.isFinite(v));
+  const chunk = 40;
+  for (let i = 0; i < entries.length; i += chunk) {
+    const part = Object.fromEntries(entries.slice(i, i + chunk));
+    setTimeout(() => sendLiveParamUpdate(widgetId, part), (i / chunk) * 60);
+  }
+}
+
+function openFm8Settings(widgetId) {
+  const state = fm8States.get(widgetId);
+  if (!state) return;
+  openFm8Dialog({
+    state,
+    onKeys: (keys) => {
+      sendFm8Keys(widgetId, keys);
+      refreshFm8Summary(widgetId);
+      savePresetNow();
+    },
+    onClose: () => refreshFm8Summary(widgetId),
+  });
+}
 const DX_ENVELOPE_WIDTH = 240;
 const DX_ENVELOPE_HEIGHT = 116;
 const DX_ENVELOPE_PADDING = 10;
@@ -18833,6 +19210,8 @@ numericEditInput.addEventListener("keydown", (e) => {
 
 const widgetPickerOverlay = document.getElementById("widgetPickerOverlay");
 const widgetPickerList = document.getElementById("widgetPickerList");
+const widgetPickerSearch = document.getElementById("widgetPickerSearch");
+const widgetPickerEmpty = document.getElementById("widgetPickerEmpty");
 let pendingWidgetPos = null;
 
 function openWidgetPicker(x, y, clientX, clientY) {
@@ -18840,9 +19219,25 @@ function openWidgetPicker(x, y, clientX, clientY) {
   widgetPickerList.innerHTML = "";
   const allowed = pages[currentPageName].allowedTypes;
 
+  // Fixed columns instead of CSS multi-column: the first categories (MIDI, Generator,
+  // Modulator) head columns 1..n side by side, every later one goes under the currently
+  // shortest column (height = rows, header counts as one).
+  const pickerWidth = Math.min(820, window.innerWidth - 16) - 24;
+  const columnCount = Math.max(1, Math.floor((pickerWidth + 10) / (150 + 10)));
+  const stacks = Array.from({ length: columnCount }, () => {
+    const stack = document.createElement("div");
+    stack.className = "widget-picker-stack";
+    widgetPickerList.appendChild(stack);
+    return { el: stack, rows: 0 };
+  });
+  let placed = 0;
+
   WIDGET_CATEGORIES.forEach((cat) => {
     const typesHere = cat.types.filter((t) => allowed.includes(t));
-    if (typesHere.length === 0) return; 
+    if (typesHere.length === 0) return;
+    const stack = placed < columnCount ? stacks[placed] : stacks.reduce((a, b) => (b.rows < a.rows ? b : a));
+    placed += 1;
+    stack.rows += typesHere.length + 1;
 
     const column = document.createElement("div");
     column.className = "widget-picker-column";
@@ -18860,7 +19255,14 @@ function openWidgetPicker(x, y, clientX, clientY) {
       const itemLabel = document.createElement("span");
       itemLabel.className = "widget-source-label";
       const pickerLabel = def.pickerLabel || def.label;
-      itemLabel.textContent = def.icon ? `${def.icon} ${pickerLabel}` : pickerLabel;
+      item.dataset.search = `${pickerLabel} ${def.label} ${cat.label} ${type}`.toLowerCase();
+      const iconHtml = nodeIconHtml(type);
+      if (iconHtml) {
+        item.insertAdjacentHTML("beforeend", iconHtml);
+        itemLabel.textContent = pickerLabel;
+      } else {
+        itemLabel.textContent = def.icon ? `${def.icon} ${pickerLabel}` : pickerLabel;
+      }
       item.appendChild(itemLabel);
 
       const helpBtn = document.createElement("button");
@@ -18891,9 +19293,11 @@ function openWidgetPicker(x, y, clientX, clientY) {
       column.appendChild(item);
     });
 
-    widgetPickerList.appendChild(column);
+    stack.el.appendChild(column);
   });
 
+  widgetPickerSearch.value = "";
+  filterWidgetPicker();
   const picker = widgetPickerOverlay.querySelector(".widget-picker");
   picker.style.left = "0px";
   picker.style.top = "0px";
@@ -18902,7 +19306,35 @@ function openWidgetPicker(x, y, clientX, clientY) {
   const margin = 8;
   picker.style.left = `${clamp(clientX, margin, window.innerWidth - rect.width - margin)}px`;
   picker.style.top = `${clamp(clientY, margin, window.innerHeight - rect.height - margin)}px`;
+  // Touch devices: no autofocus, it would pop up the on-screen keyboard over the list.
+  if (window.matchMedia("(pointer: fine)").matches) widgetPickerSearch.focus();
 }
+
+// Every search word must appear in the node's label, category or type id.
+function filterWidgetPicker() {
+  const words = widgetPickerSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let anyVisible = false;
+  widgetPickerList.querySelectorAll(".widget-picker-column").forEach((column) => {
+    let columnVisible = false;
+    column.querySelectorAll(".widget-source").forEach((item) => {
+      const match = words.every((w) => item.dataset.search.includes(w));
+      item.classList.toggle("filtered-out", !match);
+      columnVisible ||= match;
+    });
+    column.classList.toggle("filtered-out", !columnVisible);
+    anyVisible ||= columnVisible;
+  });
+  widgetPickerEmpty.classList.toggle("hidden", anyVisible);
+}
+
+widgetPickerSearch.addEventListener("input", filterWidgetPicker);
+widgetPickerSearch.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeWidgetPicker();
+  } else if (e.key === "Enter") {
+    widgetPickerList.querySelector(".widget-source:not(.filtered-out):not(.disabled)")?.click();
+  }
+});
 
 function closeWidgetPicker() {
   widgetPickerOverlay.classList.add("hidden");
@@ -20521,6 +20953,16 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "lfo" && portId === "delay") {
+    const state = lfoStates.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.delay = Number.isNaN(num) ? 0 : clamp(num, 0, 5);
+      sendLiveParamUpdateThrottled(widgetId, { delay: state.delay });
+      updateLfoVisual(widgetId);
+    }
+  }
+
   if (el.dataset.widgetType === "lfo" && portId === "phase") {
     const state = lfoStates.get(widgetId);
     if (state) {
@@ -20777,6 +21219,32 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
 
   if (el.dataset.widgetType === "fm-oscillator" && portId === "morph") {
     setFmOscillatorMorph(widgetId, value);
+  }
+
+  if (el.dataset.widgetType === "fm-oscillator" && portId === "detune") {
+    const state = fmOscillatorStates.get(widgetId);
+    const num = Number(value);
+    if (state && !Number.isNaN(num)) {
+      state.detune = clamp(num, 0, CV_MAX_VOLTS);
+      recomputeFmOscillatorFreq(widgetId, voiceIndex);
+      const row = el.querySelector('[data-role="fm-oscillator-detune-row"]');
+      const slider = row?.querySelector('[data-role="fm-oscillator-detune-slider"]');
+      if (slider) slider.value = String(state.detune);
+      const label = row?.querySelector('[data-role="fm-oscillator-detune-value"]');
+      if (label) label.textContent = fmDetuneLabel(state.detune);
+      if (voiceIndex === undefined) sendLiveParamUpdateThrottled(widgetId, { detune: state.detune });
+    }
+  }
+
+  if (el.dataset.widgetType === "fm-oscillator" && (portId === "ratioCoarse" || portId === "ratioFine")) {
+    const state = fmOscillatorStates.get(widgetId);
+    const num = Number(value);
+    if (state && !Number.isNaN(num)) {
+      state[portId] = clamp(num, 0, CV_MAX_VOLTS);
+      recomputeFmOscillatorFreq(widgetId, voiceIndex);
+      updateFmOscillatorRatioVisual(widgetId);
+      if (voiceIndex === undefined) sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
+    }
   }
 
   if (el.dataset.widgetType === "fm-oscillator" && (portId === "superSawDetune" || portId === "superSawMix")) {
@@ -21983,6 +22451,23 @@ function applyFilterWidgetParams(id, params, curtis = false) {
 const graphicEqCvEngine = makeEffectCvEngine("graphic-eq");
 
 const WIDGET_ENGINES = {
+  fm8: {
+    getParams: (id) => {
+      const state = fm8States.get(id);
+      if (!state) return {};
+      return { ...state.keys };
+    },
+    applyParams: (id, params) => {
+      const state = fm8States.get(id);
+      if (!state || !params) return;
+      const defaults = defaultFm8Keys();
+      Object.keys(defaults).forEach((key) => {
+        const v = Number(params[key]);
+        state.keys[key] = Number.isFinite(v) ? v : defaults[key];
+      });
+      refreshFm8Summary(id);
+    },
+  },
   "midi-program": {
     getParams: (id) => ({ ...midiProgramStates.get(id) }),
     applyParams: (id, params) => {
@@ -22104,6 +22589,7 @@ const WIDGET_ENGINES = {
         knobCount: state.count,
         layerCount: state.layerCount,
         activeLayer: state.activeLayer,
+        orientation: state.orientation,
         outputSide: state.outputSide,
         bindings: firstLayer.controls.slice(0, state.count).map(({ cc, channel }) => ({ cc, channel })),
         layers: state.layers.slice(0, state.layerCount).map((layer, layerIndex) => ({
@@ -22131,7 +22617,8 @@ const WIDGET_ENGINES = {
       state.count = count;
       state.layerCount = clamp(layerEntries?.length ?? params.layerCount ?? 1, 1, KNOB_MAX_LAYERS);
       state.activeLayer = clamp(Math.round(Number(params.activeLayer) || 0), 0, state.layerCount - 1);
-      state.outputSide = ["top", "bottom"].includes(params.outputSide) ? params.outputSide : "bottom";
+      state.orientation = params.orientation === "horizontal" ? "horizontal" : "vertical";
+      state.outputSide = knobValidOutputSide(state.orientation, params.outputSide);
       state.layers = Array.from({ length: state.layerCount }, () => createKnobLayer());
       const applyControls = (layer, controls, labels) => {
         if (Array.isArray(labels)) {
@@ -22540,6 +23027,7 @@ const WIDGET_ENGINES = {
             maxRate: state.maxRate,
             gain: state.gain,
             phase: state.phase,
+            delay: state.delay ?? 0,
             zeroPointFixed: state.zeroPointFixed,
             zeroPoint: state.zeroPoint,
             oneShot: state.oneShot,
@@ -22555,6 +23043,7 @@ const WIDGET_ENGINES = {
       state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
       state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
       state.phase = clamp(params.phase ?? 0, -180, 180);
+      state.delay = clamp(Number(params.delay) || 0, 0, 5);
       state.zeroPointFixed = params.zeroPointFixed === true;
       state.zeroPoint = params.zeroPoint ?? 5;
       state.oneShot = params.oneShot === true;
@@ -22654,6 +23143,9 @@ const WIDGET_ENGINES = {
         waveType: state.waveType,
         amplitude: state.amplitude,
         tune: state.tuneVolts,
+        ratioCoarse: state.ratioCoarse,
+        ratioFine: state.ratioFine,
+        detune: state.detune,
         gain: state.gain,
         fmIndex: state.fmIndex,
         feedback: state.feedback,
@@ -22672,6 +23164,9 @@ const WIDGET_ENGINES = {
       state.waveType = FM_WAVE_TYPE_BUTTONS.some((wave) => wave.id === params.waveType) ? params.waveType : "sine";
       state.amplitude = params.amplitude ?? 1;
       state.tuneVolts = params.tune ?? center;
+      state.ratioCoarse = clamp(Number(params.ratioCoarse ?? FM_RATIO_COARSE_ONE_CV) || 0, 0, CV_MAX_VOLTS);
+      state.ratioFine = clamp(Number(params.ratioFine) || 0, 0, CV_MAX_VOLTS);
+      state.detune = clamp(Number(params.detune ?? center), 0, CV_MAX_VOLTS);
       state.gain = params.gain ?? CV_MAX_VOLTS;
       state.fmIndex = params.fmIndex ?? 0;
       state.feedback = params.feedback ?? 0;
@@ -22764,7 +23259,7 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = soundFontPlayerStates.get(id) || {};
       return {
-        volume: state.volume || "flash",
+        volume: "sd",
         path: state.path || "",
         bank: state.bank ?? 0,
         program: state.program ?? 0,
@@ -22778,7 +23273,7 @@ const WIDGET_ENGINES = {
     applyParams: (id, params) => {
       const state = soundFontPlayerStates.get(id);
       if (!state || !params) return;
-      state.volume = params.volume === "sd" ? "sd" : "flash";
+      state.volume = "sd"; // legacy presets say "flash"; SoundFonts are SD-only
       state.path = typeof params.path === "string" ? params.path : "";
       state.bank = clamp(params.bank ?? 0, 0, SOUNDFONT_DEFAULT_MAX_BANK);
       state.program = clamp(params.program ?? 0, 0, 127);

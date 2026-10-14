@@ -5,14 +5,21 @@ can also be frequency-modulated by another oscillator for FM/bell-like and metal
 <h2>Key inputs</h2>
 <ul>
 <li><span class="port-label">Pitch</span> — the 1V/oct-style pitch CV, normally patched from Midi-In's Pitch output.</li>
-<li><span class="port-label">Tune</span> — fine/coarse tuning offset, for detuning against other oscillators.</li>
+<li><span class="port-label">Tune</span> — free tuning offset (1 V per octave around 5 V), for detuning against other oscillators.</li>
+<li><span class="port-label">Ratio Coarse / Ratio Fine</span> — frequency ratio like a DX7 operator, applied on top of Tune:
+Coarse steps through 0.5, 1, 2, 3 … 31 (0–10 V in 32 steps), Fine adds +0 … 99 %. E.g. Coarse 3 = three times the played
+pitch - use it on modulators for clean harmonic FM spectra. Both can be patched. While a cable feeds <b>Tune</b>, Tune alone
+sets the pitch and the ratio is ignored (rows greyed out). Double-click a label to reset (1×, +0 %).</li>
 <li><span class="port-label">Amplitude</span> — overall loudness of the oscillator, often patched from Velocity or an envelope.</li>
 <li><span class="port-label">Waveform</span> — picks the wave shape (sine, saw, square, etc.).</li>
 <li><span class="port-label">Gate</span> — retriggers the oscillator's phase/feedback state when a new note starts.</li>
 <li><span class="port-label">Gain</span> — output level trim.</li>
 <li><span class="port-label">Feedback (Self)</span> — feeds the oscillator's own output back into itself for extra harmonic edge/distortion.</li>
 <li><span class="port-label">FM In</span> — patch another oscillator's output here to frequency-modulate this one (classic FM synthesis).</li>
-<li><span class="port-label">FM Ratio</span> — sets the modulator-to-carrier frequency ratio for FM.</li>
+<li><span class="port-label">Detune</span> — fine operator detune, ±10 cents around 5 V (double-click to reset). The slight beating between detuned operators is what gives DX7 electric pianos their shimmer.</li>
+<li><span class="port-label">FM Depth</span> — how strongly the signal at FM In bends this oscillator's phase (modulation index).
+0 = no FM, 10 V = maximum (4 cycles of phase deviation at a full-scale modulator). The knob follows the DX7's output-level curve: 0–10 V is level 0–99 in 0.75 dB steps, so the modulation index doubles every 8 steps (about every 0.8 V) - fine control at low depths, like the original. The frequency ratio is set on the
+<i>modulator</i> with Tune/Ratio, not here.</li>
 <li><span class="port-label">Duty Cycle</span> — pulse width for the square wave (thin, nasal square vs. fat 50% square).</li>
 <li><span class="port-label">SuperSaw Detune / SuperSaw Mix</span> — stacks and detunes multiple saws under the hood for a thick "supersaw" trance-style sound, and blends how much of that stacking is mixed in.</li>
 <li><span class="port-label">Morph</span> — only with the Wavetable waveform: moves through the wavetable, 0 V = first table, 10 V = last table.</li>

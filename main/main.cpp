@@ -497,6 +497,7 @@ extern "C" void app_main(void) {
         vTaskDelay(pdMS_TO_TICKS(50));
 #if defined(CONFIG_APP_ENABLE_WEBSERVER)
         Feature::Synth::broadcast_cv_status_tick();
+        Feature::Synth::broadcast_midi_tick();
 #endif
         Feature::Synth::log_midi_cc_debug_tick();
         Feature::Synth::log_render_diagnostics_tick();

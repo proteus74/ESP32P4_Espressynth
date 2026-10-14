@@ -7,6 +7,7 @@
 #include <new>
 
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_log.h"
 
 #include "EspEqEffect.h"
@@ -46,6 +47,7 @@
 #include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
+#include "nodes/Fm8Node.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -116,19 +118,30 @@ constexpr char kGraphBuilderTag[] = "GraphBuilder";
 // around 12 voices with two WavePlayer widgets active per voice. Back to
 // internal-first until that's resolved differently (e.g. only widening this
 // for graphs that don't use WavePlayer/SoundFontPlayer at all).
+// Internal RAM that a graph build must leave free for everything else (LittleFS, httpd, WiFi
+// buffers, LVGL draw strips...). Below this, per-instance data goes to PSRAM instead of
+// shrinking the voice count: polyphonic patches (6-operator FM x 8 voices) need ~170 KB.
+constexpr size_t kInternalReserveBytes = 48 * 1024;
+
+inline bool internalRamLow(size_t aboutToAllocate)
+{
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < kInternalReserveBytes + aboutToAllocate;
+}
+
 inline float *allocateBlockBuffer(bool preferPsram, uint16_t &psramFallbacks)
 {
     constexpr size_t bytes = synth::kBlockSize * sizeof(float);
-    const uint32_t primaryCaps = preferPsram ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const uint32_t fallbackCaps = preferPsram ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool usePsram = preferPsram || internalRamLow(bytes);
+    const uint32_t primaryCaps = usePsram ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const uint32_t fallbackCaps = usePsram ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     float *buffer = static_cast<float *>(heap_caps_calloc(1, bytes, primaryCaps));
     if (buffer == nullptr)
     {
         buffer = static_cast<float *>(heap_caps_calloc(1, bytes, fallbackCaps));
-        if (buffer != nullptr && !preferPsram)
-        {
-            ++psramFallbacks; // only meaningful as "unexpectedly landed in PSRAM"
-        }
+    }
+    if (buffer != nullptr && !preferPsram && esp_ptr_external_ram(buffer))
+    {
+        ++psramFallbacks; // counted as "landed in PSRAM although internal was the default"
     }
     return buffer;
 }
@@ -141,13 +154,17 @@ inline float *allocateBlockBuffer(bool preferPsram, uint16_t &psramFallbacks)
 template <typename T>
 T *allocateNodeState(uint16_t &psramFallbacks)
 {
-    void *raw = heap_caps_malloc(sizeof(T), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void *raw = internalRamLow(sizeof(T)) ? nullptr : heap_caps_malloc(sizeof(T), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (raw == nullptr)
     {
         raw = heap_caps_malloc(sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (raw != nullptr)
         {
             ++psramFallbacks;
+        }
+        else
+        {
+            raw = heap_caps_malloc(sizeof(T), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         }
     }
     if (raw == nullptr)
@@ -604,6 +621,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::FmOscillator:
         nodes::fmoscillator::build(inst, p);
         break;
+    case NodeType::Fm8:
+        nodes::fm8::build(inst, p);
+        break;
     case NodeType::Hammond:
         nodes::hammond::build(inst, p);
         break;
@@ -918,7 +938,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     const uint16_t allocCount = total > 0 ? total : 1;
     const size_t instanceBytes = static_cast<size_t>(allocCount) * sizeof(NodeInstance);
     bool instancesInternal = true;
-    void *rawInstances = heap_caps_malloc(instanceBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void *rawInstances =
+        internalRamLow(instanceBytes) ? nullptr : heap_caps_malloc(instanceBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (rawInstances == nullptr)
     {
         instancesInternal = false;
@@ -1026,6 +1047,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             case NodeType::DxEnvelope:
                 inst.dxEnvelope = allocateNodeState<DxEnvelopeState>(outputPsramFallbacks);
                 stateAllocFailed = (inst.dxEnvelope == nullptr);
+                break;
+            case NodeType::Fm8:
+                inst.fm8 = allocateNodeState<nodes::fm8::Fm8State>(outputPsramFallbacks);
+                stateAllocFailed = (inst.fm8 == nullptr);
                 break;
             case NodeType::StepArpeggiator:
                 inst.stepArp = allocateNodeState<StepArpState>(outputPsramFallbacks);
@@ -2138,7 +2163,11 @@ inline Graph *GraphBuilder::build(const PresetDoc &doc, uint16_t *outRequestedVo
         bool fitInternal = false;
         g = buildWithVoiceCap(doc, effectiveVoices, fitInternal);
         const bool buildSucceeded = doc.widgetCount == 0 || g->widgetCount != 0;
-        if (buildSucceeded && fitInternal)
+        // A graph that spilled some per-instance data into PSRAM is still a good graph: only an
+        // outright allocation failure (or an empty result) costs voices. fitInternal stays in the
+        // log line (GraphBuilder) so a spill is visible.
+        (void)fitInternal;
+        if (buildSucceeded)
         {
             break;
         }

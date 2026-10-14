@@ -9,6 +9,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "tsf.h"
 
 #include "NodeState.h"
@@ -134,24 +135,13 @@ inline SoundFontFileCache *findCachedFile(const char *volume, const char *relati
 }
 } // namespace detail
 
-// Resolves flash|sd plus a safe relative .sf2 path into a VFS path.
+// Resolves a safe relative .sf2 path into a VFS path. SoundFonts live on the SD card only;
+// `volume` is kept in the preset format but parsePreset() normalizes it to "sd".
 inline bool resolvePath(const char *volume, const char *relativePath, char *out, size_t outSize)
 {
     if (out == nullptr || outSize == 0 || !safeRelativePath(relativePath)) return false;
-    const char *root = nullptr;
-    if (volume != nullptr && strcmp(volume, "flash") == 0)
-    {
-        root = "/littlefs";
-    }
-    else if (volume != nullptr && strcmp(volume, "sd") == 0 && Feature::SDCard::is_mounted())
-    {
-        root = Feature::SDCard::MOUNT_POINT;
-    }
-    else
-    {
-        return false;
-    }
-    const int written = snprintf(out, outSize, "%s/%s", root, relativePath);
+    if (volume == nullptr || strcmp(volume, "sd") != 0 || !Feature::SDCard::is_mounted()) return false;
+    const int written = snprintf(out, outSize, "%s/%s", Feature::SDCard::MOUNT_POINT, relativePath);
     return written > 0 && static_cast<size_t>(written) < outSize;
 }
 
@@ -184,6 +174,11 @@ inline tsf *load(const LoadConfig &config, int &presetIndex)
     else
     {
         char path[256];
+        if (!Feature::SDCard::is_mounted())
+        {
+            ESP_LOGW(kSoundFontTag, "SF2 needs the SD card (not mounted): %s", config.relativePath);
+            return nullptr;
+        }
         if (!resolvePath(config.volume, config.relativePath, path, sizeof(path)))
         {
             ESP_LOGE(kSoundFontTag, "Invalid/unavailable SF2 path: %s:%s", config.volume, config.relativePath);
@@ -206,12 +201,17 @@ inline tsf *load(const LoadConfig &config, int &presetIndex)
             return nullptr;
         }
 
+        const int64_t loadStartUs = esp_timer_get_time();
         tsf *freshLoad = tsf_load_filename(path);
         if (freshLoad == nullptr)
         {
             ESP_LOGE(kSoundFontTag, "SF2 could not be loaded: %s", path);
             return nullptr;
         }
+        const int64_t loadUs = esp_timer_get_time() - loadStartUs;
+        ESP_LOGI(kSoundFontTag, "SF2 loaded %s: %ld KB in %lld ms (%lld KB/s overall incl. parse+convert)", path,
+                 size / 1024, static_cast<long long>(loadUs / 1000),
+                 loadUs > 0 ? static_cast<long long>(size) * 1000000LL / 1024 / loadUs : 0LL);
 
         // Claim a free cache slot for this file so a later widget (or a
         // later rebuild) referencing the same (volume, relativePath) hits
@@ -453,7 +453,8 @@ inline const float *renderPlanar(SoundFontPlayerState &state, size_t frames)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    snprintf(out.soundFontVolume, sizeof(out.soundFontVolume), "%s", presetparser::getString(p, "volume", "flash"));
+    // Legacy presets say "flash": SoundFonts load from the SD card only now, same relative path.
+    snprintf(out.soundFontVolume, sizeof(out.soundFontVolume), "sd");
     snprintf(out.soundFontPath, sizeof(out.soundFontPath), "%s", presetparser::getString(p, "path", ""));
     out.soundFontBank = presetparser::getInt(p, "bank", 0);
     out.soundFontProgram = presetparser::getInt(p, "program", 0);

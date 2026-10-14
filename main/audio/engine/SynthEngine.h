@@ -1012,7 +1012,7 @@ namespace
 {
 constexpr const char *kSynthEngineTag = "synth_engine";
 constexpr UBaseType_t kSynthEngineMidiQueueDepth = 128;
-constexpr uint32_t kSynthEngineTaskStackSize = 12288; // FatSuperSaw boot/reload/render used <3 KiB; retain headroom for USB mixing and other DSP paths.
+constexpr uint32_t kSynthEngineTaskStackSize = 8192; // measured peak ~2.9 KiB (FatSuperSaw boot/reload/render <3 KiB); headroom kept for USB mixing and other DSP paths.
 constexpr uint32_t kSynthEngineLoaderTaskStackSize = 6144; // boot/reload/load testing leaves >2 KiB; no render-task DSP buffers
 
 // Real-time budget of one block in microseconds - the time actually

@@ -345,35 +345,40 @@ void create_user_widget_knob(lv_obj_t *parent_obj, int startWidgetIndex) {
     {
         lv_obj_t *parent_obj = obj;
         {
-            // arcKnob
-            lv_obj_t *obj = lv_arc_create(parent_obj);
+            lv_obj_t *obj = lv_obj_create(parent_obj);
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 155, 95);
+            lv_obj_set_style_radius(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+        {
+            // knobbar
+            lv_obj_t *obj = lv_bar_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
-            lv_obj_set_pos(obj, 1, 19);
-            lv_obj_set_size(obj, 148, 148);
-            lv_arc_set_value(obj, 20);
-            lv_obj_set_style_arc_width(obj, 20, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_rounded(obj, false, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_width(obj, 20, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_rounded(obj, false, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_bg_opa(obj, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
+            lv_obj_set_pos(obj, 2, 2);
+            lv_obj_set_size(obj, 151, 45);
+            lv_bar_set_value(obj, 25, LV_ANIM_OFF);
+            lv_obj_set_style_radius(obj, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
             // lblknobvalue
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
-            lv_obj_set_pos(obj, 0, 48);
-            lv_obj_set_size(obj, 150, 37);
+            lv_obj_set_pos(obj, 2, 24);
+            lv_obj_set_size(obj, 75, 37);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_text_font(obj, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_letter_space(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text(obj, "lblknobvalue");
         }
         {
             // lblknobdevice
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
-            lv_obj_set_pos(obj, 1, 146);
-            lv_obj_set_size(obj, 149, 17);
+            lv_obj_set_pos(obj, 2, 61);
+            lv_obj_set_size(obj, 151, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -383,35 +388,35 @@ void create_user_widget_knob(lv_obj_t *parent_obj, int startWidgetIndex) {
             // lblknobport
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 3] = obj;
-            lv_obj_set_pos(obj, 2, 166);
-            lv_obj_set_size(obj, 148, 17);
+            lv_obj_set_pos(obj, 2, 76);
+            lv_obj_set_size(obj, 151, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text(obj, "lblknobport");
         }
         {
-            // lblknobname
+            // lblnodevalue
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 4] = obj;
-            lv_obj_set_pos(obj, 0, 1);
-            lv_obj_set_size(obj, 149, 17);
+            lv_obj_set_pos(obj, 80, 24);
+            lv_obj_set_size(obj, 73, 37);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "lblnodevalue");
+        }
+        {
+            // lblknobname
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 5] = obj;
+            lv_obj_set_pos(obj, 2, 47);
+            lv_obj_set_size(obj, 151, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text(obj, "lblknobname");
-        }
-        {
-            // lblnodevalue
-            lv_obj_t *obj = lv_label_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 5] = obj;
-            lv_obj_set_pos(obj, 0, 85);
-            lv_obj_set_size(obj, 150, 37);
-            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_text_font(obj, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_text_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_label_set_text(obj, "lblnodevalue");
         }
     }
 }
@@ -426,29 +431,33 @@ void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex) 
     {
         lv_obj_t *parent_obj = obj;
         {
+            lv_obj_t *obj = lv_obj_create(parent_obj);
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 155, 95);
+            lv_obj_set_style_radius(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+        {
             lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 1, 25);
-            lv_obj_set_size(obj, 148, 82);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    // lblknobbuttonvalue
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
-                    lv_obj_set_pos(obj, -13, -6);
-                    lv_obj_set_size(obj, 150, 40);
-                    lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "lblknobbuttonvalue");
-                }
-            }
+            lv_obj_set_pos(obj, 2, 2);
+            lv_obj_set_size(obj, 151, 45);
+            lv_obj_set_style_radius(obj, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+        {
+            // lblknobbuttonvalue
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
+            lv_obj_set_pos(obj, 4, 24);
+            lv_obj_set_size(obj, 75, 40);
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text_static(obj, "lblknobbuttonvalue");
         }
         {
             // lblknobdevice
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
-            lv_obj_set_pos(obj, 1, 111);
+            lv_obj_set_pos(obj, 4, 61);
             lv_obj_set_size(obj, 149, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -459,8 +468,8 @@ void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex) 
             // lblknobport
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
-            lv_obj_set_pos(obj, 2, 131);
-            lv_obj_set_size(obj, 148, 17);
+            lv_obj_set_pos(obj, 3, 76);
+            lv_obj_set_size(obj, 149, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -470,7 +479,7 @@ void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex) 
             // lblknobname
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 3] = obj;
-            lv_obj_set_pos(obj, 0, 1);
+            lv_obj_set_pos(obj, 3, 47);
             lv_obj_set_size(obj, 149, 17);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -481,10 +490,10 @@ void create_user_widget_midi_button(lv_obj_t *parent_obj, int startWidgetIndex) 
             // lblknobbuttonnodevalue
             lv_obj_t *obj = lv_label_create(parent_obj);
             ((lv_obj_t **)&objects)[startWidgetIndex + 4] = obj;
-            lv_obj_set_pos(obj, 1, 67);
-            lv_obj_set_size(obj, 148, 40);
+            lv_obj_set_pos(obj, 80, 24);
+            lv_obj_set_size(obj, 70, 40);
             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-            lv_obj_set_style_text_font(obj, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "lblknobbuttonvalue");
         }

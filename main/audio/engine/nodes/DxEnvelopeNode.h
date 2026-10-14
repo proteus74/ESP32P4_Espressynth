@@ -176,6 +176,9 @@ struct DxEnvelopeState
     DxEnvelopeScheduler scheduler;
     float timeMaxSeconds[4] = {4.0f, 4.0f, 4.0f, 4.0f};
     bool timeLog[4] = {false, false, false, false};
+    // Unscaled segment times; the scheduler holds baseTimes / rateScale (see "rateScale" port 10).
+    float baseTimes[4] = {0.1f, 0.25f, 0.4f, 0.6f};
+    float rateScale = 1.0f;
     float velocity = 1.0f;
     bool gatePrev = false;
 };
@@ -185,25 +188,35 @@ inline void updateParameters(NodeInstance &inst)
     auto &state = *inst.dxEnvelope;
     constexpr synth::PortMask kShapePortMask = 0xFFu;
     const auto shapePorts = inst.audioConnectedPortMask | inst.controlConnectedPortMask;
-    if ((shapePorts & kShapePortMask) != 0)
+    // "rateScale" (port 10, DX7-style rate scaling): 0-10V, 5V = unchanged; every 2 V (e.g. two
+    // octaves of a Midi-In Pitch cable) doubles the speed of all four segments.
+    float rate = 1.0f;
+    if (noderender::portIsFed(inst, 10))
+    {
+        const float volts = noderender::clampToRange(noderender::portSample(inst, 10, 0), 0.0f, cv::kMaxVolts);
+        rate = exp2f((volts - cv::kMaxVolts * 0.5f) * 0.5f);
+    }
+    const bool rateChanged = rate != state.rateScale;
+    if ((shapePorts & kShapePortMask) != 0 || rateChanged)
     {
         float levels[4];
         float times[4];
         for (size_t i = 0; i < 4; ++i)
         {
             levels[i] = state.scheduler.level(i);
-            times[i] = state.scheduler.time(i);
             if ((shapePorts & synth::portBit(static_cast<int>(i))) != 0)
             {
                 levels[i] = clampLevel(noderender::portSample(inst, static_cast<int>(i), 0));
             }
             if ((shapePorts & synth::portBit(static_cast<int>(i + 4))) != 0)
             {
-                times[i] = cv::cvToEnvelopeSeconds(
+                state.baseTimes[i] = cv::cvToEnvelopeSeconds(
                     noderender::portSample(inst, static_cast<int>(i + 4), 0),
                     state.timeMaxSeconds[i], state.timeLog[i]);
             }
+            times[i] = clampTime(state.baseTimes[i] / rate);
         }
+        state.rateScale = rate;
         state.scheduler.configure(levels, times, static_cast<float>(synth::kSampleRate));
         ++enginestats::current.dxShapeConfigured;
     }
@@ -281,6 +294,7 @@ inline void build(NodeInstance &inst, const WidgetParams &params)
     inst.dxEnvelope->scheduler.configure(params.dxLevel, params.dxTime, static_cast<float>(synth::kSampleRate));
     for (size_t i = 0; i < 4; ++i)
     {
+        inst.dxEnvelope->baseTimes[i] = clampTime(params.dxTime[i]);
         inst.dxEnvelope->timeMaxSeconds[i] = clampTime(params.dxTimeMaxSeconds[i]);
         inst.dxEnvelope->timeLog[i] = params.dxTimeLog[i];
     }
@@ -313,7 +327,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     for (size_t i = 0; i < 4; ++i)
     {
         levels[i] = state.scheduler.level(i);
-        times[i] = state.scheduler.time(i);
+        times[i] = clampTime(state.baseTimes[i] / state.rateScale);
     }
 
     const int levelIndex = parameterIndex(name, "level");
@@ -326,7 +340,8 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     const int timeIndex = parameterIndex(name, "time");
     if (timeIndex >= 0)
     {
-        times[timeIndex] = clampTime(value);
+        state.baseTimes[timeIndex] = clampTime(value);
+        times[timeIndex] = clampTime(value / state.rateScale);
         state.scheduler.configure(levels, times, static_cast<float>(synth::kSampleRate));
         return true;
     }

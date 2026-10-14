@@ -1125,6 +1125,13 @@ const SUPER_SAW_CENTS = [-28, -14, -7, 7, 14, 28];
 // fm-oscillator CV ports that replace a fallback constant (see _fmCvInput).
 const FM_CV_INPUT_PORTS = ["fmIndex", "feedback", "superSawDetune", "superSawMix"];
 
+// DX7 output-level curve for "FM Depth" (must match fmDepthFromCv() in FmOscillatorNode.h):
+// 0-10 V -> level 0..99, 0.75 dB per step (x2 every 8 steps), level 0 = silent, 10 V = 1.0.
+function fmDepthFromCv(volts) {
+  const level = Math.min(Math.max(Number(volts) || 0, 0), CV_MAX_VOLTS) * (99 / CV_MAX_VOLTS);
+  return level < 0.5 ? 0 : 2 ** ((level - 99) / 8);
+}
+
 // PhaseOsc::sampleAt() for a phase in cycles (any value, wrapped here).
 function firmwareWaveSample(waveType, phase, dutyThreshold = 0.5) {
   const p = phase - Math.floor(phase);
@@ -1180,7 +1187,7 @@ function createFmOscillatorCore(entry, sampleRate) {
         return;
       }
       // Block-rate like the firmware (portSample(inst, port, 0)).
-      const phaseOffsetScale = (fmIndexBuf[0] / CV_MAX_VOLTS) * FM_INDEX_MAX_PHASE_DEVIATION / AUDIO_PEAK_VOLTS;
+      const phaseOffsetScale = fmDepthFromCv(fmIndexBuf[0]) * FM_INDEX_MAX_PHASE_DEVIATION / AUDIO_PEAK_VOLTS;
       const feedbackAmount = clampRange(feedbackBuf[0] / CV_MAX_VOLTS, 0, 1) * FM_SELF_FEEDBACK_MAX_PHASE_DEVIATION;
       const feedbackActive = feedbackAmount !== 0;
       if (wave === "supersaw") {
@@ -4599,7 +4606,7 @@ export class AudioEngine {
           gainCv,
           gainCvActive: false,
           gain: params.gain ?? CV_MAX_VOLTS,
-          volume: params.volume || "flash",
+          volume: "sd",
           path: params.path || "",
           bank: params.bank ?? 0,
           program: params.program ?? 0,

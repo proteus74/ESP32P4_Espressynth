@@ -1,0 +1,30 @@
+<h2>What it's for</h2>
+<p>FM8 is a complete 8-operator FM synthesizer voice in a single widget: eight sine operators, a
+modulation matrix (any operator can modulate any other, including itself), a DX7-style envelope per
+operator and one audio output. Because everything lives in one widget it needs far less memory than
+building the same sound from eight oscillators and eight envelopes.</p>
+<h2>Editing and loading DX7 SysEx</h2>
+<p><b>Right-click</b> the widget (or use <i>Edit / Load SysEx…</i>) to open the patch editor. <b>Load a
+DX7 .syx file</b> - a single voice or a 32-voice bank - pick a voice from the list and the algorithm,
+operator ratios, levels, envelopes, velocity/keyboard scaling and feedback are applied immediately.
+The DX7's LFO and pitch EG are not imported.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Pitch</span> - pitch CV, normally Midi-In's Pitch.</li>
+<li><span class="port-label">Gate</span> - note on/off, normally Midi-In's Gate.</li>
+<li><span class="port-label">Velocity</span> - note velocity, normally Midi-In's Velocity.</li>
+<li><span class="port-label">Tune</span> - global pitch offset (1 V per octave around 5 V).</li>
+<li><span class="port-label">Gain</span> - output level.</li>
+</ul>
+<h2>Operators</h2>
+<p>Per operator: ratio (coarse/fine) or fixed frequency, detune in cents, output level 0-99,
+velocity sensitivity, rate scaling, keyboard level scaling, a four-stage envelope (R1-R4 rates,
+L1-L4 levels, exactly as on the DX7: L1-L3 are reached while the key is held, L4 on release) and
+feedback with a selectable source operator. Levels use the DX7's logarithmic scale (0.75 dB per
+step).</p>
+<h2>Matrix</h2>
+<p>Row = operator that is modulated, column = modulating operator, value 0-1. The <i>Out</i> column
+of the operator table is each operator's weight in the audio output (the carriers).</p>
+<h2>Output</h2>
+<p><span class="port-label">Out</span> - the voice's audio, polyphonic like every voiced widget
+(set the voice count on Midi-In).</p>

@@ -64,9 +64,14 @@
 #include "esp_timer.h"
 #include "lwip/ip4_addr.h"
 
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
-    #include "features/filesystem/littlefs_manager.hpp"
+// Boot splash: /www/static/img/splash.jpg, decoded by the P4's hardware JPEG engine (LVGL
+// itself only has a PNG decoder here). Needs the www partition (web server feature).
+#if defined(CONFIG_APP_ENABLE_WEBSERVER) && defined(CONFIG_SOC_JPEG_DECODE_SUPPORTED)
+    #define APP_BOOT_SPLASH 1
+    #include "driver/jpeg_decode.h"
     #include "misc/cache/instance/lv_image_cache.h"
+#else
+    #define APP_BOOT_SPLASH 0
 #endif
 
 #if defined(CONFIG_APP_ENABLE_WIFI)
@@ -110,7 +115,7 @@ static uint8_t* s_lvgl_frame_buffer = nullptr;
 static uint8_t s_next_frame_buffer = 1;
 #endif
 static esp_lcd_touch_handle_t s_touch_handle = nullptr;
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
 static std::atomic<bool> s_splash_frame_pending{false};
 static std::atomic<TickType_t> s_splash_visible_since{0};
 static lv_obj_t* s_splash_background = nullptr;
@@ -348,13 +353,13 @@ void update_runtime_labels()
         switch (activity.kind)
         {
         case SynthEngine::MidiControlSnapshot::Kind::Button:
-            lv_label_set_text_fmt(s_activity_label, "MIDI-Button\n%s\nCC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
+            lv_label_set_text_fmt(s_activity_label, "CC-Button\n%s\nCC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
                                   activity.widgetLabel, static_cast<unsigned>(activity.cc),
                                   static_cast<unsigned>(activity.channel + 1), static_cast<int>(value_whole),
                                   value_fraction, raw);
             break;
         case SynthEngine::MidiControlSnapshot::Kind::UpDownButton:
-            lv_label_set_text_fmt(s_activity_label, "MIDI-Up/Down\n%s\n%s  CC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
+            lv_label_set_text_fmt(s_activity_label, "CC-Up/Down\n%s\n%s  CC %u  CH %u\nWert  %d.%02u  (MIDI %u)",
                                   activity.widgetLabel, activity.direction == 1 ? "Hoch" : "Runter",
                                   static_cast<unsigned>(activity.cc), static_cast<unsigned>(activity.channel + 1),
                                   static_cast<int>(value_whole), value_fraction, raw);
@@ -506,7 +511,7 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 //  - The PSRAM traffic of a redraw can still knock the scan-out out of sync (this chip revision
 //    has no LCD underrun detection), so every finished frame requests a restart in the next
 //    vertical blank. The reduced pixel clock lowers PSRAM scan-out demand.
-constexpr int RGB_DRAW_BUFFER_LINES = 16;
+constexpr int RGB_DRAW_BUFFER_LINES = 8; // 2 strips x 8 lines x 800 px x 2 B = 25.6 KB internal RAM (was 16 lines = 51 KB)
 static uint8_t* s_rgb_frame_buffer = nullptr;
 // Copies each strip into the PSRAM frame buffer by DMA (PPA SRM at scale 1, no rotation).
 // A CPU memcpy would stream the whole redraw through the L2 cache both cores share and evict
@@ -543,6 +548,23 @@ bool rgb_flush_dma(const lv_area_t* area, uint8_t* px_map) {
     return true;
 }
 
+static volatile bool s_rgb_restart_pending = false;
+static volatile uint32_t s_rgb_last_flush_tick = 0;
+static uint32_t s_rgb_last_restart_tick = 0;
+constexpr uint32_t RGB_RESTART_QUIET_MS = 120;  // redraws idle this long -> resync now
+constexpr uint32_t RGB_RESTART_MAX_MS = 600;    // during endless bursts still resync this often
+
+void rgb_restart_timer_cb(lv_timer_t*) {
+    if (!s_rgb_restart_pending) return;
+    const uint32_t now = lv_tick_get();
+    const bool quiet = lv_tick_elaps(s_rgb_last_flush_tick) >= RGB_RESTART_QUIET_MS;
+    const bool overdue = lv_tick_elaps(s_rgb_last_restart_tick) >= RGB_RESTART_MAX_MS;
+    if (!quiet && !overdue) return;
+    s_rgb_restart_pending = false;
+    s_rgb_last_restart_tick = now;
+    crow_lcd_rgb_panel_restart(s_panel);
+}
+
 void rgb_flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     constexpr int width = CurrentBoard::DISPLAY_NATIVE_WIDTH;
     constexpr size_t bytes_per_pixel = sizeof(uint16_t);
@@ -556,15 +578,18 @@ void rgb_flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map)
             esp_cache_msync(dst, row_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
         }
     }
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     if (lv_display_flush_is_last(display) &&
         s_splash_frame_pending.exchange(false, std::memory_order_acq_rel)) {
         s_splash_visible_since.store(xTaskGetTickCount(), std::memory_order_release);
     }
 #endif
     if (lv_display_flush_is_last(display)) {
-        // Redraw traffic can knock the P4 scan-out out of sync; resync it in the next vblank.
-        crow_lcd_rgb_panel_restart(s_panel);
+        // Redraw traffic can knock the P4 scan-out out of sync. Resync is requested by
+        // rgb_restart_timer_cb() once redraws settle: a restart per frame resets the LCD timing
+        // generator and makes the panel flicker during bursts (many sliders moving at once).
+        s_rgb_last_flush_tick = lv_tick_get();
+        s_rgb_restart_pending = true;
     }
     lv_display_flush_ready(display);
 }
@@ -604,6 +629,7 @@ lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
     lv_display_set_buffers(display, draw_buffer_a, draw_buffer_b, draw_buffer_bytes,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, rgb_flush_cb);
+    lv_timer_create(rgb_restart_timer_cb, 40, nullptr);
     return display;
 }
 #endif // CONFIG_APP_DISPLAY_OUTPUT_RGB
@@ -611,7 +637,7 @@ lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
 #if defined(CONFIG_APP_ENABLE_MIPI_DSI)
 #if defined(CONFIG_BOARD_JC1060P470C_7_INCH)
 
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
 void on_direct_flush_finished(lv_event_t* event) {
     auto* display = static_cast<lv_display_t*>(lv_event_get_target(event));
     // The DSI port returns from the final flush only after the buffer switch.
@@ -638,7 +664,7 @@ lv_display_t* create_direct_display(esp_lcd_panel_handle_t panel) {
     lvgl_port_display_dsi_cfg_t dsi_config = {};
     dsi_config.flags.avoid_tearing = true;
     lv_display_t* display = lvgl_port_add_disp_dsi(&config, &dsi_config);
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     if (display != nullptr) {
         lv_display_add_event_cb(display, on_direct_flush_finished, LV_EVENT_FLUSH_FINISH, nullptr);
     }
@@ -701,7 +727,7 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
     }
 
     s_next_frame_buffer = static_cast<uint8_t>((s_next_frame_buffer + 1) % FRAME_BUFFER_COUNT);
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     if (lv_display_flush_is_last(display) &&
         s_splash_frame_pending.exchange(false, std::memory_order_acq_rel)) {
         s_splash_visible_since.store(xTaskGetTickCount(), std::memory_order_release);
@@ -714,31 +740,98 @@ void flush_cb(lv_display_t* display, const lv_area_t* area, uint8_t* px_map) {
 
 #endif // CONFIG_APP_ENABLE_MIPI_DSI
 
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
-// Boot splash screen: /littlefs/system/splash.png, scaled-to-fit ("Stretch to Uniform" -
+#if APP_BOOT_SPLASH
+// Boot splash screen: /www/static/img/splash.jpg, scaled-to-fit ("Stretch to Uniform" -
 // aspect ratio preserved, never distorted or cropped) while remaining features initialize.
-// The file itself is provisioned offline from littlefs_data/system/splash.png via
-// `idf.py littlefs-flash` (see the root CMakeLists.txt's littlefs_create_partition_image(littlefs
-// ...) call), NOT embedded/written here - this code only ever reads it. Needs
-// Feature::LittleFS::init() to already have mounted /littlefs - see app_startup.hpp's boot-order
-// comment.
-constexpr const char* kSplashPath = "/littlefs/system/splash.png";
-// "S:" is the LVGL fs-driver drive letter registered via CONFIG_LV_FS_STDIO_LETTER
-// (sdkconfig.defaults) - LVGL strips it before handing the rest to fopen(), so this must
-// stay the full real VFS path (CONFIG_LV_FS_STDIO_PATH is deliberately left empty).
-constexpr const char* kSplashLvglPath = "S:/littlefs/system/splash.png";
+// The file ships in the www image (data/static/img/splash.jpg, `idf.py www-flash`); this code
+// only reads it. app_startup.hpp mounts /www before LVGL for that reason. The P4's hardware
+// JPEG engine decodes it once into an RGB565 PSRAM buffer that the LVGL image object points at;
+// the buffer is freed again when the splash fades out (finish_startup_screen()).
+constexpr const char* kSplashPath = "/www/static/img/splash.jpg";
 constexpr uint32_t kSplashMinimumVisibleMs = 3000;
 constexpr uint32_t kSplashFadeMs = 250;
 constexpr uint32_t kSplashFirstFrameTimeoutMs = 5000;
+static lv_image_dsc_t s_splash_dsc = {};
+static uint8_t* s_splash_pixels = nullptr;
+
+// Hardware-decodes kSplashPath into s_splash_dsc (RGB565). False on any error - the caller
+// then just skips the splash.
+bool decode_splash_jpeg() {
+    constexpr const char* TAG = "FeatureLVGL";
+    FILE* file = fopen(kSplashPath, "rb");
+    if (file == nullptr) {
+        ESP_LOGW(TAG, "Splash: %s not found (errno=%d) - skipping splash screen", kSplashPath, errno);
+        return false;
+    }
+    fseek(file, 0, SEEK_END);
+    const long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    const jpeg_decode_memory_alloc_cfg_t in_cfg = {.buffer_direction = JPEG_DEC_ALLOC_INPUT_BUFFER};
+    size_t in_capacity = 0;
+    auto* jpeg = file_size > 0 ? static_cast<uint8_t*>(jpeg_alloc_decoder_mem(file_size, &in_cfg, &in_capacity))
+                               : nullptr;
+    const bool read_ok = jpeg != nullptr && fread(jpeg, 1, file_size, file) == static_cast<size_t>(file_size);
+    fclose(file);
+
+    jpeg_decode_picture_info_t info = {};
+    jpeg_decoder_handle_t engine = nullptr;
+    uint8_t* pixels = nullptr;
+    uint32_t stride = 0;
+    bool ok = read_ok && jpeg_decoder_get_info(jpeg, file_size, &info) == ESP_OK;
+    if (ok) {
+        // 4:2:0/4:2:2 output is padded to whole 16x16 MCUs - size the buffer for that.
+        const uint32_t padded_w = (info.width + 15) & ~15u;
+        const uint32_t padded_h = (info.height + 15) & ~15u;
+        stride = padded_w * sizeof(uint16_t);
+        const jpeg_decode_memory_alloc_cfg_t out_cfg = {.buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER};
+        size_t out_capacity = 0;
+        pixels = static_cast<uint8_t*>(jpeg_alloc_decoder_mem(stride * padded_h, &out_cfg, &out_capacity));
+        const jpeg_decode_engine_cfg_t engine_cfg = {.intr_priority = 0, .timeout_ms = 1000, .flags = {}};
+        ok = pixels != nullptr && jpeg_new_decoder_engine(&engine_cfg, &engine) == ESP_OK;
+        if (ok) {
+            const jpeg_decode_cfg_t decode_cfg = {
+                .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
+                .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR, // little-endian RGB565 = LVGL's layout
+                .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
+            };
+            uint32_t out_size = 0;
+            const int64_t start_us = esp_timer_get_time();
+            ok = jpeg_decoder_process(engine, &decode_cfg, jpeg, file_size, pixels, out_capacity, &out_size) == ESP_OK;
+            ESP_LOGI(TAG, "Splash: HW-decoded %s (%ld bytes, %lux%lu) in %lld us", kSplashPath, file_size,
+                     static_cast<unsigned long>(info.width), static_cast<unsigned long>(info.height),
+                     static_cast<long long>(esp_timer_get_time() - start_us));
+            jpeg_del_decoder_engine(engine);
+        }
+    }
+    free(jpeg);
+    if (!ok) {
+        ESP_LOGW(TAG, "Splash: JPEG decode of %s failed - skipping splash screen", kSplashPath);
+        free(pixels);
+        return false;
+    }
+
+    s_splash_pixels = pixels;
+    s_splash_dsc = {};
+    s_splash_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_splash_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_splash_dsc.header.w = info.width;
+    s_splash_dsc.header.h = info.height;
+    s_splash_dsc.header.stride = stride;
+    s_splash_dsc.data_size = stride * info.height;
+    s_splash_dsc.data = pixels;
+    return true;
+}
 
 // Creates the splash while caller holds lvgl_port_lock(). Rendering starts after init()
 // releases that lock; remaining App::init() work then continues in parallel with taskLVGL.
 void show_splash_screen(lv_display_t* display) {
     constexpr const char* TAG = "FeatureLVGL";
+    if (!decode_splash_jpeg()) return;
     const int32_t screen_w = lv_display_get_horizontal_resolution(display);
     const int32_t screen_h = lv_display_get_vertical_resolution(display);
-    ESP_LOGI(TAG, "Splash: showing '%s' (LVGL path '%s'), screen %ldx%ld",
-             kSplashPath, kSplashLvglPath, static_cast<long>(screen_w), static_cast<long>(screen_h));
+    ESP_LOGI(TAG, "Splash: showing '%s', screen %ldx%ld", kSplashPath, static_cast<long>(screen_w),
+             static_cast<long>(screen_h));
 
     s_splash_background = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_splash_background, screen_w, screen_h);
@@ -754,32 +847,13 @@ void show_splash_screen(lv_display_t* display) {
     s_splash_image = lv_image_create(s_splash_background);
     ESP_LOGI(TAG, "Splash: image object %p created on bg %p", static_cast<void*>(s_splash_image),
              static_cast<void*>(s_splash_background));
-    lv_image_set_src(s_splash_image, kSplashLvglPath);
+    lv_image_set_src(s_splash_image, &s_splash_dsc);
 
-    lv_image_header_t header{};
-    const lv_result_t info_result = lv_image_decoder_get_info(kSplashLvglPath, &header);
-    ESP_LOGI(TAG, "Splash: decoder_get_info result=%d w=%u h=%u cf=%u stride=%u",
-             static_cast<int>(info_result), static_cast<unsigned>(header.w),
-             static_cast<unsigned>(header.h), static_cast<unsigned>(header.cf),
-             static_cast<unsigned>(header.stride));
-    if (info_result == LV_RESULT_OK && header.w > 0 && header.h > 0) {
-        // A newly-created image uses LV_SIZE_CONTENT. Its content size is applied during the
-        // next layout pass, but this splash is invalidated immediately. Give it its decoded
-        // dimensions now so the first render cannot see a zero-sized object.
-        lv_obj_set_size(s_splash_image, header.w, header.h);
-        const uint32_t zoom_x = (static_cast<uint32_t>(screen_w) * 256u) / header.w;
-        const uint32_t zoom_y = (static_cast<uint32_t>(screen_h) * 256u) / header.h;
-        // "Stretch to Uniform": scale by the SMALLER of the two factors so the whole image
-        // stays inside the screen on both axes (never overflows/crops, never distorts) - the
-        // larger factor would overflow one axis in order to exactly fill the other.
-        const uint32_t scale = zoom_x < zoom_y ? zoom_x : zoom_y;
-        ESP_LOGI(TAG, "Splash: zoom_x=%u zoom_y=%u -> applying scale=%u (256=1:1)",
-                 static_cast<unsigned>(zoom_x), static_cast<unsigned>(zoom_y),
-                 static_cast<unsigned>(scale));
-        lv_image_set_scale(s_splash_image, scale);
-    } else {
-        ESP_LOGW(TAG, "Splash image decoder_get_info failed - showing unscaled");
-    }
+    // Stretched to fill the whole screen, aspect ratio NOT preserved (wanted: no black bars).
+    // An explicit screen-sized object (not LV_SIZE_CONTENT) also keeps the first render, which
+    // happens before any layout pass, from seeing a zero-sized image.
+    lv_obj_set_size(s_splash_image, screen_w, screen_h);
+    lv_image_set_inner_align(s_splash_image, LV_IMAGE_ALIGN_STRETCH);
     lv_obj_center(s_splash_image);
     lv_obj_update_layout(s_splash_image);
     ESP_LOGI(TAG, "Splash: obj size after src+scale = %ldx%ld, pos (%ld,%ld)",
@@ -792,7 +866,7 @@ void show_splash_screen(lv_display_t* display) {
     s_splash_frame_pending.store(true, std::memory_order_release);
     lv_obj_invalidate(s_splash_background);
 }
-#endif // CONFIG_APP_ENABLE_LITTLEFS
+#endif // APP_BOOT_SPLASH
 
 [[maybe_unused]] void create_ui() {
     lv_obj_t* screen = lv_screen_active();
@@ -922,7 +996,7 @@ inline void resync_display() {
 #endif
 
 inline void finish_startup_screen() {
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     constexpr const char* TAG = "FeatureLVGL";
     if (s_splash_background == nullptr) {
         lvgl_port_lock(0);
@@ -970,6 +1044,9 @@ inline void finish_startup_screen() {
     lv_obj_delete(s_splash_background); // also deletes the child image object
     s_splash_background = nullptr;
     s_splash_image = nullptr;
+    free(s_splash_pixels); // ~1.2 MB decoded RGB565, see decode_splash_jpeg()
+    s_splash_pixels = nullptr;
+    s_splash_dsc = {};
     lvgl_port_unlock();
 
     ESP_LOGI(TAG, "Splash: fade complete; LVGL status UI ready");
@@ -1186,8 +1263,8 @@ inline esp_err_t init() {
     // work instead of leaving it free to migrate.
     lvgl_config.task_affinity = App::MAIN_CORE;
     lvgl_config.task_max_sleep_ms = 33;
-    // PNG decoding and LittleFS/VFS calls need more stack than the port's 7 KB default.
-    lvgl_config.task_stack = 12 * 1024; // splash decoding leaves >7 KiB of measured stack headroom
+    // 8 KiB: a little above the port default (7 KiB) for the EEZ UI callbacks.
+    lvgl_config.task_stack = 8 * 1024; // measured peak use ~4.5 KiB (the splash is decoded on the init task, not here)
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_config), TAG, "LVGL port initialization failed");
 
     lvgl_port_lock(0);
@@ -1214,7 +1291,7 @@ inline esp_err_t init() {
     display_config.rotation.swap_xy = CONFIG_APP_DISPLAY_WIDTH > 240;
     display_config.rotation.mirror_x = CONFIG_APP_DISPLAY_WIDTH > 240;
     lv_display_t* display = lvgl_port_add_disp(&display_config);
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     if (display != nullptr) {
         lv_display_add_event_cb(display, [](lv_event_t* event) {
             auto* screen = static_cast<lv_display_t*>(lv_event_get_target(event));
@@ -1387,23 +1464,13 @@ inline esp_err_t init() {
 #endif
 
     Feature::EEZUI::init();
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
-    {
-        struct stat splash_st {};
-        if (stat(kSplashPath, &splash_st) == 0) {
-            ESP_LOGI(TAG, "Splash: found %s (%ld bytes)", kSplashPath,
-                     static_cast<long>(splash_st.st_size));
-            show_splash_screen(display);
-        } else {
-            ESP_LOGW(TAG, "Splash: %s not found (errno=%d) - skipping splash screen",
-                     kSplashPath, errno);
-        }
-    }
+#if APP_BOOT_SPLASH
+    show_splash_screen(display); // no-op (logged) when splash.jpg is missing or undecodable
 #endif
 
     lvgl_port_unlock();
 
-#if defined(CONFIG_APP_ENABLE_LITTLEFS)
+#if APP_BOOT_SPLASH
     ESP_LOGI(TAG, "Display ready%s",
              s_splash_background != nullptr ? ", startup splash active" : "");
 #else

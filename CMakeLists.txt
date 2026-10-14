@@ -60,8 +60,8 @@ endif()
 littlefs_create_partition_image(www "${CMAKE_CURRENT_LIST_DIR}/data")
 
 # Default/seed content for the "littlefs" partition (see partitions.csv and
-# main/features/filesystem/littlefs_manager.hpp) - e.g. the boot splash image
-# (main/features/display/display_lvgl.hpp reads /littlefs/system/splash.png). Same mechanism
+# main/features/filesystem/littlefs_manager.hpp). (The boot splash is no longer here: it ships
+# in the www image as data/static/img/splash.jpg, see display_lvgl.hpp.) Same mechanism
 # as "www" above: built from littlefs_data/ into build/littlefs.bin by the
 # "littlefs_littlefs_bin" target, reflashed independently via `idf.py littlefs-flash`, not on
 # every `idf.py flash` (deliberately not FLASH_IN_PROJECT).

@@ -8,6 +8,11 @@
 #include "NodeTypes.h"
 #include "SynthConfig.h"
 
+namespace nodes::fm8
+{
+struct Fm8State;
+}
+
 // Full definitions + all logic for these heap-allocated pointer members live
 // in nodes/*.h (only need to be forward-declared here). The using-
 // declarations bring them into the global namespace under their established
@@ -307,6 +312,7 @@ struct NodeInstance
         ReverbLightState *reverbLight;
         AdsrState *adsr;
         DxEnvelopeState *dxEnvelope;
+        nodes::fm8::Fm8State *fm8;
         StepArpState *stepArp;
         DrumSequencerState *drumSequencer;
         FilterState *filter;

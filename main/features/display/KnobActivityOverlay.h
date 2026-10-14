@@ -9,6 +9,8 @@
 #include "screens.h"
 #include "features/synth/KnobActivity.h"
 #include "features/display/PortDisplayLabels.h"
+#include "esp_log.h"
+#include "features/display/MidiButtonCard.h"
 
 class KnobActivityOverlay
 {
@@ -16,7 +18,7 @@ class KnobActivityOverlay
     {
         KnobActivity activity;
         lv_obj_t *root;
-        lv_obj_t *arc; // nullptr on MidiButton cards
+        lv_obj_t *bar; // nullptr on MidiButton cards
         lv_obj_t *value;
         lv_obj_t *device;
         lv_obj_t *port;
@@ -51,7 +53,7 @@ class KnobActivityOverlay
             snprintf(value, sizeof(value), "%.4g", static_cast<double>(activity.sourceValue));
         else
         {
-            if (lv_arc_get_value(card.arc) != activity.raw) lv_arc_set_value(card.arc, activity.raw);
+            if (lv_bar_get_value(card.bar) != activity.raw) lv_bar_set_value(card.bar, activity.raw, LV_ANIM_OFF);
             snprintf(value, sizeof(value), "%u", static_cast<unsigned>(activity.raw));
         }
         auto label = [](lv_obj_t *obj, const char *text)
@@ -80,13 +82,15 @@ class KnobActivityOverlay
         const int availableWidth = lv_display_get_horizontal_resolution(nullptr) - 32;
         const int availableHeight = lv_display_get_vertical_resolution(nullptr) - 32;
         const bool hasEnvelope = std::any_of(cards_.begin(), cards_.end(), [](const Card &card) { return card.activity.isEnvelope; });
-        const int cellWidth = hasEnvelope ? 206 : 156;
+        const int cellWidth = hasEnvelope ? 206 : 161;
+        const bool hasButtonOrEnvelope = std::any_of(cards_.begin(), cards_.end(), [](const Card &card) { return card.activity.isButton || card.activity.isEnvelope; });
+        const int rowHeight = hasButtonOrEnvelope ? 150 : 95;
         const int columns = std::max(1, (availableWidth - 4) / (cellWidth + 12));
         const int count = static_cast<int>(cards_.size());
         const int usedColumns = std::min(count, columns);
         const int rows = (count + columns - 1) / columns;
         lv_obj_set_size(panel_, usedColumns * cellWidth + (usedColumns - 1) * 12 + 16,
-                        std::min(availableHeight, rows * 194 + (rows - 1) * 12 + 16));
+                        std::min(availableHeight, rows * rowHeight + (rows - 1) * 12 + 16));
         lv_obj_center(panel_);
     }
 
@@ -122,7 +126,7 @@ class KnobActivityOverlay
                 lv_obj_set_parent(card.root, panel_);
             } else {
             card.root = lv_obj_create(panel_);
-            lv_obj_set_size(card.root, activity.isEnvelope ? 200 : 150, (activity.isButton || activity.isEnvelope) ? 150 : 194);
+            lv_obj_set_size(card.root, activity.isEnvelope ? 200 : (activity.isButton ? 150 : 155), (activity.isButton || activity.isEnvelope) ? 150 : 95);
             lv_obj_set_style_margin_hor(card.root, 3, 0);
             lv_obj_set_style_pad_all(card.root, 0, 0);
             lv_obj_set_style_border_width(card.root, 0, 0);
@@ -151,26 +155,34 @@ class KnobActivityOverlay
             else if (activity.isButton)
             {
                 create_user_widget_midi_button(card.root, 0);
-                card.arc = nullptr;
+                card.bar = nullptr;
                 card.value = handles[0];
                 card.device = handles[1];
                 card.port = handles[2];
                 card.name = handles[3];
                 card.nodeValue = handles[4];
-                // The value label sits inside an lv_button; display only, not pressable.
-                lv_obj_clear_flag(lv_obj_get_parent(card.value), LV_OBJ_FLAG_CLICKABLE);
+                // Display only, not pressable.
+                if (lv_obj_t *button = midiButtonOf(card.root)) lv_obj_clear_flag(button, LV_OBJ_FLAG_CLICKABLE);
             }
             else
             {
                 create_user_widget_knob(card.root, 0);
-                card.arc = handles[0];
-                card.value = handles[1];
-                card.device = handles[2];
-                card.port = handles[3];
-                card.name = handles[4];
-                card.nodeValue = handles[5];
-                lv_arc_set_range(card.arc, 0, 127);
-                lv_obj_clear_flag(card.arc, LV_OBJ_FLAG_CLICKABLE);
+                const KnobHandles knob = KnobHandles::from(handles);
+                if (!knob.valid())
+                {
+                    objects = screenObjects;
+                    ESP_LOGE("KnobOverlay", "Knob widget handle order does not match firmware (screens.c re-exported?)");
+                    lv_obj_delete(card.root);
+                    return;
+                }
+                card.bar = knob.bar;
+                card.value = knob.value;
+                card.device = knob.device;
+                card.port = knob.port;
+                card.name = knob.name;
+                card.nodeValue = knob.nodeValue;
+                lv_bar_set_range(card.bar, 0, 127);
+                lv_obj_clear_flag(card.bar, LV_OBJ_FLAG_CLICKABLE);
             }
             objects = screenObjects;
             }

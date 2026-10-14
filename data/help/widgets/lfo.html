@@ -7,6 +7,7 @@ movement. For self-drawn, morphable shapes use the <strong>Wavetable</strong> wi
 <ul>
 <li><span class="port-label">Rate</span> — how fast it cycles. Double-click the widget to set the maximum rate the 0–10&nbsp;V range maps to.</li>
 <li><span class="port-label">Phase</span> — where in its cycle it starts.</li>
+<li><span class="port-label">Delay</span> — fades the swing in over 0–5 s after every Reset edge (DX7 style LFO delay: vibrato that blooms after the note starts). Needs a gate patched to Reset; with 0 s the LFO starts at full depth.</li>
 <li><span class="port-label">Reset</span> — a trigger input that restarts the cycle from the beginning, handy for syncing the wobble to a new note.</li>
 <li><span class="port-label">One Shot</span> — makes the LFO run through its shape once instead of looping.</li>
 <li><span class="port-label">Global</span> — lets all voices share one LFO instead of each voice running its own.</li>

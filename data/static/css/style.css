@@ -295,12 +295,14 @@ button:hover {
   background: none;
   border: 1px solid var(--card-border);
   border-radius: 0.375rem;
-  padding: 0.25rem 0.6rem;
+  padding: 0.15rem 0.4rem;
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
   color: var(--text);
   opacity: 0.5;
+  display: inline-flex;
+  align-items: center;
 }
 
 .battery-indicator {
@@ -517,29 +519,6 @@ button:hover {
   background: none;
 }
 
-.master-clock-badge {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.3rem 0.7rem;
-  background: var(--bg);
-  border: 1px solid var(--card-border);
-  border-radius: 999px;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-.master-clock-badge:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.master-clock-badge-icon {
-  font-size: 0.9rem;
-}
-
 .mem-stats {
   display: flex;
   align-items: center;
@@ -566,9 +545,26 @@ button:hover {
   border-left: 1px solid var(--card-border);
 }
 
-.stat-icon {
-  font-size: 0.85rem;
-  line-height: 1;
+/* Header / status-bar icons (node-icons.js UI_ICONS): the node-icon tile, lit like the
+   widget headers. */
+.ui-icon {
+  width: 20px;
+  height: 20px;
+  border-color: color-mix(in srgb, var(--wave-color) 40%, transparent);
+}
+
+.ui-icon svg {
+  filter: drop-shadow(0 0 2px var(--wave-color));
+}
+
+.master-volume-meter .ui-icon {
+  margin-right: 0.1rem;
+}
+
+.audio-start-btn .ui-icon {
+  border: none;
+  background: none;
+  box-shadow: none;
 }
 
 .panic-btn {
@@ -873,13 +869,19 @@ body.show-node-cpu .widget-cpu-badge {
   gap: 0.4rem;
   background: var(--bg);
   border: 1px solid var(--card-border);
-  border-radius: 0.5rem;
-  padding: 0.3rem 0.3rem 0.3rem 0.55rem;
+  border-radius: 0.4rem;
+  padding: 0.12rem 0.2rem 0.12rem 0.45rem;
   /* Shrinks a little on narrow viewports instead of forcing horizontal
      scroll or clipping labels - see #widgetPickerOverlay .widget-picker
      for the matching width/column adaptation. */
-  font-size: clamp(0.7rem, 0.55rem + 0.6vw, 0.8rem);
+  font-size: clamp(0.68rem, 0.55rem + 0.5vw, 0.76rem);
+  line-height: 1.25;
   cursor: pointer;
+}
+
+.widget-source.filtered-out,
+.widget-picker-column.filtered-out {
+  display: none;
 }
 
 .widget-source:hover {
@@ -895,7 +897,56 @@ body.show-node-cpu .widget-cpu-badge {
   border-color: var(--card-border);
 }
 
+/* Add Node picker icon: a mini .osc-wave-btn tile (same gradient, bevel and
+   colored stroke glyph), glowing in its own color while the row is hovered. */
+.node-icon {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 0.3rem;
+  background: linear-gradient(145deg, #1a2233 0%, #0a0e18 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), inset 0 -2px 4px rgba(0, 0, 0, 0.8);
+  color: var(--wave-color, var(--accent));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.node-icon svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+  pointer-events: none;
+}
+
+/* Widget header on the canvas: same tile, a touch larger and always lit. */
+.widget-instance-title .node-icon {
+  width: 22px;
+  height: 22px;
+  border-color: color-mix(in srgb, var(--wave-color) 45%, transparent);
+}
+
+.widget-instance-title .node-icon svg {
+  width: 14px;
+  height: 14px;
+  filter: drop-shadow(0 0 2px var(--wave-color));
+}
+
+.widget-source:not(.disabled):hover .node-icon {
+  border-color: var(--wave-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--wave-color) 55%, transparent),
+    inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 -2px 4px rgba(0, 0, 0, 0.85);
+}
+
+.widget-source:not(.disabled):hover .node-icon svg {
+  filter: drop-shadow(0 0 3px var(--wave-color));
+}
+
 .widget-source-label {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -904,8 +955,8 @@ body.show-node-cpu .widget-cpu-badge {
 
 .widget-source-help {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -914,7 +965,7 @@ body.show-node-cpu .widget-cpu-badge {
   border-radius: 50%;
   background: transparent;
   color: #94a3b8;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: bold;
   line-height: 1;
   cursor: pointer;
@@ -925,39 +976,62 @@ body.show-node-cpu .widget-cpu-badge {
   color: var(--accent);
 }
 
+/* Fixed ~150px columns (count + category placement in openWidgetPicker()): MIDI,
+   Generator and Modulator head the first columns, later categories fill in
+   under the shortest one - no gap under a short category. */
 .widget-picker-list {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 0 clamp(0.5rem, 2vw, 1rem);
+  gap: 0.6rem;
+}
+
+.widget-picker-stack {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .widget-picker-column {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  /* Fluid column width: columns narrow together as the viewport shrinks so
-     more of them still fit per row (reordering the picker's rows/columns
-     automatically) instead of collapsing to one narrow column per row. */
-  width: clamp(140px, 26vw, 220px);
-  flex: 0 0 auto;
+  display: grid;
+  /* minmax(0, ...): long labels ellipsize instead of widening the column */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.12rem;
+  margin-bottom: 0.45rem;
+  break-inside: avoid;
 }
 
 .widget-picker-category {
-  font-size: clamp(0.68rem, 0.58rem + 0.4vw, 0.75rem);
+  font-size: clamp(0.62rem, 0.55rem + 0.3vw, 0.7rem);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--accent);
-  margin: 0.5rem 0 0.15rem;
-  padding-top: 0.25rem;
-  border-top: 1px solid var(--card-border);
+  margin: 0 0 0.05rem;
 }
 
-.widget-picker-category:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
+.widget-picker-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  background: var(--bg);
+  color: inherit;
+  border: 1px solid var(--card-border);
+  border-radius: 0.4rem;
+}
+
+.widget-picker-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.widget-picker-empty {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  padding: 0.25rem 0;
+}
+
+.widget-picker-empty.hidden {
+  display: none;
 }
 
 .canvas {
@@ -1878,73 +1952,116 @@ body.show-node-cpu .widget-cpu-badge {
 
 .knob-control { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; min-width: 0; }
 
-.knob-dial {
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 34% 27%, #4c5960 0 8%, #273238 56%, #121a1e 100%);
-  border: 2px solid #70818a;
-  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.2), inset 0 -3px 6px rgba(0, 0, 0, 0.72), 0 1px 3px rgba(0, 0, 0, 0.72);
+/* Slider. .knob-slider-track IS the thumb's travel range (see startKnobSliderDrag),
+   --pos (0..1) is set from JS. Vertical sliders sit side by side (outputs top/bottom),
+   horizontal ones are stacked (outputs left/right). */
+.knob-slider {
+  --pos: 0;
+  display: flex;
   position: relative;
+  box-sizing: border-box;
+  touch-action: none;
+  user-select: none;
   cursor: pointer;
-  overflow: visible;
+  outline: none;
 }
 
-.knob-dial::before {
-  display: none;
+.knob-slider-track {
+  position: relative;
+  box-sizing: border-box;
+  border: 1px solid rgba(118, 132, 143, 0.5);
+  border-radius: 4px;
+  background: #0b1215;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.85);
 }
 
-.knob-dial:hover {
-  filter: brightness(1.04);
-}
-
-.knob-scale {
+.knob-slider-fill {
   position: absolute;
-  inset: -8px;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.knob-tick {
-  position: absolute;
-  width: 3px;
-  height: 9px;
-  border-radius: 0;
-  background: #e6e5e1;
-  box-shadow: 0 0 2px rgba(255, 255, 255, 0.45);
-  transform-origin: center;
-}
-
-.knob-indicator {
-  position: absolute;
-  left: 50%;
-  top: 14px;
-  width: 4px;
-  height: 24px;
-  border-radius: 2px;
+  border-radius: 3px;
   background: #a59e00;
-  box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.38);
-  transform-origin: 50% 24px;
-  margin-left: -2px;
-  z-index: 3;
+  opacity: 0.85;
 }
 
-.knob-center-cap {
+.knob-slider-thumb {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 58px;
-  height: 58px;
-  margin: -29px 0 0 -29px;
-  border: 3px solid #ece8df;
-  border-radius: 50%;
-  background: radial-gradient(circle at 34% 27%, #fffefa 0 8%, #eeeae1 48%, #cbc6bb 100%);
-  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.95), inset 0 -4px 7px rgba(86, 79, 70, 0.22), 0 1px 3px rgba(0, 0, 0, 0.72);
-  z-index: 2;
+  box-sizing: border-box;
+  border: 2px solid #ece8df;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #fffefa 0, #eeeae1 55%, #cbc6bb 100%);
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.95), inset 0 -3px 5px rgba(86, 79, 70, 0.22), 0 1px 3px rgba(0, 0, 0, 0.72);
+  transform: translate(-50%, -50%);
 }
+
+.knob-slider-thumb::after {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
+  background: #a59e00;
+}
+
+.knob-slider:hover .knob-slider-thumb,
+.knob-slider.dragging .knob-slider-thumb { filter: brightness(1.05); }
+.knob-slider:focus-visible .knob-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.knob-orient-vertical .knob-slider { width: 44px; height: 128px; padding: 9px 0; justify-content: center; }
+.knob-orient-vertical .knob-slider-track { width: 10px; height: 100%; }
+.knob-orient-vertical .knob-slider-fill { left: 0; right: 0; bottom: 0; height: calc(var(--pos) * 100%); }
+.knob-orient-vertical .knob-slider-thumb { left: 50%; top: calc((1 - var(--pos)) * 100%); width: 30px; height: 18px; }
+.knob-orient-vertical .knob-slider-thumb::after { left: 4px; right: 4px; top: 50%; height: 3px; margin-top: -1.5px; }
+
+.knob-orient-horizontal .knob-slider { width: 100%; height: 30px; padding: 0 9px; align-items: center; }
+.knob-orient-horizontal .knob-slider-track { flex: 1; height: 10px; }
+.knob-orient-horizontal .knob-slider-fill { top: 0; bottom: 0; left: 0; width: calc(var(--pos) * 100%); }
+.knob-orient-horizontal .knob-slider-thumb { top: 50%; left: calc(var(--pos) * 100%); width: 18px; height: 30px; }
+.knob-orient-horizontal .knob-slider-thumb::after { top: 4px; bottom: 4px; left: 50%; width: 3px; margin-left: -1.5px; }
+
+/* Horizontal sliders: one row per control; the jacks (left/right) use the same row
+   height and gap so each one lines up with its slider. */
+.knob-body.knob-orient-horizontal,
+.knob-output-ports.knob-orient-horizontal {
+  --knob-row-h: max(30px, calc(var(--knob-layer-count, 1) * 16px));
+  --knob-row-gap: 0.4rem;
+}
+.knob-body.knob-orient-horizontal { padding-bottom: 0.6rem; }
+.knob-body.knob-orient-horizontal.knob-side-left { padding-left: 1rem; }
+.knob-body.knob-orient-horizontal.knob-side-right { padding-right: 1rem; }
+.knob-orient-horizontal .knob-controls { grid-template-columns: minmax(0, 1fr); grid-auto-rows: var(--knob-row-h); gap: var(--knob-row-gap); }
+.knob-orient-horizontal .knob-control {
+  display: grid;
+  grid-template-columns: minmax(3rem, 5.5rem) minmax(120px, 1fr) 3.6rem;
+  grid-template-areas: "label slider readout";
+  align-items: center;
+  gap: 0.5rem;
+  height: var(--knob-row-h);
+}
+.knob-orient-horizontal .knob-slider { grid-area: slider; }
+.knob-orient-horizontal .knob-readout { grid-area: readout; min-width: 0; }
+.knob-orient-horizontal .knob-cc-label {
+  grid-area: label;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knob-output-ports.knob-orient-horizontal {
+  position: absolute;
+  top: 0.5rem;
+  bottom: auto;
+  width: 14px;
+  padding: 0;
+  grid-template-columns: 1fr;
+  grid-auto-rows: var(--knob-row-h);
+  gap: var(--knob-row-gap);
+}
+.knob-output-ports.knob-output-left { left: 0; right: auto; transform: translateX(-50%); }
+.knob-output-ports.knob-output-right { left: auto; right: 0; transform: translateX(50%); }
+.knob-orient-horizontal .knob-output-group { flex-direction: column; gap: 0.12rem; }
+.knob-output-left .port-label, .knob-output-right .port-label { display: none; }
+.knob-output-left .port-row, .knob-output-right .port-row { justify-content: center; }
+.knob-output-left .port-row-out > .port-dot, .knob-output-right .port-row-out > .port-dot { margin: 0; }
 
 .knob-readout {
-  min-width: 82px;
+  min-width: 56px;
   padding: 0.18rem 0.45rem;
   border: 1px solid rgba(118, 132, 143, 0.45);
   border-radius: 3px;
@@ -1979,6 +2096,8 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .knob-output-ports { display: grid; grid-template-columns: repeat(var(--knob-count, 1), minmax(0, 1fr)); gap: 0.1rem; }
+/* Same column gap as .knob-controls so each jack sits above/below its slider. */
+.widget-instance[data-widget-type="knob"] > .knob-output-ports.knob-orient-vertical { column-gap: 0.5rem; }
 .knob-output-group { display: flex; align-items: center; justify-content: center; gap: 0.12rem; min-width: 0; }
 .knob-output-ports .port-row { flex: 0 0 auto; min-width: 0; padding: 0; }
 .knob-output-ports .port-label { font-size: 0.6rem; }
@@ -4108,7 +4227,7 @@ body.show-oscilloscopes .oscilloscope-only-body {
   position: fixed;
   display: flex;
   flex-direction: column;
-  width: min(900px, calc(100vw - 16px));
+  width: min(820px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
   background: var(--card);
   border: 1px solid var(--card-border);
@@ -4675,6 +4794,8 @@ body.show-oscilloscopes .oscilloscope-only-body {
   color: #94a3b8;
   font-size: 0.78rem;
 }
+
+.knob-settings-output-side.knob-settings-orientation { margin-right: 0.6rem; }
 
 .knob-settings-output-side select {
   min-width: 110px;
@@ -5648,3 +5769,200 @@ input[type="range"].port-slider + .port-value {
 .master-volume-body .widget-ports { margin-left: auto; padding: 0; }
 .master-volume-body .port-row { padding: 0; }
 .master-volume-body .port-label { display: none; }
+
+/* FM8 widget (fm8.js): compact summary in the widget, full editor in a dialog. */
+.fm8-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  min-width: 190px;
+}
+
+.fm8-summary-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm8-summary-sub {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.fm8-op-bars {
+  display: flex;
+  gap: 4px;
+  height: 56px;
+  align-items: flex-end;
+  margin-top: 0.35rem;
+}
+
+.fm8-op-bar {
+  position: relative;
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 3px;
+}
+
+.fm8-op-bar > div {
+  background: #38bdf8;
+  border-radius: 3px 3px 0 0;
+}
+
+.fm8-op-bar.carrier > div {
+  background: #f59e0b;
+}
+
+.fm8-op-bar > span {
+  position: absolute;
+  bottom: -14px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.6rem;
+  color: #94a3b8;
+}
+
+.fm8-edit-btn {
+  margin-top: 0.7rem;
+  font-size: 0.75rem;
+}
+
+.fm8-dialog {
+  width: min(1200px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.fm8-dialog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fm8-dialog-head h3 {
+  margin: 0;
+}
+
+.fm8-loader,
+.fm8-globals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.fm8-info {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.fm8-table-wrap {
+  overflow-x: auto;
+}
+
+.fm8-table {
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.fm8-table th,
+.fm8-table td {
+  padding: 1px 2px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.fm8-table th {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.fm8-table input {
+  width: 3.6rem;
+  padding: 1px 2px;
+  font-size: 0.72rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+}
+
+.fm8-matrix input {
+  width: 2.8rem;
+}
+
+/* FM8 editor: Dexed-style operator cards */
+.fm8-ops {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.fm8-section {
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.fm8-section h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fm8-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr));
+  gap: 0.25rem 0.5rem;
+}
+
+.fm8-field {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.65rem;
+  color: #94a3b8;
+}
+
+.fm8-field input[type="number"],
+.fm8-field select {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 0.75rem;
+  padding: 1px 3px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+}
+
+.fm8-alg-text {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: #cbd5e1;
+}
+
+@media (max-width: 900px) {
+  .fm8-ops {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.fm8-dialog.fm8-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}

@@ -155,18 +155,33 @@ inline httpd_handle_t handle() {
  *        image hasn't been flashed yet -- logs and returns an error instead of formatting the
  *        partition out from under a pending flash.
  */
-inline esp_err_t begin() {
+/**
+ * @brief Mount the "www" LittleFS partition at /www (idempotent). Called early by app_startup
+ *        so the boot splash (display_lvgl.hpp, /www/static/img/splash.jpg) can read it before
+ *        LVGL comes up; begin() calls it again and reuses the mount.
+ */
+inline esp_err_t mount() {
+    static esp_err_t s_mount_result = ESP_ERR_INVALID_STATE;
+    if (s_mount_result == ESP_OK) return ESP_OK;
+
     esp_vfs_littlefs_conf_t fs_conf = {};
     fs_conf.base_path = MOUNT_POINT;
     fs_conf.partition_label = PARTITION_LABEL;
     fs_conf.format_if_mount_failed = false;
     fs_conf.dont_mount = false;
 
-    const esp_err_t mount_err = esp_vfs_littlefs_register(&fs_conf);
-    if (mount_err != ESP_OK) {
+    s_mount_result = esp_vfs_littlefs_register(&fs_conf);
+    if (s_mount_result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to mount '%s' partition: %s (has the web assets image been "
                       "built and flashed? see main/features/web/web_server.hpp)",
-                 PARTITION_LABEL, esp_err_to_name(mount_err));
+                 PARTITION_LABEL, esp_err_to_name(s_mount_result));
+    }
+    return s_mount_result;
+}
+
+inline esp_err_t begin() {
+    const esp_err_t mount_err = mount();
+    if (mount_err != ESP_OK) {
         return mount_err;
     }
 

@@ -58,5 +58,9 @@ void *tsfPsramRealloc(void *ptr, size_t size)
 #define TSF_RENDER_EFFECTSAMPLEBLOCK 128
 #define TSF_LOAD_YIELD_INTERVAL 8192
 #define TSF_LOAD_YIELD() vTaskDelay(pdMS_TO_TICKS(1))
+#include "esp_log.h"
+#include "esp_timer.h"
+#define TSF_LOAD_PROFILE_NOW_US() static_cast<long long>(esp_timer_get_time())
+#define TSF_LOAD_PROFILE_LOG(fmt, ...) ESP_LOGI("tsf", fmt, ##__VA_ARGS__)
 #define TSF_IMPLEMENTATION
 #include "tsf.h"

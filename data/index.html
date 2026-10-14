@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261008-mic-battery-1">
+<link rel="stylesheet" href="/static/css/style.css?v=20261015-fm8-3">
 </head>
 <body>
 
@@ -90,6 +90,7 @@
     <div class="master-volume-wrap">
       <div class="cpu-load master-volume-meter" id="masterVolumeMeter" title="Master Volume" role="button" tabindex="0"
         aria-haspopup="true" aria-expanded="false" aria-controls="masterVolumePopover">
+        <span data-ui-icon="volume"></span>
         <span class="cpu-load-label">VOL</span>
         <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="masterVolumeMeterFill"></div></div>
         <span class="cpu-load-value" id="masterVolumeMeterValue">–</span>
@@ -101,12 +102,24 @@
         <span class="master-volume-popover-hint" id="masterVolumePopoverHint" hidden>MIDI CC</span>
       </div>
     </div>
-    <button id="masterClockBadge" class="master-clock-badge" title="Master Clock Settings">
-      <span class="master-clock-badge-icon">⏱️</span>
-      <span id="masterClockBpmLabel">120</span> BPM
-    </button>
-    <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio">🔇</button>
-    <span id="batteryIndicator" class="battery-indicator" title="Battery" hidden>🔋 <span id="batteryIndicatorValue">–</span></span>
+    <div class="master-volume-wrap" id="masterClockWrap">
+      <div class="cpu-load master-volume-meter" id="masterClockMeter"
+        title="Master Tempo - click: tempo slider, double-click: Master Clock settings" role="button" tabindex="0"
+        aria-haspopup="true" aria-expanded="false" aria-controls="masterClockPopover">
+        <span data-ui-icon="tempo"></span>
+        <span class="cpu-load-label">BPM</span>
+        <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="masterClockMeterFill"></div></div>
+        <span class="cpu-load-value" id="masterClockBpmLabel">120</span>
+      </div>
+      <div class="master-volume-popover" id="masterClockPopover" hidden>
+        <span class="master-volume-popover-value" id="masterClockPopoverValue">120</span>
+        <input type="range" id="masterClockPopoverInput" class="master-volume-popover-slider"
+          min="0" max="240" step="0.1" value="120" aria-label="Master Tempo">
+        <span class="master-volume-popover-hint" id="masterClockPopoverHint" hidden>MIDI CC</span>
+      </div>
+    </div>
+    <button id="audioStartBtn" class="audio-start-btn" disabled title="Start audio"><span data-ui-icon="audio-off"></span></button>
+    <span id="batteryIndicator" class="battery-indicator" title="Battery" hidden><span data-ui-icon="battery"></span> <span id="batteryIndicatorValue">–</span></span>
     <button id="loadSamplesBtn" class="load-samples-btn" type="button" hidden
       title="Sample loading is off in Settings - click to download the samples for this preset now">Load Samples</button>
     <span id="midiNoDevice" class="midi-name">No device</span>
@@ -126,7 +139,7 @@
       <div class="preset-load-progress-track"><div class="preset-load-progress-fill" id="presetLoadProgressFill"></div></div>
     </div>
     <div class="stat-group" title="Free PSRAM / internal RAM">
-      <span class="stat-icon">💾</span>
+      <span data-ui-icon="memory"></span>
       <span class="mem-stat-label">PS</span>
       <span class="mem-stat-value" id="psMemValue">–</span>
       <span class="mem-stat-label">Sys</span>
@@ -134,7 +147,7 @@
     </div>
   </div>
   <div class="cpu-load" id="cpuLoad" title="CPU load per core (Core 1 = audio render task)">
-    <span class="stat-icon">🖥️</span>
+    <span data-ui-icon="cpu"></span>
     <span class="cpu-load-label">CPU</span>
     <span class="cpu-load-core">C0</span>
     <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="cpuLoadCore0Fill"></div></div>
@@ -529,6 +542,8 @@
       <button id="widgetPickerClose" class="widget-instance-close" type="button" aria-label="Close">×</button>
     </div>
     <div class="widget-picker-body">
+      <input id="widgetPickerSearch" class="widget-picker-search" type="search" placeholder="Search nodes… (Enter adds first match)" autocomplete="off" spellcheck="false">
+      <div class="widget-picker-empty hidden" id="widgetPickerEmpty">No matching node</div>
       <div class="widget-picker-list" id="widgetPickerList"></div>
     </div>
   </div>
@@ -556,24 +571,28 @@
 
 <div id="knobSettingsOverlay" class="modal-overlay hidden">
   <div class="modal knob-settings-modal">
-    <h3>Knob Settings</h3>
+    <h3>CC-Slider Settings</h3>
     <div class="modal-field-row">
-      <button type="button" id="knobSettingsAdd" class="btn-secondary knob-add-action knob-add-knob" title="Add knob" aria-label="Add knob"><span class="knob-add-knob-icon" aria-hidden="true"></span></button>
+      <button type="button" id="knobSettingsAdd" class="btn-secondary knob-add-action knob-add-knob" title="Add slider" aria-label="Add slider"><span class="knob-add-knob-icon" aria-hidden="true"></span></button>
       <button type="button" id="knobSettingsAddLayer" class="btn-secondary knob-add-action knob-layer-add" title="Add layer" aria-label="Add layer"><span class="knob-layer-icon" aria-hidden="true"></span></button>
     </div>
-    <div id="knobSettingsLayerTabs" class="knob-settings-layer-tabs" role="tablist" aria-label="Knob layers"></div>
+    <div id="knobSettingsLayerTabs" class="knob-settings-layer-tabs" role="tablist" aria-label="Slider layers"></div>
     <label class="knob-settings-layer-name">
       <span>Layer name</span>
       <input type="text" id="knobLayerNameInput" maxlength="32" placeholder="Layer name">
     </label>
     <div class="knob-settings-head" aria-hidden="true">
-      <span>Knob</span><span>CC / Channel</span><span>Label</span><span>List</span><span>A Out</span><span>B Out</span><span>Actions</span>
+      <span>Slider</span><span>CC / Channel</span><span>Label</span><span>List</span><span>A Out</span><span>B Out</span><span>Actions</span>
     </div>
     <div id="knobSettingsGrid" class="knob-settings-grid"></div>
     <div class="modal-actions knob-settings-footer">
+      <label class="knob-settings-output-side knob-settings-orientation">
+        <span>Sliders</span>
+        <select id="knobOrientationInput"><option value="vertical">Vertical</option><option value="horizontal">Horizontal</option></select>
+      </label>
       <label class="knob-settings-output-side">
         <span>Output side</span>
-        <select id="knobOutputSideInput"><option value="top">Top</option><option value="bottom">Bottom</option></select>
+        <select id="knobOutputSideInput"></select>
       </label>
       <button id="knobSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="knobSettingsSave">Save</button>
@@ -591,7 +610,7 @@
 
 <div id="buttonSettingsOverlay" class="modal-overlay hidden">
   <div class="modal knob-settings-modal button-settings-modal">
-    <h3>Button Settings</h3>
+    <h3>CC Button Settings</h3>
     <div class="modal-field-row">
       <button type="button" id="buttonSettingsAdd" class="btn-secondary knob-add-action button-add-control" title="Add button" aria-label="Add button"><span class="button-add-control-icon" aria-hidden="true"></span></button>
       <button type="button" id="buttonSettingsAddLayer" class="btn-secondary knob-add-action knob-layer-add" title="Add layer" aria-label="Add layer"><span class="knob-layer-icon" aria-hidden="true"></span></button>
@@ -626,7 +645,7 @@
 
 <div id="upDownButtonSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
-    <h3>Up/Down Button Settings</h3>
+    <h3>CC Up/Down Button Settings</h3>
     <div class="modal-cc-learn-row">
     <label class="modal-field modal-cc-field">
       <span>Learned CC Number (Up)</span>
@@ -1189,7 +1208,7 @@
     <label class="modal-field"><span>SoundFont (SF2)</span><select id="soundFontPlayerFileSelect"></select></label>
     <div class="modal-field"><span>Preset</span><span id="soundFontPlayerPresetDisplay" class="modal-field-readout">–</span></div>
     <label class="modal-field"><span>Internal SF2 Voices (4–128)</span><input type="number" id="soundFontPlayerVoicesInput" min="4" max="128" value="32"></label>
-    <p class="modal-hint">Bank/Program are set on the widget itself. Place files in /storage/soundfonts or /sdcard/soundfonts. Plays on the ESP32-P4 and, approximately, in this browser preview.</p>
+    <p class="modal-hint">Bank/Program are set on the widget itself. SoundFonts load from the SD card only: place files in /sdcard/soundfonts. Plays on the ESP32-P4 and, approximately, in this browser preview.</p>
     <div class="modal-actions"><button id="soundFontPlayerSettingsCancel" class="btn-secondary">Cancel</button><button id="soundFontPlayerSettingsSave">Save</button></div>
   </div>
 </div>
@@ -1449,6 +1468,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261009-program-change-1"></script>
+<script type="module" src="/static/js/main.js?v=20261015-fm8-3"></script>
 </body>
 </html>

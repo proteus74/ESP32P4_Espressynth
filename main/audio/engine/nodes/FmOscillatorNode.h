@@ -71,6 +71,33 @@ constexpr float kSelfFeedbackMaxPhaseDeviation = 1.0f;
 
 constexpr float kSuperSawCents[6] = {-28.0f, -14.0f, -7.0f, 7.0f, 14.0f, 28.0f};
 
+// DX7 output-level curve for "FM Depth": 0-10V -> level 0..99, 0.75 dB per level step (a factor of
+// 2 every 8 steps), so the modulation index is dosed exponentially like on the real DX7. Level 0
+// is silent; 10V = 1.0 (full kFmIndexMaxPhaseDeviation). Must match main.js/audio-engine.js.
+inline float fmDepthFromCv(float cvVolts)
+{
+    const float level = noderender::clampToRange(cvVolts, 0.0f, cv::kMaxVolts) * (99.0f / cv::kMaxVolts);
+    return level < 0.5f ? 0.0f : exp2f((level - 99.0f) * 0.125f);
+}
+
+// "detune" (port 15, 0-10V, 5V = 0): +-10 cents like the DX7's operator detune, but continuous.
+inline float detuneVoltsFromCv(float cvVolts)
+{
+    return (noderender::clampToRange(cvVolts, 0.0f, cv::kMaxVolts) - cv::kMaxVolts * 0.5f) * (10.0f / 1200.0f / (cv::kMaxVolts * 0.5f));
+}
+
+
+// DX7-style frequency ratio as a pitch offset in volts (1V/oct): coarse CV 0-10V snaps to 32
+// steps 0.5, 1, 2 ... 31; fine CV 0-10V = +0..99 %. Same mapping as main.js's fmRatioFromCv().
+inline float ratioVolts(float coarseCv, float fineCv)
+{
+    int step = static_cast<int>(coarseCv * (31.0f / cv::kMaxVolts) + 0.5f);
+    step = step < 0 ? 0 : (step > 31 ? 31 : step);
+    const float coarse = step == 0 ? 0.5f : static_cast<float>(step);
+    const float fine = (fineCv < 0.0f ? 0.0f : (fineCv > cv::kMaxVolts ? cv::kMaxVolts : fineCv)) * (99.0f / cv::kMaxVolts);
+    return log2f(coarse * (1.0f + fine * 0.01f));
+}
+
 struct SuperSawLoopCtx
 {
     NodeInstance *inst;
@@ -448,7 +475,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // pattern as "tune" above.
     const bool fmIndexFed = controlPortConnected(inst, 6) || (inst.audioConnectedPortMask & synth::portBit(6)) != 0;
     const float fmIndexCv = fmIndexFed ? portSample(inst, 6, 0) : s.fmIndexCv;
-    const float indexAmount = fmIndexCv * cv::kInvMaxVolts * kFmIndexMaxPhaseDeviation;
+    const float indexAmount = fmDepthFromCv(fmIndexCv) * kFmIndexMaxPhaseDeviation;
 
     // "dutyCycle" (port 8): control-only, one evaluation per block, same
     // pattern as "fmIndex" above. Only compute its fixed-point threshold for
@@ -515,9 +542,21 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float *gainBuf = gainFed ? inst.inPorts[4] : nullptr;
     const float *fmInBuf = fmInFed ? inst.inPorts[5] : nullptr;
 
+    // Operator detune (cents) is folded into the center every tune term is measured against.
+    const bool detuneFed = controlPortConnected(inst, 15) || (inst.audioConnectedPortMask & synth::portBit(15)) != 0;
+    const float tuneCenterVolts =
+        kCenterVolts - detuneVoltsFromCv(detuneFed ? portSample(inst, 15, 0) : s.detuneCv);
+
     const float pitchCvConst =
         pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, 1, 0) : kCenterVolts);
-    const float tuneVoltsConst = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
+    // Ratio (ports 13/14) adds log2(ratio) octaves on top of the Tune slider - but only while
+    // nothing feeds "tune": a patched Tune always wins. tuneNeedsAudioRate implies a patched
+    // tune, so the audio-rate paths never need the ratio.
+    const float tuneVoltsConst =
+        tuneAudioFed ? constantTuneVolts
+                     : s.tuneVolts + (controlPortConnected(inst, 2) ? 0.0f
+                                                                     : ratioVolts(portIsFed(inst, 13) ? portSample(inst, 13, 0) : s.ratioCoarseCv,
+                                                                                  portIsFed(inst, 14) ? portSample(inst, 14, 0) : s.ratioFineCv));
 
     const float baseAmp = controlPortConnected(inst, 0) ? s.amplitude : 0.0f;
     float constantAmpCv = ampScalar;
@@ -561,7 +600,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         ctx.gainTarget = gainTarget;
         ctx.pitchCvConst = pitchCvConst;
         ctx.tuneVoltsConst = tuneVoltsConst;
-        ctx.centerVolts = kCenterVolts;
+        ctx.centerVolts = tuneCenterVolts;
         ctx.invSampleRate = kInvSampleRate;
         ctx.phaseOffsetScale = phaseOffsetScale;
         ctx.feedbackAmount = feedbackAmount;
@@ -590,7 +629,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
 
         if (!needsAudioRatePitch)
         {
-            const float cycles = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts)) * kInvSampleRate;
+            const float cycles = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - tuneCenterVolts)) * kInvSampleRate;
             ctx.increments[0] = PhaseOsc::toPhaseInt(cycles);
             for (size_t voice = 0; voice < 6; ++voice)
                 ctx.increments[voice + 1] = PhaseOsc::toPhaseInt(cycles * ctx.ratios[voice]);
@@ -605,7 +644,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 {
                     const float pitchCv = pitchNeedsAudioRate ? portSample(inst, 1, i) : pitchCvConst;
                     const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
-                    const float cycles = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * kInvSampleRate;
+                    const float cycles = cv::hzFromPitchCv(pitchCv + (tuneVolts - tuneCenterVolts)) * kInvSampleRate;
                     s.phaseGen.advancePhaseOnly(PhaseOsc::toPhaseInt(cycles), 1);
                     for (size_t voice = 0; voice < 6; ++voice)
                         s.superSawSidePhase[voice] += PhaseOsc::toPhaseInt(cycles * ctx.ratios[voice]);
@@ -649,7 +688,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         const ::wavetable::Bank *bank = s.wavetableBank;
         const bool morphFed = portIsFed(inst, 12);
         const float morphConst = s.morphCv * cv::kInvMaxVolts;
-        const float hzConst = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts));
+        const float hzConst = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - tuneCenterVolts));
         const uint32_t incConst = PhaseOsc::toPhaseInt(hzConst * kInvSampleRate);
         if (!feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f && !needsAudioRatePitch)
         {
@@ -668,7 +707,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
             {
                 const float pitchCv = pitchNeedsAudioRate ? portSample(inst, 1, i) : pitchCvConst;
                 const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
-                inc = PhaseOsc::toPhaseInt(cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts)) * kInvSampleRate);
+                inc = PhaseOsc::toPhaseInt(cv::hzFromPitchCv(pitchCv + (tuneVolts - tuneCenterVolts)) * kInvSampleRate);
             }
             const float amp = ampConstantForBlock
                                   ? ampConstantValue
@@ -709,7 +748,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                                           ? portSample(inst, 1, i)
                                           : pitchCvConst;
                 const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
-                const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
+                const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - tuneCenterVolts));
                 const float amp = ampConstantForBlock
                                       ? ampConstantValue
                                       : (hasAmpRamp ? ampRampStart + ampRampStep * static_cast<float>(i)
@@ -733,7 +772,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                                           ? portSample(inst, 1, i)
                                           : pitchCvConst;
                 const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, 2, i) : tuneVoltsConst;
-                const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
+                const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - tuneCenterVolts));
                 const float amp = ampConstantForBlock
                                       ? ampConstantValue
                                       : (hasAmpRamp ? ampRampStart + ampRampStep * static_cast<float>(i)
@@ -747,7 +786,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         return;
     }
 
-    const float hz = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - kCenterVolts));
+    const float hz = cv::hzFromPitchCv(pitchCvConst + (tuneVoltsConst - tuneCenterVolts));
     const float phaseIncrement = hz * kInvSampleRate;
     const uint32_t phaseIncrementInt = PhaseOsc::toPhaseInt(phaseIncrement);
 
@@ -831,6 +870,9 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     auto &s = inst.fmOsc;
     s.wave = p.waveType;
     s.tuneVolts = p.tuneVolts;
+    s.detuneCv = p.fmDetune;
+    s.ratioCoarseCv = p.fmRatioCoarse;
+    s.ratioFineCv = p.fmRatioFine;
     s.amplitude = p.amplitude;
     s.gainCv = p.gain;
     s.fmIndexCv = p.fmIndex;
@@ -866,6 +908,21 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (strcmp(name, "tune") == 0)
     {
         s.tuneVolts = value;
+        return true;
+    }
+    if (strcmp(name, "detune") == 0)
+    {
+        s.detuneCv = value;
+        return true;
+    }
+    if (strcmp(name, "ratioCoarse") == 0)
+    {
+        s.ratioCoarseCv = value;
+        return true;
+    }
+    if (strcmp(name, "ratioFine") == 0)
+    {
+        s.ratioFineCv = value;
         return true;
     }
     if (strcmp(name, "amplitude") == 0)
@@ -925,6 +982,9 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     // Same key/domain/default as nodes::oscillator::parsePreset() - see
     // main.js's WIDGET_ENGINES["fm-oscillator"].
     out.tuneVolts = presetparser::getFloat(p, "tune", 5.0f);
+    out.fmDetune = presetparser::getFloat(p, "detune", 5.0f);
+    out.fmRatioCoarse = presetparser::getFloat(p, "ratioCoarse", 10.0f / 31.0f);
+    out.fmRatioFine = presetparser::getFloat(p, "ratioFine", 0.0f);
     out.amplitude = presetparser::getFloat(p, "amplitude", 1.0f);
     out.gain = presetparser::getFloat(p, "gain", 10.0f);
     out.fmIndex = presetparser::getFloat(p, "fmIndex", 0.0f);

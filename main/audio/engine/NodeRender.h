@@ -41,6 +41,7 @@
 #include "nodes/DxEnvelopeNode.h"
 #include "nodes/FilterNode.h"
 #include "nodes/FmOscillatorNode.h"
+#include "nodes/Fm8Node.h"
 #include "nodes/GainNode.h"
 #include "nodes/HammondNode.h"
 #include "nodes/KnobNode.h"
@@ -82,6 +83,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::FmOscillator:
         nodes::fmoscillator::render(inst, frames);
+        break;
+    case NodeType::Fm8:
+        nodes::fm8::render(inst, frames);
         break;
     case NodeType::Hammond:
         nodes::hammond::render(inst, frames);

@@ -338,7 +338,7 @@ typedef char tsf_char20[20];
 struct tsf
 {
 	struct tsf_preset* presets;
-	float* fontSamples;
+	short* fontSamples; // 16-bit PCM, scaled to float in tsf_voice_render()
 	struct tsf_voice* voices;
 	struct tsf_channels* channels;
 
@@ -998,22 +998,22 @@ static int tsf_load_samples(void** pRawBuffer, float** pFloatBuffer, unsigned in
 	*pSmplCount = resNum;
 	return (*pFloatBuffer ? 1 : 0);
 	#else
-	// Inline convert the samples from short to float
-	float *res, *out; const short *in;
+	// Keep the samples as 16-bit PCM (fontSamples is short*; tsf_voice_render() scales on the
+	// fly): half the PSRAM footprint/traffic of floats and no load-time conversion pass.
 	(void)pRawBuffer;
 	*pSmplCount = chunkSmpl->size / (unsigned int)sizeof(short);
-	*pFloatBuffer = (float*)TSF_MALLOC(*pSmplCount * sizeof(float));
-	if (!*pFloatBuffer || !stream->read(stream->data, *pFloatBuffer, chunkSmpl->size)) return 0;
-	unsigned int yieldCount = 0;
-	for (res = *pFloatBuffer, out = res + *pSmplCount, in = (short*)res + *pSmplCount; out != res;)
+	*pFloatBuffer = (float*)TSF_MALLOC(*pSmplCount * sizeof(short));
+	#ifdef TSF_LOAD_PROFILE_NOW_US
+	const long long tReadStart = TSF_LOAD_PROFILE_NOW_US();
+	#endif
+	if (!*pFloatBuffer || !stream->read(stream->data, *pFloatBuffer, *pSmplCount * (unsigned int)sizeof(short))) return 0;
+	#ifdef TSF_LOAD_PROFILE_LOG
 	{
-		*(--out) = (float)(*(--in) / 32767.0);
-		if (TSF_LOAD_YIELD_INTERVAL && ++yieldCount >= TSF_LOAD_YIELD_INTERVAL)
-		{
-			yieldCount = 0;
-			TSF_LOAD_YIELD();
-		}
+		const long long us = TSF_LOAD_PROFILE_NOW_US() - tReadStart;
+		TSF_LOAD_PROFILE_LOG("read %u bytes: %lld ms = %lld KB/s", (unsigned)(*pSmplCount * sizeof(short)), us / 1000,
+		                     us > 0 ? (long long)(*pSmplCount * sizeof(short)) * 1000000LL / 1024 / us : 0LL);
 	}
+	#endif
 	return 1;
 	#endif
 }
@@ -1236,7 +1236,7 @@ static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, floa
 static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, int numSamples)
 {
 	struct tsf_region* region = v->region;
-	float* input = f->fontSamples;
+	const short* input = f->fontSamples;
 	float* outL = outputBuffer;
 	float* outR = (f->outputmode == TSF_STEREO_UNWEAVED ? outL + numSamples : TSF_NULL);
 
@@ -1315,7 +1315,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
 					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[sampleBase + pos] * (1.0f - alpha) + input[sampleBase + nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = ((float)input[sampleBase + pos] * (1.0f - alpha) + (float)input[sampleBase + nextPos] * alpha) * (1.0f / 32767.0f);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1325,7 +1325,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
-					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
+					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (float)(tmpLoopEnd - tmpLoopStart + 1);
 				}
 				break;
 
@@ -1336,7 +1336,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
 					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[sampleBase + pos] * (1.0f - alpha) + input[sampleBase + nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = ((float)input[sampleBase + pos] * (1.0f - alpha) + (float)input[sampleBase + nextPos] * alpha) * (1.0f / 32767.0f);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1346,7 +1346,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
-					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
+					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (float)(tmpLoopEnd - tmpLoopStart + 1);
 				}
 				break;
 
@@ -1356,7 +1356,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
 					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[sampleBase + pos] * (1.0f - alpha) + input[sampleBase + nextPos] * alpha);
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = ((float)input[sampleBase + pos] * (1.0f - alpha) + (float)input[sampleBase + nextPos] * alpha) * (1.0f / 32767.0f);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1365,7 +1365,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
-					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
+					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (float)(tmpLoopEnd - tmpLoopStart + 1);
 				}
 				break;
 		}
@@ -1461,7 +1461,7 @@ TSFDEF tsf* tsf_load(struct tsf_stream* stream)
 		if (res) TSF_MEMSET(res, 0, sizeof(tsf));
 		if (!res || !tsf_load_presets(res, &hydra, smplCount)) goto out_of_memory;
 		res->outSampleRate = 44100.0f;
-		res->fontSamples = floatBuffer;
+		res->fontSamples = (short*)floatBuffer;
 		floatBuffer = TSF_NULL; // don't free below
 	}
 	if (0)
