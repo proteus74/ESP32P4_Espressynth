@@ -2,6 +2,7 @@
 """
 Espressynth deploy script: builds complete merged binary for all partitions.
 Creates EspressiveSynths-Merge.bin containing:
+  - bootloader (0x2000) and partition table (0x8000)
   - factory app firmware
   - coprocessor firmware (slave_fw partition)
   - www partition (web server static files)
@@ -27,12 +28,14 @@ MAIN_APP_BIN = None
 
 # Partition offsets and sizes (from partitions.csv)
 PARTITIONS = {
+    'bootloader': (0x2000, 0x6000),
+    'partition_table': (0x8000, 0x1000),
     'nvs': (0x9000, 0x6000),
     'phy_init': (0xf000, 0x1000),
     'factory': (0x10000, 0x300000),
     'slave_fw': (0x310000, 0x200000),
-    'www': (0x510000, 0x200000),
-    'littlefs': (0x710000, 0x8f0000),
+    'www': (0x510000, 0x380000),
+    'littlefs': (0x890000, 0x770000),
 }
 
 def run_command(cmd, description):
@@ -101,6 +104,19 @@ def merge_binaries():
     # Create blank 16 MB image (0xFF filled)
     merged = bytearray([0xFF] * FLASH_SIZE)
 
+    # Bootloader and partition table: without them the merged image does not boot (the image is
+    # written from flash offset 0, which also covers 0x2000..0x8fff).
+    for name, path in (('bootloader', BUILD_DIR / "bootloader" / "bootloader.bin"),
+                       ('partition_table', BUILD_DIR / "partition_table" / "partition-table.bin")):
+        with open(path, 'rb') as f:
+            data = f.read()
+        offset, size = PARTITIONS[name]
+        if len(data) > size:
+            print(f"✗ {name} ({len(data)} bytes) exceeds its slot ({size} bytes)")
+            sys.exit(1)
+        merged[offset:offset+len(data)] = data
+        print(f"  ✓ {name} at 0x{offset:06x} ({len(data)} bytes)")
+
     # Read and place factory app
     with open(MAIN_APP_BIN, 'rb') as f:
         data = f.read()
@@ -151,7 +167,7 @@ def merge_binaries():
     print(f"\n✓ Merged binary created: {OUTPUT_FILENAME.name} ({size_mb:.1f} MB)")
     print(f"  Total size: {len(merged)} bytes (0x{len(merged):x})")
     print(f"\n  To flash all partitions at once:")
-    print(f"  esptool.py -p COM3 write_flash 0x0 {OUTPUT_FILENAME.name}")
+    print(f"  python -m esptool --chip esp32p4 -p COM3 write-flash 0x0 {OUTPUT_FILENAME.name}")
 
 def main():
     print("━" * 60)

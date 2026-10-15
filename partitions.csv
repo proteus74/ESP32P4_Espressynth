@@ -6,7 +6,7 @@
 # (main/features/hosted/hosted_ota.hpp; see coprocessor_fw/README.md for how to build/stage it).
 # "www" is a small LittleFS partition for the web server's static files (see
 # main/features/web/web_server.hpp), built from the project's data/ directory and
-# flashable independently of the app image (see the root CMakeLists.txt) -- 2 MB taken
+# flashable independently of the app image (see the root CMakeLists.txt) -- 3.5 MB taken
 # off "littlefs" below to make room for it.
 # "littlefs" claims the rest of the flash as the general-purpose LittleFS data partition
 # (main/features/filesystem/littlefs_manager.hpp).
@@ -16,5 +16,5 @@ nvs,         data, nvs,      0x9000,   0x6000,
 phy_init,    data, phy,      0xf000,   0x1000,
 factory,     app,  factory,  0x10000,  0x300000,
 slave_fw,    data, 0x40,     0x310000, 0x200000,
-www,         data, 0x83,     0x510000, 0x200000,
-littlefs,    data, 0x83,     0x710000, 0x8F0000,
+www,         data, 0x83,     0x510000, 0x380000,
+littlefs,    data, 0x83,     0x890000, 0x770000,

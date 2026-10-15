@@ -546,6 +546,9 @@ void ensure_storage_directories() {
     mkdir(dir, 0775);
     snprintf(dir, sizeof(dir), "%s/samples", Feature::LittleFS::MOUNT_POINT);
     mkdir(dir, 0775);
+    // FM8 patch/bank data (filled by the user, e.g. DX7 .syx banks).
+    snprintf(dir, sizeof(dir), "%s/FM8", Feature::LittleFS::MOUNT_POINT);
+    mkdir(dir, 0775);
 }
 } // namespace
 
