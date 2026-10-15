@@ -378,7 +378,8 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
             NodeInstance &target = graph.instances[targetWidget.instanceBase + v];
             float targetValue = value;
             if (kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0 &&
-                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator || target.type == NodeType::Hammond))
+                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator ||
+                 target.type == NodeType::Hammond || target.type == NodeType::Fm8))
             {
                 // Bipolar Pitch Bend feeds the existing 5V-centered Tune parameter.
                 targetValue += cv::kMaxVolts / 2.0f;
@@ -1465,6 +1466,13 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
                     pushControlRouteValue(*this, w, ControlRoute::Kind::KnobCc, k.raw, controlIndex);
                     recordControlDebug(w, controlIndex, false, ccChannel0, ccNumber, ccValue);
                 }
+            }
+            else if (widgets[w].type == NodeType::Fm8)
+            {
+                // FM8 MIDI learn: the shared patch (owned by the primary voice) holds the bindings.
+                NodeInstance &fmInst = instances[widgets[w].instanceBase];
+                if (fmInst.fm8 != nullptr && fmInst.primary == &fmInst && fmInst.fm8->patch != nullptr)
+                    fmInst.fm8->patch->applyMidiCc(ccNumber, ccChannel0, ccValue);
             }
             else if (widgets[w].type == NodeType::Switch)
             {

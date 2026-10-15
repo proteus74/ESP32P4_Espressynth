@@ -26,6 +26,7 @@
 namespace nodes::fm8
 {
 
+using ::fm8::CcBinding;
 using ::fm8::Patch;
 
 struct Fm8State
@@ -46,6 +47,11 @@ struct Fm8State
     uint8_t note = 60;          // MIDI note as played (before tune)
     uint8_t velocity = 100;     // 1..127
     uint16_t silentBlocks = 0;
+
+    int8_t appliedOctaves = 0; // whole octaves of Tune currently folded into the note number
+
+    float lp = 0.0f; // post-voice low-pass state (patch bytes 156/157)
+    float bp = 0.0f;
 };
 
 namespace detail
@@ -61,11 +67,32 @@ inline void ensureEngine()
     }
 }
 
-// Played note + Tune port (1 V per octave around 5 V), rounded to semitones for msfa's key scaling.
+// Tune is 1 V per octave around 5 V and acts on running notes too (pitch bend, glide): the whole
+// octaves go into the note number (key scaling follows), the rest, always inside +-1 octave, is
+// sent as msfa pitch bend with a range of 12 semitones, so it moves smoothly without retriggering.
+inline float tuneOffsetVolts(const Fm8State &s)
+{
+    float v = s.tuneVolts;
+    v = v < 0.0f ? 0.0f : (v > cv::kMaxVolts ? cv::kMaxVolts : v);
+    return v - cv::kMaxVolts * 0.5f;
+}
+
+inline int tuneOctaves(const Fm8State &s)
+{
+    return static_cast<int>(tuneOffsetVolts(s)); // truncates toward zero
+}
+
+inline int tuneBend14(const Fm8State &s)
+{
+    const float rest = tuneOffsetVolts(s) - static_cast<float>(tuneOctaves(s)); // (-1, 1) octaves
+    const int bend = 0x2000 + static_cast<int>(lroundf(rest * 8192.0f));
+    return bend < 0 ? 0 : (bend > 0x3fff ? 0x3fff : bend);
+}
+
+// Played note plus the whole octaves of Tune.
 inline int effectiveNote(const Fm8State &s)
 {
-    const int semis = static_cast<int>(lroundf((s.tuneVolts - cv::kMaxVolts * 0.5f) * 12.0f));
-    int n = static_cast<int>(s.note) + semis;
+    const int n = static_cast<int>(s.note) + 12 * tuneOctaves(s);
     return n < 0 ? 0 : (n > 127 ? 127 : n);
 }
 } // namespace detail
@@ -80,12 +107,43 @@ inline void gateOn(Fm8State &s, int note, int velocity127)
     s.gate = true;
     s.idle = false;
     s.silentBlocks = 0;
+    s.lp = 0.0f;
+    s.bp = 0.0f;
+    s.appliedOctaves = static_cast<int8_t>(detail::tuneOctaves(s));
 }
 
 inline void gateOff(Fm8State &s)
 {
     s.gate = false;
     if (s.voice != nullptr && !s.idle) msfa_bridge::noteOff(s.voice);
+}
+
+// Post-voice 2-pole low-pass (Chamberlin state-variable). Cutoff patch byte 156 runs 30 Hz up to
+// ~0.17 * fs exponentially, 99 bypasses; resonance byte 157 sets Q 0.6 .. 9.6.
+inline void applyFilter(Fm8State &s, float *out, size_t frames)
+{
+    const uint8_t cutoff = s.patch->d[156];
+    if (cutoff >= 99)
+    {
+        s.lp = 0.0f;
+        s.bp = 0.0f;
+        return;
+    }
+    const float fs = static_cast<float>(synth::kSampleRate);
+    const float fc = 30.0f * powf((fs * 0.17f) / 30.0f, static_cast<float>(cutoff) / 98.0f);
+    const float f = 2.0f * sinf(3.14159265f * fc / fs);
+    const float q = 1.0f / (0.6f + (static_cast<float>(s.patch->d[157]) / 99.0f) * 9.0f);
+    float lp = s.lp;
+    float bp = s.bp;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        lp += f * bp;
+        const float hp = out[i] - lp - q * bp;
+        bp += f * hp;
+        out[i] = lp;
+    }
+    s.lp = lp;
+    s.bp = bp;
 }
 
 IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
@@ -98,6 +156,14 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         memset(out, 0, frames * sizeof(float));
         return;
     }
+
+    // Tune/Gain wired from a DSP node (e.g. Pitch Bend through an Adder) arrive as an input
+    // buffer. The widget slider and Knob/MIDI routes reach s.tuneVolts / s.gainCv through
+    // setParam, so only a genuine DSP edge is read here (once per block).
+    if ((inst.audioConnectedPortMask & synth::portBit(3)) != 0)
+        s.tuneVolts = noderender::portSample(inst, 3, 0);
+    if ((inst.audioConnectedPortMask & synth::portBit(4)) != 0)
+        s.gainCv = noderender::portSample(inst, 4, 0);
 
     // Note source: MIDI route (pendingOn) or a patched gate cable (edge detection).
     const bool gatePort = noderender::portSample(inst, 1, 0) >= cv::kGateThresholdVolts;
@@ -129,11 +195,15 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         memset(out, 0, frames * sizeof(float));
         return;
     }
-    if (s.appliedVersion != s.patch->version)
+    // A patch edit, or Tune crossing an octave boundary, re-applies the voice (phases are kept).
+    const int octaves = detail::tuneOctaves(s);
+    if (s.appliedVersion != s.patch->version || octaves != s.appliedOctaves)
     {
         msfa_bridge::update(s.voice, s.patch->d, detail::effectiveNote(s), s.velocity);
         s.appliedVersion = s.patch->version;
+        s.appliedOctaves = static_cast<int8_t>(octaves);
     }
+    const int bend = detail::tuneBend14(s);
 
     const float gain = cv::vcaGain(s.gainCv, false) * cv::kAudioPeakVolts;
     float peak = 0.0f;
@@ -144,11 +214,12 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         const size_t n = frames - done < static_cast<size_t>(msfa_bridge::kBlock)
                              ? frames - done
                              : static_cast<size_t>(msfa_bridge::kBlock);
-        const float p = msfa_bridge::render(s.voice, chunk, 1, 0x2000, 2);
+        const float p = msfa_bridge::render(s.voice, chunk, 1, bend, 12);
         if (p > peak) peak = p;
         for (size_t i = 0; i < n; ++i) out[done + i] = chunk[i] * gain;
         done += n;
     }
+    applyFilter(s, out, frames);
 
     if (peak < 1e-5f)
     {
@@ -199,9 +270,47 @@ inline void destroy(NodeInstance &inst)
     inst.fm8 = nullptr;
 }
 
-// "d0".."d154" (voice bytes), "ops" (operator switches). Returns false for other names.
+// "cc_dN" / "ch_dN": MIDI learn binding of voice byte N. cc < 0 removes the binding.
+inline bool setBinding(Patch &p, const char *name, float value)
+{
+    const bool isCc = strncmp(name, "cc_d", 4) == 0;
+    if (!isCc && strncmp(name, "ch_d", 4) != 0) return false;
+    int param = 0;
+    for (const char *c = name + 4; *c != '\0'; ++c)
+    {
+        if (*c < '0' || *c > '9' || param > 999) return false;
+        param = param * 10 + (*c - '0');
+    }
+    if (param >= ::fm8::kPatchBytes) return false;
+    const int v = static_cast<int>(lroundf(value));
+    CcBinding *b = p.findBinding(param);
+    if (b == nullptr)
+    {
+        if (v < 0 || p.bindingCount >= Patch::kMaxBindings) return v < 0;
+        b = &p.bindings[p.bindingCount++];
+        *b = CcBinding{static_cast<uint8_t>(param), -1, -1};
+    }
+    if (isCc)
+    {
+        if (v < 0)
+        {
+            p.removeBinding(b);
+            return true;
+        }
+        b->cc = static_cast<int8_t>(v > 127 ? 127 : v);
+    }
+    else
+    {
+        b->channel = static_cast<int8_t>(v < 0 ? -1 : (v > 15 ? 15 : v));
+    }
+    return true;
+}
+
+// "d0".."d154" (voice bytes), "ops" (operator switches), "cc_dN"/"ch_dN" (bindings).
+// Returns false for other names.
 inline bool setPatchKey(Patch &p, const char *name, float value)
 {
+    if (name[0] == 'c') return setBinding(p, name, value);
     int index = -1;
     if (name[0] == 'd' && name[1] >= '0' && name[1] <= '9')
     {
@@ -240,7 +349,7 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.gainCv = value;
         return true;
     }
-    if (name[0] == 'd' || strcmp(name, "ops") == 0)
+    if (name[0] == 'd' || name[0] == 'c' || strcmp(name, "ops") == 0)
     {
         // All voices share one patch: only voice 0 writes it, the others just acknowledge.
         if (inst.primary == &inst && s.patch != nullptr) return setPatchKey(*s.patch, name, value);
