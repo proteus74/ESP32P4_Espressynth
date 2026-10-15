@@ -6,7 +6,7 @@ import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
 import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261015-fm8-1";
-import { defaultFm8Keys, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-3";
+import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-16";
 
 // Header/status-bar icons: index.html marks them with data-ui-icon, swapped for the SVG tiles here.
 document.querySelectorAll("[data-ui-icon]").forEach((el) => {
@@ -3264,7 +3264,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "hammond", "soundfont-player", "mda-piano", "wave-folder", "overdrive", "wave-player", "lfo", "wavetable", "comb-filter"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "fm8", "hammond", "soundfont-player", "mda-piano", "wave-folder", "overdrive", "wave-player", "lfo", "wavetable", "comb-filter"]);
 
 // LFO and Wavetable share one implementation (state in lfoStates, tickLfo,
 // reset/one-shot/global handling, rate settings dialog); state.wavetable
@@ -4604,15 +4604,13 @@ function createWidget(type, label, x, y, forcedId) {
     const summary = document.createElement("div");
     summary.className = "fm8-summary";
     summary.dataset.role = "fm8-summary";
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "btn-secondary fm8-edit-btn";
-    editBtn.textContent = "Edit / Load SysEx…";
-    body.append(summary, editBtn);
+    body.append(summary);
     el.appendChild(body);
     renderFm8Summary(summary, state);
-    editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-    editBtn.addEventListener("click", (e) => {
+    el.addEventListener("dblclick", (e) => {
+      // not on the gain slider, its value, a port or a button
+      if (e.target.closest("input, button, .port-dot, .widget-header")) return;
+      e.preventDefault();
       e.stopPropagation();
       openFm8Settings(id);
     });
@@ -6410,6 +6408,69 @@ function createWidget(type, label, x, y, forcedId) {
         };
         row.querySelector(".port-label")?.addEventListener("dblclick", reset);
         valueSpan.addEventListener("dblclick", reset);
+      }
+      if (type === "fm8" && port.id === "tune") {
+        const fm8State = fm8States.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fm8State.keys.tune);
+        slider.dataset.role = "fm8-tune-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "tune", parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "fm8-tune-value";
+        valueSpan.textContent = formatNumber(fm8State.keys.tune);
+        row.appendChild(valueSpan);
+
+        // Double-click on the label or the value resets to 5 V (no transposition), like Oscillator.
+        const resetTune = () => {
+          if (connections.some((c) => c.to.widgetId === id && c.to.portId === "tune")) return;
+          deliverToWidget(id, "tune", CV_MAX_VOLTS / 2);
+        };
+        const tuneLabel = row.querySelector(".port-label");
+        if (tuneLabel) {
+          tuneLabel.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            resetTune();
+          });
+        }
+        valueSpan.addEventListener("dblclick", (e) => {
+          e.stopPropagation();
+          resetTune();
+        });
+      }
+      if (type === "fm8" && port.id === "gain") {
+        const fm8State = fm8States.get(id);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "port-slider";
+        slider.min = "0";
+        slider.max = String(CV_MAX_VOLTS);
+        slider.step = "0.01";
+        slider.value = String(fm8State.keys.gain);
+        slider.dataset.role = "fm8-gain-slider";
+        slider.addEventListener("mousedown", (e) => e.stopPropagation());
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("input", () => {
+          deliverToWidget(id, "gain", parseFloat(slider.value));
+        });
+        row.appendChild(slider);
+
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "port-value";
+        valueSpan.dataset.role = "fm8-gain-value";
+        valueSpan.textContent = formatNumber(fm8State.keys.gain);
+        row.appendChild(valueSpan);
       }
       if (type === "fm-oscillator" && port.id === "gain") {
         const fmOscState = fmOscillatorStates.get(id);
@@ -18344,6 +18405,18 @@ function refreshFm8Summary(widgetId) {
   const state = fm8States.get(widgetId);
   const summary = document.querySelector(`#${widgetId} [data-role="fm8-summary"]`);
   if (state && summary) renderFm8Summary(summary, state);
+  updateFm8SliderVisuals(widgetId);
+}
+
+function updateFm8SliderVisuals(widgetId) {
+  const state = fm8States.get(widgetId);
+  if (!state) return;
+  ["gain", "tune"].forEach((name) => {
+    const slider = document.querySelector(`#${widgetId} [data-role="fm8-${name}-slider"]`);
+    if (slider) slider.value = String(state.keys[name]);
+    const valueSpan = document.querySelector(`#${widgetId} [data-role="fm8-${name}-value"]`);
+    if (valueSpan) valueSpan.textContent = formatNumber(state.keys[name]);
+  });
 }
 
 // Sends patch keys to the device in small frames (the live-param queue message is limited);
@@ -21158,6 +21231,28 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "fm8" && portId === "tune") {
+    const state = fm8States.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.keys.tune = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      updateFm8SliderVisuals(widgetId);
+      state.ui?.refresh();
+      sendLiveParamUpdateThrottled(widgetId, { tune: state.keys.tune });
+    }
+  }
+
+  if (el.dataset.widgetType === "fm8" && portId === "gain") {
+    const state = fm8States.get(widgetId);
+    if (state) {
+      const num = Number(value);
+      state.keys.gain = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      updateFm8SliderVisuals(widgetId);
+      state.ui?.refresh();
+      sendLiveParamUpdateThrottled(widgetId, { gain: state.keys.gain });
+    }
+  }
+
   if (el.dataset.widgetType === "fm-oscillator" && portId === "gain") {
     const state = fmOscillatorStates.get(widgetId);
     if (state) {
@@ -22455,7 +22550,8 @@ const WIDGET_ENGINES = {
     getParams: (id) => {
       const state = fm8States.get(id);
       if (!state) return {};
-      return { ...state.keys };
+      // origin (bank#voice) and the modified flag are strings/flags the firmware ignores
+      return { ...state.keys, fm8Origin: state.origin || "", fm8Modified: state.modified ? 1 : 0 };
     },
     applyParams: (id, params) => {
       const state = fm8States.get(id);
@@ -22465,6 +22561,15 @@ const WIDGET_ENGINES = {
         const v = Number(params[key]);
         state.keys[key] = Number.isFinite(v) ? v : defaults[key];
       });
+      // MIDI learn bindings are optional and replace the previous set as a whole.
+      Object.keys(state.keys).forEach((key) => {
+        if (isFm8BindingKey(key)) delete state.keys[key];
+      });
+      Object.keys(params).forEach((key) => {
+        if (isFm8BindingKey(key)) state.keys[key] = Number(params[key]);
+      });
+      state.origin = typeof params.fm8Origin === "string" ? params.fm8Origin : "";
+      state.modified = Number(params.fm8Modified) === 1;
       refreshFm8Summary(id);
     },
   },
@@ -24972,6 +25077,11 @@ function connectWs() {
       applyDeviceParamUpdate(data.widgetId, data.params || {});
     } else if (data.type === "midi") {
       appendLog(`[${data.time}] ${data.port}: ${data.message}`);
+      // A CC consumed by an FM8 MIDI learn is not routed anywhere else.
+      if (handleFm8Midi(data, fm8States, refreshFm8Summary)) {
+        flashMidiActivity();
+        return;
+      }
       routeMidiToWidgets(data);
       routeMidiToKnobs(data);
       routeMidiToButtons(data);

@@ -5793,51 +5793,8 @@ input[type="range"].port-slider + .port-value {
   color: #94a3b8;
 }
 
-.fm8-op-bars {
-  display: flex;
-  gap: 4px;
-  height: 56px;
-  align-items: flex-end;
-  margin-top: 0.35rem;
-}
-
-.fm8-op-bar {
-  position: relative;
-  flex: 1 1 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 3px;
-}
-
-.fm8-op-bar > div {
-  background: #38bdf8;
-  border-radius: 3px 3px 0 0;
-}
-
-.fm8-op-bar.carrier > div {
-  background: #f59e0b;
-}
-
-.fm8-op-bar > span {
-  position: absolute;
-  bottom: -14px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 0.6rem;
-  color: #94a3b8;
-}
-
-.fm8-edit-btn {
-  margin-top: 0.7rem;
-  font-size: 0.75rem;
-}
-
 .fm8-dialog {
-  width: min(1200px, calc(100vw - 24px));
+  width: min(1240px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);
   overflow: auto;
   display: flex;
@@ -5855,8 +5812,7 @@ input[type="range"].port-slider + .port-value {
   margin: 0;
 }
 
-.fm8-loader,
-.fm8-globals {
+.fm8-loader {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
@@ -5869,91 +5825,536 @@ input[type="range"].port-slider + .port-value {
   font-size: 0.75rem;
 }
 
-.fm8-table-wrap {
-  overflow-x: auto;
+/* Dexed-style editor: laid out like the Dexed window, small knobs without value text */
+.fm8-dialog {
+  width: 900px; /* design size, scaled to the window with zoom (fm8.js fit()) */
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  padding: 8px;
+  gap: 6px;
+  background: #2a2825;
+  --fm8-card: #4b4741;
+  --fm8-inset: #3b3833;
+  --fm8-text: #e6e1d8;
 }
 
-.fm8-table {
-  border-collapse: collapse;
-  font-size: 0.72rem;
+.fm8-dialog-head h3 {
+  font-size: 0.8rem;
+  color: var(--fm8-text);
 }
 
-.fm8-table th,
-.fm8-table td {
-  padding: 1px 2px;
-  text-align: center;
-  white-space: nowrap;
+.fm8-info {
+  color: #a39d90;
+  font-size: 0.65rem;
 }
 
-.fm8-table th {
-  color: #94a3b8;
-  font-weight: 500;
-}
-
-.fm8-table input {
-  width: 3.6rem;
-  padding: 1px 2px;
-  font-size: 0.72rem;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--card-border);
-  border-radius: 3px;
-}
-
-.fm8-matrix input {
-  width: 2.8rem;
-}
-
-/* FM8 editor: Dexed-style operator cards */
 .fm8-ops {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
+  gap: 4px;
 }
 
-.fm8-section {
-  background: var(--bg);
-  border: 1px solid var(--card-border);
-  border-radius: 0.4rem;
-  padding: 0.4rem 0.5rem;
-}
-
-.fm8-section h4 {
-  margin: 0 0 0.3rem;
-  font-size: 0.78rem;
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.fm8-grid {
+.fm8-op {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr));
-  gap: 0.25rem 0.5rem;
+  grid-template-columns: 0.95fr 1.05fr;
+  grid-template-areas: "freq mode" "eg right";
+  gap: 4px;
+  padding: 4px;
+  background: var(--fm8-card);
+  border-radius: 4px;
+  color: var(--fm8-text);
+  min-width: 0;
 }
 
-.fm8-field {
+.fm8-op-freq {
+  grid-area: freq;
+}
+
+.fm8-op-mode {
+  grid-area: mode;
+}
+
+.fm8-eg-block {
+  grid-area: eg;
+}
+
+.fm8-op-right {
+  grid-area: right;
   display: flex;
   flex-direction: column;
-  font-size: 0.65rem;
-  color: #94a3b8;
+  gap: 4px;
 }
 
-.fm8-field input[type="number"],
-.fm8-field select {
-  width: 100%;
-  box-sizing: border-box;
-  font-size: 0.75rem;
-  padding: 1px 3px;
-  background: var(--card);
-  color: var(--text);
-  border: 1px solid var(--card-border);
+.fm8-op-freq,
+.fm8-op-mode,
+.fm8-eg-block,
+.fm8-op-panel,
+.fm8-brand,
+.fm8-algorithm,
+.fm8-lfo,
+.fm8-pitch-eg {
+  background: var(--fm8-inset);
   border-radius: 3px;
+  padding: 3px;
 }
 
-.fm8-alg-text {
-  margin-top: 0.4rem;
-  font-size: 0.72rem;
-  color: #cbd5e1;
+.fm8-op-freq,
+.fm8-eg-block,
+.fm8-op-panel,
+.fm8-pitch-eg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fm8-freq,
+.fm8-status {
+  background: #000;
+  color: #f3efe6;
+  font: 700 0.62rem monospace;
+  text-align: center;
+  padding: 2px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.fm8-op-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fm8-mode {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "ra . fi" "la sw lb";
+  align-items: center;
+  gap: 2px 4px;
+  font-size: 0.55rem;
+  color: #c9c3b6;
+}
+
+.fm8-mode > :nth-child(1) { grid-area: ra; }
+.fm8-mode > :nth-child(2) { grid-area: fi; justify-self: end; }
+.fm8-mode > :nth-child(3) { grid-area: la; }
+.fm8-mode > :nth-child(4) { grid-area: sw; justify-self: center; }
+.fm8-mode > :nth-child(5) { grid-area: lb; }
+
+.fm8-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4a1d17;
+  box-shadow: inset 0 0 0 1px #1c0f0c;
+}
+
+.fm8-led.lit {
+  background: #ff5b3d;
+  box-shadow: 0 0 5px #ff5b3d;
+}
+
+.fm8-sw {
+  position: relative;
+  width: 30px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid #111;
+  border-radius: 2px;
+  background: #26231f;
+  cursor: pointer;
+}
+
+.fm8-sw::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 10px;
+  background: linear-gradient(#8d8679, #5c574d);
+  border-radius: 1px;
+  transition: left 0.08s;
+}
+
+.fm8-sw.on::after {
+  left: 14px;
+}
+
+.fm8-sw.vertical {
+  width: 12px;
+  height: 26px;
+}
+
+.fm8-sw.vertical::after {
+  width: 8px;
+  height: 11px;
+  left: 1px;
+  top: 12px;
+}
+
+.fm8-sw.vertical.on::after {
+  left: 1px;
+  top: 1px;
+}
+
+.fm8-op-num {
+  margin-left: auto;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: #fff;
+}
+
+.fm8-eg-wrap {
+  height: 40px;
+}
+
+.fm8-eg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #000;
+  border-radius: 2px;
+}
+
+.fm8-eg polygon {
+  fill: #3fb6aa;
+}
+
+.fm8-eg polyline {
+  fill: none;
+  stroke: #5fd9cc;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.fm8-eg-caption {
+  font-size: 0.55rem;
+  color: #c9c3b6;
+  text-align: center;
+}
+
+.fm8-knob-row {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-start;
+}
+
+.fm8-knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 30px;
+  user-select: none;
+}
+
+.fm8-knob-dial {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: ns-resize;
+  touch-action: none;
+  background: radial-gradient(circle at 38% 32%, #6a655c, #3a3733 62%, #24221f 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.7), inset 0 0 0 1px #171512;
+}
+
+.fm8-knob-ind {
+  position: absolute;
+  left: calc(50% - 1px);
+  top: 2px;
+  width: 2px;
+  height: calc(50% - 2px);
+  transform-origin: 50% 100%;
+  background: #f5f1e8;
+  border-radius: 1px;
+}
+
+.fm8-knob.learned .fm8-knob-dial,
+.fm8-hslider.learned .fm8-hslider-track {
+  box-shadow: 0 0 0 2px #fbbf24;
+}
+
+.fm8-knob-label {
+  font-size: 0.55rem;
+  color: #d4cec1;
+  text-align: center;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.fm8-scaling {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: 2px;
+}
+
+.fm8-hslider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding-bottom: 4px;
+}
+
+.fm8-hslider-track {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  background: #26231f;
+  border: 1px solid #111;
+  border-radius: 2px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.fm8-hslider-thumb {
+  position: absolute;
+  top: 1px;
+  width: 6px;
+  height: 10px;
+  margin-left: -3px;
+  background: linear-gradient(90deg, #a49d8f, #6c675d);
+  border-radius: 1px;
+}
+
+.fm8-curve-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: 2px;
+}
+
+/* rate scaling: caption above the knob (as in Dexed) so it does not collide with the curve captions */
+.fm8-curve-row .fm8-knob {
+  flex-direction: column-reverse;
+  width: auto;
+  min-width: 30px;
+}
+
+.fm8-curve-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.fm8-curve {
+  width: 34px;
+  height: 22px;
+  padding: 0;
+  background: #000;
+  border: 1px solid #171512;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.fm8-curve svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.fm8-curve polyline {
+  fill: none;
+  stroke: #5fd9cc;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Bottom row */
+.fm8-bottom {
+  display: grid;
+  grid-template-columns: 325fr 235fr 160fr 120fr;
+  gap: 4px;
+}
+
+.fm8-brand,
+.fm8-algorithm,
+.fm8-lfo,
+.fm8-pitch-eg {
+  background: var(--fm8-card);
+  color: var(--fm8-text);
+  padding: 5px;
+  min-width: 0;
+}
+
+.fm8-brand {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "logo knobs" "status status" "bank bank" "btns voice";
+  gap: 4px;
+  align-items: center;
+}
+
+.fm8-logo {
+  grid-area: logo;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: #fff;
+}
+
+.fm8-brand-knobs {
+  grid-area: knobs;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fm8-brand-inset {
+  background: var(--fm8-inset);
+  border-radius: 3px;
+  padding: 3px 8px;
+  gap: 6px;
+}
+
+.fm8-status {
+  grid-area: status;
+  font-size: 0.7rem;
+  text-align: left;
+}
+
+.fm8-btn-row {
+  grid-area: btns;
+  display: flex;
+  gap: 4px;
+}
+
+.fm8-btn {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  background: #35a79d;
+  color: #fff;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.fm8-voice-select {
+  grid-area: voice;
+  min-width: 0;
+  font-size: 0.65rem;
+  background: #000;
+  color: #f3efe6;
+  border: 1px solid #111;
+  border-radius: 2px;
+}
+
+.fm8-bank-select {
+  grid-area: bank;
+  min-width: 0;
+  font-size: 0.65rem;
+  background: #000;
+  color: #f3efe6;
+  border: 1px solid #111;
+  border-radius: 2px;
+}
+
+.fm8-algorithm {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.fm8-alg-grid {
+  background: #000;
+  border-radius: 2px;
+  padding: 3px;
+}
+
+.fm8-alg-svg {
+  width: 100%;
+  display: block;
+}
+
+.fm8-alg-box {
+  fill: #2c2a26;
+  stroke: #6b665c;
+  stroke-width: 1;
+}
+
+.fm8-alg-box.carrier {
+  fill: #0f3d38;
+  stroke: #5fd9cc;
+}
+
+.fm8-alg-num {
+  fill: #f3efe6;
+  font: 700 9px sans-serif;
+}
+
+.fm8-alg-line {
+  fill: none;
+  stroke: #5fd9cc;
+  stroke-width: 1.4;
+}
+
+.fm8-alg-knobs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fm8-lfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fm8-lfo-top {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-start;
+}
+
+.fm8-lfo-sync {
+  display: flex;
+  justify-content: space-around;
+}
+
+.fm8-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.fm8-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* MIDI learn: floating panel (does not block the editor) and the knob context menu */
+.fm8-learn {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  z-index: 10001;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  font-size: 0.8rem;
+}
+
+.fm8-learn.hidden {
+  display: none;
+}
+
+.fm8-ctx {
+  z-index: 10000;
 }
 
 @media (max-width: 900px) {
@@ -5962,7 +6363,43 @@ input[type="range"].port-slider + .port-value {
   }
 }
 
-.fm8-dialog.fm8-drop {
-  outline: 2px dashed var(--accent);
-  outline-offset: -6px;
+/* SAVE: floating panel (name + user-bank slot) */
+.fm8-save {
+  position: fixed;
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+  z-index: 10001;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: #2a2825;
+  border: 1px solid #35a79d;
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  font-size: 0.8rem;
+  color: #e6e1d8;
+}
+
+.fm8-save.hidden {
+  display: none;
+}
+
+.fm8-save-name {
+  width: 9rem;
+  font: 0.8rem monospace;
+  background: #000;
+  color: #f3efe6;
+  border: 1px solid #111;
+  border-radius: 2px;
+  padding: 2px 4px;
+}
+
+.fm8-save-slot {
+  font-size: 0.75rem;
+  background: #000;
+  color: #f3efe6;
+  border: 1px solid #111;
+  border-radius: 2px;
 }
