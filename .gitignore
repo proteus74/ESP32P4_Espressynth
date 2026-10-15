@@ -79,3 +79,5 @@ Desktop.ini
 build_verify/
 .vscode/settings.json
 sdkconfig.defaults.*.local
+.playwright-mcp/*
+
