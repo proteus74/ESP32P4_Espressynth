@@ -694,7 +694,8 @@ export function openFm8Dialog(host) {
     track.appendChild(thumb);
     wrap.append(el("span", "fm8-knob-label", label), track);
     repaint.push(() => {
-      thumb.style.left = `${((Number(state.keys[key]) || 0) / 99) * 100}%`;
+      // keep the whole thumb inside the track (its width is 6px, see .fm8-hslider-thumb)
+      thumb.style.left = `calc((100% - 6px) * ${(Number(state.keys[key]) || 0) / 99})`;
     });
     attachControl(wrap, track, key, name.toUpperCase(), (v) => v, { min: 0, max: 99, learn: true, label: name, vertical: false });
     return wrap;

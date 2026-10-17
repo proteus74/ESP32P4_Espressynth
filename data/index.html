@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261015-fm8-16">
+<link rel="stylesheet" href="/static/css/style.css?v=20261015-fm8-22">
 </head>
 <body>
 
@@ -784,23 +784,38 @@
 <div id="midiInSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>Midi-In Settings</h3>
-    <label class="modal-field">
-      <span>Channel</span>
-      <select id="midiInChannelSelect"></select>
-    </label>
-    <label class="modal-field">
-      <span>On overflow (all voices in use)</span>
-      <select id="midiInOverflowModeSelect">
-        <option value="steal-oldest">Steal oldest voice</option>
-        <option value="ignore">Ignore new note</option>
-      </select>
-    </label>
-    <label class="modal-field"><span>Pitch Bend Range (±V)</span><input type="text" inputmode="decimal" id="midiInPitchBendRangeInput" value="0.166667" aria-describedby="midiInPitchBendRangeHelp"></label>
-    <p id="midiInPitchBendRangeHelp">Enter 0–5 V for either side. Center: 0 V. Example: 1 V gives −1 to +1 V; 1 V changes Tune by one octave.</p>
-    <label class="modal-field modal-field-checkbox">
-      <input type="checkbox" id="midiInPitchBendQuantizeInput">
-      <span>Quantize to cents (snap to exact pitch steps)</span>
-    </label>
+    <div class="midi-in-settings-row">
+      <label class="modal-field">
+        <span>Channel</span>
+        <select id="midiInChannelSelect"></select>
+      </label>
+      <label class="modal-field">
+        <span>On overflow (all voices in use)</span>
+        <select id="midiInOverflowModeSelect">
+          <option value="steal-oldest">Steal oldest voice</option>
+          <option value="ignore">Ignore new note</option>
+        </select>
+      </label>
+      <label class="modal-field"><span>Pitch Bend Range (±V)</span><input type="text" inputmode="decimal" id="midiInPitchBendRangeInput" value="0.166667" aria-describedby="midiInPitchBendRangeHelp"></label>
+      <label class="modal-field modal-field-checkbox">
+        <input type="checkbox" id="midiInPitchBendQuantizeInput">
+        <span>Quantize to cents</span>
+      </label>
+    </div>
+    <p id="midiInPitchBendRangeHelp" class="modal-hint">Pitch bend range: 0–5 V per side, centre 0 V (1 V gives −1 to +1 V and changes Tune by one octave).
+      Quantize snaps the bend to exact pitch steps.</p>
+    <div class="midi-in-keys">
+      <div class="midi-in-keys-toolbar">
+        <span>Keys passed on</span>
+        <span id="midiInKeyCount" class="midi-in-key-count"></span>
+        <button type="button" id="midiInKeysAll" class="btn-secondary">All</button>
+        <button type="button" id="midiInKeysNone" class="btn-secondary">None</button>
+        <button type="button" id="midiInKeysInvert" class="btn-secondary">Invert</button>
+      </div>
+      <div class="piano-keyboard-container" id="midiInKeyboardContainer"></div>
+      <p class="modal-hint">Click a key to switch it on or off, drag over several keys to set a range. Keys that
+        are off are ignored by this Midi-In (use a second Midi-In for the other keys).</p>
+    </div>
     <div class="modal-actions">
       <button id="midiInSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="midiInSettingsSave">Save</button>
@@ -1468,6 +1483,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261015-fm8-16"></script>
+<script type="module" src="/static/js/main.js?v=20261015-fm8-22"></script>
 </body>
 </html>

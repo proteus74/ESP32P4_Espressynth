@@ -1306,6 +1306,8 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         if (widgets[w].type != NodeType::MidiIn) continue;
         const auto &m = instances[widgets[w].instanceBase].midiIn;
         if (event.status < 0xF0 && m.channel >= 0 && m.channel != (event.status & 15)) continue;
+        // Key filter: note-ons on keys this Midi-In ignores are dropped (note-offs always pass).
+        if (event.codeIndex == 0x9 && event.data2 > 0 && !m.noteAllowed(event.data1)) continue;
         deliverRawMidi(*this, w, event, filtered, filterEvents, path);
     }
 
@@ -1661,6 +1663,10 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
         {
             continue;
         }
+        if (noteOn && widgets[w].type == NodeType::MidiIn && !midi.noteAllowed(sourceNote))
+        {
+            continue;
+        }
 
         VoiceAllocator &alloc = voiceAllocators[w];
         const int16_t previousNote = alloc.currentNote(0);
@@ -1904,6 +1910,12 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         if (slot.type == NodeType::MidiIn && strcmp(key, "pitchBendQuantizeCents") == 0 && cJSON_IsBool(item))
         {
             instances[slot.instanceBase].midiIn.pitchBendQuantizeCents = cJSON_IsTrue(item);
+            continue;
+        }
+        if (slot.type == NodeType::MidiIn && strcmp(key, "keyMask") == 0 && cJSON_IsString(item))
+        {
+            for (uint16_t v = 0; v < slot.instanceCount; ++v)
+                parseKeyMaskHex(item->valuestring, instances[slot.instanceBase + v].midiIn.keyMask);
             continue;
         }
 

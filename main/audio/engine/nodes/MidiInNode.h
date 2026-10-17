@@ -63,6 +63,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.midiIn.glideTime = p.glideTime;
     inst.midiIn.pitchBendRangeCents = p.midiInPitchBendRangeCents;
     inst.midiIn.pitchBendQuantizeCents = p.midiInPitchBendQuantizeCents;
+    memcpy(inst.midiIn.keyMask, p.midiInKeyMask, sizeof(inst.midiIn.keyMask));
 }
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
@@ -76,6 +77,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     const float bendRange = presetparser::getFloat(p, "pitchBendRangeCents", 200.0f);
     out.midiInPitchBendRangeCents = std::isfinite(bendRange) ? std::fmax(0.0f, std::fmin(6000.0f, bendRange)) : 200.0f;
     out.midiInPitchBendQuantizeCents = presetparser::getBool(p, "pitchBendQuantizeCents", false);
+    parseKeyMaskHex(presetparser::getString(p, "keyMask", ""), out.midiInKeyMask); // absent/invalid: all keys
 }
 
 } // namespace nodes::midiin

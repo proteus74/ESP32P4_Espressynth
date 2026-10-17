@@ -5,6 +5,9 @@
 #include "NodeTypes.h"
 #include "SynthConfig.h"
 
+#include <cstdint>
+#include <cstring>
+
 // One POD-ish state struct per node type - see NodeInstance.h for how these
 // are held (a flat struct, not a union, to keep lifetime/placement-new
 // concerns out of code that can't be compile-tested interactively).
@@ -595,6 +598,33 @@ struct AudioOutState
 struct MeterState
 {};
 
+// "keyMask": 32 hex characters, byte i = notes 8i..8i+7 (bit 0 = lowest), high nibble first.
+// Returns false and leaves `out` untouched when the string is missing or malformed.
+inline bool parseKeyMaskHex(const char *hex, uint32_t out[4])
+{
+    if (hex == nullptr)
+        return false;
+    uint32_t words[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 32; ++i)
+    {
+        const char c = hex[i];
+        uint32_t v;
+        if (c >= '0' && c <= '9')
+            v = static_cast<uint32_t>(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            v = static_cast<uint32_t>(10 + c - 'a');
+        else if (c >= 'A' && c <= 'F')
+            v = static_cast<uint32_t>(10 + c - 'A');
+        else
+            return false; // also catches a string shorter than 32 characters
+        const int byteIdx = i / 2;
+        const int shift = (byteIdx % 4) * 8 + ((i & 1) != 0 ? 0 : 4);
+        words[byteIdx / 4] |= v << shift;
+    }
+    memcpy(out, words, sizeof(words));
+    return true;
+}
+
 struct MidiInState
 {
     int8_t channel = -1; // -1 = omni, else 0-based MIDI channel
@@ -611,6 +641,13 @@ struct MidiInState
     // voltage that means an exact number of cents, matching pitchCv's own
     // discrete-note steps, rather than a smooth in-between value.
     bool pitchBendQuantizeCents = false;
+    // Keys this Midi-In reacts to (bit n of the 128-bit mask = MIDI note n). Default: all keys.
+    // Only note-ons are filtered; a note-off always passes so nothing can get stuck.
+    uint32_t keyMask[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    bool noteAllowed(uint8_t note) const
+    {
+        return note > 127 || ((keyMask[note >> 5] >> (note & 31)) & 1u) != 0;
+    }
     bool sustainPedalDown = false; // runtime only - CC64 state, never persisted/loaded
     // "voices" CV port (runtime only, see nodes::midiin::render): candidate voice count and
     // for how many blocks it has been stable, plus the last count already requested.

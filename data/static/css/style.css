@@ -1475,6 +1475,17 @@ body.show-node-cpu .widget-cpu-badge {
   box-shadow: 0 0 6px 1px var(--ok);
 }
 
+/* Armed by right-click, waiting for the next MIDI note (stepArpNoteLearn). */
+.step-arp-cell .step-arp-slider.step-arp-learning {
+  border-color: var(--warn, #f59e0b);
+  box-shadow: 0 0 6px 1px var(--warn, #f59e0b);
+  animation: step-arp-learn-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes step-arp-learn-pulse {
+  to { opacity: 0.45; }
+}
+
 .step-arp-value {
   font-family: "Courier New", monospace;
   font-size: 0.55rem;
@@ -5127,6 +5138,42 @@ body.show-oscilloscopes .oscilloscope-only-body {
   line-height: 1;
 }
 
+/* Midi-In key filter (settings dialog) */
+#midiInSettingsOverlay .modal {
+  width: min(1000px, calc(100vw - 24px));
+}
+
+/* Channel / overflow / pitch bend range / quantize side by side */
+.midi-in-settings-row {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.midi-in-settings-row .modal-field {
+  margin-bottom: 0;
+}
+
+.midi-in-keys-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.midi-in-key-count {
+  margin-right: auto;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+#midiInKeyboardContainer .piano-keyboard {
+  width: 100%;
+  min-width: 0;
+  height: 84px;
+}
+
 .piano-keyboard-container {
   overflow-x: auto;
   margin-bottom: 1rem;
@@ -6116,7 +6163,6 @@ input[type="range"].port-slider + .port-value {
   top: 1px;
   width: 6px;
   height: 10px;
-  margin-left: -3px;
   background: linear-gradient(90deg, #a49d8f, #6c675d);
   border-radius: 1px;
 }

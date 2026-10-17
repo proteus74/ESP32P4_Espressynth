@@ -241,6 +241,7 @@ struct WidgetParams
     float glideTime = 0.0f;
     float midiInPitchBendRangeCents = 200.0f;
     bool midiInPitchBendQuantizeCents = false;
+    uint32_t midiInKeyMask[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     int16_t midiFilterNote = -1;
     // midi-split
     uint8_t midiSplitZoneCount = 0; // starts empty - no zone until the user adds one

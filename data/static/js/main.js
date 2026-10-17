@@ -6,7 +6,7 @@ import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
 import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261015-fm8-1";
-import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-16";
+import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-21";
 
 // Header/status-bar icons: index.html marks them with data-ui-icon, swapped for the SVG tiles here.
 document.querySelectorAll("[data-ui-icon]").forEach((el) => {
@@ -50,7 +50,7 @@ document.addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (cancelKnobMidiLearn() || cancelButtonMidiLearn()) {
+  if (cancelKnobMidiLearn() || cancelButtonMidiLearn() || cancelStepArpNoteLearn()) {
     e.preventDefault();
     e.stopImmediatePropagation();
     return;
@@ -2230,7 +2230,7 @@ const WIDGET_TYPES = {
 
 
 const WIDGET_CATEGORIES = [
-  { label: "Midi", types: ["midi-in", "midi-split", "midi-filter", "midi-program"] },
+  { label: "Midi", types: ["midi-in", "midi-filter", "midi-program"] },
   { label: "Generator", types: ["fm-oscillator", "fm8", "wave-player", "hammond", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["adsr", "dx-envelope", "lfo", "wavetable", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
@@ -3648,7 +3648,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "midi-in") {
-    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0, pitchBendRangeCents: 200, pitchBendQuantizeCents: false });
+    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0, pitchBendRangeCents: 200, pitchBendQuantizeCents: false, keyMask: MIDI_KEY_MASK_ALL });
     midiVoiceSlotStates.set(id, {
       slots: [{ note: null, heldSince: 0, held: false }],
       holdCounter: 0,
@@ -10022,6 +10022,36 @@ document.getElementById("linkedOutputSettingsSave").addEventListener("click", ()
 
 
 const midiInStates = new Map();
+
+// Key filter of a Midi-In: 32 hex characters = 128 note bits (byte i = notes 8i..8i+7, bit 0 = lowest,
+// high nibble first). Mirrors parseKeyMaskHex in the firmware.
+const MIDI_KEY_MASK_ALL = "f".repeat(32);
+
+function midiKeyMaskToArray(hex) {
+  const bits = new Uint8Array(128).fill(1);
+  if (typeof hex !== "string" || !/^[0-9a-f]{32}$/i.test(hex)) return bits;
+  for (let i = 0; i < 16; i += 1) {
+    const byte = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    for (let b = 0; b < 8; b += 1) bits[i * 8 + b] = (byte >> b) & 1;
+  }
+  return bits;
+}
+
+function midiKeyMaskToHex(bits) {
+  let hex = "";
+  for (let i = 0; i < 16; i += 1) {
+    let byte = 0;
+    for (let b = 0; b < 8; b += 1) if (bits[i * 8 + b] === 1) byte |= 1 << b;
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+function midiKeyAllowed(state, note) {
+  const hex = state.keyMask;
+  if (typeof hex !== "string" || hex === MIDI_KEY_MASK_ALL || !Number.isInteger(note) || note < 0 || note > 127) return true;
+  return midiKeyMaskToArray(hex)[note] === 1;
+}
 const midiFilterStates = new Map();
 const midiProgramStates = new Map();
 
@@ -10046,6 +10076,12 @@ const midiInOverflowModeSelect = document.getElementById("midiInOverflowModeSele
 const midiInPitchBendRangeInput = document.getElementById("midiInPitchBendRangeInput");
 const midiInPitchBendQuantizeInput = document.getElementById("midiInPitchBendQuantizeInput");
 let pendingMidiInId = null;
+const midiInKeyboardContainer = document.getElementById("midiInKeyboardContainer");
+const midiInKeyCount = document.getElementById("midiInKeyCount");
+let midiInKeyEdit = null; // Uint8Array(128): 1 = this Midi-In reacts to the note
+const midiInPressedNotes = new Set(); // notes currently held on the incoming MIDI (preview only)
+const midiInReleaseTimers = new Map();
+const MIDI_IN_KEY_PREVIEW_MS = 160;
 
 function midiInVoiceLimit(widgetId) {
   return isFxMidiIn(widgetId) ? 1 : MIDI_IN_MAX_VOICES;
@@ -10175,12 +10211,81 @@ function openMidiInSettings(widgetId) {
   midiInOverflowModeSelect.closest(".modal-field")?.classList.toggle("disabled", fxMidiIn);
   midiInPitchBendRangeInput.value = Number(((state.pitchBendRangeCents ?? 200) / 1200).toFixed(6));
   midiInPitchBendQuantizeInput.checked = state.pitchBendQuantizeCents === true;
+  midiInKeyEdit = midiKeyMaskToArray(state.keyMask);
+  renderMidiInKeyEditor();
   midiInSettingsOverlay.classList.remove("hidden");
 }
+
+// Key picker over the whole MIDI range (C-1..G9, so the 88 piano keys and everything around them):
+// selected keys are coloured; click toggles one key, a drag sets a range
+// (to the opposite of what the lowest key of the range currently is).
+function renderMidiInKeyEditor() {
+  const zones = [];
+  let start = null;
+  for (let n = 0; n <= 128; n += 1) {
+    const on = n <= 127 && midiInKeyEdit[n] === 1;
+    if (on && start === null) start = n;
+    if (!on && start !== null) {
+      zones.push({ from: start, to: n - 1, color: "#f87171" });
+      start = null;
+    }
+  }
+  midiInKeyboardContainer.innerHTML = "";
+  midiInKeyboardContainer.appendChild(createPianoKeyboard({
+    minNote: 0,
+    maxNote: 127,
+    zones,
+    pressedNotes: midiInPressedNotes,
+    onRangeSelect: (lo, hi) => {
+      const value = midiInKeyEdit[lo] === 1 ? 0 : 1;
+      for (let n = lo; n <= hi; n += 1) midiInKeyEdit[n] = value;
+      renderMidiInKeyEditor();
+    },
+  }));
+  let count = 0;
+  for (let n = 0; n <= 127; n += 1) if (midiInKeyEdit[n] === 1) count += 1;
+  midiInKeyCount.textContent = `${count} of 128 keys`;
+}
+
+// Shows incoming notes on the key picker while the dialog is open (same as the Midi-Split editor).
+// Every incoming note is shown, also the ones this Midi-In would ignore, so you can see what to pick.
+function previewMidiInNote(note, noteOn) {
+  if (!Number.isInteger(note) || !pendingMidiInId) return;
+  const keyEl = () => midiInKeyboardContainer.querySelector(`[data-note="${note}"]`);
+  const timer = midiInReleaseTimers.get(note);
+  if (timer) clearTimeout(timer);
+  if (noteOn) {
+    midiInReleaseTimers.delete(note);
+    midiInPressedNotes.add(note);
+  } else {
+    // keep the key lit briefly so a short tap is still visible
+    midiInReleaseTimers.set(note, setTimeout(() => {
+      midiInReleaseTimers.delete(note);
+      midiInPressedNotes.delete(note);
+      keyEl()?.classList.remove("piano-key-midi-active");
+    }, MIDI_IN_KEY_PREVIEW_MS));
+  }
+  keyEl()?.classList.toggle("piano-key-midi-active", midiInPressedNotes.has(note));
+}
+
+function setAllMidiInKeys(value) {
+  midiInKeyEdit.fill(value);
+  renderMidiInKeyEditor();
+}
+
+document.getElementById("midiInKeysAll").addEventListener("click", () => setAllMidiInKeys(1));
+document.getElementById("midiInKeysNone").addEventListener("click", () => setAllMidiInKeys(0));
+document.getElementById("midiInKeysInvert").addEventListener("click", () => {
+  for (let n = 0; n <= 127; n += 1) midiInKeyEdit[n] = midiInKeyEdit[n] === 1 ? 0 : 1;
+  renderMidiInKeyEditor();
+});
 
 function closeMidiInSettings() {
   midiInSettingsOverlay.classList.add("hidden");
   pendingMidiInId = null;
+  midiInReleaseTimers.forEach((timer) => clearTimeout(timer));
+  midiInReleaseTimers.clear();
+  midiInPressedNotes.clear();
 }
 
 
@@ -10199,9 +10304,11 @@ document.getElementById("midiInSettingsSave").addEventListener("click", () => {
     // Keep the stored cents field compatible with existing presets (1 V/octave).
     state.pitchBendRangeCents = Number.isFinite(volts) ? clamp(volts, 0, 5) * 1200 : 200;
     state.pitchBendQuantizeCents = midiInPitchBendQuantizeInput.checked === true;
+    state.keyMask = midiKeyMaskToHex(midiInKeyEdit);
     sendLiveParamUpdate(pendingMidiInId, {
       pitchBendRangeCents: state.pitchBendRangeCents,
       pitchBendQuantizeCents: state.pitchBendQuantizeCents,
+      keyMask: state.keyMask,
     });
     savePresetNow();
   }
@@ -17182,6 +17289,18 @@ function renderStepArpPorts(widgetId, portsEl) {
     knob.addEventListener("click", (e) => e.stopPropagation());
     knob.addEventListener("input", () => setStepArpValue(widgetId, i, parseFloat(knob.value)));
     knob.addEventListener("change", () => markDirty());
+    // Right-click arms "learn next MIDI note" for this step; right-click
+    // again (or Escape) cancels.
+    knob.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const same = stepArpNoteLearn?.widgetId === widgetId && stepArpNoteLearn.index === i;
+      cancelStepArpNoteLearn();
+      if (!same && !knob.disabled) {
+        stepArpNoteLearn = { widgetId, index: i };
+        knob.classList.add("step-arp-learning");
+      }
+    });
     knob.addEventListener("wheel", (e) => adjustStepArpValueByWheel(e, widgetId, i), { passive: false });
     // Double-click resets this step back to its 5V default - same shortcut
     // convention as the widget-level dblclick opening settings, just
@@ -17253,6 +17372,38 @@ function adjustStepArpValueByWheel(e, widgetId, index) {
   const next = current + (e.deltaY < 0 ? step : -step);
   setStepArpValue(widgetId, index, state.snapToSemitones ? next : Math.round(next * 100) / 100);
   markDirty();
+}
+
+let stepArpNoteLearn = null;
+
+function cancelStepArpNoteLearn() {
+  if (!stepArpNoteLearn) return false;
+  document
+    .getElementById(stepArpNoteLearn.widgetId)
+    ?.querySelector(`[data-role="step-arp-knob-${stepArpNoteLearn.index + 1}"]`)
+    ?.classList.remove("step-arp-learning");
+  stepArpNoteLearn = null;
+  return true;
+}
+
+// Consumes the next note-on while a step is armed. Returns true if consumed.
+function routeMidiToStepArpLearn(data) {
+  if (!stepArpNoteLearn || data.midiType !== "note_on" || !(data.velocity > 0)) return false;
+  const { widgetId, index } = stepArpNoteLearn;
+  const state = stepArpStates.get(widgetId);
+  cancelStepArpNoteLearn();
+  if (!state) return true;
+  const pitchWired = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "pitch");
+  const center = CV_MAX_VOLTS / 2;
+  const semitones = data.note - PITCH_CV_ANCHOR_NOTE;
+  // Pitch wired: knob is an offset (see updateStepArpKnobVisual), else absolute 1V/oct.
+  const volts =
+    pitchWired && state.maxSemitoneOffset > 0
+      ? center + (semitones * center) / state.maxSemitoneOffset
+      : center + (semitones / 12) * PITCH_CV_VOLTS_PER_OCTAVE;
+  setStepArpValue(widgetId, index, volts);
+  markDirty();
+  return true;
 }
 
 function setStepArpValue(widgetId, index, volts) {
@@ -18419,28 +18570,53 @@ function updateFm8SliderVisuals(widgetId) {
   });
 }
 
-// Sends patch keys to the device in small frames (the live-param queue message is limited);
-// every voice instance applies them through the engine's flat-key setParam.
+// Sends patch keys to the device in small frames; every voice instance applies them through the
+// engine's flat-key setParam. The device's live-param message holds 256 bytes (LiveParamMsg::json)
+// and silently drops longer frames, so the frames are sized by their JSON length, not by key count
+// (a whole voice is ~160 keys, ~1.6 KB).
+const FM8_FRAME_LIMIT = 220;
+
 function sendFm8Keys(widgetId, keys) {
   const entries = Object.entries(keys).filter(([, v]) => typeof v === "number" && Number.isFinite(v));
-  const chunk = 40;
-  for (let i = 0; i < entries.length; i += chunk) {
-    const part = Object.fromEntries(entries.slice(i, i + chunk));
-    setTimeout(() => sendLiveParamUpdate(widgetId, part), (i / chunk) * 60);
+  const overhead = JSON.stringify({ type: "paramUpdate", widgetId, params: {} }).length;
+  const frames = [];
+  let part = {};
+  let count = 0;
+  let size = overhead;
+  for (const [key, value] of entries) {
+    const add = JSON.stringify(key).length + String(value).length + 2; // "key":value,
+    if (count > 0 && size + add > FM8_FRAME_LIMIT) {
+      frames.push(part);
+      part = {};
+      count = 0;
+      size = overhead;
+    }
+    part[key] = value;
+    count += 1;
+    size += add;
   }
+  if (count > 0) frames.push(part);
+  frames.forEach((frame, i) => setTimeout(() => sendLiveParamUpdate(widgetId, frame), i * 15));
 }
 
 function openFm8Settings(widgetId) {
   const state = fm8States.get(widgetId);
   if (!state) return;
+  // Edits go to the device live. The preset is written once when the editor closes: saving it on
+  // every knob step makes the device reload the preset and rebuild the whole graph (audible
+  // dropouts and crackling while turning a knob).
+  let changed = false;
   openFm8Dialog({
     state,
     onKeys: (keys) => {
       sendFm8Keys(widgetId, keys);
       refreshFm8Summary(widgetId);
-      savePresetNow();
+      changed = true;
     },
-    onClose: () => refreshFm8Summary(widgetId),
+    onClose: () => {
+      refreshFm8Summary(widgetId);
+      if (changed) savePresetNow();
+    },
   });
 }
 const DX_ENVELOPE_WIDTH = 240;
@@ -22501,6 +22677,7 @@ function routeMidiToWidgets(data) {
   const delivered = new Set();
   midiInStates.forEach((state, id) => {
     if (state.channel !== null && data.channel !== state.channel) return;
+    if (data.midiType === "note_on" && !midiKeyAllowed(state, data.note)) return;
     routeMidiWidget(data, id, state);
     routeRawMidi(id, "midi", data, new Set(), delivered);
   });
@@ -22629,6 +22806,7 @@ const WIDGET_ENGINES = {
       const bendRange = Number(state.pitchBendRangeCents ?? 200);
       state.pitchBendRangeCents = Number.isFinite(bendRange) ? clamp(bendRange, 0, 6000) : 200;
       state.pitchBendQuantizeCents = state.pitchBendQuantizeCents === true;
+      if (typeof state.keyMask !== "string" || !/^[0-9a-f]{32}$/i.test(state.keyMask)) state.keyMask = MIDI_KEY_MASK_ALL;
       resizeVoiceSlots(id, state.voices);
       updateMidiInControls(id);
     },
@@ -25082,6 +25260,10 @@ function connectWs() {
         flashMidiActivity();
         return;
       }
+      if (routeMidiToStepArpLearn(data)) {
+        flashMidiActivity();
+        return;
+      }
       routeMidiToWidgets(data);
       routeMidiToKnobs(data);
       routeMidiToButtons(data);
@@ -25094,6 +25276,7 @@ function connectWs() {
       routeMidiToGlobalMidiControls(data);
       if (["note_on", "note_off"].includes(data.midiType)) {
         previewMidiSplitNote(data.note, data.midiType === "note_on" && data.velocity > 0);
+        previewMidiInNote(data.note, data.midiType === "note_on" && data.velocity > 0);
       }
       flashMidiActivity();
     } else if (data.type === "midi-error") {
