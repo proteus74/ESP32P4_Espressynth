@@ -1,7 +1,7 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261014-dx-1";
+import { AudioEngine } from "./audio-engine.js?v=20261018-fm8-4";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
@@ -1618,8 +1618,8 @@ const WIDGET_TYPES = {
     icon: "🎛️",
     inputs: [
       { id: "pitchCv", label: "Pitch" },
-      { id: "gate", label: "Gate" },
       { id: "velocity", label: "Velocity" },
+      { id: "gate", label: "Gate" },
       { id: "tune", label: "Tune" },
       { id: "gain", label: "Gain" },
     ],
@@ -1794,7 +1794,8 @@ const WIDGET_TYPES = {
   "mic-in": {
     label: "Mic-In",
     icon: "🎤",
-    // Onboard PDM microphone (firmware-only source, like CV In: no browser-side preview).
+    // Onboard PDM microphone; the browser preview substitutes the page's own microphone
+    // (getUserMedia, secure contexts only - see audio-engine.js "mic-in").
     inputs: [],
     outputs: [{ id: "out", label: "Out" }],
   },
@@ -2332,8 +2333,10 @@ const AUDIO_PORTS = {
   // this table just never reflected it).
   adsr: { in: ["gate"], out: ["out"] },
   "dx-envelope": { in: ["gate"], out: ["out"] },
-  // FM8 is rendered by the device only; the browser preview has no node for it (like Clock).
-  fm8: { out: [] },
+  // FM8: audio-engine.js runs a JS port of the device's msfa voice; "value" is real audio.
+  // The five inputs stay control-kind (block-rate on the device too) and reach the engine
+  // through deliverToWidget().
+  fm8: { out: ["value"] },
   "step-arpeggiator": {
     in: ["clock", "gate", "pitch", "direction", "pulseTime", "rate", "pattern", "switchAtEnd", ...Array.from({ length: 16 }, (_, i) => `step${i + 1}`)],
     // "cv"/"gateOut" are genuine audio-rate outputs in the C++ engine, but
@@ -2501,7 +2504,7 @@ function appendOscilloscopePanel(body, port = "value") {
   body.appendChild(panel);
 }
 
-const OSCILLOSCOPE_WIDGET_TYPES = ["oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "mda-piano"];
+const OSCILLOSCOPE_WIDGET_TYPES = ["oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "soundfont-player", "mda-piano", "mic-in"];
 
 const GRAPHIC_EQ_DEFAULT_FREQS = [63, 125, 250, 500, 1000, 2000, 5000, 14000];
 
@@ -3821,6 +3824,9 @@ function createWidget(type, label, x, y, forcedId) {
 
     body.appendChild(bpmLabel);
     el.appendChild(body);
+    // Start ticking right away - previously only a BPM change or a preset load
+    // (applyParams) started the timer, so a Clock from the palette stayed silent.
+    restartClockTimer(id);
   }
 
   if (type === "cv-in" || type === "cv-out") {
@@ -4596,15 +4602,30 @@ function createWidget(type, label, x, y, forcedId) {
     applyAdsrCollapsed(id);
   }
 
+  if (type === "mic-in") {
+    audioEngine.createNode(id, "mic-in", {});
+    const body = document.createElement("div");
+    body.className = "widget-instance-body oscilloscope-only-body";
+    const status = document.createElement("div");
+    status.className = "osc-freq-label";
+    status.dataset.role = "mic-in-status";
+    status.textContent = audioEngine.getMicInStatus(id);
+    body.appendChild(status);
+    appendOscilloscopePanel(body, "out");
+    el.appendChild(body);
+  }
+
   if (type === "fm8") {
     const state = { keys: defaultFm8Keys() };
     fm8States.set(id, state);
+    audioEngine.createNode(id, "fm8", { ...state.keys });
     const body = document.createElement("div");
     body.className = "widget-instance-body fm8-body";
     const summary = document.createElement("div");
     summary.className = "fm8-summary";
     summary.dataset.role = "fm8-summary";
     body.append(summary);
+    appendOscilloscopePanel(body);
     el.appendChild(body);
     renderFm8Summary(summary, state);
     el.addEventListener("dblclick", (e) => {
@@ -7035,6 +7056,7 @@ function removeWidget(id, force = false) {
   effectCvStates.delete(id);
   stepArpStopInternalClock(id);
   clearTimeout(stepArpStates.get(id)?.gateOutTimer);
+  clearTimeout(stepArpStates.get(id)?.retriggerTimer);
   stepArpStates.delete(id);
   drumSequencerStopInternalClock(id);
   const drumState = drumSequencerStates.get(id);
@@ -11667,7 +11689,10 @@ function traverseVoiceSet(midiInId) {
     }
 
     const outputs = (WIDGET_TYPES[type] && WIDGET_TYPES[type].outputs) || [];
-    const isBoundary = LINK_WIDGET_TYPES.includes(type) || (outputs.length === 0 && type !== "midi-split") || type === "soundfont-player";
+    // fm8 keeps its voices inside one engine node (audio-engine.js "fm8"), so nothing behind
+    // it is voiced either - same as the SoundFont player.
+    const isBoundary = LINK_WIDGET_TYPES.includes(type) || (outputs.length === 0 && type !== "midi-split") ||
+      type === "soundfont-player" || type === "fm8";
     if (isBoundary) continue;
 
     visited.add(widgetId);
@@ -11700,6 +11725,11 @@ function refreshVoiceGroups() {
         desiredVoiceCounts.set(widgetId, Math.max(current, state.voices));
       });
     }
+    // FM8 is a voice-set boundary (one engine node): tell it the voice count instead, so its
+    // internal fan-in matches the device's 1/sqrt(N) voiced->global edge scale.
+    connections
+      .filter((c) => c.from.widgetId === midiInId && document.getElementById(c.to.widgetId)?.dataset.widgetType === "fm8")
+      .forEach((c) => audioEngine.setParam(c.to.widgetId, "voices", state.voices));
   });
 
   midiFilterStates.forEach((state, id) => {
@@ -13834,7 +13864,14 @@ function updateLfoVisual(widgetId) {
 
 
 
-function tickAudioMonitors() {
+function tickAudioMonitors(frameTs) {
+  // ~30 fps is plenty for meters/scopes and halves the main-thread time this tick steals
+  // from the ScriptProcessor audio callbacks (see SCRIPT_PROCESSOR_FRAMES in audio-engine.js).
+  if (frameTs !== undefined && frameTs - (tickAudioMonitors.lastFrameTs || 0) < 30) {
+    requestAnimationFrame(tickAudioMonitors);
+    return;
+  }
+  tickAudioMonitors.lastFrameTs = frameTs || performance.now();
   const now = performance.now();
   document.querySelectorAll('.widget-instance[data-widget-type="vu-meter"], .widget-instance[data-widget-type="vu-meter-horizontal"]').forEach((el) => {
     const state = audioMonitorStates.get(el.id);
@@ -13924,6 +13961,10 @@ function tickAudioMonitors() {
   });
   document.querySelectorAll('.widget-instance[data-widget-type="midi-in"]').forEach((el) => {
     updateMidiInVoiceSlotsLabel(el.id);
+  });
+  document.querySelectorAll('.widget-instance[data-widget-type="mic-in"] [data-role="mic-in-status"]').forEach((label) => {
+    const status = audioEngine.getMicInStatus(label.closest(".widget-instance").id);
+    if (label.textContent !== status) label.textContent = status;
   });
   if (oscilloscopesVisible) {
     document
@@ -17635,13 +17676,33 @@ function stepArpTriggerStep(widgetId, state, el) {
   updateStepArpActiveHighlight(widgetId);
 
   const outDot = el.querySelector('.port-dot[data-port-id="gateOut"][data-port-dir="out"]');
-  setLedActive(outDot, true);
-  propagate(widgetId, "gateOut", GATE_ON_VOLTS);
-  clearTimeout(state.gateOutTimer);
-  state.gateOutTimer = setTimeout(() => {
-    setLedActive(outDot, false);
+  const startPulse = () => {
+    setLedActive(outDot, true);
+    propagate(widgetId, "gateOut", GATE_ON_VOLTS);
+    clearTimeout(state.gateOutTimer);
+    state.gateOutTimer = setTimeout(() => {
+      state.gateOutTimer = null;
+      setLedActive(outDot, false);
+      propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
+    }, state.pulseMs);
+  };
+  clearTimeout(state.retriggerTimer);
+  state.retriggerTimer = null;
+  if (state.retriggerGateOut === true && state.gateOutTimer) {
+    // Previous pulse still running (pulse width longer than the clock interval): force a
+    // ~1 ms LOW gap first so a downstream envelope sees a real falling+rising edge - mirrors
+    // StepArpeggiatorNode.h's retriggerGapRemaining/pendingPulseSamples.
+    clearTimeout(state.gateOutTimer);
+    state.gateOutTimer = null;
+    setLedActive(outDot, false, 0);
     propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
-  }, state.pulseMs);
+    state.retriggerTimer = setTimeout(() => {
+      state.retriggerTimer = null;
+      startPulse();
+    }, 1);
+  } else {
+    startPulse();
+  }
 
   stepArpAdvance(widgetId, state);
 }
@@ -18557,6 +18618,9 @@ function refreshFm8Summary(widgetId) {
   const summary = document.querySelector(`#${widgetId} [data-role="fm8-summary"]`);
   if (state && summary) renderFm8Summary(summary, state);
   updateFm8SliderVisuals(widgetId);
+  // Every path that changes the patch (editor, MIDI learn, preset load) ends here - keep the
+  // preview engine's copy current; sounding voices re-apply it like the device does.
+  if (state) audioEngine.setParam(widgetId, "patch", state.keys);
 }
 
 function updateFm8SliderVisuals(widgetId) {
@@ -21412,6 +21476,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     if (state) {
       const num = Number(value);
       state.keys.tune = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "tune", state.keys.tune);
       updateFm8SliderVisuals(widgetId);
       state.ui?.refresh();
       sendLiveParamUpdateThrottled(widgetId, { tune: state.keys.tune });
@@ -21423,9 +21488,20 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     if (state) {
       const num = Number(value);
       state.keys.gain = clamp(Number.isNaN(num) ? 0 : num, 0, CV_MAX_VOLTS);
+      audioEngine.setParam(widgetId, "gain", state.keys.gain);
       updateFm8SliderVisuals(widgetId);
       state.ui?.refresh();
       sendLiveParamUpdateThrottled(widgetId, { gain: state.keys.gain });
+    }
+  }
+
+  if (el.dataset.widgetType === "fm8" && ["pitchCv", "velocity", "gate"].includes(portId)) {
+    // Per-voice note delivery to the preview engine (see audioEngine.fm8Voice). The device
+    // handles its own MIDI; nothing is sent back.
+    audioEngine.fm8Voice(widgetId, voiceIndex, portId, Number(value));
+    if (portId === "gate") {
+      const dot = el.querySelector('.port-row-in [data-port-id="gate"]');
+      setLedActive(dot, Number(value) > GATE_THRESHOLD_VOLTS);
     }
   }
 
@@ -21713,6 +21789,8 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
         // purely for the editor's own LED/propagate() simulation).
         clearTimeout(state.gateOutTimer);
         state.gateOutTimer = null;
+        clearTimeout(state.retriggerTimer);
+        state.retriggerTimer = null;
         setLedActive(el.querySelector('[data-port-id="gateOut"][data-port-dir="out"]'), false);
         propagate(widgetId, "gateOut", GATE_OFF_VOLTS);
         // No running sequence left to quantize a pending switch against.

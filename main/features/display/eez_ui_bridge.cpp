@@ -10,6 +10,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "MemoryDiagnostics.h"
 #include "KnobActivityOverlay.h"
 #include "PageControlsView.h"
 
@@ -27,7 +28,12 @@ extern "C" {
 namespace {
 
 lv_timer_t *s_timer = nullptr;
-EezPresetList s_preset_list{};
+// PSRAM, allocated on first use: 8.7 KB that only the preset table reads.
+EezPresetList &preset_list()
+{
+    static auto *list = static_cast<EezPresetList *>(heap_caps_calloc(1, sizeof(EezPresetList), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    return *list;
+}
 EezTabList *s_tab_list = nullptr; // allocated in PSRAM on first use
 lv_obj_t *s_pages_box = nullptr;  // open Pages popup, closed again on a preset change
 lv_obj_t *s_page_loading = nullptr;
@@ -225,7 +231,7 @@ void populate_pages()
 void populate_presets()
 {
     lv_obj_t *table = objects.tbl_presets;
-    lv_table_set_row_count(table, s_preset_list.count + 1);
+    lv_table_set_row_count(table, preset_list().count + 1);
     lv_table_set_column_count(table, 4);
     lv_table_set_column_width(table, 0, 55);
     lv_table_set_column_width(table, 1, 240);
@@ -235,8 +241,8 @@ void populate_presets()
     lv_table_set_cell_value(table, 0, 1, "Preset");
     lv_table_set_cell_value(table, 0, 2, "Short Description");
     lv_table_set_cell_value(table, 0, 3, "Author");
-    for (uint16_t i = 0; i < s_preset_list.count; ++i) {
-        const EezPresetEntry *preset = &s_preset_list.entries[i];
+    for (uint16_t i = 0; i < preset_list().count; ++i) {
+        const EezPresetEntry *preset = &preset_list().entries[i];
         lv_table_set_cell_value_fmt(table, i + 1, 0, "%u", static_cast<unsigned>(i + 1));
         lv_table_set_cell_value(table, i + 1, 1, preset->display_name);
         lv_table_set_cell_value(table, i + 1, 2, preset->description);
@@ -292,13 +298,13 @@ void apply_data_results()
             break;
         case DataKind::Presets:
             if (result.data != nullptr) {
-                const bool changed = !s_presets_ready || memcmp(&s_preset_list, result.data, sizeof(s_preset_list)) != 0;
-                s_preset_list = *static_cast<EezPresetList *>(result.data);
+                const bool changed = !s_presets_ready || memcmp(&preset_list(), result.data, sizeof(preset_list())) != 0;
+                preset_list() = *static_cast<EezPresetList *>(result.data);
                 s_presets_ready = true;
                 s_presets_loaded_us = esp_timer_get_time();
                 if (changed) populate_presets();
             } else if (!s_presets_ready) {
-                s_preset_list.count = 0;
+                preset_list().count = 0;
                 lv_table_set_cell_value(objects.tbl_presets, 0, 0, "Presets konnten nicht geladen werden");
             }
             break;
@@ -313,8 +319,8 @@ void action_select_preset(lv_event_t *)
     uint32_t column = LV_TABLE_CELL_NONE;
     lv_table_get_selected_cell(objects.tbl_presets, &row, &column);
     (void)column;
-    if (row == LV_TABLE_CELL_NONE || row == 0 || row > s_preset_list.count) return;
-    if (eez_synth_load_preset(s_preset_list.entries[row - 1].file_name)) action_back_to_main(nullptr);
+    if (row == LV_TABLE_CELL_NONE || row == 0 || row > preset_list().count) return;
+    if (eez_synth_load_preset(preset_list().entries[row - 1].file_name)) action_back_to_main(nullptr);
 }
 
 // lv_label_set_text() always invalidates (and so re-renders) the label, even for identical
@@ -387,7 +393,7 @@ void update_runtime_labels()
     static int64_t previous_sample_us = 0;
     static uint32_t previous_idle_runtime = 0;
     const int64_t now_us = esp_timer_get_time();
-    if (previous_sample_us != 0 && now_us - previous_sample_us < 100000) return;
+    if (previous_sample_us != 0 && now_us - previous_sample_us < 500000) return;
     const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(App::MAIN_CORE);
     float core0 = 0.0f;
     if (previous_sample_us != 0) {
@@ -408,6 +414,15 @@ void update_runtime_labels()
     static int64_t previous_info_us = 0;
     if (previous_info_us != 0 && now_us - previous_info_us < 500000) return;
     previous_info_us = now_us;
+
+    // LVGL pool usage for /api/diagnostics/memory - must run on the LVGL task (we are).
+    {
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        memorydiag::setLvglStats(static_cast<uint32_t>(mon.total_size),
+                                 static_cast<uint32_t>(mon.total_size - mon.free_size),
+                                 static_cast<uint32_t>(mon.max_used), mon.frag_pct);
+    }
 
     constexpr size_t mib = 1024 * 1024;
     const unsigned psram_free_tenths = static_cast<unsigned>((heap_caps_get_free_size(MALLOC_CAP_SPIRAM) * 10ULL + mib / 2) / mib);
@@ -483,7 +498,7 @@ void init()
     lv_obj_add_event_cb(objects.btn_back, action_back_to_main, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.btn_pages, action_open_pages, LV_EVENT_CLICKED, nullptr);
     // Populate caches while the startup splash is still visible.
-    s_timer = lv_timer_create(timer_callback, 16, nullptr);
+    s_timer = lv_timer_create(timer_callback, 33, nullptr);
 }
 
 void show_preset_list()
@@ -507,7 +522,7 @@ void start()
 {
     if (s_timer != nullptr) return;
     update_runtime_labels();
-    s_timer = lv_timer_create(timer_callback, 16, nullptr);
+    s_timer = lv_timer_create(timer_callback, 33, nullptr);
 }
 
 } // namespace Feature::EEZUI

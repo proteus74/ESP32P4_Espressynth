@@ -52,6 +52,12 @@ struct Fm8State
 
     float lp = 0.0f; // post-voice low-pass state (patch bytes 156/157)
     float bp = 0.0f;
+    // applyFilter()'s coefficients, cached by the two patch bytes they derive
+    // from (powf+sinf per block per voice otherwise). 0xFF = not computed yet.
+    uint8_t filterCutoffByte = 0xFF;
+    uint8_t filterResByte = 0xFF;
+    float filterF = 0.0f;
+    float filterQ = 0.0f;
 };
 
 namespace detail
@@ -129,10 +135,18 @@ inline void applyFilter(Fm8State &s, float *out, size_t frames)
         s.bp = 0.0f;
         return;
     }
-    const float fs = static_cast<float>(synth::kSampleRate);
-    const float fc = 30.0f * powf((fs * 0.17f) / 30.0f, static_cast<float>(cutoff) / 98.0f);
-    const float f = 2.0f * sinf(3.14159265f * fc / fs);
-    const float q = 1.0f / (0.6f + (static_cast<float>(s.patch->d[157]) / 99.0f) * 9.0f);
+    const uint8_t res = s.patch->d[157];
+    if (cutoff != s.filterCutoffByte || res != s.filterResByte)
+    {
+        const float fs = static_cast<float>(synth::kSampleRate);
+        const float fc = 30.0f * powf((fs * 0.17f) / 30.0f, static_cast<float>(cutoff) / 98.0f);
+        s.filterF = 2.0f * sinf(3.14159265f * fc / fs);
+        s.filterQ = 1.0f / (0.6f + (static_cast<float>(res) / 99.0f) * 9.0f);
+        s.filterCutoffByte = cutoff;
+        s.filterResByte = res;
+    }
+    const float f = s.filterF;
+    const float q = s.filterQ;
     float lp = s.lp;
     float bp = s.bp;
     for (size_t i = 0; i < frames; ++i)
@@ -206,19 +220,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const int bend = detail::tuneBend14(s);
 
     const float gain = cv::vcaGain(s.gainCv, false) * cv::kAudioPeakVolts;
-    float peak = 0.0f;
-    float chunk[msfa_bridge::kBlock];
-    size_t done = 0;
-    while (done < frames)
-    {
-        const size_t n = frames - done < static_cast<size_t>(msfa_bridge::kBlock)
-                             ? frames - done
-                             : static_cast<size_t>(msfa_bridge::kBlock);
-        const float p = msfa_bridge::render(s.voice, chunk, 1, bend, 12);
-        if (p > peak) peak = p;
-        for (size_t i = 0; i < n; ++i) out[done + i] = chunk[i] * gain;
-        done += n;
-    }
+    // The engine block is a multiple of msfa's 64-sample block: render straight into out[]
+    // with the gain folded into the bridge's int->float conversion (one pass, no chunk copy).
+    static_assert(synth::kBlockSize % msfa_bridge::kBlock == 0, "engine block must be a multiple of msfa's block");
+    const float peak = msfa_bridge::render(s.voice, out, static_cast<int>(frames / msfa_bridge::kBlock), bend, 12, gain);
     applyFilter(s, out, frames);
 
     if (peak < 1e-5f)

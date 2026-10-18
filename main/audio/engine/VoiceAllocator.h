@@ -24,10 +24,7 @@ public:
             slot.heldSince = 0;
             slot.held = false;
         }
-        for (auto &heldSince : monoHeldSince_)
-        {
-            heldSince = 0;
-        }
+        monoHeldCount_ = 0;
         holdCounter_ = 0;
     }
 
@@ -58,7 +55,7 @@ public:
             {
                 return -1;
             }
-            monoHeldSince_[note] = holdCounter_;
+            monoPush(note);
             slots_[0].note = note;
             slots_[0].heldSince = holdCounter_;
             slots_[0].held = false;
@@ -141,7 +138,7 @@ public:
     {
         if (voiceCount_ == 1)
         {
-            monoHeldSince_[note] = 0;
+            monoRemove(note);
             if (slots_[0].note != static_cast<int16_t>(note))
             {
                 return -1;
@@ -247,23 +244,48 @@ private:
         return best;
     }
 
+    // Mono legato: keys currently held, oldest first, newest at the top -
+    // the note to fall back to on note-off is simply the top. A small
+    // stack instead of a per-note timestamp table: one VoiceAllocator sits
+    // in every one of the kMaxWidgets slots (Graph::voiceAllocators), so a
+    // 512 B uint32_t[128] here cost ~32 KB of internal RAM per Graph,
+    // twice during a preset swap. More than kMonoHeldMax keys held at once
+    // just forgets the oldest one.
+    static constexpr uint8_t kMonoHeldMax = 16;
+
+    void monoRemove(uint8_t note)
+    {
+        for (uint8_t i = 0; i < monoHeldCount_; ++i)
+        {
+            if (monoHeld_[i] != note)
+                continue;
+            for (uint8_t j = i + 1; j < monoHeldCount_; ++j)
+                monoHeld_[j - 1] = monoHeld_[j];
+            --monoHeldCount_;
+            return;
+        }
+    }
+
+    void monoPush(uint8_t note)
+    {
+        monoRemove(note); // re-struck key becomes the newest
+        if (monoHeldCount_ == kMonoHeldMax)
+        {
+            for (uint8_t j = 1; j < monoHeldCount_; ++j)
+                monoHeld_[j - 1] = monoHeld_[j];
+            --monoHeldCount_;
+        }
+        monoHeld_[monoHeldCount_++] = note;
+    }
+
     int16_t newestHeldMonoNote() const
     {
-        int16_t newest = -1;
-        uint32_t newestSince = 0;
-        for (uint16_t note = 0; note < 128; ++note)
-        {
-            if (monoHeldSince_[note] > newestSince)
-            {
-                newest = static_cast<int16_t>(note);
-                newestSince = monoHeldSince_[note];
-            }
-        }
-        return newest;
+        return monoHeldCount_ == 0 ? -1 : static_cast<int16_t>(monoHeld_[monoHeldCount_ - 1]);
     }
 
     Slot slots_[SYNTH_VOICE_COUNT];
-    uint32_t monoHeldSince_[128] = {};
+    uint8_t monoHeld_[kMonoHeldMax] = {};
+    uint8_t monoHeldCount_ = 0;
     uint32_t holdCounter_ = 0;
     uint8_t voiceCount_ = 1;
     OverflowMode overflowMode_ = OverflowMode::StealOldest;

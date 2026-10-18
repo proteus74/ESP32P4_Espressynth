@@ -7,6 +7,8 @@ namespace
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
 memorydiag::State gState;
 TaskHandle_t gSynthTask = nullptr;
+uint32_t gLvglTotal = 0, gLvglUsed = 0, gLvglMaxUsed = 0;
+uint8_t gLvglFragPct = 0;
 }
 
 namespace memorydiag
@@ -15,6 +17,16 @@ void registerSynthTask(TaskHandle_t task)
 {
     portENTER_CRITICAL(&gMux);
     gSynthTask = task;
+    portEXIT_CRITICAL(&gMux);
+}
+
+void setLvglStats(uint32_t total, uint32_t used, uint32_t maxUsed, uint8_t fragPct)
+{
+    portENTER_CRITICAL(&gMux);
+    gLvglTotal = total;
+    gLvglUsed = used;
+    gLvglMaxUsed = maxUsed;
+    gLvglFragPct = fragPct;
     portEXIT_CRITICAL(&gMux);
 }
 
@@ -33,6 +45,10 @@ HeapSnapshot snapshot()
     TaskHandle_t synthTask;
     portENTER_CRITICAL(&gMux);
     synthTask = gSynthTask;
+    result.lvglTotal = gLvglTotal;
+    result.lvglUsed = gLvglUsed;
+    result.lvglMaxUsed = gLvglMaxUsed;
+    result.lvglFragPct = gLvglFragPct;
     portEXIT_CRITICAL(&gMux);
     if (synthTask != nullptr)
     {

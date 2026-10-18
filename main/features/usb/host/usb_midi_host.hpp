@@ -173,7 +173,11 @@ extern "C" __attribute__((used)) void tuh_midi_rx_cb(uint8_t idx, uint32_t bytes
         // keypress and overwhelm httpd's async send queue. Drop them here, same filter
         // UsbMidiEvent::parse() already applies to the USB-device side.
         const uint8_t cin = packet[0] & 0x0f;
-        if (cin != 0x0 && cin != 0x1 && queue != nullptr) {
+        // System Real-Time (0xF8 clock, 0xFA-0xFC start/continue/stop, 0xFE active sensing,
+        // 0xFF reset): nothing downstream consumes them, yet each one would wake usb_midi_task,
+        // pass through the engine queue + route scans and cost a WebSocket frame - a clocked
+        // controller or DAW sends 48 clocks/s at 120 BPM, Active Sensing another ~3/s.
+        if (cin != 0x0 && cin != 0x1 && packet[1] < 0xF8 && queue != nullptr) {
             midi_packet_t event{};
             std::memcpy(event.data, packet, sizeof(event.data));
             if (xQueueSend(queue, &event, 0) != pdTRUE) rx_dropped.fetch_add(1, std::memory_order_relaxed);

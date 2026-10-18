@@ -33,14 +33,29 @@ inline void render(NodeInstance &inst, size_t frames)
     using namespace noderender;
     auto &s = inst.pan;
     const bool panFed = portFed(inst, 1);
-
+    const float *in = inst.inPorts[0];
+    const float inScalar = inst.controlValue[0];
+    if (!panFed)
+    {
+        // Static pan: both sine lookups are block-constant.
+        const float phase = (clampCv(s.pan) * cv::kInvMaxVolts) * 0.25f;
+        const float gain2 = dsp::sineLookup(phase);
+        const float gain1 = dsp::sineLookup(phase + 0.25f);
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const float dry = in != nullptr ? in[i] : inScalar;
+            inst.outL[i] = dry * gain1;
+            inst.outR[i] = dry * gain2;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
-        const float panCv = clampCv(panFed ? portSample(inst, 1, i) : s.pan);
+        const float panCv = clampCv(portSample(inst, 1, i));
         const float phase = (panCv * cv::kInvMaxVolts) * 0.25f;
         const float gain2 = dsp::sineLookup(phase);
         const float gain1 = dsp::sineLookup(phase + 0.25f);
-        const float dry = portSample(inst, 0, i);
+        const float dry = in != nullptr ? in[i] : inScalar;
         inst.outL[i] = dry * gain1;
         inst.outR[i] = dry * gain2;
     }

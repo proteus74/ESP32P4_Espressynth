@@ -92,13 +92,14 @@ void update(Voice *voice, const uint8_t patch[kPatchBytes], int midiNote, int ve
     voice->controllers.opSwitch = patch[155] != 0 ? (patch[155] & 0x3f) : 0x3f;
 }
 
-float render(Voice *voice, float *out, int blocks, int pitchBend14, int pitchRangeSemis)
+float render(Voice *voice, float *out, int blocks, int pitchBend14, int pitchRangeSemis, float gain)
 {
     if (voice == nullptr) return 0.0f;
     voice->controllers.values_[kControllerPitch] = pitchBend14;
     voice->controllers.values_[kControllerPitchRange] = pitchRangeSemis;
     float peak = 0.0f;
     alignas(16) int32_t buf[kBlock];
+    const float scale = gain * (1.0f / 32768.0f);
     for (int b = 0; b < blocks; ++b)
     {
         std::memset(buf, 0, sizeof(buf));
@@ -106,16 +107,19 @@ float render(Voice *voice, float *out, int blocks, int pitchBend14, int pitchRan
         const int32_t lfoDelay = voice->lfo.getdelay();
         voice->note.compute(buf, lfoValue, lfoDelay, &voice->controllers);
         float *dst = out + b * kBlock;
+        // Peak on the integer domain (one compare per sample, no fabsf), scaled once at the end.
+        int32_t peakInt = 0;
         for (int i = 0; i < kBlock; ++i)
         {
             // msfa output is ~24 bit; Dexed scales it to 16 bit with >> 13 and saturates.
             int32_t v = buf[i] >> 13;
             v = v > 32767 ? 32767 : (v < -32768 ? -32768 : v);
-            const float f = static_cast<float>(v) * (1.0f / 32768.0f);
-            dst[i] = f;
-            const float a = f < 0.0f ? -f : f;
-            if (a > peak) peak = a;
+            const int32_t a = v < 0 ? -v : v;
+            if (a > peakInt) peakInt = a;
+            dst[i] = static_cast<float>(v) * scale;
         }
+        const float blockPeak = static_cast<float>(peakInt) * (1.0f / 32768.0f);
+        if (blockPeak > peak) peak = blockPeak;
     }
     return peak;
 }

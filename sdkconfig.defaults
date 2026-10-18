@@ -96,8 +96,8 @@ CONFIG_FREERTOS_CORETIMER_SYSTIMER_LVL3=y
 
 # LVGL default theme in dark mode.
 CONFIG_LV_THEME_DEFAULT_DARK=y
-# Match display updates to the 16 ms UI timer. Reuse style and rounded-edge calculations.
-CONFIG_LV_DEF_REFR_PERIOD=16
+# 33 ms = the RGB panel's ~28 Hz scan-out (12 MHz pixel clock); the EEZ UI timer runs at 33 ms too. Reuse style and rounded-edge calculations.
+CONFIG_LV_DEF_REFR_PERIOD=33
 CONFIG_LV_OBJ_STYLE_CACHE=y
 CONFIG_LV_DRAW_SW_CIRCLE_CACHE_SIZE=16
 CONFIG_LV_DRAW_SW_SHADOW_CACHE_SIZE=64
@@ -132,11 +132,11 @@ CONFIG_LV_USE_LOG=y
 CONFIG_LV_LOG_LEVEL_WARN=y
 CONFIG_LV_LOG_PRINTF=y
 
-# 64KB default is nowhere near enough once LV_MEM_POOL_ALLOC (root CMakeLists.txt) redirects
-# this whole pool to PSRAM for lodepng's file-load/inflate scratch buffers - see that comment
-# for the full story. 4MB covers lodepng's reallocating decode scratch plus normal widget/style
-# allocations with headroom; PSRAM is 32MB.
-CONFIG_LV_MEM_SIZE_KILOBYTES=4096
+# LV_MEM_POOL_ALLOC (root CMakeLists.txt) puts this pool in PSRAM. The old 4 MB was sized for
+# lodepng's decode scratch, which the hardware-JPEG splash no longer needs. Measured on the
+# CrowPanel 5" (lv_mem_monitor via /api/diagnostics/memory): ~35 KB used, 42 KB peak. 1 MB
+# leaves >20x headroom for cached page views.
+CONFIG_LV_MEM_SIZE_KILOBYTES=1024
 
 # --- Web server capacity for the synth engine's browser UI (main/features/synth/
 # synth_web_api.hpp): a persistent /ws connection for the whole session, on top of overlapping

@@ -28,7 +28,7 @@ void noteOff(Voice *voice);
 // Re-applies the patch while a note is held (live editing); keeps phases and envelope positions.
 void update(Voice *voice, const uint8_t patch[kPatchBytes], int midiNote, int velocity);
 
-// Renders `blocks` x 64 samples into out[] (float, +-1.0; overwritten). pitchBend14 = 0x2000 centre.
-// Returns the peak magnitude of the rendered audio.
-float render(Voice *voice, float *out, int blocks, int pitchBend14, int pitchRangeSemis);
+// Renders `blocks` x 64 samples into out[] (float, +-1.0 times `gain`; overwritten).
+// pitchBend14 = 0x2000 centre. Returns the peak magnitude of the rendered audio before `gain`.
+float render(Voice *voice, float *out, int blocks, int pitchBend14, int pitchRangeSemis, float gain = 1.0f);
 } // namespace msfa_bridge

@@ -16,4 +16,9 @@ idf_component_register(
 )
 
 # Third-party code (written for -Wall-less builds): keep warnings visible but do not fail the build.
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-type-limits -Wno-unused-variable -Wno-unused-function)
+# -O3 -funroll-loops: the 64-sample operator loops (fm_op_kernel.cpp) are ~22 instructions per
+# sample with 4 of them loop/index overhead; unrolling removes most of that. Nothing here is
+# size-critical (the kernels live in IRAM, ~1 KB).
+# -fno-math-errno: the few float exp/log calls per block (dx7note.cpp) become plain calls.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-type-limits -Wno-unused-variable -Wno-unused-function
+    -O3 -fno-math-errno -funroll-loops)

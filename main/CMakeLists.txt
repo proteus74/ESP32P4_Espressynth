@@ -56,6 +56,13 @@ idf_component_register(
     WHOLE_ARCHIVE
 )
 
+# The whole audio engine (main/audio/engine/*.h, header-only) is compiled through main.cpp.
+# -fno-math-errno lets sqrtf/floorf/fabsf become single FPU instructions instead of libm
+# calls (errno is never read here); -fno-trapping-math drops FP exception bookkeeping.
+# Deliberately NOT -ffast-math: NaN-aware clamps (noderender::clampToRange) rely on IEEE
+# comparison semantics.
+set_source_files_properties(main.cpp PROPERTIES COMPILE_OPTIONS "-fno-math-errno;-fno-trapping-math")
+
 # Keep dependency task and SDIO buffer policies in project-owned wrappers.
 target_link_options(${COMPONENT_LIB} INTERFACE
     "-Wl,--wrap=xTaskCreatePinnedToCore"

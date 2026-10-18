@@ -44,6 +44,11 @@ inline void render(NodeInstance &inst, size_t frames)
 
     const bool amountFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 1)) != 0;
     const bool curveFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 2)) != 0;
+    // Resolved once per block (same aliasing reason as FilterNode.h: the
+    // smoother writes through inst, so portSample()'s inPorts[] load would
+    // be repeated every sample otherwise).
+    const float *in = inst.inPorts[0];
+    const float inScalar = inst.controlValue[0];
 
     if (!amountFed && !curveFed)
     {
@@ -76,22 +81,33 @@ inline void render(NodeInstance &inst, size_t frames)
                 return;
             }
         }
+        if (converged)
+        {
+            for (size_t i = 0; i < frames; ++i)
+            {
+                inst.outL[i] = (in != nullptr ? in[i] : inScalar) * target;
+            }
+            return;
+        }
         for (size_t i = 0; i < frames; ++i)
         {
-            const float amount = converged ? target : s.amountSmooth.process(target);
-            inst.outL[i] = portSample(inst, 0, i) * amount;
+            inst.outL[i] = (in != nullptr ? in[i] : inScalar) * s.amountSmooth.process(target);
         }
         return;
     }
 
     // At least one of "amount"/"curve" is audio-rate fed - compute per sample.
+    const float *amountBuf = amountFed ? src.inPorts[1] : nullptr;
+    const float *curveBuf = curveFed ? src.inPorts[2] : nullptr;
+    const float amountTarget = cv::vcaGain(s.amountCv, false);
+    const float curveTarget = cv::curveGain(s.curveCv);
     for (size_t i = 0; i < frames; ++i)
     {
-        const float outputGain = amountFed ? cv::vcaGain(src.inPorts[1][i], false)
-                                            : s.amountSmooth.process(cv::vcaGain(s.amountCv, false));
-        const float curveGain = curveFed ? cv::curveGain(portSample(src, 2, i))
-                                          : s.curveSmooth.process(cv::curveGain(s.curveCv));
-        inst.outL[i] = portSample(inst, 0, i) * outputGain * curveGain;
+        const float outputGain = amountBuf != nullptr ? cv::vcaGain(amountBuf[i], false)
+                                                      : s.amountSmooth.process(amountTarget);
+        const float curveGain = curveBuf != nullptr ? cv::curveGain(curveBuf[i])
+                                                    : s.curveSmooth.process(curveTarget);
+        inst.outL[i] = (in != nullptr ? in[i] : inScalar) * outputGain * curveGain;
     }
 }
 

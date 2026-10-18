@@ -704,6 +704,9 @@ inline esp_err_t init() {
     s_presetNavQueue = xQueueCreate(1, sizeof(int));
     xTaskCreatePinnedToCore(&preset_nav_task, "preset_nav", 4096, nullptr, 3, nullptr, 0);
 
+    // Deferred preset writes (PresetWriteCache.hpp): flash writes wait for an output pause.
+    presetcache::init([](uint32_t ms) { return s_engine.outputSilentFor(ms); });
+
     s_engine.begin(codec, secondaryI2sTxHandle, ns4168I2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
 
     ESP_LOGI(TAG, "Synth engine started (preset: %s)",

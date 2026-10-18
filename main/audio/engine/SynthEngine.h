@@ -29,6 +29,7 @@
 #include "EnvelopeActivity.h"
 #include "MasterClock.h"
 #include "MemoryDiagnostics.h"
+#include "PresetWriteCache.hpp"
 #include "PresetChangedMsg.h"
 #include "PresetFill.h"
 #include "PresetParser.h"
@@ -234,6 +235,15 @@ public:
     uint32_t renderOverrunCount() const { return renderOverrunCount_.load(std::memory_order_relaxed); }
     // Samples hard-limited at +/-1.0 on a raw I2S sink since boot (output overdriven).
     uint32_t clippedSampleCount() const { return clippedSamples_.load(std::memory_order_relaxed); }
+
+    // True when no sink has carried audible output (|sample| > kAudibleThreshold, pre-sink-gain)
+    // for at least `ms`. Used to schedule flash writes (features/synth/PresetWriteCache.hpp)
+    // into pauses. Also true before the first block ever rendered.
+    bool outputSilentFor(uint32_t ms) const
+    {
+        const int64_t last = lastAudibleUs_.load(std::memory_order_relaxed);
+        return esp_timer_get_time() - last >= static_cast<int64_t>(ms) * 1000;
+    }
     uint32_t midiDropCount() const { return midiDropCount_.load(std::memory_order_relaxed); }
     uint16_t activeSoundFontVoices() const { return activeSoundFontVoices_.load(std::memory_order_relaxed); }
     bool presetLoadActive() const { return presetLoadActive_.load(std::memory_order_acquire); }
@@ -952,6 +962,7 @@ private:
     std::atomic<uint32_t> timingHistogram_[kTimingHistogramBinCount] = {};
     std::atomic<uint32_t> renderOverrunCount_{0};
     std::atomic<uint32_t> clippedSamples_{0};
+    std::atomic<int64_t> lastAudibleUs_{0};
     std::atomic<uint32_t> midiDropCount_{0};
     std::atomic<uint16_t> activeSoundFontVoices_{0};
     // Loader stages, not byte-exact file progress: SoundFont/WAV parsing has
@@ -1012,6 +1023,10 @@ namespace
 {
 constexpr const char *kSynthEngineTag = "synth_engine";
 constexpr UBaseType_t kSynthEngineMidiQueueDepth = 128;
+// Knob/MIDI activity for the on-device displays. Latest-wins (pushKnobActivity drops the
+// oldest entry when full) and the LVGL tick drains it every frame, so a few entries are
+// enough; the previous 2 * kMaxConnections = 512 x ~216 B cost ~110 KB PSRAM per sink.
+constexpr UBaseType_t kKnobActivityQueueDepth = 16;
 constexpr uint32_t kSynthEngineTaskStackSize = 8192; // measured peak ~2.9 KiB (FatSuperSaw boot/reload/render <3 KiB); headroom kept for USB mixing and other DSP paths.
 constexpr uint32_t kSynthEngineLoaderTaskStackSize = 6144; // boot/reload/load testing leaves >2 KiB; no render-task DSP buffers
 
@@ -1118,37 +1133,43 @@ void destroyPresetDoc(PresetDoc *doc)
 
 PresetDoc *readPresetFile(const char *path, uint32_t reloadGeneration)
 {
-    FILE *f = fopen(path, "rb");
-    if (f == nullptr)
+    // A save that is still parked in PSRAM (PresetWriteCache) is newer than the file.
+    size_t bufferSize = 0;
+    char *buffer = presetcache::copyPending(path, bufferSize);
+    if (buffer == nullptr)
     {
-        return nullptr;
-    }
-    fseek(f, 0, SEEK_END);
-    const long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size <= 0 || static_cast<size_t>(size) > synth::kMaxPresetBytes)
-    {
-        fclose(f);
-        return nullptr;
-    }
+        FILE *f = fopen(path, "rb");
+        if (f == nullptr)
+        {
+            return nullptr;
+        }
+        fseek(f, 0, SEEK_END);
+        const long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (size <= 0 || static_cast<size_t>(size) > synth::kMaxPresetBytes)
+        {
+            fclose(f);
+            return nullptr;
+        }
 
-    const size_t bufferSize = static_cast<size_t>(size);
-    char *buffer = static_cast<char *>(heap_caps_malloc(bufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (buffer == nullptr)
-    {
-        buffer = static_cast<char *>(heap_caps_malloc(bufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    }
-    if (buffer == nullptr)
-    {
+        bufferSize = static_cast<size_t>(size);
+        buffer = static_cast<char *>(heap_caps_malloc(bufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (buffer == nullptr)
+        {
+            buffer = static_cast<char *>(heap_caps_malloc(bufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        }
+        if (buffer == nullptr)
+        {
+            fclose(f);
+            return nullptr;
+        }
+        const size_t readBytes = fread(buffer, 1, static_cast<size_t>(size), f);
         fclose(f);
-        return nullptr;
-    }
-    const size_t readBytes = fread(buffer, 1, static_cast<size_t>(size), f);
-    fclose(f);
-    if (readBytes != static_cast<size_t>(size))
-    {
-        heap_caps_free(buffer);
-        return nullptr;
+        if (readBytes != static_cast<size_t>(size))
+        {
+            heap_caps_free(buffer);
+            return nullptr;
+        }
     }
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::FileBufferReady);
 
@@ -1164,7 +1185,7 @@ PresetDoc *readPresetFile(const char *path, uint32_t reloadGeneration)
     }
     PresetDoc *doc = new (docStorage) PresetDoc();
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::PresetDocReady);
-    const bool ok = parsePreset(buffer, readBytes, *doc);
+    const bool ok = parsePreset(buffer, bufferSize, *doc);
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::Parsed);
     heap_caps_free(buffer);
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::FileBufferFreed);
@@ -1234,11 +1255,11 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     midiEventQueue_ = xQueueCreate(kSynthEngineMidiQueueDepth, sizeof(UsbMidiEvent));
     midiCcDebugQueue_ = xQueueCreateWithCaps(16, sizeof(MidiCcDebugSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #if defined(CONFIG_APP_ENABLE_LVGL)
-    knobActivityQueues_[0] = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    knobActivityQueues_[0] = xQueueCreateWithCaps(kKnobActivityQueueDepth, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (knobActivityQueues_[0] == nullptr) ESP_LOGE(kSynthEngineTag, "Knob display queue allocation failed");
 #endif
 #if defined(CONFIG_APP_ENABLE_SSD1306)
-    knobActivityQueues_[1] = xQueueCreateWithCaps(2 * synth::kMaxConnections, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    knobActivityQueues_[1] = xQueueCreateWithCaps(kKnobActivityQueueDepth, sizeof(KnobActivity), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (knobActivityQueues_[1] == nullptr) ESP_LOGE(kSynthEngineTag, "OLED knob queue allocation failed");
 #endif
     if (midiCcDebugQueue_ == nullptr) ESP_LOGE(kSynthEngineTag, "Control console log queue allocation failed");
@@ -1607,6 +1628,20 @@ inline void SynthEngine::taskLoop()
         gout.nsL = nsL; gout.nsR = nsR;
         if (micRead_ != nullptr) micRead_(nodes::micin::micInputBlock(), synth::kBlockSize);
         liveGraph_->renderBlock(gout, synth::kBlockSize);
+        {
+            // Silence detector for deferred flash writes (see outputSilentFor). One pass over
+            // the active sinks' block - well below the cost of the PCM conversion below.
+            constexpr float kAudibleThreshold = 1e-3f;
+            bool audible = false;
+            const float *bufs[] = {usbL, usbR, esL, esR, wmL, wmR, nsL, nsR};
+            for (const float *b : bufs)
+            {
+                for (size_t i = 0; i < synth::kBlockSize && !audible; ++i)
+                    audible = b[i] > kAudibleThreshold || b[i] < -kAudibleThreshold;
+                if (audible) break;
+            }
+            if (audible) lastAudibleUs_.store(esp_timer_get_time(), std::memory_order_relaxed);
+        }
         synchronizeMidiControls();
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
         const int64_t renderUs = esp_timer_get_time() - renderStartUs;

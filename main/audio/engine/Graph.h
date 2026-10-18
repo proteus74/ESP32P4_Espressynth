@@ -62,6 +62,12 @@ struct WidgetSlot
     uint16_t instanceCount = 0; // 1 or the preset's configured voice count
     uint16_t outgoingEdgeStart = 0;
     uint16_t outgoingEdgeCount = 0;
+    // controlRoutes[] whose sourceWidget is this widget - GraphBuilder sorts
+    // the routes by source (stable, so per-source order is unchanged) and
+    // fills these, same scheme as outgoingEdgeStart/Count above. Every
+    // per-event delivery walks only this range instead of all routes.
+    uint16_t routeStart = 0;
+    uint16_t routeCount = 0;
 };
 
 // Optional out-param for Graph::applyLiveParams: reports the Knob control
@@ -365,19 +371,24 @@ constexpr float kGraphBlockBudgetUs = 1000000.0f * static_cast<float>(synth::kBl
 inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRoute::Kind kind, float value,
                                   uint8_t sourceSide = 0)
 {
-    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
+    const WidgetSlot &source = graph.widgets[sourceWidget];
+    const uint16_t routeEnd = source.routeStart + source.routeCount;
+    for (uint16_t r = source.routeStart; r < routeEnd; ++r)
     {
         const ControlRoute &route = graph.controlRoutes[r];
-        if (route.kind != kind || route.sourceWidget != sourceWidget || route.side != sourceSide)
+        if (route.kind != kind || route.side != sourceSide)
         {
             continue;
         }
+        // Param-name checks don't depend on the voice - resolve once per route.
+        const bool bendToTune = kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0;
+        const bool rateParam = kind != ControlRoute::Kind::KnobCc && strcmp(route.paramName, "rate") == 0;
         const WidgetSlot &targetWidget = graph.widgets[route.targetWidget];
         for (uint16_t v = 0; v < targetWidget.instanceCount; ++v)
         {
             NodeInstance &target = graph.instances[targetWidget.instanceBase + v];
             float targetValue = value;
-            if (kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0 &&
+            if (bendToTune &&
                 (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator ||
                  target.type == NodeType::Hammond || target.type == NodeType::Fm8))
             {
@@ -388,8 +399,7 @@ inline void pushControlRouteValue(Graph &graph, uint16_t sourceWidget, ControlRo
             // 0-10 V. Map that voltage to the LFO's 0-50 Hz range. A raw
             // Knob CC route intentionally stays raw and is clamped by the
             // LFO parameter setter itself.
-            if ((target.type == NodeType::Lfo || target.type == NodeType::Wavetable) &&
-                strcmp(route.paramName, "rate") == 0 && kind != ControlRoute::Kind::KnobCc)
+            if (rateParam && (target.type == NodeType::Lfo || target.type == NodeType::Wavetable))
             {
                 if (targetValue < 0.0f) targetValue = 0.0f;
                 if (targetValue > cv::kMaxVolts) targetValue = cv::kMaxVolts;
@@ -447,13 +457,11 @@ inline void copyMidiCcDebugText(char *destination, size_t destinationSize, const
 inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_t voiceIdx, uint8_t note, bool noteOn,
                                uint8_t velocity, int side)
 {
-    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
+    const WidgetSlot &source = graph.widgets[sourceWidget];
+    const uint16_t routeEnd = source.routeStart + source.routeCount;
+    for (uint16_t r = source.routeStart; r < routeEnd; ++r)
     {
         const ControlRoute &route = graph.controlRoutes[r];
-        if (route.sourceWidget != sourceWidget)
-        {
-            continue;
-        }
         if (side >= 0 && route.side != static_cast<uint8_t>(side))
         {
             continue;
@@ -1113,10 +1121,11 @@ inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &ev
     if (path[source]) return;
     path[source] = true;
     const bool isNote = event.codeIndex == 8 || event.codeIndex == 9 || event.codeIndex == 10;
-    for (uint16_t r = 0; r < graph.controlRouteCount; ++r)
+    const WidgetSlot &sourceSlot = graph.widgets[source];
+    const uint16_t routeEnd = sourceSlot.routeStart + sourceSlot.routeCount;
+    for (uint16_t r = sourceSlot.routeStart; r < routeEnd; ++r)
     {
         const auto &route = graph.controlRoutes[r];
-        if (route.sourceWidget != source) continue;
         const auto &target = graph.widgets[route.targetWidget];
         if (route.kind != ControlRoute::Kind::MidiRaw &&
             !(route.kind == ControlRoute::Kind::MidiGate && target.type == NodeType::MidiSplit)) continue;
@@ -1260,10 +1269,11 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
                 entry.raw = true;
             }
         };
-        for (uint16_t r = 0; r < controlRouteCount; ++r)
+        const uint16_t routeEnd = source.routeStart + source.routeCount;
+        for (uint16_t r = source.routeStart; r < routeEnd; ++r)
         {
             const auto &route = controlRoutes[r];
-            if (route.sourceWidget != event.widget || route.side != event.side) continue;
+            if (route.side != event.side) continue;
             if (route.kind != ControlRoute::Kind::Knob && route.kind != ControlRoute::Kind::KnobCc &&
                 route.kind != ControlRoute::Kind::Button) continue;
             const auto &target = instances[widgets[route.targetWidget].instanceBase];
@@ -1277,10 +1287,12 @@ inline void Graph::flushControlDebug(MidiCcDebugSnapshot &snapshot,
                         target.controlValue[route.targetPort];
             append(route.targetWidget, route.targetPort, route.paramName, value, raw);
         }
-        for (uint16_t e = 0; e < edgeCount; ++e)
+        // Edges are grouped by source widget (GraphBuilder's outgoingEdgeStart) - no need
+        // to scan every edge of a 16-voice graph on each flush.
+        const uint16_t edgeEnd = source.outgoingEdgeStart + source.outgoingEdgeCount;
+        for (uint16_t e = source.outgoingEdgeStart; e < edgeEnd; ++e)
         {
             const auto &edge = edges[e];
-            if (instances[edge.fromInstance].widgetIndex != event.widget) continue;
             // Both outputs of Output Switch change, including the now-zero branch.
             const auto &targetInst = instances[edge.toInstance];
             const uint16_t targetWidget = targetInst.widgetIndex;

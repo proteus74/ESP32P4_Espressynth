@@ -156,59 +156,156 @@ inline void applyCoeffs(FilterState &s, FilterKind kind, float cutoffCv, float r
     s.onePole.setCutoff(cutoff, sampleRate);
     Biquad *stages[kFilterMaxSections] = {&s.biquad, &s.sections[0], &s.sections[1]};
     const int count = biquadCount(kind, s.slopeDb);
+    if (count < 1)
+        return;
+    // Every section is configured identically: compute once on the first,
+    // copy to the rest (sinCosW0 + two divisions per section otherwise, up
+    // to 44100/coeffStride times per second per voice under audio-rate
+    // cutoff modulation).
     if (isShelfKind(kind))
     {
         // Split across the active sections so the total shelf lift stays put
         // when the slope changes.
         const float gainDb = shelfGainDbFromCv(resonanceCv) / static_cast<float>(count);
-        for (int i = 0; i < count; ++i)
-        {
-            if (kind == FilterKind::LowShelf)
-                stages[i]->setLowShelf(cutoff, gainDb, sampleRate);
-            else
-                stages[i]->setHighShelf(cutoff, gainDb, sampleRate);
-        }
-        return;
+        if (kind == FilterKind::LowShelf)
+            stages[0]->setLowShelf(cutoff, gainDb, sampleRate);
+        else
+            stages[0]->setHighShelf(cutoff, gainDb, sampleRate);
     }
-    const float q = filterResonanceQ(s, resonanceCv);
-    for (int i = 0; i < count; ++i)
+    else
     {
+        const float q = filterResonanceQ(s, resonanceCv);
         switch (kind)
         {
         case FilterKind::LowPass:
-            stages[i]->setLowpass(cutoff, q, sampleRate);
+            stages[0]->setLowpass(cutoff, q, sampleRate);
             break;
         case FilterKind::HighPass:
-            stages[i]->setHighpass(cutoff, q, sampleRate);
+            stages[0]->setHighpass(cutoff, q, sampleRate);
             break;
         case FilterKind::BandPass:
-            stages[i]->setBandpass(cutoff, q, sampleRate);
+            stages[0]->setBandpass(cutoff, q, sampleRate);
             break;
         case FilterKind::Notch:
-            stages[i]->setNotch(cutoff, q, sampleRate);
+            stages[0]->setNotch(cutoff, q, sampleRate);
             break;
         case FilterKind::AllPass:
-            stages[i]->setAllpass(cutoff, q, sampleRate);
+            stages[0]->setAllpass(cutoff, q, sampleRate);
             break;
         default:
             break;
         }
     }
+    for (int i = 1; i < count; ++i)
+        stages[i]->copyCoeffsFrom(*stages[0]);
 }
 
-inline float processChain(FilterState &s, FilterKind kind, float x)
+// Chain shape (section count / one-pole tail) is block-constant: resolved
+// once per render() instead of recomputing biquadCount()'s division and
+// usesOnePole()'s modulo, and rebuilding stages[], on every sample.
+struct ChainShape
 {
-    Biquad *stages[kFilterMaxSections] = {&s.biquad, &s.sections[0], &s.sections[1]};
-    const int count = biquadCount(kind, s.slopeDb);
-    float y = x;
-    for (int i = 0; i < count; ++i)
-        y = stages[i]->process(y);
-    if (usesOnePole(kind, s.slopeDb))
+    Biquad *stages[kFilterMaxSections];
+    int count;
+    bool onePole;
+    bool highPass;
+};
+
+inline ChainShape chainShape(FilterState &s, FilterKind kind)
+{
+    return {{&s.biquad, &s.sections[0], &s.sections[1]},
+            biquadCount(kind, s.slopeDb),
+            usesOnePole(kind, s.slopeDb),
+            kind == FilterKind::HighPass};
+}
+
+// Two/three sections in ONE loop, skewed by one sample per section
+// (section k works on sample i-k). A biquad's recurrence (y -> z1 -> next
+// y) is a serial FPU-latency chain of ~3 dependent ops per sample; running
+// the sections back to back (one pass each, or nested per sample) just
+// strings those chains together. Skewing makes the per-iteration work of
+// the sections mutually independent so the in-order core can interleave
+// them. Same arithmetic, same order per section - bit-identical output.
+// in == out allowed: in[i] is read before out[i-k] (k >= 1) is written.
+inline void cascade2(Biquad &s0, Biquad &s1, const float *in, float *out, size_t n)
+{
+    Biquad::Regs r0 = s0.load(), r1 = s1.load();
+    float y0 = Biquad::step(r0, in[0]);
+    for (size_t i = 1; i < n; ++i)
     {
-        const float lp = s.onePole.process(y);
-        y = kind == FilterKind::HighPass ? y - lp : lp;
+        const float y0n = Biquad::step(r0, in[i]);
+        out[i - 1] = Biquad::step(r1, y0);
+        y0 = y0n;
     }
-    return y;
+    out[n - 1] = Biquad::step(r1, y0);
+    s0.store(r0);
+    s1.store(r1);
+}
+
+inline void cascade3(Biquad &s0, Biquad &s1, Biquad &s2, const float *in, float *out, size_t n)
+{
+    Biquad::Regs r0 = s0.load(), r1 = s1.load(), r2 = s2.load();
+    float y0 = Biquad::step(r0, in[0]);
+    if (n == 1)
+    {
+        out[0] = Biquad::step(r2, Biquad::step(r1, y0));
+    }
+    else
+    {
+        float y1 = Biquad::step(r1, y0);
+        y0 = Biquad::step(r0, in[1]);
+        for (size_t i = 2; i < n; ++i)
+        {
+            const float y0n = Biquad::step(r0, in[i]);
+            const float y1n = Biquad::step(r1, y0);
+            out[i - 2] = Biquad::step(r2, y1);
+            y0 = y0n;
+            y1 = y1n;
+        }
+        out[n - 2] = Biquad::step(r2, y1);
+        out[n - 1] = Biquad::step(r2, Biquad::step(r1, y0));
+    }
+    s0.store(r0);
+    s1.store(r1);
+    s2.store(r2);
+}
+
+// Runs the cascade over n samples in block form (register-resident
+// coefficients/state) instead of sample by sample through stages[]
+// pointers. in == out allowed; the caller guarantees in != nullptr, n > 0.
+inline void processChainBlock(FilterState &s, const ChainShape &c, const float *in, float *out, size_t n)
+{
+    switch (c.count)
+    {
+    case 3:
+        cascade3(*c.stages[0], *c.stages[1], *c.stages[2], in, out, n);
+        break;
+    case 2:
+        cascade2(*c.stages[0], *c.stages[1], in, out, n);
+        break;
+    case 1:
+        c.stages[0]->processBlock(in, out, n);
+        break;
+    default:
+        if (in != out)
+            memcpy(out, in, n * sizeof(float));
+        break;
+    }
+    if (c.onePole)
+    {
+        for (size_t i = 0; i < n; ++i)
+        {
+            const float lp = s.onePole.process(out[i]);
+            out[i] = c.highPass ? out[i] - lp : lp;
+        }
+    }
+}
+
+// Once per block - see Biquad::process's comment on why not per sample.
+inline void flushChain(const ChainShape &c)
+{
+    for (int i = 0; i < c.count; ++i)
+        c.stages[i]->flushState();
 }
 } // namespace
 
@@ -283,28 +380,43 @@ inline void render(NodeInstance &inst, size_t frames)
     const NodeInstance &src = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
     const bool cutoffAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     const bool resonanceAudioFed = (src.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
+    // Input pointer resolved once: portSample()'s per-sample inPorts[] reload
+    // can't be hoisted by the compiler because the biquad state writes
+    // through the same NodeInstance (aliasing).
+    const float *in = inst.inPorts[0];
+    float *out = inst.outL;
+    if (in == nullptr)
+    {
+        // No cable: the input is one block-constant value - materialize it
+        // in outL and filter in place, so the block path below has a buffer.
+        const float inScalar = inst.controlValue[0];
+        for (size_t i = 0; i < frames; ++i)
+            out[i] = inScalar;
+        in = out;
+    }
+    const ChainShape chain = chainShape(s, kind);
     if (cutoffAudioFed || resonanceAudioFed)
     {
+        // Coefficients are constant inside each coeffStride-long chunk, so
+        // the cascade runs per chunk in block form - same update points and
+        // same per-sample math as the previous sample loop.
         const size_t coeffStride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
-        size_t nextCoeffSample = 0;
-        for (size_t i = 0; i < frames; ++i)
+        for (size_t i = 0; i < frames; i += coeffStride)
         {
-            if (i == nextCoeffSample)
+            const float cutoffCv = cutoffAudioFed ? src.inPorts[3][i] : s.cutoffCv;
+            const float resonanceCv = resonanceAudioFed ? src.inPorts[4][i] : s.resonanceCv;
+            if (!s.audioCoeffsInitialized || cutoffCv != s.lastAudioCutoffCv ||
+                resonanceCv != s.lastAudioResonanceCv)
             {
-                nextCoeffSample += coeffStride;
-                const float cutoffCv = cutoffAudioFed ? src.inPorts[3][i] : s.cutoffCv;
-                const float resonanceCv = resonanceAudioFed ? src.inPorts[4][i] : s.resonanceCv;
-                if (!s.audioCoeffsInitialized || cutoffCv != s.lastAudioCutoffCv ||
-                    resonanceCv != s.lastAudioResonanceCv)
-                {
-                    applyCoeffs(s, kind, cutoffCv, resonanceCv, kSampleRate);
-                    s.lastAudioCutoffCv = cutoffCv;
-                    s.lastAudioResonanceCv = resonanceCv;
-                    s.audioCoeffsInitialized = true;
-                }
+                applyCoeffs(s, kind, cutoffCv, resonanceCv, kSampleRate);
+                s.lastAudioCutoffCv = cutoffCv;
+                s.lastAudioResonanceCv = resonanceCv;
+                s.audioCoeffsInitialized = true;
             }
-            inst.outL[i] = processChain(s, kind, portSample(inst, 0, i));
+            const size_t n = frames - i < coeffStride ? frames - i : coeffStride;
+            processChainBlock(s, chain, in + i, out + i, n);
         }
+        flushChain(chain);
         return;
     }
     if (s.coeffsDirty)
@@ -312,10 +424,8 @@ inline void render(NodeInstance &inst, size_t frames)
         applyCoeffs(s, kind, s.cutoffCv, s.resonanceCv, kSampleRate);
         s.coeffsDirty = false;
     }
-    for (size_t i = 0; i < frames; ++i)
-    {
-        inst.outL[i] = processChain(s, kind, portSample(inst, 0, i));
-    }
+    processChainBlock(s, chain, in, out, frames);
+    flushChain(chain);
 }
 
 inline void build(NodeInstance &inst, const WidgetParams &p)

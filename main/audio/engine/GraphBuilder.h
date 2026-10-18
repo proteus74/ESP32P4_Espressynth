@@ -1528,6 +1528,34 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // project scope).
     }
 
+    // Group controlRoutes[] by source widget (WidgetSlot::routeStart/routeCount)
+    // so every per-event delivery walks only its own source's routes. Stable
+    // insertion sort: per-source order must stay exactly as built above (the
+    // delivery code relies on it, e.g. a Knob's route order), and at most
+    // kMaxConnections entries once per preset load is negligible.
+    for (uint16_t i = 1; i < g->controlRouteCount; ++i)
+    {
+        ControlRoute moving = g->controlRoutes[i];
+        uint16_t j = i;
+        while (j > 0 && g->controlRoutes[j - 1].sourceWidget > moving.sourceWidget)
+        {
+            g->controlRoutes[j] = g->controlRoutes[j - 1];
+            --j;
+        }
+        g->controlRoutes[j] = moving;
+    }
+    for (uint16_t w = 0; w < g->widgetCount; ++w)
+    {
+        g->widgets[w].routeStart = 0;
+        g->widgets[w].routeCount = 0;
+    }
+    for (uint16_t r = 0; r < g->controlRouteCount; ++r)
+    {
+        WidgetSlot &slot = g->widgets[g->controlRoutes[r].sourceWidget];
+        if (slot.routeCount == 0) slot.routeStart = r;
+        ++slot.routeCount;
+    }
+
     // Seed controlValue for Knob/Button routes from the preset's own initial
     // raw/list state (already computed into knob.currentValue/button.
     // currentValue by applyParams() above) - without this, a Multiplier/

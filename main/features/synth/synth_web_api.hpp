@@ -27,6 +27,7 @@
 #include "MemoryDiagnostics.h"
 #include "PresetChangedMsg.h"
 #include "PresetPaths.h"
+#include "PresetWriteCache.hpp"
 #include "SamplePaths.h"
 #include "UsbMidiEvent.h"
 #include "driver/gpio.h"
@@ -75,8 +76,9 @@ constexpr size_t kMaxWsFrameLen = 8192; // includes the complete GPIO/device-set
 
 struct BroadcastWork {
     std::atomic<bool> *pending = nullptr;
-    // CV status can contain one live-voltage entry per widget.
-    char json[4096];
+    // Payload follows the struct in the same allocation, sized to the frame (a MIDI event is
+    // ~230 B; a fixed 4 KB member cost one PSRAM block of that size per event).
+    char *json = nullptr;
 };
 
 // A long HTTP transfer must not queue a new copy of periodic status every tick.
@@ -159,16 +161,17 @@ inline bool broadcast_json(const char *json, std::atomic<bool> *pending = nullpt
 // to a momentary enumeration miss decide that themselves).
 inline bool queue_broadcast(httpd_handle_t server, const char *json, std::atomic<bool> *pending) {
     if (pending != nullptr && pending->exchange(true)) return true;
-    auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork),
+    const size_t length = strlen(json);
+    auto *work = static_cast<BroadcastWork *>(heap_caps_malloc(sizeof(BroadcastWork) + length + 1,
                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (work == nullptr) {
         if (pending != nullptr) pending->store(false);
         return false;
     }
     work->pending = pending;
-    const int length = snprintf(work->json, sizeof(work->json), "%s", json);
-    if (length < 0 || static_cast<size_t>(length) >= sizeof(work->json) ||
-        httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
+    work->json = reinterpret_cast<char *>(work + 1);
+    memcpy(work->json, json, length + 1);
+    if (httpd_queue_work(server, &broadcast_work, work) != ESP_OK) {
         heap_caps_free(work);
         if (pending != nullptr) pending->store(false);
         return false;
@@ -266,10 +269,13 @@ inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
         return;
     }
     if (Feature::Web::handle() == nullptr) return;
-    broadcast_midi_tick(); // older events first, so a CC (e.g. sustain) stays ahead of this note
+    // Only enqueue here. This runs on usb_midi_task (2 KB stack, core 1); the tick that
+    // actually serializes and hands frames to httpd (PSRAM malloc, httpd_queue_work ->
+    // lwIP sendto, which waits for tcpip_thread on core 0) is app_main's 50 ms loop, so a
+    // chord or fast run is no longer serialized behind one WebSocket hand-off per note.
+    // Ordering is kept: broadcast_midi_tick() drains this FIFO before the coalesced CCs.
     const MidiFrame frame{status, data1, data2};
     xQueueSend(midi_fifo(), &frame, 0); // only drops if 64 events are already waiting
-    broadcast_midi_tick();
 }
 
 /** Broadcasts live CV input values and CV device state at the UI refresh rate. */
@@ -929,6 +935,18 @@ esp_err_t preset_get_handler(httpd_req_t *req) {
     // Lets the browser learn which preset this is in the same round trip.
     httpd_resp_set_hdr(req, "X-Preset-Name", resolved_name);
 
+    // A save still parked in PSRAM (deferred flash write) is the current state, not the file.
+    {
+        size_t pending_size = 0;
+        char *pending = presetcache::copyPending(resolved_path, pending_size);
+        if (pending != nullptr) {
+            httpd_resp_set_type(req, "application/json");
+            const esp_err_t sent = httpd_resp_send(req, pending, static_cast<ssize_t>(pending_size));
+            heap_caps_free(pending);
+            return sent;
+        }
+    }
+
     FILE *file = fopen(resolved_path, "rb");
     if (file == nullptr) {
         httpd_resp_sendstr(req, kEmptyPresetJson);
@@ -951,6 +969,8 @@ esp_err_t preset_select_handler(httpd_req_t *req) {
     } else {
         snprintf(preset_path, sizeof(preset_path), "%s", presetpaths::unnamedPath());
     }
+    // Preset change: the previous preset's deferred save goes to flash now, at the latest.
+    presetcache::flushAll();
     struct stat preset_stat = {};
     if (stat(preset_path, &preset_stat) != 0 || S_ISDIR(preset_stat.st_mode)) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "preset not found");
@@ -984,8 +1004,10 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    constexpr size_t chunkSize = 1024;
-    auto *body = static_cast<char *>(heap_caps_malloc(chunkSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    // The whole body lands in PSRAM and is parked there (PresetWriteCache.hpp): the flash
+    // write happens later in an output pause, so a save while playing no longer stalls the
+    // render task. The reload below reads the parked copy, so the engine is current at once.
+    auto *body = static_cast<char *>(heap_caps_malloc(req->content_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (body == nullptr) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
         return ESP_FAIL;
@@ -1002,36 +1024,26 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     // is only a defensive fallback if a save races ahead of that.
     mkdir(presetpaths::kDir, 0775);
 
-    char temporary_path[kMaxPathLen + 5];
-    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", target_path);
-    FILE *file = fopen(temporary_path, "wb");
-    if (file == nullptr) {
-        heap_caps_free(body);
-        ESP_LOGE(WEB_API_TAG, "%s could not be opened for writing", target_path);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not write preset");
-        return ESP_FAIL;
-    }
     size_t received = 0;
     while (received < req->content_len) {
-        const size_t remaining = req->content_len - received;
-        const int ret = httpd_req_recv(req, body, remaining < chunkSize ? remaining : chunkSize);
-        if (ret <= 0 || fwrite(body, 1, static_cast<size_t>(ret), file) != static_cast<size_t>(ret)) {
-            fclose(file);
-            unlink(temporary_path);
+        const int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
             heap_caps_free(body);
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
-            else if (ret > 0) httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not write preset");
+            else httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not receive preset");
             return ESP_FAIL;
         }
         received += static_cast<size_t>(ret);
     }
-    const int closeResult = fclose(file);
-    heap_caps_free(body);
-    if (closeResult != 0 || rename(temporary_path, target_path) != 0) {
-        unlink(temporary_path);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not replace preset");
+    struct stat existing = {};
+    const bool is_new_file = stat(target_path, &existing) != 0;
+    if (!presetcache::stage(target_path, body, received)) {
+        heap_caps_free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not stage preset");
         return ESP_FAIL;
     }
+    // A brand-new preset must exist on flash right away (preset list, select's stat check).
+    if (is_new_file) presetcache::flushAll();
 
     const bool queued = has_name_param ? Feature::Synth::request_preset_name(raw_name)
                                        : Feature::Synth::request_current_preset();
@@ -1159,6 +1171,7 @@ void json_escape_to_buf(const char *s, char *out, size_t out_size) {
 } // namespace
 
 esp_err_t backup_export_handler(httpd_req_t *req) {
+    presetcache::flushAll(); // the export reads files - deferred saves must be on flash first
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"espressynth-backup.json\"");
 
@@ -1763,20 +1776,23 @@ esp_err_t memory_diagnostics_handler(httpd_req_t *req) {
     const memorydiag::HeapSnapshot current = memorydiag::snapshot();
 
     httpd_resp_set_type(req, "application/json");
-    char json[768];
+    char json[1024];
     int length = snprintf(
         json, sizeof(json),
         "{\"generation\":%" PRIu32 ",\"phase\":\"%s\",\"phaseId\":%u,\"inProgress\":%s,\"success\":%s,"
         "\"current\":{\"internalFree\":%" PRIu32 ",\"internalLargest\":%" PRIu32 ",\"internalMinimum\":%" PRIu32
         ",\"psramFree\":%" PRIu32 ",\"psramLargest\":%" PRIu32 ",\"psramMinimum\":%" PRIu32
         ",\"synthStackHighWaterBytes\":%" PRIu32 "},"
+        "\"lvgl\":{\"total\":%" PRIu32 ",\"used\":%" PRIu32 ",\"maxUsed\":%" PRIu32 ",\"fragPct\":%u},"
         "\"graph\":{\"instances\":%" PRIu32 ",\"nodeInstanceBytes\":%" PRIu32 ",\"blockBuffers\":%" PRIu32
         ",\"blockBufferBytes\":%" PRIu32 ",\"instancesInternal\":%s,\"outputPsramFallbacks\":%" PRIu32
         "},\"phases\":{",
         state.generation, memorydiag::phaseName(state.phase), static_cast<unsigned>(state.phase),
         state.inProgress ? "true" : "false", state.success ? "true" : "false", current.internalFree,
         current.internalLargest, current.internalMinimum, current.psramFree, current.psramLargest,
-        current.psramMinimum, current.synthStackHighWaterBytes, state.graph.instanceCount,
+        current.psramMinimum, current.synthStackHighWaterBytes,
+        current.lvglTotal, current.lvglUsed, current.lvglMaxUsed, static_cast<unsigned>(current.lvglFragPct),
+        state.graph.instanceCount,
         state.graph.nodeInstanceBytes, state.graph.blockBufferCount, state.graph.blockBufferBytes,
         state.graph.instancesInternal ? "true" : "false", state.graph.outputPsramFallbacks);
     if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||

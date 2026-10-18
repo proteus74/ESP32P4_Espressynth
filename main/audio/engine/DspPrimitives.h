@@ -319,12 +319,66 @@ public:
             (a + 1.0f) - (a - 1.0f) * cosw0 - twoSqrtAAlpha);
     }
 
+    // No per-sample denormal flush here (was 4 compares + 2 selects per
+    // sample per section) - the caller flushes once per block via
+    // flushState() instead. Safe: flushDenorm's 1e-15 threshold sits ~23
+    // decades above the subnormal range, and even a pole at 0.999 needs
+    // >50k samples to decay that far, so a 128-sample block can never go
+    // subnormal between two flushes.
     float process(float x)
     {
         const float y = b0_ * x + z1_;
-        z1_ = dsp::flushDenorm(b1_ * x - a1_ * y + z2_);
-        z2_ = dsp::flushDenorm(b2_ * x - a2_ * y);
+        z1_ = b1_ * x - a1_ * y + z2_;
+        z2_ = b2_ * x - a2_ * y;
         return y;
+    }
+
+    // Register-resident copy of one section for block loops: the compiler
+    // can't keep b*/a*/z* in registers across out[] stores it cannot prove
+    // non-aliasing with `this`, so block code loads once, steps on locals
+    // and stores back (see processBlock below and FilterNode.h's cascades).
+    struct Regs
+    {
+        float b0, b1, b2, a1, a2, z1, z2;
+    };
+    Regs load() const { return {b0_, b1_, b2_, a1_, a2_, z1_, z2_}; }
+    void store(const Regs &r)
+    {
+        z1_ = r.z1;
+        z2_ = r.z2;
+    }
+    static float step(Regs &r, float x)
+    {
+        const float y = r.b0 * x + r.z1;
+        r.z1 = r.b1 * x - r.a1 * y + r.z2;
+        r.z2 = r.b2 * x - r.a2 * y;
+        return y;
+    }
+
+    // Block form of process(). in == out is fine (in-place cascade).
+    void processBlock(const float *in, float *out, size_t n)
+    {
+        Regs r = load();
+        for (size_t i = 0; i < n; ++i)
+            out[i] = step(r, in[i]);
+        store(r);
+    }
+
+    // Cascaded sections of one filter share identical coefficients - compute
+    // them once on the first section, copy to the rest (state untouched).
+    void copyCoeffsFrom(const Biquad &o)
+    {
+        b0_ = o.b0_;
+        b1_ = o.b1_;
+        b2_ = o.b2_;
+        a1_ = o.a1_;
+        a2_ = o.a2_;
+    }
+
+    void flushState()
+    {
+        z1_ = dsp::flushDenorm(z1_);
+        z2_ = dsp::flushDenorm(z2_);
     }
 
     void reset()

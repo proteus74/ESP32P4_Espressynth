@@ -2435,12 +2435,12 @@
           "definition": {
             "MAIN": {
               "DEFAULT": {
-                "bg_color": "#A9A9A9",
+                "bg_color": "#141414",
                 "shadow_width": 2,
                 "shadow_ofs_x": 2,
                 "shadow_color": "#000000",
                 "radius": 2,
-                "border_color": "#FF0000",
+                "border_color": "#7D7D7D",
                 "border_opa": 255,
                 "border_width": 1
               }

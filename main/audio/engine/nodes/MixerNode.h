@@ -23,23 +23,36 @@ inline void render(NodeInstance &inst, size_t frames)
     // lesen"). Same summation order as before (only zero-gain ports, whose
     // contribution is 0 regardless of the port's actual sample, are
     // skipped), so this is bit-identical for the common finite-signal case.
-    uint8_t activePort[8];
+    // Buffer pointers and gains hoisted too: an input without a buffer
+    // (no cable, portSample() would fall back to controlValue) contributes
+    // one block-constant term, folded into constSum once instead of
+    // re-branching on inPorts[p]==nullptr for every sample.
+    const float *buf[8];
+    float gain[8];
     uint8_t activeCount = 0;
+    float constSum = 0.0f;
     for (int p = 0; p < inst.audioInPortCount; ++p)
     {
-        if (s.inputGain[p] != 0.0f)
+        if (s.inputGain[p] == 0.0f)
         {
-            activePort[activeCount++] = static_cast<uint8_t>(p);
+            continue;
         }
+        if (inst.inPorts[p] == nullptr)
+        {
+            constSum += inst.controlValue[p] * s.inputGain[p];
+            continue;
+        }
+        buf[activeCount] = inst.inPorts[p];
+        gain[activeCount] = s.inputGain[p];
+        ++activeCount;
     }
     const float outputGain = s.outputGain;
     for (size_t i = 0; i < frames; ++i)
     {
-        float sum = 0.0f;
+        float sum = constSum;
         for (uint8_t idx = 0; idx < activeCount; ++idx)
         {
-            const int p = activePort[idx];
-            sum += portSample(inst, p, i) * s.inputGain[p];
+            sum += buf[idx][i] * gain[idx];
         }
         inst.outL[i] = sum * outputGain;
     }

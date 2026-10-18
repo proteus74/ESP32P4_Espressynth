@@ -50,7 +50,10 @@ int32_t Sin::lookup(int32_t phase) {
   int dy = sintab[phase_int];
   int y0 = sintab[phase_int + 1];
 
-  return y0 + (((int64_t)dy * (int64_t)lowbits) >> SHIFT);
+  // |dy| <= 2^24 * 2*pi / 1024 ~ 1.03e5 and lowbits < 2^14, so the product stays below
+  // 2^31: a plain 32-bit multiply is exact here. The upstream int64_t form costs mul+mulh
+  // plus shifts on RV32IM, in the innermost per-sample loop of every operator.
+  return y0 + ((dy * lowbits) >> SHIFT);
 #else
   int phase_int = (phase >> SHIFT) & (SIN_N_SAMPLES - 1);
   int y0 = sintab[phase_int];

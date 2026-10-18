@@ -5,6 +5,10 @@ import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-cor
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv, createCombFilterDsp } from "./comb-filter-core.js?v=20260926-comb-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, overdriveCv, createOverdriveDsp } from "./overdrive-core.js?v=20261003-od-3";
 import { createReverbCore } from "./reverb-core.js?v=20260926-knob-2";
+import { createFm8Engine } from "./fm8-core.js?v=20261018-fm8-1";
+
+// FM8 control ports in nodes/Fm8Node.h port order (ChannelMerger inputs of its processor).
+const FM8_PORTS = ["pitchCv", "gate", "velocity", "tune", "gain"];
 
 function clampRange(value, lo, hi) {
   return value < lo ? lo : value > hi ? hi : value;
@@ -190,6 +194,18 @@ function parseValueList(str) {
 
 
 
+
+// Block size of every ScriptProcessorNode in this preview engine (AudioWorklet is not
+// available over the device's plain-http UI). ScriptProcessor callbacks run on the main
+// thread, so each one must finish inside bufferSize / sampleRate; at the former 256 frames
+// that was 5.8 ms shared with the UI (canvas scopes, WebSocket status, DOM updates) and
+// multiplied by every voiced instance (16 voices = 16 callbacks per block) - audible
+// dropouts whenever the page did anything. 1024 frames = 23 ms of slack and ~23 ms of
+// added latency - the compromise between playable and glitch-free (2048 was audibly laggy);
+// edges inside a block are still handled per sample by the processors, only block-rate CV
+// reads become coarser, which the firmware's own 128-sample block rate already makes a
+// preview detail.
+const SCRIPT_PROCESSOR_FRAMES = 1024;
 
 const CV_MAX_VOLTS = 10;
 // Mirrors nodes::lfo::kMaxRateHz (LfoNode.h) and main.js's LFO_MAX_RATE_HZ.
@@ -1454,6 +1470,8 @@ export class AudioEngine {
 
   ensureContext() {
     if (!this.ctx) {
+      // Default "interactive" latency hint: "playback" would absorb main-thread stalls, but
+      // adds tens of ms of output latency on top of the ScriptProcessor block - unplayable.
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
       
       
@@ -2669,7 +2687,7 @@ export class AudioEngine {
         // 3 feedback, 4 superSawDetune, 5 superSawMix (all raw volts).
         const waveType = params.waveType || "sine";
         const inputMerger = ctx.createChannelMerger(6);
-        const processor = ctx.createScriptProcessor(256, 6, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 6, 1);
         inputMerger.connect(processor);
 
         // Hz: direct-set frequency (freqConst) or the pitch-CV chain below.
@@ -3119,7 +3137,7 @@ export class AudioEngine {
         // output follows the input, the other one HOLDS the last value it
         // carried (held1/held2), it does not drop to 0V.
         const input = ctx.createGain();
-        const processor = ctx.createScriptProcessor(256, 1, 2);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 1, 2);
         input.connect(processor);
         const splitter = ctx.createChannelSplitter(2);
         processor.connect(splitter);
@@ -3294,7 +3312,7 @@ export class AudioEngine {
         const filterInput = ctx.createGain();
         const inputMerger = ctx.createChannelMerger(7);
         filterInput.connect(inputMerger, 0, 0);
-        const processor = ctx.createScriptProcessor(256, 7, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 7, 1);
         inputMerger.connect(processor);
         const filterOutput = ctx.createGain();
         processor.connect(filterOutput);
@@ -3336,7 +3354,7 @@ export class AudioEngine {
         const resonanceCvSum = ctx.createGain();
         cutoffCvSum.connect(inputMerger, 0, 1);
         resonanceCvSum.connect(inputMerger, 0, 2);
-        const processor = ctx.createScriptProcessor(256, 3, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 3, 1);
         inputMerger.connect(processor);
         const filterOutput = ctx.createGain();
         processor.connect(filterOutput);
@@ -3679,7 +3697,7 @@ export class AudioEngine {
         // the fallback values while an input carries no audio-rate cable.
         const divideValues = params.values || [];
         const inputMerger = ctx.createChannelMerger(2);
-        const processor = ctx.createScriptProcessor(256, 2, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 2, 1);
         const seedNum = ctx.createConstantSource();
         seedNum.offset.value = divideValues[0] ?? 0;
         seedNum.start();
@@ -3829,7 +3847,7 @@ export class AudioEngine {
         // curve only covered the point range +/-50% and clamped beyond it,
         // while the firmware extrapolates the line (up to the constraints).
         const input = ctx.createGain();
-        const processor = ctx.createScriptProcessor(256, 1, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 1, 1);
         input.connect(processor);
         const entry = {
           type,
@@ -3946,7 +3964,7 @@ export class AudioEngine {
         };
       }
       case "bitcrusher": {
-        const processor = ctx.createScriptProcessor(256, 1, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 1, 1);
         const entry = {
           type,
           processor,
@@ -3985,7 +4003,7 @@ export class AudioEngine {
         // Keep signal and every parameter on separate merger channels. This
         // lets Drive/Symmetry/Gain/Mix be modulated at audio rate.
         const inputMerger = ctx.createChannelMerger(5);
-        const processor = ctx.createScriptProcessor(256, 5, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 5, 1);
         const controlSources = ["drive", "symmetry", "gain", "mix"].map((name, index) => {
           const source = ctx.createConstantSource();
           const fallback = [0, CV_MAX_VOLTS / 2, CV_MAX_VOLTS, CV_MAX_VOLTS][index];
@@ -4038,7 +4056,7 @@ export class AudioEngine {
         // Signal on merger channel 0, every CV on its own channel, so all
         // parameters stay audio-rate modulatable - DSP in overdrive-core.js.
         const inputMerger = ctx.createChannelMerger(1 + OVERDRIVE_PORTS.length);
-        const processor = ctx.createScriptProcessor(256, 1 + OVERDRIVE_PORTS.length, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 1 + OVERDRIVE_PORTS.length, 1);
         const controlSources = OVERDRIVE_PORTS.map((name, index) => {
           const source = ctx.createConstantSource();
           source.offset.value = overdriveCv(Number(params[name]), OVERDRIVE_DEFAULTS[name]);
@@ -4069,7 +4087,7 @@ export class AudioEngine {
         // calls (module-scope cvToRange() above matches cv::cvToRange()'s
         // log-curve mapping exactly).
         const inputMerger = ctx.createChannelMerger(4);
-        const processor = ctx.createScriptProcessor(256, 4, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 4, 1);
         const controlSources = ["attack", "release", "preGain"].map((name, index) => {
           const source = ctx.createConstantSource();
           source.offset.value = clampRange(Number(params[name] ?? CV_MAX_VOLTS / 2), 0, CV_MAX_VOLTS);
@@ -4112,7 +4130,7 @@ export class AudioEngine {
         // per-channel gain gives out1/out2 their own connectable node, same
         // shape as chorus's separate delayL/delayR.
         const inputMerger = ctx.createChannelMerger(2);
-        const processor = ctx.createScriptProcessor(256, 2, 2);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 2, 2);
         const panSource = ctx.createConstantSource();
         panSource.offset.value = clampRange(Number(params.pan ?? CV_MAX_VOLTS / 2), 0, CV_MAX_VOLTS);
         panSource.connect(inputMerger, 0, 1);
@@ -4152,7 +4170,7 @@ export class AudioEngine {
       case "monoflop":
       case "counter": {
         const inputMerger = ctx.createChannelMerger(2);
-        const processor = ctx.createScriptProcessor(256, 2, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 2, 1);
         const controlSources = [0, 1].map((index) => {
           const source = ctx.createConstantSource();
           source.offset.value = type === "monoflop" && index === 1 ? clampRange(Number.isFinite(Number(params.threshold)) ? Number(params.threshold) : 5, 0, CV_MAX_VOLTS) : 0;
@@ -4193,7 +4211,7 @@ export class AudioEngine {
         // ScriptProcessor has just one input, so connecting directly to it
         // would mix all three signals before we could compare them.
         const inputMerger = ctx.createChannelMerger(3);
-        const processor = ctx.createScriptProcessor(256, 3, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 3, 1);
         const thresholdSource = ctx.createConstantSource();
         thresholdSource.offset.value = clampRange(Number(params.threshold ?? 5), 0, CV_MAX_VOLTS);
         thresholdSource.connect(inputMerger, 0, 2);
@@ -4230,7 +4248,7 @@ export class AudioEngine {
         // "count" pulses spaced "time" ms apart, tracked as a small
         // sample-countdown queue (swap-removed as entries fire).
         const inputMerger = ctx.createChannelMerger(5);
-        const processor = ctx.createScriptProcessor(256, 5, 1);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 5, 1);
         const burstDefaults = { mode: 0, count: 5, time: 5, decay: 5 };
         const controlSources = ["mode", "count", "time", "decay"].map((name, index) => {
           const source = ctx.createConstantSource();
@@ -4410,7 +4428,7 @@ export class AudioEngine {
         const inputMerger = ctx.createChannelMerger(2);
         inputNodeL.connect(inputMerger, 0, 0);
         inputNodeR.connect(inputMerger, 0, 1);
-        const processor = ctx.createScriptProcessor(256, 2, 2);
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 2, 2);
         inputMerger.connect(processor);
         const splitter = ctx.createChannelSplitter(2);
         processor.connect(splitter);
@@ -4641,7 +4659,7 @@ export class AudioEngine {
           seed.start();
           return seed;
         });
-        // 2048, not the 256 the other ScriptProcessor nodes use: this one
+        // 2048 (now the same as SCRIPT_PROCESSOR_FRAMES, kept explicit here): this one
         // renders up to 32 sampled voices plus the effects chain per block,
         // and a 5.3 ms main-thread deadline drops whole blocks (audible as
         // clicks). Costs ~43 ms preview latency.
@@ -4712,6 +4730,96 @@ export class AudioEngine {
             outL[i] *= g;
             outR[i] *= g;
           }
+        };
+        return entry;
+      }
+      case "mic-in": {
+        // Browser stand-in for the onboard PDM microphone (nodes/MicInNode.h): the page's own
+        // microphone via getUserMedia, scaled to +/-AUDIO_PEAK_VOLTS like the firmware.
+        // getUserMedia only exists in a secure context (https or localhost) - over the device's
+        // plain-http UI the widget stays silent and says so (see getMicInStatus).
+        const outGain = ctx.createGain();
+        outGain.gain.value = AUDIO_PEAK_VOLTS;
+        const entry = { type, outGain, stream: null, source: null, status: "Mikrofon: wird angefragt …", extraNodes: [outGain] };
+        entry.cleanup = () => {
+          if (entry.source) { try { entry.source.disconnect(); } catch (err) { /* already */ } }
+          if (entry.stream) entry.stream.getTracks().forEach((t) => t.stop());
+          entry.stream = null;
+          entry.source = null;
+        };
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          entry.status = window.isSecureContext ? "Mikrofon: nicht verfügbar" : "Mikrofon: nur über https/localhost";
+        } else {
+          navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false })
+            .then((stream) => {
+              if (!this.nodes.size || entry.removed) { stream.getTracks().forEach((t) => t.stop()); return; }
+              entry.stream = stream;
+              entry.source = ctx.createMediaStreamSource(stream);
+              entry.source.connect(outGain);
+              const label = stream.getAudioTracks()[0]?.label;
+              entry.status = label ? `Mikrofon: ${label}` : "Mikrofon: aktiv";
+            })
+            .catch((err) => {
+              entry.status = err && err.name === "NotAllowedError" ? "Mikrofon: Zugriff verweigert" : `Mikrofon: ${err?.name || "Fehler"}`;
+            });
+        }
+        return entry;
+      }
+      case "fm8": {
+        // JS port of the device's msfa DX7 voice (fm8-core.js), one ScriptProcessor per widget
+        // with the firmware's per-voice instances as internal slots. The five control ports
+        // mirror nodes/Fm8Node.h: read once per block from channel [0]; a cable on "gate"
+        // triggers slot 0 (pitch from "pitchCv", velocity from "velocity"), MIDI voices arrive
+        // out-of-band through fm8Voice() - the firmware's per-voice MidiGate route.
+        const defaults = [CV_MAX_VOLTS / 2, 0, 0, Number(params.tune ?? 5), Number(params.gain ?? CV_MAX_VOLTS)];
+        const inputMerger = ctx.createChannelMerger(FM8_PORTS.length);
+        const seeds = defaults.map((value, index) => {
+          const seed = ctx.createConstantSource();
+          seed.offset.value = clampRange(Number.isFinite(value) ? value : 0, 0, CV_MAX_VOLTS);
+          seed.connect(inputMerger, 0, index);
+          seed.start();
+          return seed;
+        });
+        // SCRIPT_PROCESSOR_FRAMES is a multiple of msfa's 64-sample block, which process()
+        // requires.
+        const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, FM8_PORTS.length, 1);
+        inputMerger.connect(processor);
+        const outGain = ctx.createGain();
+        outGain.gain.value = 1;
+        processor.connect(outGain);
+        const engine = createFm8Engine(ctx.sampleRate, { keys: params, tune: defaults[3], gain: defaults[4] });
+        const entry = {
+          type,
+          inputMerger,
+          processor,
+          outGain,
+          seeds,
+          controlSources: seeds,
+          controlConnectionCounts: new Array(FM8_PORTS.length).fill(0),
+          engine,
+          prevGatePort: false,
+          voicePitch: [],
+          voiceVelocity: [],
+          extraSources: seeds,
+          extraNodes: [inputMerger, processor, outGain],
+        };
+        processor.onaudioprocess = (event) => {
+          const out = event.outputBuffer.getChannelData(0);
+          out.fill(0);
+          const ch = (i) => event.inputBuffer.getChannelData(i)[0];
+          engine.setTune(ch(3));
+          engine.setGain(ch(4));
+          const gatePort = ch(1) >= GATE_THRESHOLD_VOLTS;
+          if (gatePort !== entry.prevGatePort) {
+            if (gatePort) {
+              const velocity = Math.round(clampRange(ch(2) / CV_MAX_VOLTS, 0, 1) * 127);
+              engine.gateOn(0, Math.round((ch(0) - CV_MAX_VOLTS / 2) * 12 + 60), velocity > 0 ? velocity : 100);
+            } else {
+              engine.gateOff(0);
+            }
+            entry.prevGatePort = gatePort;
+          }
+          engine.process(out, out.length);
         };
         return entry;
       }
@@ -4973,8 +5081,43 @@ export class AudioEngine {
     return tap.buffer;
   }
 
+  // FM8 per-voice MIDI delivery (main.js's deliverToWidget for a midi-in cable on
+  // pitchCv/velocity/gate): slot = the midi-in voice index, undefined = mono -> slot 0.
+  // Mirrors Graph.h's MidiGate route for NodeType::Fm8: pitchCv/velocity are stored, a gate
+  // >= threshold (re)triggers the slot's note - every note-on, not just an edge, so a
+  // sustain-held key struck again restarts like on the device - and gate off releases it.
+  fm8Voice(id, voiceIndex, portId, value) {
+    const wrapper = this.nodes.get(id);
+    const entry = wrapper && wrapper.voiced ? wrapper.instances[0] : wrapper;
+    if (!entry || entry.type !== "fm8") return;
+    const slot = voiceIndex === undefined ? 0 : voiceIndex;
+    const v = Number(value) || 0;
+    if (portId === "pitchCv") {
+      entry.voicePitch[slot] = v;
+    } else if (portId === "velocity") {
+      entry.voiceVelocity[slot] = v;
+    } else if (portId === "gate") {
+      if (v >= GATE_THRESHOLD_VOLTS) {
+        const pitch = entry.voicePitch[slot] ?? CV_MAX_VOLTS / 2;
+        const velocity = Math.round(clampRange((entry.voiceVelocity[slot] ?? 0) / CV_MAX_VOLTS, 0, 1) * 127);
+        entry.engine.gateOn(slot, Math.round((pitch - CV_MAX_VOLTS / 2) * 12 + 60), velocity > 0 ? velocity : 100);
+      } else {
+        entry.engine.gateOff(slot);
+      }
+    }
+  }
+
+  // Mic-In widget status line (main.js's tickAudioMonitors polls it).
+  getMicInStatus(id) {
+    const wrapper = this.nodes.get(id);
+    const entry = wrapper && wrapper.voiced ? wrapper.instances[0] : wrapper;
+    return entry && entry.type === "mic-in" ? entry.status : "";
+  }
+
   _removeEntry(entry) {
     if (!entry) return;
+    entry.removed = true;
+    if (typeof entry.cleanup === "function") entry.cleanup();
     if (this._deferredSampleLoads.delete(entry)) this._notifyDeferredSamples();
     // Generic cleanup lists (each node on its own, so one already-stopped
     // source can't abort the rest): extraSources get stop()+disconnect(),
@@ -5341,7 +5484,7 @@ export class AudioEngine {
     const buildFallback = () => {
       const core = new WavetableLfoCore(ctx.sampleRate);
       core.setTables(entry.wtTables);
-      const processor = ctx.createScriptProcessor(256, 1, 1);
+      const processor = ctx.createScriptProcessor(SCRIPT_PROCESSOR_FRAMES, 1, 1);
       processor.onaudioprocess = (event) => {
         core.process(event.outputBuffer.getChannelData(0), entry.lfoRate ?? 0, entry.wtMorph ?? 0, (entry.lfoPhase ?? 0) / 360);
       };
@@ -6037,6 +6180,22 @@ export class AudioEngine {
         }
         break;
       }
+      case "fm8": {
+        if (paramName === "tune" || paramName === "gain") {
+          const idx = paramName === "tune" ? 3 : 4;
+          // Only while no cable owns the port (same guard as mda-piano above).
+          if (entry.controlConnectionCounts[idx] === 0) {
+            applyRampValue(entry.seeds[idx].offset, clampRange(Number(value) || 0, 0, CV_MAX_VOLTS));
+          }
+        } else if (paramName === "patch") {
+          entry.engine.setPatchKeys(value || {});
+        } else if (paramName === "voices") {
+          entry.engine.setFanIn(Number(value) || 1);
+        } else {
+          entry.engine.setPatchKey(paramName, value);
+        }
+        break;
+      }
       case "multiplier": {
         // Same reasoning as "adder" above.
         const idx = parseInt(String(paramName).replace("in", ""), 10) - 1;
@@ -6293,6 +6452,13 @@ export class AudioEngine {
     if (!this.ctx) return false;
     const now = this.ctx.currentTime;
     for (const wrapper of this.nodes.values()) {
+      if (!wrapper) continue;
+      // FM8 slots carry their own envelopes (Graph::renderBlock counts fm8->idle the same way).
+      if (!wrapper.voiced && wrapper.type === "fm8") {
+        const slot = wrapper.engine.slots[voiceIndex];
+        if (slot && !slot.idle) return true;
+        continue;
+      }
       if (!wrapper.voiced || (wrapper.type !== "adsr" && wrapper.type !== "dx-envelope")) continue;
       const entry = wrapper.instances[voiceIndex];
       if (entry && entry.releaseEndsAt !== null && entry.releaseEndsAt > now) return true;
@@ -6306,6 +6472,8 @@ export class AudioEngine {
     if (entry.type === "oscillator" && port === "value") return entry.outGain;
     if (entry.type === "fm-oscillator" && port === "value") return entry.outGain;
     if (entry.type === "hammond" && port === "value") return entry.outGain;
+    if (entry.type === "fm8" && port === "value") return entry.outGain;
+    if (entry.type === "mic-in" && port === "out") return entry.outGain;
     if ((entry.type === "lfo" || entry.type === "wavetable") && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
     if (entry.type === "output-switch") {
@@ -6482,6 +6650,7 @@ export class AudioEngine {
     if (entry.type === "envelope-follower" && ["in", "attack", "release", "preGain"].includes(port)) return entry.inputMerger;
     if (entry.type === "burst-generator" && ["in", "mode", "count", "time", "decay"].includes(port)) return entry.inputMerger;
     if (entry.type === "pan" && (port === "in" || port === "pan")) return entry.inputMerger;
+    if (entry.type === "fm8" && FM8_PORTS.includes(port)) return entry.inputMerger;
     if (entry.type === "sample-hold" && (port === "in" || port === "trigger" || port === "threshold")) return entry.inputMerger;
     if (entry.type === "counter" && (port === "count" || port === "reset")) return entry.inputMerger;
     if (entry.type === "monoflop" && (port === "in" || port === "threshold")) return entry.inputMerger;
@@ -6562,8 +6731,10 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && ["counter", "monoflop"].includes(toEntry.type)) {
-      const index = (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
+    if (toEntry && (["counter", "monoflop"].includes(toEntry.type) || toEntry.type === "fm8")) {
+      const index = toEntry.type === "fm8"
+        ? (FM8_PORTS.includes(toPort) ? FM8_PORTS.indexOf(toPort) : undefined)
+        : (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (!from || index === undefined) return;
       try {
@@ -6842,15 +7013,23 @@ export class AudioEngine {
   }
 
   _disconnectEntries(fromEntry, fromPort, toEntry, toPort, gainScale = 1) {
-    if (toEntry && ["counter", "monoflop"].includes(toEntry.type)) {
-      const index = (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
+    if (toEntry && (["counter", "monoflop"].includes(toEntry.type) || toEntry.type === "fm8")) {
+      const index = toEntry.type === "fm8"
+        ? (FM8_PORTS.includes(toPort) ? FM8_PORTS.indexOf(toPort) : undefined)
+        : (toEntry.type === "monoflop" ? { in: 0, threshold: 1 } : { count: 0, reset: 1 })[toPort];
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (!from || index === undefined) return;
       try {
         from.disconnect(toEntry.inputMerger, 0, index);
         if (--toEntry.controlConnectionCounts[index] <= 0) {
           toEntry.controlConnectionCounts[index] = 0;
-          toEntry.controlSources[index].offset.value = toEntry.type === "monoflop" && index === 1 ? toEntry.threshold : 0;
+          if (toEntry.type === "fm8") {
+            // Back to the widget's own value: tune/gain keep their slider, pitch rests at 5 V.
+            const rest = [CV_MAX_VOLTS / 2, 0, 0, toEntry.engine.state.tuneVolts, toEntry.engine.state.gainCv][index];
+            toEntry.controlSources[index].offset.value = clampRange(rest, 0, CV_MAX_VOLTS);
+          } else {
+            toEntry.controlSources[index].offset.value = toEntry.type === "monoflop" && index === 1 ? toEntry.threshold : 0;
+          }
           toEntry.controlSources[index].connect(toEntry.inputMerger, 0, index);
         }
       } catch (err) {

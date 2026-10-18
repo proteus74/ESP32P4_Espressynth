@@ -511,7 +511,11 @@ IRAM_ATTR bool on_dpi_vsync(esp_lcd_panel_handle_t panel,
 //  - The PSRAM traffic of a redraw can still knock the scan-out out of sync (this chip revision
 //    has no LCD underrun detection), so every finished frame requests a restart in the next
 //    vertical blank. The reduced pixel clock lowers PSRAM scan-out demand.
-constexpr int RGB_DRAW_BUFFER_LINES = 8; // 2 strips x 8 lines x 800 px x 2 B = 25.6 KB internal RAM (was 16 lines = 51 KB)
+// One strip x 16 lines x 800 px x 2 B = 25.6 KB internal RAM. A second strip bought nothing:
+// the PPA copy in rgb_flush_cb is blocking and flush_ready is signalled synchronously, so
+// LVGL never rendered into one strip while the other was being copied. One strip of twice
+// the height halves the strip count per full redraw (60 -> 30 object-tree walks/PPA jobs).
+constexpr int RGB_DRAW_BUFFER_LINES = 16;
 static uint8_t* s_rgb_frame_buffer = nullptr;
 // Copies each strip into the PSRAM frame buffer by DMA (PPA SRM at scale 1, no rotation).
 // A CPU memcpy would stream the whole redraw through the L2 cache both cores share and evict
@@ -611,10 +615,7 @@ lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
     const size_t draw_buffer_bytes = static_cast<size_t>(CurrentBoard::DISPLAY_NATIVE_WIDTH) *
                                      RGB_DRAW_BUFFER_LINES * sizeof(uint16_t);
     void* draw_buffer_a = heap_caps_aligned_alloc(64, draw_buffer_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    void* draw_buffer_b = heap_caps_aligned_alloc(64, draw_buffer_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (draw_buffer_a == nullptr || draw_buffer_b == nullptr) {
-        heap_caps_free(draw_buffer_a);
-        heap_caps_free(draw_buffer_b);
+    if (draw_buffer_a == nullptr) {
         return nullptr;
     }
 
@@ -622,11 +623,10 @@ lv_display_t* create_rgb_display(esp_lcd_panel_handle_t panel) {
                                               CurrentBoard::DISPLAY_NATIVE_HEIGHT);
     if (display == nullptr) {
         heap_caps_free(draw_buffer_a);
-        heap_caps_free(draw_buffer_b);
         return nullptr;
     }
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_buffers(display, draw_buffer_a, draw_buffer_b, draw_buffer_bytes,
+    lv_display_set_buffers(display, draw_buffer_a, nullptr, draw_buffer_bytes,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, rgb_flush_cb);
     lv_timer_create(rgb_restart_timer_cb, 40, nullptr);
