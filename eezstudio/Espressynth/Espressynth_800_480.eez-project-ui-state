@@ -1,6 +1,7 @@
 {
   "navigation": {
     "selectedUserPageObject": "[Espressynth_800_480.eez-project]:/userPages/0",
+    "selectedStyleObject": "[Espressynth_800_480.eez-project]:/lvglStyles/styles/0",
     "subnavigationSelectedItems": {}
   },
   "layoutModel": {
@@ -21,6 +22,7 @@
           },
           {
             "type": "border",
+            "selected": 0,
             "size": 240,
             "location": "right",
             "children": [
@@ -214,8 +216,7 @@
                   },
                   "icon": "svg:page"
                 }
-              ],
-              "active": true
+              ]
             },
             {
               "type": "row",
@@ -235,7 +236,8 @@
                       "enableClose": false,
                       "icon": "svg:properties"
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
@@ -853,7 +855,8 @@
                       "component": "styles",
                       "enableClose": false
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
@@ -1072,10 +1075,10 @@
       },
       "transform": {
         "translate": {
-          "x": -578.6826839826838,
-          "y": -419.53809523809497
+          "x": -585.902597402597,
+          "y": -358.88357271466896
         },
-        "scale": 1
+        "scale": 1.5
       },
       "timeline": {
         "isEditorActive": false,
@@ -1102,6 +1105,11 @@
         "secondToPx": 200,
         "scrollLeft": 0
       }
+    },
+    "[Espressynth_800_480.eez-project]:/lvglStyles/styles[tree-state]": {
+      "0": {
+        "$selected": true
+      }
     }
   },
   "activeOutputSection": 0,
@@ -1117,9 +1125,12 @@
   "selectedStylePropertyName": "",
   "lvglPart": "MAIN",
   "lvglState": "DEFAULT",
-  "lvglExpandedPropertiesGroup": [],
+  "lvglExpandedPropertiesGroup": [
+    "BACKGROUND",
+    "BORDER"
+  ],
   "showInactiveFlowsInDebugger": true,
   "globalFlowZoom": true,
-  "flowZoom": 1,
+  "flowZoom": 1.5,
   "implementationLanguage": "C"
 }

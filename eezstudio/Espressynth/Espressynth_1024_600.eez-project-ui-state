@@ -1,8 +1,7 @@
 {
   "navigation": {
-    "selectedUserPageObject": "[Espressynth.eez-project]:/userPages/0",
-    "selectedUserWidgetObject": "[Espressynth.eez-project]:/userWidgets/2",
-    "selectedStyleObject": "[Espressynth.eez-project]:/lvglStyles/styles/0",
+    "selectedUserPageObject": "[Espressynth_1024_600.eez-project]:/userPages/0",
+    "selectedStyleObject": "[Espressynth_1024_600.eez-project]:/lvglStyles/styles/0",
     "subnavigationSelectedItems": {}
   },
   "layoutModel": {
@@ -24,7 +23,7 @@
           {
             "type": "border",
             "selected": 0,
-            "size": 2.5,
+            "size": 279.5,
             "location": "right",
             "children": [
               {
@@ -195,37 +194,14 @@
               "children": [
                 {
                   "type": "tab",
-                  "id": "#fd45b5a8-c096-450f-b106-b18bc42d726c",
-                  "name": "Settings",
+                  "id": "#2044307f-2c01-489b-8d5d-ece28e0f01a4",
+                  "name": "Main",
                   "component": "editor",
                   "config": {
-                    "objectPath": "[Espressynth.eez-project]:/settings",
-                    "subObjectPath": "[Espressynth.eez-project]:/settings",
-                    "permanent": false
-                  },
-                  "icon": "material:settings"
-                },
-                {
-                  "type": "tab",
-                  "id": "#a1dbcb9c-7774-434f-99da-c9a4571ad299",
-                  "name": "Main_1024_600",
-                  "component": "editor",
-                  "config": {
-                    "objectPath": "[Espressynth.eez-project]:/userPages/0",
+                    "objectPath": "[Espressynth_1024_600.eez-project]:/userPages/0",
                     "permanent": false
                   },
                   "icon": "svg:page"
-                },
-                {
-                  "type": "tab",
-                  "id": "#4da2b861-3c57-4c63-b2f9-bafb46c6bdca",
-                  "name": "Envelope",
-                  "component": "editor",
-                  "config": {
-                    "objectPath": "[Espressynth.eez-project]:/userWidgets/2",
-                    "permanent": false
-                  },
-                  "icon": "svg:user_widget"
                 }
               ],
               "active": true
@@ -1255,6 +1231,30 @@
         "secondToPx": 200,
         "scrollLeft": 0
       }
+    },
+    "[Espressynth_1024_600.eez-project]:/lvglStyles/styles[tree-state]": {
+      "0": {
+        "$selected": true
+      }
+    },
+    "[Espressynth_1024_600.eez-project]:/userPages/0[flow-state]": {
+      "selectionFront": {},
+      "selectionBack": {
+        "0": {}
+      },
+      "transform": {
+        "translate": {
+          "x": -597.819970703125,
+          "y": -336.16520904541017
+        },
+        "scale": 0.9
+      },
+      "timeline": {
+        "isEditorActive": false,
+        "position": 0,
+        "secondToPx": 200,
+        "scrollLeft": 0
+      }
     }
   },
   "activeOutputSection": 0,
@@ -1287,6 +1287,6 @@
   ],
   "showInactiveFlowsInDebugger": true,
   "globalFlowZoom": true,
-  "flowZoom": 1.25,
+  "flowZoom": 0.9,
   "implementationLanguage": "C"
 }
