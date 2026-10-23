@@ -1,11 +1,12 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261018-fm8-4";
+import { AudioEngine } from "./audio-engine.js?v=20261023-wm8960-in-3";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
-import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261015-fm8-1";
+import { openSamplerEditor } from "./sampler-editor.js?v=20261021-sampler-3";
+import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261023-wm8960-in-3";
 import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-21";
 
 // Header/status-bar icons: index.html marks them with data-ui-icon, swapped for the SVG tiles here.
@@ -134,6 +135,7 @@ function startBatteryIndicator() {
 async function applyOutputAvailability() {
   let flags = { es8311: true, ns4168: false, wm8960: false };
   let pdmMic = false;
+  let wm8960In = false;
   let battery = false;
   try {
     const res = await fetch("/api/version");
@@ -144,6 +146,7 @@ async function applyOutputAvailability() {
       wm8960: data.wm8960 === true,
     };
     pdmMic = data.pdmMic === true;
+    wm8960In = data.wm8960In === true;
     battery = data.battery === true;
   } catch (err) {
     // keep defaults
@@ -157,6 +160,10 @@ async function applyOutputAvailability() {
   }
   if (!pdmMic && cat) {
     const idx = cat.types.indexOf("mic-in");
+    if (idx >= 0) cat.types.splice(idx, 1);
+  }
+  if (!wm8960In && cat) {
+    const idx = cat.types.indexOf("wm8960-in");
     if (idx >= 0) cat.types.splice(idx, 1);
   }
   if (battery) startBatteryIndicator();
@@ -1698,6 +1705,22 @@ const WIDGET_TYPES = {
       { id: "right", label: "Out R" },
     ],
   },
+  // Pitch-CV sample player with Start/End and a sustain loop (nodes/SamplerNode.h). Shares
+  // wavePlayerStates and the Wave Player's label/gain-slider helpers.
+  sampler: {
+    label: "Sampler",
+    icon: "🎚",
+    inputs: [
+      { id: "amplitude", label: "Amplitude" },
+      { id: "pitchCv", label: "Pitch (1V/Oct)" },
+      { id: "gate", label: "Gate" },
+      { id: "gain", label: "Gain" },
+    ],
+    outputs: [
+      { id: "left", label: "Out L" },
+      { id: "right", label: "Out R" },
+    ],
+  },
   "soundfont-player": {
     label: "SoundFont Player",
     icon: "🎼",
@@ -1798,6 +1821,17 @@ const WIDGET_TYPES = {
     // (getUserMedia, secure contexts only - see audio-engine.js "mic-in").
     inputs: [],
     outputs: [{ id: "out", label: "Out" }],
+  },
+  "wm8960-in": {
+    label: "WM8960-In",
+    icon: "🎤",
+    // WM8960 codec ADC (HAT microphones / line input), stereo. The browser preview substitutes
+    // the page's own microphone on both channels (see audio-engine.js "wm8960-in").
+    inputs: [],
+    outputs: [
+      { id: "left", label: "Out L" },
+      { id: "right", label: "Out R" },
+    ],
   },
   "ns4168-out": {
     label: "NS4168-Out",
@@ -2171,6 +2205,8 @@ const WIDGET_TYPES = {
       { id: "global", label: "Global" },
       { id: "zeroPoint", label: "Offset" },
       { id: "gain", label: "Gain" },
+      // Wavetable waveform only (row greyed out otherwise): 0-10V = first..last table.
+      { id: "morph", label: "Morph" },
     ],
     outputs: [{ id: "value", label: "Out" }],
   },
@@ -2232,14 +2268,14 @@ const WIDGET_TYPES = {
 
 const WIDGET_CATEGORIES = [
   { label: "Midi", types: ["midi-in", "midi-filter", "midi-program"] },
-  { label: "Generator", types: ["fm-oscillator", "fm8", "wave-player", "hammond", "soundfont-player", "mda-piano"] },
+  { label: "Generator", types: ["fm-oscillator", "fm8", "wave-player", "sampler", "hammond", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["adsr", "dx-envelope", "lfo", "wavetable", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const", "master-volume"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "counter", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
   { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
-  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out", "mic-in"] },
+  { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out", "mic-in", "wm8960-in"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
   { label: "External Hardware", types: ["cv-in", "cv-out", "digital-in", "digital-out", "rgb-led"] },
 ];
@@ -2273,6 +2309,7 @@ const AUDIO_PORTS = {
   
   
   "wave-player": { in: ["amplitude", "gain"], out: ["left", "right"] },
+  sampler: { in: ["amplitude", "gain"], out: ["left", "right"] },
   "soundfont-player": { out: ["left", "right"] },
   "mda-piano": { out: ["left", "right"] },
   
@@ -2385,6 +2422,7 @@ const AUDIO_PORTS = {
   "wm8960-out": { in: ["left", "right"] },
   "ns4168-out": { in: ["left", "right"] },
   "mic-in": { out: ["out"] },
+  "wm8960-in": { out: ["left", "right"] },
   "vu-meter": { in: ["in"] },
   "vu-meter-horizontal": { in: ["in"] },
   oscilloscope: { in: ["in1", "in2"] },
@@ -2504,7 +2542,7 @@ function appendOscilloscopePanel(body, port = "value") {
   body.appendChild(panel);
 }
 
-const OSCILLOSCOPE_WIDGET_TYPES = ["oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "soundfont-player", "mda-piano", "mic-in"];
+const OSCILLOSCOPE_WIDGET_TYPES = ["oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "sampler", "soundfont-player", "mda-piano", "mic-in", "wm8960-in"];
 
 const GRAPHIC_EQ_DEFAULT_FREQS = [63, 125, 250, 500, 1000, 2000, 5000, 14000];
 
@@ -2623,7 +2661,10 @@ const FM_WAVE_TYPE_BUTTONS = [
 
 
 
-const LFO_TYPE_BUTTONS = WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise" && w.id !== "pink-noise");
+const LFO_TYPE_BUTTONS = [
+  ...WAVE_TYPE_BUTTONS.filter((w) => w.id !== "noise" && w.id !== "pink-noise"),
+  FM_WAVE_TYPE_BUTTONS.find((w) => w.id === "wavetable"),
+];
 
 // Same icon-button treatment as the oscillator/filter type buttons (shared
 // .osc-wave-btn styling) instead of plain text pills.
@@ -2649,7 +2690,7 @@ const LFO_ZERO_MODE_BUTTONS = [
 
 
 const GENERATOR_PAGE_TYPES = [
-  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "master-volume", "const", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan",
+  "midi-in", "midi-split", "knob", "button", "multiplier", "adder", "divide", "frequency-divider", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not", "clock", "oscillator", "fm-oscillator", "fm8", "hammond", "wave-player", "sampler", "soundfont-player", "mda-piano", "detune", "adsr", "dx-envelope", "step-arpeggiator", "drum-sequencer", "master-volume", "const", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan",
 ];
 const FX_PAGE_TYPES = [
   "master-volume",
@@ -2664,7 +2705,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["midi-program", "midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in"];
+const DUAL_PAGE_TYPES = ["midi-program", "midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in", "wm8960-in"];
 
 
 
@@ -3267,7 +3308,7 @@ function uniqueWidgetLabel(requestedLabel) {
 // Widget types whose "gain" input port is the unambiguous main Volume/Gain control (as opposed
 // to a per-channel/per-band gain-ish port like Mixer's "gainN" or ESP-EQ's "gainDb") - see
 // createWidget's tagging of .gain-control-row/[data-role="main-gain-control"].
-const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "fm8", "hammond", "soundfont-player", "mda-piano", "wave-folder", "overdrive", "wave-player", "lfo", "wavetable", "comb-filter"]);
+const MAIN_GAIN_WIDGET_TYPES = new Set(["oscillator", "fm-oscillator", "fm8", "hammond", "soundfont-player", "mda-piano", "wave-folder", "overdrive", "wave-player", "sampler", "lfo", "wavetable", "comb-filter"]);
 
 // LFO and Wavetable share one implementation (state in lfoStates, tickLfo,
 // reset/one-shot/global handling, rate settings dialog); state.wavetable
@@ -3561,6 +3602,14 @@ function createWidget(type, label, x, y, forcedId) {
       if (e.target.closest("button")) return;
       e.stopPropagation();
       openWavePlayerSettings(id);
+    });
+  }
+
+  if (type === "sampler") {
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input")) return;
+      e.stopPropagation();
+      openSamplerSettings(id);
     });
   }
 
@@ -4230,6 +4279,22 @@ function createWidget(type, label, x, y, forcedId) {
     el.appendChild(body);
   }
 
+  if (type === "sampler") {
+    const state = samplerDefaults();
+    wavePlayerStates.set(id, state);
+    audioEngine.createNode(id, "sampler", { ...state });
+
+    const body = document.createElement("div");
+    body.className = "widget-instance-body wave-player-body";
+    const sampleLabel = document.createElement("div");
+    sampleLabel.className = "wave-player-sample-label";
+    sampleLabel.dataset.role = "wave-player-sample-label";
+    sampleLabel.textContent = "No sample";
+    body.appendChild(sampleLabel);
+    appendOscilloscopePanel(body, "left");
+    el.appendChild(body);
+  }
+
   if (type === "soundfont-player") {
     const state = { volume: "sd", path: "", bank: 0, program: 0, maxVoices: 32,
       enableCc: false, enableModWheel: false, enablePitchWheel: false, gain: CV_MAX_VOLTS,
@@ -4606,12 +4671,21 @@ function createWidget(type, label, x, y, forcedId) {
     audioEngine.createNode(id, "mic-in", {});
     const body = document.createElement("div");
     body.className = "widget-instance-body oscilloscope-only-body";
-    const status = document.createElement("div");
-    status.className = "osc-freq-label";
-    status.dataset.role = "mic-in-status";
-    status.textContent = audioEngine.getMicInStatus(id);
-    body.appendChild(status);
     appendOscilloscopePanel(body, "out");
+    el.appendChild(body);
+  }
+
+  if (type === "wm8960-in") {
+    audioEngine.createNode(id, "wm8960-in", {});
+    wm8960InStates.set(id, { pgaDb: 24, boostDb: 0, adcDb: 0, micBias: true });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, canvas")) return;
+      e.stopPropagation();
+      openWm8960InSettings(id);
+    });
+    const body = document.createElement("div");
+    body.className = "widget-instance-body oscilloscope-only-body";
+    appendOscilloscopePanel(body, "left");
     el.appendChild(body);
   }
 
@@ -4790,6 +4864,8 @@ function createWidget(type, label, x, y, forcedId) {
       oneShotAccum: 0,
       global: false,
       wavetable: false,
+      morph: 0,
+      wavetables: null, // created on first use of the wavetable waveform
       cyclePos: 0,
       linearPos: 0,
       lastTick: null,
@@ -4829,6 +4905,7 @@ function createWidget(type, label, x, y, forcedId) {
       waveButtons.appendChild(btn);
     });
     body.appendChild(waveButtons);
+    body.appendChild(createLfoWavetablePanel(id, true));
 
     
     
@@ -4896,28 +4973,7 @@ function createWidget(type, label, x, y, forcedId) {
 
     const body = document.createElement("div");
     body.className = "widget-instance-body lfo-body";
-    const wtPanel = document.createElement("div");
-    wtPanel.className = "lfo-wavetable-panel";
-    const wtPreview = document.createElement("canvas");
-    wtPreview.className = "lfo-wavetable-preview";
-    wtPreview.width = 160;
-    wtPreview.height = 44;
-    wtPreview.dataset.role = "lfo-wavetable-preview";
-    wtPreview.title = "Current morphed waveform - click to edit";
-    const wtEdit = document.createElement("button");
-    wtEdit.className = "btn-secondary lfo-wavetable-edit";
-    wtEdit.textContent = "Edit";
-    wtEdit.title = "Open the wavetable editor";
-    [wtPreview, wtEdit].forEach((node) => {
-      node.addEventListener("mousedown", (e) => e.stopPropagation());
-      node.addEventListener("dblclick", (e) => e.stopPropagation());
-      node.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openLfoWavetableEditor(id);
-      });
-    });
-    wtPanel.append(wtPreview, wtEdit);
-    body.appendChild(wtPanel);
+    body.appendChild(createLfoWavetablePanel(id, false));
     el.appendChild(body);
 
     startLfoTimer(id);
@@ -5721,9 +5777,10 @@ function createWidget(type, label, x, y, forcedId) {
         valueSpan.textContent = `${formatNumber(state.zeroPoint)} V`;
         row.appendChild(valueSpan);
       }
-      if (type === "wavetable" && port.id === "morph") {
+      if ((type === "wavetable" || type === "lfo") && port.id === "morph") {
         // Wavetable position: 0 V = first slot, 10 V = last slot.
         const state = lfoStates.get(id);
+        if (type === "lfo") row.dataset.role = "lfo-morph-row";
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "port-slider";
@@ -5867,7 +5924,7 @@ function createWidget(type, label, x, y, forcedId) {
         
         row.insertBefore(switchLabel, row.querySelector(".port-label"));
       }
-      if (type === "wave-player" && port.id === "gain") {
+      if ((type === "wave-player" || type === "sampler") && port.id === "gain") {
         const state = wavePlayerStates.get(id);
 
         const slider = document.createElement("input");
@@ -11043,6 +11100,93 @@ async function fetchSampleList() {
   }
 }
 
+// A function, not a const object: CV_MAX_VOLTS is declared further down this file, so a
+// top-level object literal here would hit its temporal dead zone at module load.
+function samplerDefaults() {
+  return { sampleFile: "", rootNoteMidi: 60, gain: CV_MAX_VOLTS, start: 0, end: 1, loopStart: 0, loopEnd: 1, loop: false };
+}
+const SAMPLER_MARKER_KEYS = ["rootNoteMidi", "start", "end", "loopStart", "loopEnd"];
+
+// Writes sampler params into widget state + browser engine. live=true also posts the
+// live-updatable fields to the device (sampleFile only changes with a preset save/rebuild).
+function applySamplerParams(widgetId, params, live = false) {
+  const state = wavePlayerStates.get(widgetId);
+  if (!state) return;
+  const fileChanged = params.sampleFile !== state.sampleFile;
+  state.sampleFile = typeof params.sampleFile === "string" ? params.sampleFile : "";
+  SAMPLER_MARKER_KEYS.forEach((key) => {
+    const v = Number(params[key]);
+    state[key] = Number.isFinite(v) ? v : samplerDefaults()[key];
+  });
+  state.loop = params.loop === true;
+  if (params.gain !== undefined) state.gain = params.gain;
+  if (fileChanged) audioEngine.setParam(widgetId, "sampleFile", state.sampleFile);
+  SAMPLER_MARKER_KEYS.forEach((key) => audioEngine.setParam(widgetId, key, state[key]));
+  audioEngine.setParam(widgetId, "loop", state.loop ? 1 : 0);
+  audioEngine.setParam(widgetId, "gain", state.gain);
+  updateWavePlayerLabel(widgetId);
+  if (live) {
+    const update = { loop: state.loop ? 1 : 0 };
+    SAMPLER_MARKER_KEYS.forEach((key) => (update[key] = state[key]));
+    sendLiveParamUpdateThrottled(widgetId, update);
+  }
+}
+
+// Editor cursor: the device's "samplerPos" broadcast (sent only while a voice plays, every
+// 50 ms) while it keeps arriving, else the browser preview's own playback.
+const samplerDevicePlayheads = new Map(); // widgetId -> { positions, at }
+const SAMPLER_DEVICE_PLAYHEAD_TIMEOUT_MS = 250;
+function samplerPlayheads(widgetId) {
+  const device = samplerDevicePlayheads.get(widgetId);
+  if (device && performance.now() - device.at < SAMPLER_DEVICE_PLAYHEAD_TIMEOUT_MS) return device.positions;
+  return audioEngine.getSamplerPlayheads(widgetId);
+}
+
+// Decoded only for the editor's waveform; OfflineAudioContext needs no running audio.
+const samplerWaveformCache = new Map();
+function loadSamplerWaveform(file) {
+  if (!samplerWaveformCache.has(file)) {
+    const path = encodeURIComponent(`samples/${file}`);
+    const promise = fetch(`/api/files/download?volume=flash&path=${path}`)
+      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((buf) => new OfflineAudioContext(2, 1, 44100).decodeAudioData(buf))
+      .catch((err) => {
+        appendLog(`Sample "${file}" could not be loaded: ${err.message}`);
+        samplerWaveformCache.delete(file);
+        return null;
+      });
+    samplerWaveformCache.set(file, promise);
+  }
+  return samplerWaveformCache.get(file);
+}
+
+async function openSamplerSettings(widgetId) {
+  const state = wavePlayerStates.get(widgetId);
+  if (!state) return;
+  const original = { ...state };
+  const samples = await fetchSampleList();
+  const label = document.getElementById(widgetId)?.querySelector(".widget-instance-label")?.textContent || "Sampler";
+  openSamplerEditor({
+    title: `Sampler – ${label}`,
+    params: original,
+    samples,
+    noteName: (n) => `${WAVE_PLAYER_NOTE_NAMES[n % 12]}${Math.floor(n / 12) - 1}`,
+    loadBuffer: loadSamplerWaveform,
+    getPlayheads: () => samplerPlayheads(widgetId),
+    onPreview: (params) => applySamplerParams(widgetId, params, true),
+    onCancel: () => applySamplerParams(widgetId, original, true),
+    onApply: (params) => {
+      // Undo snapshot of the pre-edit state, then keep the edit.
+      applySamplerParams(widgetId, original, false);
+      pushHistorySnapshot();
+      applySamplerParams(widgetId, params, true);
+      // A different sample needs a graph rebuild on the device; markers went live already.
+      if (params.sampleFile !== original.sampleFile) savePresetNow();
+      else markDirty();
+    },
+  });
+}
+
 async function openWavePlayerSettings(widgetId) {
   const state = wavePlayerStates.get(widgetId);
   if (!state) return;
@@ -12410,6 +12554,7 @@ const clockStates = new Map();
 // modal from the live boot-time I2C scan (see openCvInSettings/openCvOutSettings below).
 // port: -1 = never configured.
 const cvInStates = new Map();
+const wm8960InStates = new Map();
 const cvOutStates = new Map();
 
 // External Hardware (Digital In/Out) - which configured GPIO (Settings dialog -> GPIO) this
@@ -12872,6 +13017,45 @@ document.getElementById("cvInSettingsSave").addEventListener("click", () => {
   updateCvIoLabel(pendingCvInId);
   savePresetNow();
   closeCvInSettings();
+});
+
+const wm8960InSettingsOverlay = document.getElementById("wm8960InSettingsOverlay");
+const wm8960InPgaInput = document.getElementById("wm8960InPgaInput");
+const wm8960InBoostSelect = document.getElementById("wm8960InBoostSelect");
+const wm8960InAdcInput = document.getElementById("wm8960InAdcInput");
+const wm8960InBiasCheck = document.getElementById("wm8960InBiasCheck");
+let pendingWm8960InId = null;
+
+function openWm8960InSettings(widgetId) {
+  const state = wm8960InStates.get(widgetId);
+  if (!state) return;
+  pendingWm8960InId = widgetId;
+  wm8960InPgaInput.value = String(state.pgaDb);
+  wm8960InBoostSelect.value = String(state.boostDb);
+  wm8960InAdcInput.value = String(state.adcDb);
+  wm8960InBiasCheck.checked = state.micBias;
+  wm8960InSettingsOverlay.classList.remove("hidden");
+}
+
+function closeWm8960InSettings() {
+  wm8960InSettingsOverlay.classList.add("hidden");
+  pendingWm8960InId = null;
+}
+
+document.getElementById("wm8960InSettingsCancel").addEventListener("click", closeWm8960InSettings);
+
+document.getElementById("wm8960InSettingsSave").addEventListener("click", () => {
+  const state = pendingWm8960InId && wm8960InStates.get(pendingWm8960InId);
+  if (!state) return;
+  // The codec steps the PGA in 0.75 dB, the ADC volume in 0.5 dB (0.375 dB hardware steps).
+  const pga = parseFloat(wm8960InPgaInput.value);
+  const adc = parseFloat(wm8960InAdcInput.value);
+  state.pgaDb = Math.round(clamp(Number.isFinite(pga) ? pga : 24, -17.25, 30) / 0.75) * 0.75;
+  state.boostDb = parseInt(wm8960InBoostSelect.value, 10) || 0;
+  state.adcDb = Math.round(clamp(Number.isFinite(adc) ? adc : 0, -97, 30) * 2) / 2;
+  state.micBias = wm8960InBiasCheck.checked;
+  savePresetNow();
+  closeWm8960InSettings();
 });
 
 const cvOutSettingsOverlay = document.getElementById("cvOutSettingsOverlay");
@@ -13664,6 +13848,55 @@ function lfoWavetableBank(state) {
   return state.wavetables;
 }
 
+// Preview canvas + "Edit" button. On the plain LFO (hiddenUnlessActive) it only shows while
+// the wavetable waveform is selected - see updateLfoWavetableVisual().
+function createLfoWavetablePanel(widgetId, hiddenUnlessActive) {
+  const wtPanel = document.createElement("div");
+  wtPanel.className = "lfo-wavetable-panel";
+  wtPanel.dataset.role = "lfo-wavetable-panel";
+  wtPanel.classList.toggle("hidden", hiddenUnlessActive); // .lfo-wavetable-panel sets display, so not the hidden attribute
+  const wtPreview = document.createElement("canvas");
+  wtPreview.className = "lfo-wavetable-preview";
+  wtPreview.width = 160;
+  wtPreview.height = 44;
+  wtPreview.dataset.role = "lfo-wavetable-preview";
+  wtPreview.title = "Current morphed waveform - click to edit";
+  const wtEdit = document.createElement("button");
+  wtEdit.className = "btn-secondary lfo-wavetable-edit";
+  wtEdit.textContent = "Edit";
+  wtEdit.title = "Open the wavetable editor";
+  [wtPreview, wtEdit].forEach((node) => {
+    node.addEventListener("mousedown", (e) => e.stopPropagation());
+    node.addEventListener("dblclick", (e) => e.stopPropagation());
+    node.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openLfoWavetableEditor(widgetId);
+    });
+  });
+  wtPanel.append(wtPreview, wtEdit);
+  return wtPanel;
+}
+
+// Plain LFO only: panel shown and morph row enabled (like the FM oscillator's) while the
+// wavetable waveform is selected.
+function updateLfoWavetableVisual(widgetId) {
+  const state = lfoStates.get(widgetId);
+  const el = document.getElementById(widgetId);
+  if (!state || !el || el.dataset.widgetType !== "lfo") return;
+  const active = state.wavetable;
+  const panel = el.querySelector('[data-role="lfo-wavetable-panel"]');
+  if (panel) panel.classList.toggle("hidden", !active);
+  const row = el.querySelector('[data-role="lfo-morph-row"]');
+  if (row) row.classList.toggle("disabled", !active);
+  const slider = el.querySelector('[data-role="lfo-morph-slider"]');
+  if (slider) {
+    const connected = connections.some((c) => c.to.widgetId === widgetId && c.to.portId === "morph");
+    slider.value = String(state.morph ?? 0);
+    slider.disabled = connected || !active;
+  }
+  updateLfoWavetablePreview(widgetId);
+}
+
 function updateLfoWavetablePreview(widgetId) {
   const state = lfoStates.get(widgetId);
   const canvas = document.getElementById(widgetId)?.querySelector('[data-role="lfo-wavetable-preview"]');
@@ -13766,9 +13999,19 @@ function setLfoWaveType(widgetId, waveType) {
   const state = lfoStates.get(widgetId);
   if (!state) return;
   state.waveType = waveType;
+  state.wavetable = waveType === "wavetable";
   state.linearPos = 0;
+  if (state.wavetable) {
+    // The device may not hold a bank for this LFO yet (the preset had another waveform):
+    // send it along; until it arrives the device plays a sine (same as the FM oscillator).
+    const bank = lfoWavetableBank(state);
+    audioEngine.setParam(widgetId, "wavetables", bank);
+    audioEngine.setParam(widgetId, "morph", state.morph ?? 0);
+    postLfoWavetableLive(widgetId, bank);
+  }
   audioEngine.setParam(widgetId, "waveType", waveType);
   updateLfoWaveButtons(widgetId);
+  updateLfoWavetableVisual(widgetId);
   sendLiveParamUpdate(widgetId, { waveType });
 }
 
@@ -13962,10 +14205,6 @@ function tickAudioMonitors(frameTs) {
   document.querySelectorAll('.widget-instance[data-widget-type="midi-in"]').forEach((el) => {
     updateMidiInVoiceSlotsLabel(el.id);
   });
-  document.querySelectorAll('.widget-instance[data-widget-type="mic-in"] [data-role="mic-in-status"]').forEach((label) => {
-    const status = audioEngine.getMicInStatus(label.closest(".widget-instance").id);
-    if (label.textContent !== status) label.textContent = status;
-  });
   if (oscilloscopesVisible) {
     document
       .querySelectorAll(OSCILLOSCOPE_WIDGET_TYPES.map((t) => `.widget-instance[data-widget-type="${t}"]`).join(", "))
@@ -14009,7 +14248,7 @@ setInterval(tickDebugVoltmeterAudioSources, 50);
 
 
 const AUDIO_SIGNAL_WIDGET_TYPES = new Set([
-  "oscillator", "fm-oscillator", "hammond", "wave-player", "soundfont-player", "gain", "filter", "comb-filter",
+  "oscillator", "fm-oscillator", "hammond", "wave-player", "sampler", "soundfont-player", "gain", "filter", "comb-filter",
   "esp-eq", "graphic-eq",
   "mixer", "bitcrusher", "wave-folder", "overdrive", "pan", "counter", "monoflop", "sample-hold", "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "switch", "multiplexer", "output-switch", "output-multiplexer",
   ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES,
@@ -21368,7 +21607,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
   
   
   
-  if (el.dataset.widgetType === "wavetable" && portId === "morph") {
+  if ((el.dataset.widgetType === "wavetable" || el.dataset.widgetType === "lfo") && portId === "morph") {
     const num = Number(value);
     if (!Number.isNaN(num)) setLfoMorph(widgetId, num);
   }
@@ -21885,6 +22124,14 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
+  if (el.dataset.widgetType === "sampler" && portId === "pitchCv") {
+    const num = Number(value);
+    if (!Number.isNaN(num)) {
+      if (voiceIndex !== undefined) audioEngine.setVoiceParam(widgetId, voiceIndex, "pitchCv", num, 0);
+      else audioEngine.setParam(widgetId, "pitchCv", num, 0);
+    }
+  }
+
   if (el.dataset.widgetType === "wave-player" && portId === "note") {
     const num = Number(value);
     if (!Number.isNaN(num)) {
@@ -21896,7 +22143,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "wave-player" && portId === "gate") {
+  if ((el.dataset.widgetType === "wave-player" || el.dataset.widgetType === "sampler") && portId === "gate") {
     if (voiceIndex !== undefined) {
       audioEngine.setVoiceParam(widgetId, voiceIndex, "gate", Number(value));
     } else {
@@ -21904,7 +22151,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "wave-player" && portId === "amplitude") {
+  if ((el.dataset.widgetType === "wave-player" || el.dataset.widgetType === "sampler") && portId === "amplitude") {
     const num = Number(value);
     const safe = Number.isNaN(num) ? 1 : num;
     if (voiceIndex !== undefined) {
@@ -21914,7 +22161,7 @@ function deliverToWidget(widgetId, portId, value, voiceIndex) {
     }
   }
 
-  if (el.dataset.widgetType === "wave-player" && portId === "gain") {
+  if ((el.dataset.widgetType === "wave-player" || el.dataset.widgetType === "sampler") && portId === "gain") {
     const state = wavePlayerStates.get(widgetId);
     if (state) {
       const num = Number(value);
@@ -23311,6 +23558,20 @@ const WIDGET_ENGINES = {
       restartClockTimer(id);
     },
   },
+  "wm8960-in": {
+    getParams: (id) => {
+      const state = wm8960InStates.get(id);
+      return state ? { pgaDb: state.pgaDb, boostDb: state.boostDb, adcDb: state.adcDb, micBias: state.micBias } : {};
+    },
+    applyParams: (id, params) => {
+      const state = wm8960InStates.get(id);
+      if (!state || !params) return;
+      state.pgaDb = Number.isFinite(params.pgaDb) ? clamp(params.pgaDb, -17.25, 30) : 24;
+      state.boostDb = [0, 13, 20, 29].includes(params.boostDb) ? params.boostDb : 0;
+      state.adcDb = Number.isFinite(params.adcDb) ? clamp(params.adcDb, -97, 30) : 0;
+      state.micBias = params.micBias !== false;
+    },
+  },
   "cv-in": {
     getParams: (id) => {
       const state = cvInStates.get(id);
@@ -23393,6 +23654,8 @@ const WIDGET_ENGINES = {
             zeroPoint: state.zeroPoint,
             oneShot: state.oneShot,
             global: state.global,
+            morph: state.morph ?? 0,
+            ...(state.waveType === "wavetable" ? { wavetables: encodeBank(lfoWavetableBank(state)) } : {}),
           }
         : {};
     },
@@ -23400,6 +23663,11 @@ const WIDGET_ENGINES = {
       const state = lfoStates.get(id);
       if (!state || !params) return;
       state.waveType = params.waveType === "supersaw" ? "sine" : (params.waveType || "sine");
+      state.wavetable = state.waveType === "wavetable";
+      state.morph = clamp(Number(params.morph) || 0, 0, CV_MAX_VOLTS);
+      state.wavetables = decodeBank(params.wavetables) || state.wavetables;
+      audioEngine.setParam(id, "morph", state.morph);
+      if (state.wavetables) audioEngine.setParam(id, "wavetables", state.wavetables);
       state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
       state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
       state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
@@ -23424,6 +23692,7 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "global", state.global);
       updateLfoWaveButtons(id);
       updateLfoVisual(id);
+      updateLfoWavetableVisual(id);
     },
   },
   wavetable: {
@@ -23613,6 +23882,18 @@ const WIDGET_ENGINES = {
       audioEngine.setParam(id, "rootNoteMidi", state.rootNoteMidi);
       audioEngine.setParam(id, "gain", state.gain);
       updateWavePlayerLabel(id);
+      updateWavePlayerGainVisual(id);
+    },
+  },
+  sampler: {
+    getParams: (id) => {
+      const state = wavePlayerStates.get(id);
+      return state ? { ...state } : {};
+    },
+    applyParams: (id, params) => {
+      const state = wavePlayerStates.get(id);
+      if (!state || !params) return;
+      applySamplerParams(id, { ...samplerDefaults(), ...params, gain: clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS) });
       updateWavePlayerGainVisual(id);
     },
   },
@@ -25366,6 +25647,9 @@ function connectWs() {
       updateNodeCpuDisplay(data.w);
     } else if (data.type === "cvStatus") {
       updateCvStatusDisplay(data.w);
+    } else if (data.type === "samplerPos") {
+      const now = performance.now();
+      (data.w || []).forEach(([id, positions]) => samplerDevicePlayheads.set(id, { positions, at: now }));
     } else if (data.type === "voicesCapped") {
       handleVoicesCapped(data.requested, data.effective, data.reason);
     } else if (data.type === "midiDevices") {

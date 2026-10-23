@@ -11,9 +11,11 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include <atomic>
 #include <cmath>
+#include <cstring>
 
 // jonlidgard/wm8960 v0.0.3's public header has no extern "C" guard, so its C-linkage
 // wm8960_* functions (compiled as plain C in wm8960.c) would otherwise be looked up under
@@ -57,20 +59,11 @@ constexpr gpio_num_t WM8960_PIN_DIN    = static_cast<gpio_num_t>(CONFIG_ONBOARD_
 constexpr gpio_num_t WM8960_PIN_DOUT   = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_WM8960_PIN_DOUT);
 constexpr gpio_num_t WM8960_PIN_BUTTON = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_WM8960_PIN_BUTTON);
 
-constexpr bool wm8960_pin_is_reserved(gpio_num_t pin) {
-    return Board::is_pin_reserved(pin);
-}
-
-static_assert(!wm8960_pin_is_reserved(WM8960_PIN_BCLK),
-              "ONBOARD_AUDIO_WM8960_PIN_BCLK conflicts with a pin already used by the current board");
-static_assert(!wm8960_pin_is_reserved(WM8960_PIN_LRCK),
-              "ONBOARD_AUDIO_WM8960_PIN_LRCK conflicts with a pin already used by the current board");
-static_assert(!wm8960_pin_is_reserved(WM8960_PIN_DIN),
-              "ONBOARD_AUDIO_WM8960_PIN_DIN conflicts with a pin already used by the current board");
-static_assert(!wm8960_pin_is_reserved(WM8960_PIN_DOUT),
-              "ONBOARD_AUDIO_WM8960_PIN_DOUT conflicts with a pin already used by the current board");
-static_assert(!wm8960_pin_is_reserved(WM8960_PIN_BUTTON),
-              "ONBOARD_AUDIO_WM8960_PIN_BUTTON conflicts with a pin already used by the current board");
+BOARD_ASSERT_PIN_FREE(CONFIG_ONBOARD_AUDIO_WM8960_PIN_BCLK);
+BOARD_ASSERT_PIN_FREE(CONFIG_ONBOARD_AUDIO_WM8960_PIN_LRCK);
+BOARD_ASSERT_PIN_FREE(CONFIG_ONBOARD_AUDIO_WM8960_PIN_DIN);
+BOARD_ASSERT_PIN_FREE(CONFIG_ONBOARD_AUDIO_WM8960_PIN_DOUT);
+BOARD_ASSERT_PIN_FREE(CONFIG_ONBOARD_AUDIO_WM8960_PIN_BUTTON);
 static_assert(WM8960_PIN_BCLK != WM8960_PIN_LRCK && WM8960_PIN_BCLK != WM8960_PIN_DIN &&
               WM8960_PIN_BCLK != WM8960_PIN_DOUT && WM8960_PIN_LRCK != WM8960_PIN_DIN &&
               WM8960_PIN_LRCK != WM8960_PIN_DOUT && WM8960_PIN_DIN != WM8960_PIN_DOUT,
@@ -216,6 +209,7 @@ inline float s_speaker_volume_db   = DEFAULT_SPEAKER_VOLUME_DB;
 inline float s_line_input_volume_db = DEFAULT_MIC_PGA_GAIN_DB;
 inline float s_mic_boost_gain_db    = DEFAULT_MIC_BOOST_GAIN_DB;
 inline float s_adc_volume_db        = DEFAULT_ADC_VOLUME_DB;
+inline bool  s_mic_bias_enabled     = true; // init() enables the bias supply
 inline float s_dac_volume_db        = DEFAULT_DAC_VOLUME_DB;
 
 // Rounds an arbitrary dB value to whichever of the WM8960's 4 fixed mic boost steps
@@ -258,6 +252,41 @@ inline i2s_chan_handle_t get_tx_handle() {
 /** @brief I2S RX channel (WM8960 ADC -> ESP32-P4, microphone data). */
 inline i2s_chan_handle_t get_rx_handle() {
     return s_rx_handle;
+}
+
+/** @brief True when the codec's ADC data line is wired (the RX channel exists). */
+inline bool input_available() {
+    return s_rx_handle != nullptr;
+}
+
+/**
+ * @brief Non-blocking ADC read for the synth's WM8960-In widget: fills `frames` samples into
+ *        `left`/`right` (+/-1.0), zeros while less than a full block has arrived. Whatever the
+ *        RX DMA delivered is parked in a small FIFO so a short read never inserts a gap
+ *        mid-stream. Called from the render task only (SynthEngine::setWm8960Input()).
+ */
+inline void read_block_stereo(float* left, float* right, size_t frames) {
+    constexpr size_t FIFO_FRAMES = 2048;
+    static int16_t fifo[FIFO_FRAMES * 2];
+    static size_t held = 0;
+
+    if (s_rx_handle != nullptr && held < FIFO_FRAMES) {
+        size_t got_bytes = 0;
+        i2s_channel_read(s_rx_handle, &fifo[held * 2], (FIFO_FRAMES - held) * 2 * sizeof(int16_t),
+                         &got_bytes, 0);
+        held += got_bytes / (2 * sizeof(int16_t));
+    }
+    if (frames > held || frames > FIFO_FRAMES) {
+        for (size_t i = 0; i < frames; ++i) left[i] = right[i] = 0.0f;
+        return;
+    }
+    constexpr float SCALE = 1.0f / 32768.0f;
+    for (size_t i = 0; i < frames; ++i) {
+        left[i]  = static_cast<float>(fifo[i * 2]) * SCALE;
+        right[i] = static_cast<float>(fifo[i * 2 + 1]) * SCALE;
+    }
+    held -= frames;
+    std::memmove(fifo, &fifo[frames * 2], held * 2 * sizeof(int16_t));
 }
 
 /** @brief True DMA-ring underrun count since boot (see on_send_q_ovf comment above). */
@@ -397,7 +426,9 @@ inline float get_mic_boost_gain_db() { return s_mic_boost_gain_db; }
 /** @brief Enable/disable the mic bias voltage supply for electret mics. */
 inline esp_err_t set_mic_bias_enabled(bool enabled) {
     if (s_wm8960.handle == nullptr) return ESP_ERR_INVALID_STATE;
-    return enabled ? wm8960_enableMicBias(&s_wm8960) : wm8960_disableMicBias(&s_wm8960);
+    const esp_err_t err = enabled ? wm8960_enableMicBias(&s_wm8960) : wm8960_disableMicBias(&s_wm8960);
+    if (err == ESP_OK) s_mic_bias_enabled = enabled;
+    return err;
 }
 
 /**
@@ -415,6 +446,67 @@ inline esp_err_t set_adc_volume_db(float dB) {
 
 /** @brief Last dB value set_adc_volume_db() applied (see the write-only note above). */
 inline float get_adc_volume_db() { return s_adc_volume_db; }
+
+struct InputSettings {
+    float pga_db;
+    float boost_db;
+    float adc_db;
+    bool mic_bias;
+};
+
+namespace {
+inline QueueHandle_t s_input_queue = nullptr;
+
+// Applies only what differs from the codec's current state, so reloading an unchanged preset
+// costs no I2C traffic.
+inline void apply_input_settings(const InputSettings& in) {
+    constexpr const char* TAG = "FeatureAudioWM8960";
+    if (in.pga_db != s_line_input_volume_db && set_line_input_volume_db(in.pga_db) != ESP_OK) {
+        ESP_LOGW(TAG, "Input PGA gain write failed");
+    }
+    uint8_t setting = 0;
+    float applied_boost_db = 0.0f;
+    mic_boost_gain_round(in.boost_db, &setting, &applied_boost_db);
+    if (applied_boost_db != s_mic_boost_gain_db && set_mic_boost_gain_db(in.boost_db) != ESP_OK) {
+        ESP_LOGW(TAG, "Mic boost write failed");
+    }
+    if (in.adc_db != s_adc_volume_db && set_adc_volume_db(in.adc_db) != ESP_OK) {
+        ESP_LOGW(TAG, "ADC volume write failed");
+    }
+    if (in.mic_bias != s_mic_bias_enabled && set_mic_bias_enabled(in.mic_bias) != ESP_OK) {
+        ESP_LOGW(TAG, "Mic bias write failed");
+    }
+    ESP_LOGI(TAG, "ADC input: PGA %.2f dB, mic boost %.0f dB, ADC %.1f dB, mic bias %s",
+             static_cast<double>(s_line_input_volume_db), static_cast<double>(s_mic_boost_gain_db),
+             static_cast<double>(s_adc_volume_db), s_mic_bias_enabled ? "on" : "off");
+}
+
+inline void input_settings_task(void*) {
+    InputSettings in;
+    while (true) {
+        if (xQueueReceive(s_input_queue, &in, portMAX_DELAY) == pdTRUE) apply_input_settings(in);
+    }
+}
+} // namespace
+
+/**
+ * @brief Queue new ADC input-stage settings (WM8960-In widget) for the codec. The I2C writes run
+ *        on a small worker task, so this is safe from any task and returns at once; only the
+ *        latest request is kept. Call from one task at a time (the preset loader).
+ */
+inline void request_input_settings(float pga_db, float boost_db, float adc_db, bool mic_bias) {
+    if (s_input_queue == nullptr) {
+        s_input_queue = xQueueCreate(1, sizeof(InputSettings));
+        if (s_input_queue == nullptr ||
+            xTaskCreatePinnedToCore(input_settings_task, "wm8960_in_cfg", 3072, nullptr, 3, nullptr,
+                                    App::MAIN_CORE) != pdPASS) {
+            ESP_LOGE("FeatureAudioWM8960", "Failed to start the input settings task");
+            return;
+        }
+    }
+    const InputSettings in = {pga_db, boost_db, adc_db, mic_bias};
+    xQueueOverwrite(s_input_queue, &in);
+}
 
 /**
  * @brief Initialize I2S bus and WM8960 codec (ONBOARD_AUDIO_WM8960)

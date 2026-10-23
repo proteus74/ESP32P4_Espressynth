@@ -3,8 +3,9 @@
 // Deferred preset writes. A preset save from the browser used to go straight to LittleFS:
 // every flash erase/write disables the cache and stalls the render task's flash-resident
 // code, audible as dropouts while playing. Saves are parked in PSRAM instead and written by
-// a low-priority task once the audio output has been silent for a moment - or, as a safety
-// net, after kMaxDeferMs regardless. Readers that must see the latest state (the engine's
+// a low-priority task once the audio output has been silent for a moment - never while audio
+// plays (a former 60 s safety-net write did exactly that and dropped out). The tradeoff: a
+// power loss during an uninterrupted performance loses the pending save. Readers that must see the latest state (the engine's
 // preset loader, GET /api/preset) take the pending copy; a preset change, backup export or
 // shutdown-like path calls flushAll() first so nothing is lost or served stale.
 
@@ -25,8 +26,7 @@ namespace presetcache
 {
 constexpr size_t kMaxEntries = 4;
 constexpr size_t kMaxPathLen = 128;
-constexpr uint32_t kSilentMs = 700;        // output quiet this long -> write now
-constexpr uint32_t kMaxDeferMs = 60 * 1000; // never hold a save longer than this
+constexpr uint32_t kSilentMs = 700; // output quiet this long -> write now
 constexpr const char *kTag = "preset_cache";
 
 using SilentForFn = bool (*)(uint32_t ms);
@@ -96,21 +96,14 @@ inline void writerTask(void *)
     {
         vTaskDelay(pdMS_TO_TICKS(100));
         lock();
-        const int64_t now = esp_timer_get_time();
         bool pending = false;
-        bool overdue = false;
         for (const auto &e : gEntries)
-        {
-            if (e.data == nullptr) continue;
-            pending = true;
-            if (now - e.stagedUs > static_cast<int64_t>(kMaxDeferMs) * 1000) overdue = true;
-        }
-        const bool quiet = gSilentFor != nullptr && gSilentFor(kSilentMs);
-        if (pending && (quiet || overdue))
+            if (e.data != nullptr) pending = true;
+        if (pending && gSilentFor != nullptr && gSilentFor(kSilentMs))
         {
             for (auto &e : gEntries)
                 if (e.data != nullptr) flushEntry(e);
-            ESP_LOGI(kTag, "deferred preset write done (%s)", overdue ? "timeout" : "silence");
+            ESP_LOGI(kTag, "deferred preset write done (silence)");
         }
         unlock();
     }

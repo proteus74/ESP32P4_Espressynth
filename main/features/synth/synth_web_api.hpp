@@ -86,6 +86,7 @@ struct BroadcastWork {
 std::atomic<bool> cpu_status_pending{false};
 std::atomic<bool> node_status_pending{false};
 std::atomic<bool> cv_status_pending{false};
+std::atomic<bool> sampler_status_pending{false};
 // MIDI events for the browser (knob display + MIDI log). httpd's work queue is small and
 // drops silently when full, so nothing here is sent straight from the MIDI task:
 //  - control changes are LATEST-WINS per (channel, controller): a fast multi-fader sweep
@@ -276,6 +277,47 @@ inline void broadcast_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
     // Ordering is kept: broadcast_midi_tick() drains this FIFO before the coalesced CCs.
     const MidiFrame frame{status, data1, data2};
     xQueueSend(midi_fifo(), &frame, 0); // only drops if 64 events are already waiting
+}
+
+/**
+ * Broadcasts the playing Sampler voices' positions ("samplerPos", fractions 0..1 of the sample)
+ * for the web editor's cursor - only while at least one voice plays. The browser hides the
+ * cursor once these frames stop arriving, so no explicit "stopped" frame is needed.
+ */
+inline void broadcast_sampler_status_tick() {
+    if (Feature::Web::handle() == nullptr) return;
+    const uint8_t count = engine().samplerStatusCount();
+    if (count == 0) return;
+
+    static char json[1024];
+    int offset = snprintf(json, sizeof(json), "{\"type\":\"samplerPos\",\"w\":[");
+    bool anyPlaying = false;
+    bool firstWidget = true;
+    for (uint8_t i = 0; i < count && offset > 0 && static_cast<size_t>(offset) < sizeof(json); ++i) {
+        char widget_id[24];
+        float positions[SynthEngine::kMaxSamplerStatusVoices];
+        uint8_t voices = 0;
+        if (!engine().samplerStatusAt(i, widget_id, sizeof(widget_id), positions, &voices)) continue;
+        bool firstVoice = true;
+        for (uint8_t v = 0; v < voices && offset > 0 && static_cast<size_t>(offset) < sizeof(json); ++v) {
+            if (positions[v] < 0.0f) continue;
+            if (firstVoice) {
+                offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s[\"%s\",[",
+                                   firstWidget ? "" : ",", widget_id);
+                firstWidget = false;
+            }
+            offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "%s%.5f",
+                               firstVoice ? "" : ",", static_cast<double>(positions[v]));
+            firstVoice = false;
+            anyPlaying = true;
+        }
+        if (!firstVoice && offset > 0 && static_cast<size_t>(offset) < sizeof(json))
+            offset += snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]]");
+    }
+    if (anyPlaying && offset > 0 && static_cast<size_t>(offset) < sizeof(json)) {
+        snprintf(json + offset, sizeof(json) - static_cast<size_t>(offset), "]}");
+        broadcast_json(json, &sampler_status_pending);
+    }
 }
 
 /** Broadcasts live CV input values and CV device state at the UI refresh rate. */
@@ -1641,9 +1683,9 @@ esp_err_t battery_handler(httpd_req_t *req) {
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[400];
+    char json[448];
     snprintf(json, sizeof(json),
-             "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"pdmMic\":%s,\"battery\":%s,\"wm8960\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
+             "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"pdmMic\":%s,\"battery\":%s,\"wm8960\":%s,\"wm8960In\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
              "\"gpioOutputs\":%s,\"gitVersion\":\"%s\"}",
              FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
@@ -1667,6 +1709,11 @@ esp_err_t version_handler(httpd_req_t *req) {
              "false",
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+             "true",
+#else
+             "false",
+#endif
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960) && CONFIG_ONBOARD_AUDIO_WM8960_PIN_DIN >= 0
              "true",
 #else
              "false",

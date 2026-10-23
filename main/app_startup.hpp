@@ -15,6 +15,9 @@
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_BLUETOOTH)
     #include "esp_hosted.h"
+    extern "C" {
+    #include "esp_hosted_transport_config.h"  // no C++ guard of its own
+    }
 #endif
 
 #if defined(CONFIG_APP_ENABLE_LVGL)
@@ -114,6 +117,30 @@ inline void network_init_task(void*) {
 #endif
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_BLUETOOTH)
+#if !defined(CONFIG_BOARD_CUSTOM_P4)
+    // The C6 SDIO pins come from the board header, not from the esp_hosted Kconfig values
+    // (CONFIG_ESP_HOSTED_HOST_SDIO_PIN_*), so switching boards in menuconfig cannot leave
+    // stale pins behind. Custom boards keep the Kconfig values.
+    {
+        esp_hosted_sdio_config sdio_cfg = esp_hosted_get_default_sdio_config();
+        sdio_cfg.pin_clk.pin   = CurrentBoard::PIN_SDIO_CLK;
+        sdio_cfg.pin_cmd.pin   = CurrentBoard::PIN_SDIO_CMD;
+        sdio_cfg.pin_d0.pin    = CurrentBoard::PIN_SDIO_D0;
+        sdio_cfg.pin_d1.pin    = CurrentBoard::PIN_SDIO_D1;
+        sdio_cfg.pin_d2.pin    = CurrentBoard::PIN_SDIO_D2;
+        sdio_cfg.pin_d3.pin    = CurrentBoard::PIN_SDIO_D3;
+        sdio_cfg.pin_reset.pin = CurrentBoard::HOSTED_RESET_GPIO;
+        const esp_err_t sdio_cfg_err = static_cast<esp_err_t>(esp_hosted_sdio_set_config(&sdio_cfg));
+        if (sdio_cfg_err != ESP_OK) {
+            ESP_LOGW("MainApp", "ESP-Hosted SDIO pin config failed: %s", esp_err_to_name(sdio_cfg_err));
+        } else {
+            // The esp_hosted "transport[host]" log line still prints the Kconfig values.
+            ESP_LOGI("MainApp", "ESP-Hosted SDIO pins from board: CLK=%d CMD=%d D0=%d D1=%d D2=%d D3=%d RESET=%d",
+                     sdio_cfg.pin_clk.pin, sdio_cfg.pin_cmd.pin, sdio_cfg.pin_d0.pin, sdio_cfg.pin_d1.pin,
+                     sdio_cfg.pin_d2.pin, sdio_cfg.pin_d3.pin, sdio_cfg.pin_reset.pin);
+        }
+    }
+#endif
     const esp_err_t hosted_init_err = static_cast<esp_err_t>(esp_hosted_init());
     if (hosted_init_err != ESP_OK) {
         ESP_LOGW("MainApp", "ESP-Hosted initialization failed: %s", esp_err_to_name(hosted_init_err));

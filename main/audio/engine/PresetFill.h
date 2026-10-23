@@ -65,6 +65,7 @@
 #include "nodes/ValueMapperNode.h"
 #include "nodes/LinkedIONodes.h"
 #include "nodes/WavePlayerNode.h"
+#include "nodes/SamplerNode.h"
 
 // Parses the /api/preset JSON schema into a PresetDoc, aggregating every
 // node type's own parsePreset() (see nodes/*.h) into one dispatcher. Kept
@@ -142,6 +143,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::CvIn:
         nodes::cvin::parsePreset(p, out);
+        break;
+    case NodeType::Wm8960In:
+        nodes::wm8960in::parsePreset(p, out);
         break;
     case NodeType::CvOut:
         nodes::cvout::parsePreset(p, out);
@@ -257,6 +261,9 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::WavePlayer:
         nodes::waveplayer::parsePreset(p, out);
+        break;
+    case NodeType::Sampler:
+        nodes::sampler::parsePreset(p, out);
         break;
     case NodeType::SoundFontPlayer:
         soundfont::parsePreset(p, out);

@@ -4,6 +4,24 @@ cmake_minimum_required(VERSION 3.22)
 
 set(EXTRA_COMPONENT_DIRS "$ENV{IDF_PATH}/examples/bluetooth/nimble/common/nimble_central_utils")
 
+# LVGL (a ~36 MB static library plus esp_lvgl_port) is only needed when a display pipeline is
+# enabled. Component exclusion has to be known before project.cmake runs, i.e. before Kconfig
+# is evaluated, so read the already generated sdkconfig directly. A missing sdkconfig, or one
+# that was never evaluated (no display-output choice in it yet), keeps LVGL in the build.
+if(DEFINED SDKCONFIG AND NOT "${SDKCONFIG}" STREQUAL "")
+    set(app_sdkconfig "${SDKCONFIG}")
+else()
+    set(app_sdkconfig "${CMAKE_CURRENT_LIST_DIR}/sdkconfig")
+endif()
+if(EXISTS "${app_sdkconfig}")
+    file(STRINGS "${app_sdkconfig}" app_lvgl_enabled REGEX "^CONFIG_APP_ENABLE_LVGL=y$")
+    file(STRINGS "${app_sdkconfig}" app_display_known REGEX "^CONFIG_APP_DISPLAY_OUTPUT_[A-Z]+=y$")
+    if(app_display_known AND NOT app_lvgl_enabled)
+        message(STATUS "No display pipeline enabled: excluding LVGL components from the build")
+        list(APPEND EXCLUDE_COMPONENTS lvgl__lvgl espressif__esp_lvgl_port)
+    endif()
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 idf_build_set_property(COMPILE_DEFINITIONS "CFG_TUSB_CONFIG_FILE=\"${CMAKE_CURRENT_LIST_DIR}/main/tusb_config.h\"" APPEND)

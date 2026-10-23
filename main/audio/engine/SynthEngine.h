@@ -140,6 +140,27 @@ public:
         return true;
     }
 
+    // Playback positions of the Sampler widgets' voices for the editor's cursor (web UI
+    // "samplerPos" broadcast). Published every block by the render task; a position is a
+    // fraction 0..1 of the sample, < 0 for a voice that is not playing.
+    static constexpr uint8_t kMaxSamplerStatus = 8;
+    static constexpr uint8_t kMaxSamplerStatusVoices = 16;
+    uint8_t samplerStatusCount() const { return samplerStatusCount_.load(std::memory_order_relaxed); }
+    bool samplerStatusAt(uint8_t i, char *idOut, size_t idOutSize, float *positionsOut, uint8_t *voiceCountOut) const
+    {
+        if (i >= samplerStatusCount_.load(std::memory_order_relaxed) || idOut == nullptr || idOutSize == 0 ||
+            positionsOut == nullptr || voiceCountOut == nullptr)
+        {
+            return false;
+        }
+        snprintf(idOut, idOutSize, "%s", samplerStatusIds_[i]);
+        const uint8_t voices = samplerStatusVoices_[i].load(std::memory_order_relaxed);
+        for (uint8_t v = 0; v < voices; ++v)
+            positionsOut[v] = samplerStatusPos_[i][v].load(std::memory_order_relaxed);
+        *voiceCountOut = voices;
+        return true;
+    }
+
     // P0 baseline diagnostics (documentation/native-synth-optimization-plan-
     // 2026-09-09.md, sections 7/8): the block-level phase breakdown inside
     // Graph::renderBlock (percent of block budget, EMA-smoothed) that the
@@ -417,6 +438,11 @@ public:
     using MicRead = void (*)(float *block, size_t frames);
     void setMicInput(MicRead read) { micRead_ = read; }
 
+    // Optional stereo ADC source for the WM8960-In widget: same contract as MicRead, but fills
+    // `frames` samples into each of `left` and `right`.
+    using StereoRead = void (*)(float *left, float *right, size_t frames);
+    void setWm8960Input(StereoRead read) { wm8960Read_ = read; }
+
     // Optional MIDI-CC-out sink: fires whenever a MIDI-learned Knob's value
     // changes so a controller with LED rings/motorized faders can mirror it
     // back (e.g. a preset loaded with different values than the hardware is
@@ -525,14 +551,15 @@ private:
                 for (uint16_t w = 0; w < graph->widgetCount; ++w)
                 {
                     const WidgetSlot &slot = graph->widgets[w];
-                    if ((slot.type != NodeType::Wavetable && slot.type != NodeType::FmOscillator) ||
+                    if ((slot.type != NodeType::Wavetable && slot.type != NodeType::FmOscillator &&
+                         slot.type != NodeType::Lfo) ||
                         strcmp(slot.id, msg.widgetId) != 0)
                         continue;
                     for (uint16_t v = 0; v < slot.instanceCount; ++v)
                     {
                         NodeInstance &inst = graph->instances[slot.instanceBase + v];
                         wavetable::Bank *&target =
-                            slot.type == NodeType::Wavetable ? inst.lfo.wavetableBank : inst.fmOsc.wavetableBank;
+                            slot.type == NodeType::FmOscillator ? inst.fmOsc.wavetableBank : inst.lfo.wavetableBank;
                         wavetable::Bank *old = target;
                         target = wavetable::acquire(msg.bank);
                         // Last reference to a replaced bank frees ~8KB of
@@ -852,6 +879,7 @@ private:
     TapSubmit submitOut_ = nullptr;
     TapMix mixHostIn_ = nullptr;
     MicRead micRead_ = nullptr;
+    StereoRead wm8960Read_ = nullptr;
     MidiCcOut midiCcOut_ = nullptr;
     MidiFeedbackOut midiFeedbackOut_ = nullptr;
     MidiConnectionGeneration midiConnectionGeneration_ = nullptr;
@@ -921,6 +949,11 @@ private:
     std::atomic<bool> cvStatusIsInput_[synth::kMaxWidgets] = {};
     std::atomic<float> cvStatusVolts_[synth::kMaxWidgets] = {};
     std::atomic<uint16_t> cvStatusCount_{0};
+
+    char samplerStatusIds_[kMaxSamplerStatus][24] = {};
+    std::atomic<float> samplerStatusPos_[kMaxSamplerStatus][kMaxSamplerStatusVoices] = {};
+    std::atomic<uint8_t> samplerStatusVoices_[kMaxSamplerStatus] = {};
+    std::atomic<uint8_t> samplerStatusCount_{0};
 
     // P0 baseline diagnostics snapshots (see phaseSnapshot()/
     // blockStatsSnapshot() above) - published once per block from the render
@@ -1627,6 +1660,8 @@ inline void SynthEngine::taskLoop()
         gout.wmL = wmL; gout.wmR = wmR;
         gout.nsL = nsL; gout.nsR = nsR;
         if (micRead_ != nullptr) micRead_(nodes::micin::micInputBlock(), synth::kBlockSize);
+        if (wm8960Read_ != nullptr)
+            wm8960Read_(nodes::wm8960in::inputBlockL(), nodes::wm8960in::inputBlockR(), synth::kBlockSize);
         liveGraph_->renderBlock(gout, synth::kBlockSize);
         {
             // Silence detector for deferred flash writes (see outputSilentFor). One pass over
@@ -1722,6 +1757,30 @@ inline void SynthEngine::taskLoop()
                 ++cvN;
             }
             cvStatusCount_.store(cvN, std::memory_order_relaxed);
+        }
+
+        // Sampler playback positions for the web editor's cursor (see samplerStatusAt()).
+        {
+            uint8_t samplerN = 0;
+            for (uint16_t i = 0; i < liveGraph_->widgetCount && samplerN < kMaxSamplerStatus; ++i)
+            {
+                const WidgetSlot &slot = liveGraph_->widgets[i];
+                if (slot.type != NodeType::Sampler) continue;
+                memcpy(samplerStatusIds_[samplerN], slot.id, sizeof(samplerStatusIds_[samplerN]));
+                const uint8_t voices = static_cast<uint8_t>(
+                    slot.instanceCount < kMaxSamplerStatusVoices ? slot.instanceCount : kMaxSamplerStatusVoices);
+                for (uint8_t v = 0; v < voices; ++v)
+                {
+                    const SamplerState &s = liveGraph_->instances[slot.instanceBase + v].sampler;
+                    const float pos = s.playing && s.frameCount > 1
+                                          ? (static_cast<float>(s.index) + s.frac) / static_cast<float>(s.frameCount - 1)
+                                          : -1.0f;
+                    samplerStatusPos_[samplerN][v].store(pos, std::memory_order_relaxed);
+                }
+                samplerStatusVoices_[samplerN].store(voices, std::memory_order_relaxed);
+                ++samplerN;
+            }
+            samplerStatusCount_.store(samplerN, std::memory_order_relaxed);
         }
 
         // P0 baseline diagnostics: published every block (a handful of plain

@@ -1,0 +1,25 @@
+<h2>What it's for</h2>
+<p>Brings the WM8960 codec's analog input (the HAT's onboard microphones or the line input) into your
+patch as a stereo audio signal &mdash; for example into an Envelope Follower, an effect chain, or
+straight to an output. Only shown when the WM8960 is enabled in the firmware with its data-in pin set
+(ESP-IDF menuconfig: Audio Subsystem &rarr; WM8960, pin DIN).</p>
+<h2>Outputs</h2>
+<ul>
+<li><span class="port-label">Out L</span> &mdash; left channel (audio level, like an oscillator).</li>
+<li><span class="port-label">Out R</span> &mdash; right channel.</li>
+</ul>
+<h2>Settings</h2>
+<p>Double-click the widget to open its settings. They are sent to the WM8960 over I2C each time the preset
+is loaded or saved, so they are part of the preset.</p>
+<ul>
+<li><b>Input gain (PGA)</b> &mdash; -17.25 to +30 dB in 0.75 dB steps, applied to both channels.</li>
+<li><b>Mic boost</b> &mdash; 0, +13, +20 or +29 dB, in front of the input gain.</li>
+<li><b>ADC volume</b> &mdash; -97 to +30 dB digital gain after the converter.</li>
+<li><b>Mic bias</b> &mdash; powers electret microphones; switch it off for line-level sources.</li>
+</ul>
+<p>The total gain is the sum of the three gain stages. Default: input gain 24 dB, boost 0 dB, ADC 0 dB.</p>
+<h2>Tips</h2>
+<p>The onboard microphones are quiet: raise the input gain or mic boost, or put a Gain/VCA behind the
+widget. Using the same I2S port for input and output keeps both in
+sync, but feeding the input straight back to the WM8960 output can cause acoustic feedback. The browser
+preview uses your computer's microphone on both channels, and only over https or localhost.</p>

@@ -1,0 +1,16 @@
+<h2>What it's for</h2>
+<p>Plays a region of a sample/wave file, pitched by a 1V/octave pitch CV - like a classic
+sampler. Double-click the widget to open the editor: choose the sample and its root note,
+see the waveform and drag the Start, End and loop markers.</p>
+<h2>Inputs</h2>
+<ul>
+<li><span class="port-label">Amplitude</span> - loudness, 0-10 V (an ADSR output fits directly). Unconnected = full level.</li>
+<li><span class="port-label">Pitch (1V/Oct)</span> - playback pitch; 5 V (C4) plays the sample at its root note.</li>
+<li><span class="port-label">Gate</span> - every new gate plays from Start. Gate off stops nothing by itself: the
+voice sounds until the amplitude is back at 0 (e.g. the ADSR release has finished). Without <em>Loop</em> it also stops
+at End; with <em>Loop</em> on, Loop Start..Loop End repeats until the amplitude is 0.</li>
+<li><span class="port-label">Gain</span> - output level trim.</li>
+</ul>
+<p>Once stopped, the sampler reads nothing until the next gate. With the amplitude unconnected (full level) a loop runs until the next gate.</p>
+<h2>Outputs</h2>
+<p><span class="port-label">Out L</span> / <span class="port-label">Out R</span> - the stereo audio signal.</p>

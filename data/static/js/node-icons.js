@@ -43,6 +43,7 @@ export const NODE_ICONS = {
   oscillator: { color: "#06b6d4", svg: svg(path("M6,50 Q28,8 50,50 T94,50", 'stroke-width="9"')) },
   hammond: { color: "#f59e0b", svg: svg(path("M10,12 L90,12") + path("M18,12 L18,58 M34,12 L34,84 M50,12 L50,44 M66,12 L66,72 M82,12 L82,52", 'stroke-width="9"')) },
   "wave-player": { color: "#22c55e", svg: svg(path("M12,42 L12,58 M24,28 L24,72 M36,16 L36,84 M48,34 L48,66 M60,22 L60,78 M72,38 L72,62 M84,46 L84,54")) },
+  sampler: { color: "#22c55e", svg: svg(path("M10,14 L10,86 M90,14 L90,86") + path("M26,40 L26,60 M38,26 L38,74 M50,18 L50,82 M62,32 L62,68 M74,44 L74,56")) },
   "soundfont-player": { color: "#ec4899", svg: svg(path("M40,76 L40,18 L82,10 L82,66") + dot(30, 76, 11) + dot(72, 66, 11)) },
   "mda-piano": { color: "#38bdf8", svg: svg(`<rect x="10" y="16" width="80" height="68" rx="6"/>` + path("M30,52 L30,84 M50,52 L50,84 M70,52 L70,84", 'stroke-width="5"') + `<rect x="24" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/><rect x="44" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/><rect x="64" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/>`) },
 
@@ -123,6 +124,7 @@ export const NODE_ICONS = {
   "es8311-out": { color: "#14b8a6", svg: chip(path("M32,50 Q41,34 50,50 T68,50", 'stroke-width="6"')) },
   "wm8960-out": { color: "#f59e0b", svg: chip(path("M36,60 L36,50 Q36,34 50,34 Q64,34 64,50 L64,60", 'stroke-width="6"')) },
   "ns4168-out": { color: "#ef4444", svg: chip(path("M34,44 L42,44 L52,36 L52,64 L42,56 L34,56 Z M60,42 Q66,50 60,58", 'stroke-width="5"')) },
+  "wm8960-in": { color: "#f59e0b", svg: chip(path("M36,40 Q36,30 50,30 Q64,30 64,40 L64,52 Q64,62 50,62 Q36,62 36,52 Z M30,58 Q30,72 50,72 Q70,72 70,58", 'stroke-width="5"')) },
   "mic-in": { color: "#ec4899", svg: svg(`<rect x="36" y="8" width="28" height="50" rx="14"/>` + path("M22,46 Q22,74 50,74 Q78,74 78,46 M50,74 L50,90 M36,90 L64,90")) },
 
   // ---- Misc ----

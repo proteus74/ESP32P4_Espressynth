@@ -8,6 +8,7 @@
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
 #include "../SynthConfig.h"
+#include "../Wavetable.h"
 
 // Free-running LFO (sine/square/triangle/sawtooth/noise) with reset/one-shot/
 // global modes. The Wavetable widget (nodes/WavetableNode.h) shares LfoState,
@@ -16,6 +17,7 @@ namespace nodes::lfo
 {
 
 constexpr float kMaxRateHz = 500.0f;
+constexpr int kMorphPort = 8; // "morph", only audible with WaveType::Wavetable (audio-rate)
 
 inline float clampRate(float value)
 {
@@ -252,6 +254,39 @@ inline void render(NodeInstance &inst, size_t frames)
     // can't represent that). Any reset edge also forces per-sample even for
     // a Sine wave, so the interpolated path can't "swallow" a reset pulse
     // landing mid-block.
+    // Wavetable: same table sampling as nodes/WavetableNode.h, plus this LFO's phase, offset and
+    // delay. No bank yet (switched live before the browser's upload arrived): a sine, like FM.
+    if (s.wave == WaveType::Wavetable)
+    {
+        const bool morphFed = controlPortConnected(inst, kMorphPort) || (inst.audioConnectedPortMask & synth::portBit(kMorphPort)) != 0;
+        const float manualMorph = s.morph * cv::kInvMaxVolts;
+        const float step = s.rate / kSampleRate;
+        const uint32_t inc = PhaseOsc::toPhaseInt(step);
+        const uint32_t offset = PhaseOsc::toPhaseInt(phaseOffset);
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const uint32_t phase = s.phaseGen.phaseInt() + offset;
+            const float morph = morphFed ? portSample(inst, kMorphPort, i) * cv::kInvMaxVolts : manualMorph;
+            const float raw = s.wavetableBank != nullptr ? ::wavetable::sample(*s.wavetableBank, phase, morph)
+                                                         : dsp::sineLookupInt(phase);
+            inst.outL[i] = clampf(center + raw * halfSwing, clampLo, clampHi);
+            if (oneShotOn && s.oneShotDone)
+                continue; // held at the cycle start - morph still acts on it
+            if (oneShotOn)
+            {
+                s.oneShotAccum += step;
+                if (s.oneShotAccum >= 1.0f)
+                {
+                    s.phaseGen.resetPhase();
+                    s.oneShotDone = true;
+                    s.oneShotAccum = 0.0f;
+                    continue;
+                }
+            }
+            s.phaseGen.advancePhaseOnly(inc, 1);
+        }
+        return;
+    }
     if (s.wave != WaveType::Sine || resetEdge || oneShotOn)
     {
         for (size_t i = 0; i < frames; ++i)
@@ -317,6 +352,14 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.lfo.oneShot = p.lfoOneShot;
     inst.lfo.global = p.lfoGlobal;
     inst.lfo.delaySec = p.lfoDelay;
+    inst.lfo.morph = p.wavetableMorph;
+    inst.lfo.wavetableBank = ::wavetable::acquire(p.wavetableBank);
+}
+
+inline void destroy(NodeInstance &inst)
+{
+    ::wavetable::release(inst.lfo.wavetableBank);
+    inst.lfo.wavetableBank = nullptr;
 }
 
 inline bool setParam(NodeInstance &inst, const char *name, float value)
@@ -351,6 +394,11 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.lfo.zeroPoint = value;
         return true;
     }
+    if (strcmp(name, "morph") == 0)
+    {
+        inst.lfo.morph = clampVolts(value);
+        return true;
+    }
     if (strcmp(name, "delay") == 0)
     {
         inst.lfo.delaySec = value < 0.0f ? 0.0f : (value > 5.0f ? 5.0f : value);
@@ -361,7 +409,12 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
 
 inline void parsePreset(cJSON *p, WidgetParams &out)
 {
-    out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"));
+    out.waveType = waveTypeFromString(presetparser::getString(p, "waveType", "sine"), false, true);
+    // Wavetable: same "wavetables"/"morph" keys as the Wavetable widget. A bank is only built
+    // when stored or when the wavetable waveform is selected (then the default bank).
+    out.wavetableMorph = presetparser::getFloat(p, "morph", 0.0f);
+    out.wavetableBank = ::wavetable::parse(p ? cJSON_GetObjectItemCaseSensitive(p, "wavetables") : nullptr,
+                                           out.waveType == WaveType::Wavetable);
     out.lfoMaxRate = clampRate(presetparser::getFloat(p, "maxRate", 50.0f));
     out.lfoRate = clampRate(presetparser::getFloat(p, "rate", 2.0f), out.lfoMaxRate);
     out.lfoGain = clampVolts(presetparser::getFloat(p, "gain", 10.0f));

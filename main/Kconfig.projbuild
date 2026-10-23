@@ -1227,8 +1227,8 @@ endchoice
 # Board defaults for symbols owned by other components. Project Kconfigs are parsed
 # before "Component config", so these defaults win over the components' own - but only
 # for a fresh sdkconfig: these symbols have visible prompts there, so a value already in
-# the sdkconfig is kept. main/boards/board_config.hpp static_asserts the board-critical
-# ones so a stale value fails the build instead of the hardware.
+# the sdkconfig is kept. (The C6 SDIO pins are therefore not seeded here at all;
+# app_startup.hpp passes the board header's pins to esp_hosted at runtime.)
 choice ESP_CONSOLE_UART
     default ESP_CONSOLE_USB_SERIAL_JTAG if BOARD_JC1060P470C_7_INCH
 endchoice
@@ -1238,28 +1238,3 @@ endchoice
 choice ESP_CONSOLE_SECONDARY
     default ESP_CONSOLE_SECONDARY_NONE if APP_ENABLE_USB_DEVICE
 endchoice
-
-if BOARD_CROWPANEL_5INCH
-    # C6 SDIO runs over the GPIO matrix here (the RGB panel occupies the IOMUX pins).
-    config ESP_HOSTED_HOST_SDIO_PIN_CMD
-        int
-        default 54
-    config ESP_HOSTED_HOST_SDIO_PIN_CLK
-        int
-        default 53
-    config ESP_HOSTED_HOST_SDIO_PIN_D0
-        int
-        default 52
-    config ESP_HOSTED_HOST_SDIO_PIN_D1
-        int
-        default 51
-    config ESP_HOSTED_HOST_SDIO_PIN_D2
-        int
-        default 50
-    config ESP_HOSTED_HOST_SDIO_PIN_D3
-        int
-        default 49
-    config ESP_HOSTED_HOST_RESET_GPIO
-        int
-        default 20
-endif

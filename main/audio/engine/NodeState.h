@@ -739,6 +739,36 @@ struct WavePlayerState
     OnePoleLowpass gainSmooth;
 };
 
+// Per-voice pitch-CV sample playback with start/end and a sustain loop (nodes/SamplerNode.h).
+// Shares WavePlayer's widget-owned, build-time-decoded buffer (Graph::waveSampleCache).
+// Markers are fractions 0..1 of the sample length, so they survive the load-time resample.
+struct SamplerState
+{
+    const int16_t *sampleData = nullptr; // interleaved stereo PCM16
+    uint32_t frameCount = 0;
+
+    int rootNoteMidi = 60;
+    float start = 0.0f;
+    float end = 1.0f;
+    float loopStart = 0.0f;
+    float loopEnd = 1.0f;
+    bool loop = false;
+
+    // Integer frame + fraction: a single float loses sub-frame precision past ~1M frames.
+    uint32_t index = 0;
+    float frac = 0.0f;
+    bool gatePrev = false;
+    bool playing = false;
+    bool heard = false; // amplitude*gain was audible since the last gate - see SamplerNode.h
+    // Retrigger while playing: the previous read position, faded out over fadeRemaining frames.
+    uint32_t fadeIndex = 0;
+    float fadeFrac = 0.0f;
+    uint16_t fadeRemaining = 0;
+
+    float gainCv = 10.0f;
+    OnePoleLowpass gainSmooth;
+};
+
 struct tsf;
 
 // One playback state per graph voice. tsf_copy() shares the immutable decoded

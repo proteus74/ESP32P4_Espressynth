@@ -1,6 +1,7 @@
 #pragma once
 #include "sdkconfig.h"
 #include "driver/gpio.h"
+#include "boards/reserved_pin.hpp"
 
 namespace Board::Custom {
 
@@ -45,10 +46,10 @@ constexpr int        SDMMC_LDO_CHANNEL = CONFIG_SDMMC_LDO_CHANNEL;
 // Every named pin above that's physically wired on this board (GPIO_NUM_NC entries are
 // harmless - filtered out by conflict checks). Used to catch a user-chosen pin (e.g. the
 // generic WM8960 codec's I2S/button pins) colliding with something already in use here.
-constexpr gpio_num_t RESERVED_PINS[] = {
-    PIN_TOUCH_RST, PIN_TOUCH_INT,
-    PIN_LCD_RST, PIN_BACKLIGHT,
-    PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_DIN, PIN_I2S_LRCK, PIN_AUDIO_PA,
+constexpr ReservedPin RESERVED_PINS[] = {
+    BOARD_PIN(PIN_TOUCH_RST), BOARD_PIN(PIN_TOUCH_INT),
+    BOARD_PIN(PIN_LCD_RST), BOARD_PIN(PIN_BACKLIGHT),
+    BOARD_PIN(PIN_I2S_MCLK), BOARD_PIN(PIN_I2S_BCLK), BOARD_PIN(PIN_I2S_DOUT), BOARD_PIN(PIN_I2S_DIN), BOARD_PIN(PIN_I2S_LRCK), BOARD_PIN(PIN_AUDIO_PA),
 };
 
 } // namespace Board::Custom

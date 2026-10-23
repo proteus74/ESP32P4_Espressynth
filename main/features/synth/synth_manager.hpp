@@ -330,6 +330,15 @@ void tap_mix(float *blockL, float *blockR, size_t frames) {
 } // namespace
 #endif // CONFIG_APP_ENABLE_USB_DEVICE && CONFIG_USB_DEV_ENABLE_UAC2
 
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+namespace {
+// WM8960-In widget -> codec input stages (see nodes/Wm8960InNode.h).
+void apply_wm8960_input_settings(float pgaDb, int boostDb, float adcDb, bool micBias) {
+    Feature::Audio::WM8960::request_input_settings(pgaDb, static_cast<float>(boostDb), adcDb, micBias);
+}
+} // namespace
+#endif
+
 #if defined(CONFIG_APP_MIDI_CC_FEEDBACK_OUT)
 namespace {
 // MidiCcOut sink (see SynthEngine::setMidiCcOutCallback): mirrors a MIDI-learned Knob's value
@@ -682,6 +691,13 @@ inline esp_err_t init() {
 #if defined(CONFIG_ONBOARD_AUDIO_PDM_MIC)
     if (Feature::Audio::PdmMic::available()) {
         s_engine.setMicInput(&Feature::Audio::PdmMic::read_block);
+    }
+#endif
+
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960)
+    if (Feature::Audio::WM8960::input_available()) {
+        s_engine.setWm8960Input(&Feature::Audio::WM8960::read_block_stereo);
+        nodes::wm8960in::applyHook = &apply_wm8960_input_settings;
     }
 #endif
 

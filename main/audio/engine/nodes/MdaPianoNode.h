@@ -245,13 +245,17 @@ inline void render(NodeInstance &inst, size_t frames)
     }
     rt->effects.process(inst.outL, inst.outR, static_cast<int>(frames));
 
+    // mda-ePiano peaks at ~0.2 for a single velocity-127 note (internal volume 0.2,
+    // final *0.5); x5 brings that to cv::kAudioPeakVolts like a full-scale Oscillator.
+    // Must match audio-engine.js's mda-piano processor.
+    constexpr float kOutputScale = cv::kAudioPeakVolts * 5.0f;
     const bool gainFed = (connected & synth::portBit(11)) != 0;
     const float gainTarget = cv::vcaGain(state.gainCv, false);
     for (size_t i = 0; i < frames; ++i)
     {
         const float gain = gainFed
-            ? cv::vcaGain(clampCv(noderender::portSample(inst, 11, i)), false) * cv::kAudioPeakVolts * 3
-            : state.gainSmooth.process(gainTarget) * cv::kAudioPeakVolts * 3 ;
+            ? cv::vcaGain(clampCv(noderender::portSample(inst, 11, i)), false) * kOutputScale
+            : state.gainSmooth.process(gainTarget) * kOutputScale;
         inst.outL[i] *= gain;
         inst.outR[i] *= gain;
     }

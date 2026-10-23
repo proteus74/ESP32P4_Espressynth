@@ -25,6 +25,7 @@
 #include "nodes/ClockNode.h"
 #include "nodes/CvInNode.h"
 #include "nodes/MicInNode.h"
+#include "nodes/Wm8960InNode.h"
 #include "nodes/CvOutNode.h"
 #include "nodes/DigitalInNode.h"
 #include "nodes/DigitalOutNode.h"
@@ -62,6 +63,7 @@
 #include "nodes/ValueMapperNode.h"
 #include "nodes/LinkedIONodes.h"
 #include "nodes/WavePlayerNode.h"
+#include "nodes/SamplerNode.h"
 
 // Switch-dispatch DSP render for one block, aggregating every node type's
 // own render() (see nodes/*.h) into one call site. Reads inst.inPorts
@@ -104,6 +106,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         break;
     case NodeType::MicIn:
         nodes::micin::render(inst, frames);
+        break;
+    case NodeType::Wm8960In:
+        nodes::wm8960in::render(inst, frames);
         break;
     case NodeType::CvOut:
         nodes::cvout::render(inst, frames);
@@ -292,6 +297,9 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::WavePlayer:
         nodes::waveplayer::render(inst, frames);
         break;
+    case NodeType::Sampler:
+        nodes::sampler::render(inst, frames);
+        break;
     case NodeType::SoundFontPlayer:
     {
         using namespace noderender;
@@ -344,11 +352,16 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
             }
             const float *planarL = planar;
             const float *planarR = planar + frames;
+            // x2: tsf's center pan (-3 dB) and velocity curve leave a GM single note
+            // around 0.5 of full scale (Creative 4M GM median at C4/vel 100); x2 brings
+            // it near a full-scale Oscillator. Must match audio-engine.js's
+            // _sf2ChannelGainNode().
+            constexpr float kOutputScale = cv::kAudioPeakVolts * 2.0f;
             if (gainFed)
             {
                 for (size_t i = 0; i < frames; ++i)
                 {
-                    const float gainMul = cv::vcaGain(portSample(inst, 5, i), false) * cv::kAudioPeakVolts;
+                    const float gainMul = cv::vcaGain(portSample(inst, 5, i), false) * kOutputScale;
                     inst.outL[i] = planarL[i] * gainMul;
                     inst.outR[i] = planarR[i] * gainMul;
                 }
@@ -357,7 +370,7 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
             {
                 for (size_t i = 0; i < frames; ++i)
                 {
-                    const float gainMul = s.gainSmooth.process(gainTarget) * cv::kAudioPeakVolts;
+                    const float gainMul = s.gainSmooth.process(gainTarget) * kOutputScale;
                     inst.outL[i] = planarL[i] * gainMul;
                     inst.outR[i] = planarR[i] * gainMul;
                 }

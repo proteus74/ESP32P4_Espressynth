@@ -5,7 +5,7 @@ import { WavetableLfoCore, createDefaultBank, sampleBank } from "./wavetable-cor
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv, createCombFilterDsp } from "./comb-filter-core.js?v=20260926-comb-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, overdriveCv, createOverdriveDsp } from "./overdrive-core.js?v=20261003-od-3";
 import { createReverbCore } from "./reverb-core.js?v=20260926-knob-2";
-import { createFm8Engine } from "./fm8-core.js?v=20261018-fm8-1";
+import { createFm8Engine } from "./fm8-core.js?v=20261021-level-1";
 
 // FM8 control ports in nodes/Fm8Node.h port order (ChannelMerger inputs of its processor).
 const FM8_PORTS = ["pitchCv", "gate", "velocity", "tune", "gain"];
@@ -1843,6 +1843,156 @@ export class AudioEngine {
     entry.source = source;
   }
 
+  // Sampler (nodes/SamplerNode.h): markers are fractions 0..1 of the sample. The source plays a
+  // copy trimmed to [start, end], so without the loop it ends at `end` by itself.
+  _samplerTrimmedBuffer(entry) {
+    const buffer = entry.buffer;
+    const key = `${entry.start}|${entry.end}`;
+    if (entry.trimmed && entry.trimmedFrom === buffer && entry.trimmedKey === key) return entry.trimmed;
+    const last = buffer.length - 1;
+    const startFrame = Math.min(Math.floor(clampRange(entry.start, 0, 1) * last), last - 1);
+    const endFrame = Math.max(Math.floor(clampRange(entry.end, 0, 1) * last), startFrame + 1);
+    const trimmed = this.ctx.createBuffer(buffer.numberOfChannels, endFrame - startFrame + 1, buffer.sampleRate);
+    for (let c = 0; c < buffer.numberOfChannels; c += 1) {
+      trimmed.copyToChannel(buffer.getChannelData(c).subarray(startFrame, endFrame + 1), c);
+    }
+    entry.trimmed = trimmed;
+    entry.trimmedFrom = buffer;
+    entry.trimmedKey = key;
+    entry.trimmedStartSec = startFrame / buffer.sampleRate;
+    return trimmed;
+  }
+
+  _samplerRate(entry) {
+    return 2 ** (entry.pitchCv - CV_MAX_VOLTS / 2 + (60 - entry.rootNoteMidi) / 12);
+  }
+
+  _applySamplerLoop(entry) {
+    const source = entry.source;
+    if (!source || !entry.buffer) return;
+    const sr = entry.buffer.sampleRate;
+    const last = entry.buffer.length - 1;
+    const loopStart = Math.max(entry.loopStart, entry.start);
+    const loopEnd = Math.max(Math.min(entry.loopEnd, entry.end), loopStart);
+    source.loopStart = Math.max(0, (loopStart * last) / sr - entry.trimmedStartSec);
+    source.loopEnd = Math.max(source.loopStart + 1 / sr, (loopEnd * last) / sr - entry.trimmedStartSec);
+    source.loop = entry.loop;
+  }
+
+  _retriggerSamplerEntry(entry) {
+    if (!this.ctx || !entry.buffer || entry.buffer.length < 3) return;
+    const now = this.ctx.currentTime;
+    if (entry.source) {
+      // Still playing: fade the old position out (5 ms) while the new note starts - no hard cut.
+      const old = entry.source;
+      const oldGain = entry.sourceGain;
+      try {
+        oldGain.gain.setValueAtTime(1, now);
+        oldGain.gain.linearRampToValueAtTime(0, now + 0.005);
+        old.stop(now + 0.006);
+      } catch (err) {
+        /* already stopped */
+      }
+      old.onended = () => oldGain.disconnect();
+    }
+    entry.releaseGain.gain.cancelScheduledValues(now);
+    entry.releaseGain.gain.setValueAtTime(1, now);
+    const source = this.ctx.createBufferSource();
+    source.buffer = this._samplerTrimmedBuffer(entry);
+    source.playbackRate.value = this._samplerRate(entry);
+    const sourceGain = this.ctx.createGain();
+    source.connect(sourceGain);
+    sourceGain.connect(entry.releaseGain);
+    entry.sourceGain = sourceGain;
+    source.onended = () => {
+      if (entry.source === source) this._stopSamplerSource(entry);
+    };
+    entry.source = source;
+    this._applySamplerLoop(entry);
+    source.start(now);
+    entry.playT0 = now;
+    entry.playPos0 = 0;
+    entry.playEndAt = null;
+    this._watchSamplerLevel(entry);
+  }
+
+  _stopSamplerSource(entry) {
+    clearInterval(entry.levelTimer);
+    entry.levelTimer = null;
+    if (!entry.source) return;
+    try {
+      entry.source.stop();
+      entry.source.disconnect();
+    } catch (err) {
+      /* already stopped */
+    }
+    entry.source = null;
+    entry.playT0 = null;
+    if (entry.sourceGain) entry.sourceGain.disconnect();
+    entry.sourceGain = null;
+  }
+
+  // Same stop rule as SamplerNode.h: the voice plays until amplitude*gain is back at 0 (once it
+  // has been audible since the gate, or right away when the gate is already off). The level is
+  // ampGain's own value (unconnected 1, control-rate amplitude) plus the amplitude cable's CV,
+  // read from an analyser on ampCv's output.
+  _watchSamplerLevel(entry) {
+    clearInterval(entry.levelTimer);
+    entry.heard = false;
+    if (!entry.ampProbe) {
+      entry.ampProbe = this.ctx.createAnalyser();
+      entry.ampProbe.fftSize = 256;
+      entry.ampProbeData = new Float32Array(entry.ampProbe.fftSize);
+      entry.ampCv.waveShaper.connect(entry.ampProbe);
+    }
+    entry.levelTimer = setInterval(() => {
+      entry.ampProbe.getFloatTimeDomainData(entry.ampProbeData);
+      let cv = 0;
+      for (const v of entry.ampProbeData) cv = Math.max(cv, Math.abs(v));
+      const gain = entry.gainCvActive ? 1 : (Number(entry.gain) || 0) / CV_MAX_VOLTS;
+      const level = (entry.ampGain.gain.value + cv) * gain;
+      if (level > 1e-4) entry.heard = true;
+      else if (entry.heard || !entry.gate) this._stopSamplerSource(entry);
+    }, 50);
+  }
+
+  // Seconds into the trimmed buffer the source is at right now, or null once it has stopped.
+  // Extrapolated from the last anchor (playT0/playPos0), so a pitch change mid-note needs a
+  // _samplerRebase() first - close enough for the editor's cursor.
+  _samplerPlayPos(entry) {
+    if (!this.ctx || !entry.source || entry.playT0 == null || !entry.trimmed) return null;
+    const now = this.ctx.currentTime;
+    if (entry.playEndAt != null && now > entry.playEndAt) return null;
+    let pos = entry.playPos0 + (now - entry.playT0) * entry.source.playbackRate.value;
+    const { loopStart, loopEnd } = entry.source;
+    if (entry.source.loop && loopEnd > loopStart && pos >= loopEnd) {
+      pos = loopStart + ((pos - loopStart) % (loopEnd - loopStart));
+    }
+    return pos < entry.trimmed.duration ? pos : null;
+  }
+
+  _samplerRebase(entry) {
+    const pos = this._samplerPlayPos(entry);
+    if (pos === null) return;
+    entry.playPos0 = pos;
+    entry.playT0 = this.ctx.currentTime;
+  }
+
+  // Playing voices of a Sampler widget as fractions 0..1 of the whole sample (editor cursor).
+  getSamplerPlayheads(id) {
+    const wrapper = this.nodes.get(id);
+    if (!wrapper) return [];
+    const entries = wrapper.voiced ? wrapper.instances : [wrapper];
+    const out = [];
+    entries.forEach((entry) => {
+      if (!entry || entry.type !== "sampler" || !entry.buffer) return;
+      const pos = this._samplerPlayPos(entry);
+      if (pos === null) return;
+      out.push(((entry.trimmedStartSec + pos) * entry.buffer.sampleRate) / (entry.buffer.length - 1));
+    });
+    return out;
+  }
+
   
 
   _sf2NewChannelState(bank, program) {
@@ -1946,7 +2096,7 @@ export class AudioEngine {
   _sf2ChannelGainNode(ctx, entry, channelIndex) {
     if (!entry.channelGainNodes[channelIndex]) {
       const gain = ctx.createGain();
-      gain.gain.value = 1;
+      gain.gain.value = 2; // NodeRender.h SoundFontPlayer kOutputScale (x2)
       gain.connect(entry.splitter);
       entry.channelGainNodes[channelIndex] = gain;
     }
@@ -2834,9 +2984,9 @@ export class AudioEngine {
           Array.isArray(params.ratios) && params.ratios.length === 9
             ? params.ratios
             : [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];
-        // kDrawbarNorm is AUDIO_PEAK_VOLTS / 9; the AUDIO_PEAK_VOLTS part is
-        // already applied by outGain (same as the oscillator), so only 1/9 here.
-        const NORM = 1 / 9;
+        // kDrawbarNorm is AUDIO_PEAK_VOLTS / 3; the AUDIO_PEAK_VOLTS part is
+        // already applied by outGain (same as the oscillator), so only 1/3 here.
+        const NORM = 1 / 3;
 
         const ampGain = ctx.createGain();
         ampGain.gain.value = 0;
@@ -2979,7 +3129,7 @@ export class AudioEngine {
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";
         const oneShot = params.oneShot === true;
-        const wavetable = type === "wavetable";
+        const wavetable = type === "wavetable" || waveType === "wavetable";
         const wtTables = Array.isArray(params.wavetables) && params.wavetables.length > 0
           ? params.wavetables.map((t) => Float32Array.from(t))
           : createDefaultBank();
@@ -4594,6 +4744,53 @@ export class AudioEngine {
         this._loadWavePlayerBuffer(entry);
         return entry;
       }
+      case "sampler": {
+        // Same chain as "wave-player", but "amplitude" is a 0-10 V CV (ampCv, like the
+        // oscillator's) instead of a raw multiplier - see nodes/SamplerNode.h.
+        const releaseGain = ctx.createGain();
+        const ampGain = ctx.createGain();
+        ampGain.gain.value = 1; // unconnected: full level; an amplitude cable zeroes this
+        releaseGain.connect(ampGain);
+        const ampCv = this._createCvGainChain(ctx, "linear");
+        ampCv.waveShaper.connect(ampGain.gain);
+        const outGain = ctx.createGain();
+        outGain.gain.value = ((params.gain ?? CV_MAX_VOLTS) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS;
+        ampGain.connect(outGain);
+        const gainCv = this._createCvGainChain(ctx, "linear", AUDIO_PEAK_VOLTS);
+        gainCv.waveShaper.connect(outGain.gain);
+        const splitter = ctx.createChannelSplitter(2);
+        outGain.connect(splitter);
+        const leftOut = ctx.createGain();
+        const rightOut = ctx.createGain();
+        splitter.connect(leftOut, 0, 0);
+        splitter.connect(rightOut, 1, 0);
+        const entry = {
+          type,
+          releaseGain,
+          ampGain,
+          ampCv,
+          outGain,
+          gain: params.gain ?? CV_MAX_VOLTS,
+          gainCv,
+          gainCvActive: false,
+          splitter,
+          leftOut,
+          rightOut,
+          source: null,
+          buffer: null,
+          gate: false,
+          pitchCv: CV_MAX_VOLTS / 2,
+          rootNoteMidi: params.rootNoteMidi ?? 60,
+          sampleFile: params.sampleFile || "",
+          start: params.start ?? 0,
+          end: params.end ?? 1,
+          loopStart: params.loopStart ?? 0,
+          loopEnd: params.loopEnd ?? 1,
+          loop: params.loop === true,
+        };
+        this._loadWavePlayerBuffer(entry);
+        return entry;
+      }
       case "soundfont-player": {
         
         
@@ -4726,42 +4923,38 @@ export class AudioEngine {
 
           const gainCv = event.inputBuffer.getChannelData(11);
           for (let i = 0; i < frames; i += 1) {
-            const g = vcaAmountFromCv(gainCv[i], "linear") * AUDIO_PEAK_VOLTS * 3;
+            const g = vcaAmountFromCv(gainCv[i], "linear") * AUDIO_PEAK_VOLTS * 5; // MdaPianoNode.h kOutputScale
             outL[i] *= g;
             outR[i] *= g;
           }
         };
         return entry;
       }
-      case "mic-in": {
-        // Browser stand-in for the onboard PDM microphone (nodes/MicInNode.h): the page's own
+      case "mic-in":
+      case "wm8960-in": {
+        // Browser stand-in for the onboard PDM microphone (nodes/MicInNode.h) and the WM8960
+        // ADC (nodes/Wm8960InNode.h, one gain node feeds both channels): the page's own
         // microphone via getUserMedia, scaled to +/-AUDIO_PEAK_VOLTS like the firmware.
         // getUserMedia only exists in a secure context (https or localhost) - over the device's
-        // plain-http UI the widget stays silent and says so (see getMicInStatus).
+        // plain-http UI the widget just stays silent.
         const outGain = ctx.createGain();
         outGain.gain.value = AUDIO_PEAK_VOLTS;
-        const entry = { type, outGain, stream: null, source: null, status: "Mikrofon: wird angefragt …", extraNodes: [outGain] };
+        const entry = { type, outGain, stream: null, source: null, extraNodes: [outGain] };
         entry.cleanup = () => {
           if (entry.source) { try { entry.source.disconnect(); } catch (err) { /* already */ } }
           if (entry.stream) entry.stream.getTracks().forEach((t) => t.stop());
           entry.stream = null;
           entry.source = null;
         };
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          entry.status = window.isSecureContext ? "Mikrofon: nicht verfügbar" : "Mikrofon: nur über https/localhost";
-        } else {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false })
             .then((stream) => {
               if (!this.nodes.size || entry.removed) { stream.getTracks().forEach((t) => t.stop()); return; }
               entry.stream = stream;
               entry.source = ctx.createMediaStreamSource(stream);
               entry.source.connect(outGain);
-              const label = stream.getAudioTracks()[0]?.label;
-              entry.status = label ? `Mikrofon: ${label}` : "Mikrofon: aktiv";
             })
-            .catch((err) => {
-              entry.status = err && err.name === "NotAllowedError" ? "Mikrofon: Zugriff verweigert" : `Mikrofon: ${err?.name || "Fehler"}`;
-            });
+            .catch(() => { /* no microphone permission: the widget stays silent */ });
         }
         return entry;
       }
@@ -4840,7 +5033,9 @@ export class AudioEngine {
     } else {
       const instances = [];
       for (let v = 0; v < voiceCount; v += 1) {
-        instances.push(this._buildNode(ctx, type, params));
+        const instance = this._buildNode(ctx, type, params);
+        if (instance) instance.voiceIndex = v;
+        instances.push(instance);
       }
       
       
@@ -5107,13 +5302,6 @@ export class AudioEngine {
     }
   }
 
-  // Mic-In widget status line (main.js's tickAudioMonitors polls it).
-  getMicInStatus(id) {
-    const wrapper = this.nodes.get(id);
-    const entry = wrapper && wrapper.voiced ? wrapper.instances[0] : wrapper;
-    return entry && entry.type === "mic-in" ? entry.status : "";
-  }
-
   _removeEntry(entry) {
     if (!entry) return;
     entry.removed = true;
@@ -5148,7 +5336,7 @@ export class AudioEngine {
         entry.lfoOsc.disconnect();
       }
       if (entry.lfoOneShotTimer) clearTimeout(entry.lfoOneShotTimer);
-      if (entry.type === "wavetable") this._destroyLfoWavetableSource(entry);
+      if (entry.type === "wavetable" || entry.type === "lfo") this._destroyLfoWavetableSource(entry);
       if (entry.lfoGain) entry.lfoGain.disconnect();
       if (entry.centerOffset) {
         entry.centerOffset.stop();
@@ -5367,7 +5555,8 @@ export class AudioEngine {
       if (entry.bandsR) entry.bandsR.forEach((b) => b.disconnect());
       if (entry.outputGainL) entry.outputGainL.disconnect();
       if (entry.outputGainR) entry.outputGainR.disconnect();
-      if (entry.type === "wave-player") {
+      if (entry.type === "sampler") clearInterval(entry.levelTimer);
+      if (entry.type === "wave-player" || entry.type === "sampler") {
         if (entry.source) {
           entry.source.stop();
           entry.source.disconnect();
@@ -5452,7 +5641,7 @@ export class AudioEngine {
   }
 
   _setLfoWavetable(entry, enabled) {
-    if (!entry || entry.type !== "wavetable" || entry.lfoWavetable === enabled) return;
+    if (!entry || (entry.type !== "wavetable" && entry.type !== "lfo") || entry.lfoWavetable === enabled) return;
     entry.lfoWavetable = enabled;
     if (enabled) {
       try {
@@ -5975,8 +6164,15 @@ export class AudioEngine {
           g.setValueAtTime(g.value, now);
           if (value >= GATE_THRESHOLD_VOLTS) {
             entry.releaseEndsAt = null;
-            g.linearRampToValueAtTime(1, now + entry.attack);
-            g.linearRampToValueAtTime(entry.sustain, now + entry.attack + entry.decay);
+            // Voice still sounding through a Sampler (stolen / re-struck): fade to 0 first, then
+            // the full attack - same as RampScheduler::restart() on the device.
+            let t0 = now;
+            if (this._samplerPlayingInVoice(entry.voiceIndex ?? 0)) {
+              t0 = now + 0.005;
+              g.linearRampToValueAtTime(0, t0);
+            }
+            g.linearRampToValueAtTime(1, t0 + entry.attack);
+            g.linearRampToValueAtTime(entry.sustain, t0 + entry.attack + entry.decay);
           } else {
             entry.releaseEndsAt = now + entry.release;
             g.linearRampToValueAtTime(0, now + entry.release);
@@ -6065,6 +6261,7 @@ export class AudioEngine {
           }
           setOscWaveType(this.ctx, entry.lfoOsc, value, (entry.lfoPhase ?? 0) / 360);
           entry.lfoWaveType = value;
+          if (entry.type === "lfo") this._setLfoWavetable(entry, value === "wavetable");
           if (lfoLinearHold(entry)) {
             // Picking a linear wave in One Shot: held at its start until the next reset.
             entry.lfoLinearPos0 = 0;
@@ -6330,6 +6527,39 @@ export class AudioEngine {
           if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
         }
         break;
+      case "sampler":
+        if (paramName === "pitchCv") {
+          this._samplerRebase(entry);
+          entry.pitchCv = Number(value) || 0;
+          if (entry.source) entry.source.playbackRate.value = this._samplerRate(entry);
+        } else if (paramName === "gate") {
+          const gate = value > GATE_THRESHOLD_VOLTS;
+          const rising = gate && !entry.gate;
+          entry.gate = gate;
+          if (rising) {
+            this._retriggerSamplerEntry(entry);
+          }
+          // Gate off alone stops nothing - see _watchSamplerLevel().
+        } else if (paramName === "amplitude") {
+          // Control-rate amplitude (Knob/Const): 0-10 V like the cable path.
+          if (!entry.ampCable) applyRampValue(entry.ampGain.gain, clampRange(Number(value) || 0, 0, CV_MAX_VOLTS) / CV_MAX_VOLTS);
+        } else if (paramName === "sampleFile") {
+          entry.sampleFile = value;
+          this._loadWavePlayerBuffer(entry);
+        } else if (paramName === "gain") {
+          entry.gain = value;
+          if (!entry.gainCvActive) applyRampValue(entry.outGain.gain, ((Number(value) || 0) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS);
+        } else if (["start", "end", "loopStart", "loopEnd", "rootNoteMidi"].includes(paramName)) {
+          this._samplerRebase(entry);
+          entry[paramName] = Number(value) || 0;
+          if (paramName === "rootNoteMidi" && entry.source) entry.source.playbackRate.value = this._samplerRate(entry);
+          this._applySamplerLoop(entry); // start/end take effect on the next gate (trimmed copy)
+        } else if (paramName === "loop") {
+          this._samplerRebase(entry);
+          entry.loop = value === true || Number(value) >= 0.5;
+          this._applySamplerLoop(entry);
+        }
+        break;
       case "reverb-light": {
         // Read per block by the processor (see the "reverb-light" _buildNode
         // case), exactly like setParamReverbLight() in ReverbNode.h.
@@ -6448,8 +6678,18 @@ export class AudioEngine {
   // allocateVoice() in main.js). Not tied to a specific midi-in widget: like
   // the C++ side, voice index is treated as a single shared namespace across
   // the whole patch.
+  _samplerPlayingInVoice(voiceIndex) {
+    for (const wrapper of this.nodes.values()) {
+      if (!wrapper || wrapper.type !== "sampler") continue;
+      const entry = wrapper.voiced ? wrapper.instances[voiceIndex] : wrapper;
+      if (entry && entry.source) return true;
+    }
+    return false;
+  }
+
   isVoiceStillSounding(voiceIndex) {
     if (!this.ctx) return false;
+    if (this._samplerPlayingInVoice(voiceIndex)) return true;
     const now = this.ctx.currentTime;
     for (const wrapper of this.nodes.values()) {
       if (!wrapper) continue;
@@ -6474,6 +6714,7 @@ export class AudioEngine {
     if (entry.type === "hammond" && port === "value") return entry.outGain;
     if (entry.type === "fm8" && port === "value") return entry.outGain;
     if (entry.type === "mic-in" && port === "out") return entry.outGain;
+    if (entry.type === "wm8960-in" && (port === "left" || port === "right")) return entry.outGain;
     if ((entry.type === "lfo" || entry.type === "wavetable") && port === "value") return entry.output;
     if (entry.type === "switch" && port === "value") return entry.output;
     if (entry.type === "output-switch") {
@@ -6550,8 +6791,8 @@ export class AudioEngine {
       if (port === "outL") return entry.nodes[0]; // legacy preset compatibility
       if (port === "outR") return entry.nodes[1];
     }
-    if (entry.type === "wave-player" && port === "left") return entry.leftOut;
-    if (entry.type === "wave-player" && port === "right") return entry.rightOut;
+    if ((entry.type === "wave-player" || entry.type === "sampler") && port === "left") return entry.leftOut;
+    if ((entry.type === "wave-player" || entry.type === "sampler") && port === "right") return entry.rightOut;
     if (entry.type === "soundfont-player" && port === "left") return entry.leftOut;
     if (entry.type === "soundfont-player" && port === "right") return entry.rightOut;
     if (entry.type === "mda-piano" && port === "left") return entry.leftOut;
@@ -6680,6 +6921,7 @@ export class AudioEngine {
     }
     if (entry.type === "spectrum" && port === "in") return entry.analyser;
     if (entry.type === "wave-player" && port === "amplitude") return entry.ampGain.gain;
+    if (entry.type === "sampler" && port === "amplitude") return entry.ampCv.prescale;
     if (entry.type === "soundfont-player" && port === "gain") return entry.gainCv.prescale;
     return null;
   }
@@ -6872,11 +7114,12 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "amplitude") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "sampler") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           toEntry.ampGain.gain.value = 0;
+          toEntry.ampCable = true; // sampler: control-rate amplitude stays out (see setParam)
           from.connect(toEntry.ampCv.prescale);
         } catch (err) {
 
@@ -6884,7 +7127,7 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "soundfont-player") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "sampler" || toEntry.type === "soundfont-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
@@ -7167,19 +7410,20 @@ export class AudioEngine {
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator") && toPort === "amplitude") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "sampler") && toPort === "amplitude") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {
           from.disconnect(toEntry.ampCv.prescale);
           toEntry.ampGain.gain.value = 1;
+          toEntry.ampCable = false;
         } catch (err) {
 
         }
       }
       return;
     }
-    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "soundfont-player") && toPort === "gain") {
+    if (toEntry && (toEntry.type === "oscillator" || toEntry.type === "hammond" || toEntry.type === "fm-oscillator" || toEntry.type === "wave-player" || toEntry.type === "sampler" || toEntry.type === "soundfont-player") && toPort === "gain") {
       const from = this._resolveScaledOutput(fromEntry, fromPort, gainScale);
       if (from) {
         try {

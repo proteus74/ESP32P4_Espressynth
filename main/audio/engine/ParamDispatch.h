@@ -52,6 +52,7 @@
 #include "nodes/StepArpeggiatorNode.h"
 #include "nodes/DrumSequencerNode.h"
 #include "nodes/ValueMapperNode.h"
+#include "nodes/SamplerNode.h"
 
 namespace
 {
@@ -120,6 +121,9 @@ inline bool setFloatFieldByName(NodeInstance &inst, NodeType type, const char *n
         return nodes::samplehold::setParam(inst, name, value);
     case NodeType::Monoflop:
         return nodes::monoflop::setParam(inst, name, value);
+
+    case NodeType::Sampler:
+        return nodes::sampler::setParam(inst, name, value);
 
     case NodeType::WavePlayer:
         if (paramDispatchIs(name, "gain"))

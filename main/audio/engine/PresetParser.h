@@ -212,6 +212,12 @@ struct WidgetParams
     // clock - pulse width in ms; tempo itself comes from the device-wide
     // synth::masterClock() (MasterClock.h), not from the preset.
     float clockPulseMs = 100.0f;
+    // wm8960-in - WM8960 ADC input stages (PGA, mic boost, digital ADC gain, mic bias), sent to
+    // the codec over I2C whenever the graph is built (see nodes/Wm8960InNode.h).
+    float wm8960InPgaDb = 24.0f;
+    int16_t wm8960InBoostDb = 0;
+    float wm8960InAdcDb = 0.0f;
+    bool wm8960InMicBias = true;
     // cv-in / cv-out (External Hardware) - which I2C ADC/DAC channel this widget talks to,
     // chosen once via the settings modal from the live boot-time scan
     // (Feature::IO::I2CDeviceRegistry), never live-updated (see nodes/CvInNode.h/
@@ -330,6 +336,12 @@ struct WidgetParams
     // wave-player
     char sampleFile[40] = {};
     int rootNoteMidi = 60; // C4 (scientific pitch notation, A4=69)
+    // sampler (also uses sampleFile/rootNoteMidi): marker fractions 0..1 of the sample length
+    float samplerStart = 0.0f;
+    float samplerEnd = 1.0f;
+    float samplerLoopStart = 0.0f;
+    float samplerLoopEnd = 1.0f;
+    bool samplerLoop = false;
     // soundfont-player
     char soundFontVolume[8] = "sd";
     char soundFontPath[160] = {};

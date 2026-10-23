@@ -51,9 +51,11 @@ inline float sineLookup(uint32_t phase)
 // in the widget's settings dialog resets to exactly this table after a
 // confirm() prompt (see main.js).
 constexpr float kDefaultRatio[kDrawbarCount] = {0.5f, 1.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 8.0f};
-// Nine unit-amplitude sines can sum to 9.0 at full 888888888 registration -
-// this keeps |out| <= cv::kAudioPeakVolts like every other generator here.
-constexpr float kDrawbarNorm = cv::kAudioPeakVolts / static_cast<float>(kDrawbarCount);
+// Power normalization (1/sqrt(9)) rather than worst-case peak (1/9): a classic
+// three-drawbar registration (888000000) then peaks at cv::kAudioPeakVolts like
+// a full-scale Oscillator. Fuller registrations can exceed it; the output
+// stage's SoftLimiter (OutputNodes.h) catches that, as for summed voices.
+constexpr float kDrawbarNorm = cv::kAudioPeakVolts / 3.0f;
 
 struct HammondState
 {

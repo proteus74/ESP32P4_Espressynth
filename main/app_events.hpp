@@ -321,8 +321,10 @@ void on_device_speaker_audio(const int16_t* samples, size_t frame_count) {
 }
 #endif
 
-#if defined(CONFIG_ONBOARD_AUDIO_ES8311) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
-// Demo: stream the onboard ES8311 microphone straight to the USB microphone (device -> host),
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2) && !defined(CONFIG_APP_ENABLE_SYNTH)
+// Demo (only without the synth engine, which owns the UAC2 mic-in tap: a second writer would
+// interleave into the same TinyUSB FIFO and garble the stream): stream the onboard ES8311
+// microphone straight to the USB microphone (device -> host),
 // so a PC-side recorder captures whatever the onboard mic picks up.
 void es8311_mic_to_usb_task(void* arg) {
     (void)arg;
@@ -346,8 +348,9 @@ void es8311_mic_to_usb_task(void* arg) {
 }
 #endif
 
-#if defined(CONFIG_ONBOARD_AUDIO_WM8960) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
-// Demo: stream the WM8960 HAT's microphones straight to the USB microphone (device -> host),
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2) && !defined(CONFIG_APP_ENABLE_SYNTH)
+// Demo (only without the synth engine, see above): stream the WM8960 HAT's
+// microphones straight to the USB microphone (device -> host),
 // so a PC-side recorder captures whatever the HAT's onboard mics pick up.
 void wm8960_mic_to_usb_task(void* arg) {
     (void)arg;
@@ -429,12 +432,12 @@ inline void register_callbacks() {
 // Starts the demo background tasks that bridge onboard codecs into the USB
 // Audio microphone path. Call after App::init(), once the codecs are up.
 inline void start_background_tasks() {
-#if defined(CONFIG_ONBOARD_AUDIO_ES8311) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2) && !defined(CONFIG_APP_ENABLE_SYNTH)
     xTaskCreatePinnedToCore(es8311_mic_to_usb_task, "es8311_mic_usb", 4096, nullptr, 5, nullptr,
                             AUDIO_CORE);
 #endif
 
-#if defined(CONFIG_ONBOARD_AUDIO_WM8960) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2)
+#if defined(CONFIG_ONBOARD_AUDIO_WM8960) && defined(CONFIG_APP_ENABLE_USB_DEVICE) && defined(CONFIG_USB_DEV_ENABLE_UAC2) && !defined(CONFIG_APP_ENABLE_SYNTH)
     xTaskCreatePinnedToCore(wm8960_mic_to_usb_task, "wm8960_mic_usb", 4096, nullptr, 5, nullptr,
                             AUDIO_CORE);
 #endif

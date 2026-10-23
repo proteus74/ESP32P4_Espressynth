@@ -471,6 +471,18 @@ public:
         }
     }
 
+    // Note-on for a voice that is still sounding (stolen or re-struck, see Graph.h's
+    // deliverNoteControlRoutes): a quick fade to 0, then the full attack from silence -
+    // unlike gate(true), which re-attacks from the current level.
+    static constexpr float kRestartFadeSec = 0.005f;
+    void restart()
+    {
+        segCount_ = 0;
+        pushSeg(0.0f, kRestartFadeSec);
+        pushSeg(1.0f, attack_);
+        pushSeg(sustain_, decay_);
+    }
+
     // advances one sample, returns the new current value
     float process()
     {
@@ -481,6 +493,7 @@ public:
             {
                 current_ = segs_[0].target;
                 segs_[0] = segs_[1];
+                segs_[1] = segs_[2];
                 --segCount_;
             }
         }
@@ -543,7 +556,7 @@ private:
     };
     void pushSeg(float target, float durationSec)
     {
-        if (segCount_ >= 2)
+        if (segCount_ >= kMaxSegs)
         {
             return;
         }
@@ -559,7 +572,8 @@ private:
         ++segCount_;
     }
 
-    Seg segs_[2];
+    static constexpr uint8_t kMaxSegs = 3; // restart(): fade, attack, decay
+    Seg segs_[kMaxSegs];
     uint8_t segCount_ = 0;
     float current_ = 0.0f;
     float attack_ = 0.1f, decay_ = 0.1f, sustain_ = 0.7f, release_ = 0.2f;

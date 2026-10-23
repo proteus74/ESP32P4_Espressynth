@@ -32,14 +32,10 @@ constexpr int I2S_PORT = CONFIG_ONBOARD_AUDIO_NS4168_I2S_PORT;
 // wm8960_manager.hpp). The CrowPanel lists its own onboard NS4168 pins in RESERVED_PINS, so
 // only check other boards against the board's reserved list.
 #if !defined(CONFIG_BOARD_CROWPANEL_5INCH)
-static_assert(!Board::pin_in_list(PIN_BCLK, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_NS4168_PIN_BCLK conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(PIN_LRCK, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_NS4168_PIN_LRCK conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(PIN_DOUT, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_NS4168_PIN_DOUT conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(PIN_CTRL, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_NS4168_PIN_CTRL conflicts with a pin already used by the current board");
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_BCLK);
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_LRCK);
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_DOUT);
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_CTRL);
 #endif
 static_assert(PIN_BCLK == GPIO_NUM_NC || (PIN_BCLK != PIN_LRCK && PIN_BCLK != PIN_DOUT && PIN_LRCK != PIN_DOUT),
               "ONBOARD_AUDIO_NS4168 BCLK/LRCK/DOUT must be distinct pins");

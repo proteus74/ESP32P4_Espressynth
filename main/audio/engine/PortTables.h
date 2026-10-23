@@ -232,6 +232,9 @@ inline int audioInIndex(NodeType type, const char *portName)
         // LFO delay (fade-in after reset), 0-10V -> 0..5 s.
         if (is(portName, "delay"))
             return 7;
+        // Wavetable waveform only: 0-10V = first..last table (nodes/LfoNode.h kMorphPort).
+        if (is(portName, "morph"))
+            return 8;
         return -1;
     case NodeType::Wavetable:
         // reset/oneShot/global: same indices and semantics as the LFO's
@@ -546,6 +549,12 @@ inline int audioInIndex(NodeType type, const char *portName)
         if (is(portName, "gain"))
             return 3;
         return -1;
+    case NodeType::Sampler:
+        if (is(portName, "amplitude")) return 0;
+        if (is(portName, "pitchCv")) return 1;
+        if (is(portName, "gate")) return 2;
+        if (is(portName, "gain")) return 3;
+        return -1;
     case NodeType::SoundFontPlayer:
         if (is(portName, "bank")) return 0;
         if (is(portName, "program")) return 1;
@@ -835,6 +844,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
         }
         return -1;
     case NodeType::WavePlayer:
+    case NodeType::Sampler:
         if (is(portName, "left"))
             return 0;
         if (is(portName, "right"))
@@ -845,6 +855,7 @@ inline int audioOutIndex(NodeType type, const char *portName)
         if (is(portName, "right")) return 1;
         return -1;
     case NodeType::MdaPiano:
+    case NodeType::Wm8960In:
         if (is(portName, "left")) return 0;
         if (is(portName, "right")) return 1;
         return -1;
@@ -908,7 +919,7 @@ inline int audioInPortCount(NodeType type)
     case NodeType::Hammond:
         return 13; // "amplitude"+"pitchCv"+"tune"+"gain" (CV) + "drawbar1".."drawbar9" (CV)
     case NodeType::Lfo:
-        return 8; // "reset" + "oneShot" + "global" + "zeroPoint" + "rate" + "gain" + "phase" + "delay" (CV)
+        return 9; // "reset" + "oneShot" + "global" + "zeroPoint" + "rate" + "gain" + "phase" + "delay" (CV) + "morph"
     case NodeType::Wavetable:
         return 6; // "reset" + "oneShot" + "global" + "morph" + "rate" + "gain" (CV)
     case NodeType::Detune:
@@ -1001,6 +1012,8 @@ inline int audioInPortCount(NodeType type)
         return 2;
     case NodeType::WavePlayer:
         return 4; // "amplitude"+"note"+"gate"+"gain" (CV)
+    case NodeType::Sampler:
+        return 4; // "amplitude"+"pitchCv"+"gate"+"gain"
     case NodeType::SoundFontPlayer:
         return 6; // "bank"+"program"+"enableCc"+"enableModWheel"+"enablePitchWheel"+"gain" (CV)
     case NodeType::MdaPiano:
@@ -1092,7 +1105,7 @@ inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::GraphicEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder || type == NodeType::Overdrive ||
-           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower || type == NodeType::MicIn || type == NodeType::MidiProgram;
+           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower || type == NodeType::MicIn || type == NodeType::Wm8960In || type == NodeType::MidiProgram;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely
@@ -1172,10 +1185,11 @@ inline bool isControlOnlyInput(NodeType type, int portIdx)
     case NodeType::DxEnvelope:
         return true; // four level, four time, and "gate" inputs, all block-rate
     case NodeType::Lfo:
-        return true; // "reset"+"oneShot"+"global"+"zeroPoint"+"rate"+"gain"+"phase" - trigger-/gate-/slider-like signals, control-rate suffices
+        return portIdx != 8; // "reset"+"oneShot"+"global"+"zeroPoint"+"rate"+"gain"+"phase"+"delay" - control-rate suffices; "morph"(8) stays audio-rate like the Wavetable widget's
     case NodeType::Wavetable:
         return portIdx != 3; // like the LFO - only "morph"(3) stays audio-rate
     case NodeType::WavePlayer:
+    case NodeType::Sampler:
         return portIdx == 1 || portIdx == 2; // "note"+"gate" - "amplitude" (index 0) stays audio-rate
     case NodeType::SoundFontPlayer:
         return portIdx != 5; // event/scalar inputs, control-only - except "gain" (index 5), real audio-rate like Oscillator's

@@ -219,7 +219,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     }
     const int bend = detail::tuneBend14(s);
 
-    const float gain = cv::vcaGain(s.gainCv, false) * cv::kAudioPeakVolts;
+    // x4: msfa's Dexed-style >> 13 int16 output peaks near 0.2 for typical factory patches
+    // (ROM1A median ~0.94V at x1); x4 brings that close to a full-scale Oscillator.
+    // Must match fm8-core.js's process().
+    const float gain = cv::vcaGain(s.gainCv, false) * cv::kAudioPeakVolts * 4.0f;
     // The engine block is a multiple of msfa's 64-sample block: render straight into out[]
     // with the gain folded into the bridge's int->float conversion (one pass, no chunk copy).
     static_assert(synth::kBlockSize % msfa_bridge::kBlock == 0, "engine block must be a multiple of msfa's block");

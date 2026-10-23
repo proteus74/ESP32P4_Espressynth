@@ -829,7 +829,7 @@ export function createFm8Engine(sampleRate, options = {}) {
   function process(out, frames) {
     const octaves = tuneOctaves();
     const bend = tuneBend14();
-    const gain = (Math.max(0, Math.min(CV_MAX_VOLTS, state.gainCv)) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS * state.fanInScale;
+    const gain = (Math.max(0, Math.min(CV_MAX_VOLTS, state.gainCv)) / CV_MAX_VOLTS) * AUDIO_PEAK_VOLTS * 4 * state.fanInScale; // x4: Fm8Node.h
     if (scratch.length < frames) scratch = new Float32Array(frames);
     const voiceOut = scratch;
     for (let v = 0; v < slots.length; v += 1) {

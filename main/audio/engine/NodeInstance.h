@@ -271,6 +271,7 @@ struct NodeInstance
         MidiProgramState midiProgram;
         SwitchState switchState;
         WavePlayerState wavePlayer;
+        SamplerState sampler;
         SoundFontPlayerState soundFontPlayer;
         MdaPianoState mdaPiano;
         ClockState clock;
@@ -440,6 +441,9 @@ struct NodeInstance
             break;
         case NodeType::WavePlayer:
             new (&wavePlayer) WavePlayerState();
+            break;
+        case NodeType::Sampler:
+            new (&sampler) SamplerState();
             break;
         case NodeType::SoundFontPlayer:
             new (&soundFontPlayer) SoundFontPlayerState();

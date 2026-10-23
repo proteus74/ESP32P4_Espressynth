@@ -20,10 +20,8 @@ constexpr gpio_num_t I2C0_PIN_SDA = static_cast<gpio_num_t>(CONFIG_I2C0_PIN_SDA)
 constexpr gpio_num_t I2C0_PIN_SCL = static_cast<gpio_num_t>(CONFIG_I2C0_PIN_SCL);
 } // namespace
 static_assert(I2C0_PIN_SDA != I2C0_PIN_SCL, "I2C0_PIN_SDA/SCL must be distinct pins");
-static_assert(!Board::pin_in_list(I2C0_PIN_SDA, CurrentBoard::RESERVED_PINS),
-              "I2C0_PIN_SDA conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(I2C0_PIN_SCL, CurrentBoard::RESERVED_PINS),
-              "I2C0_PIN_SCL conflicts with a pin already used by the current board");
+BOARD_ASSERT_PIN_NOT_BOARD(I2C0_PIN_SDA);
+BOARD_ASSERT_PIN_NOT_BOARD(I2C0_PIN_SCL);
 #endif
 
 #if defined(CONFIG_APP_ENABLE_I2C1)
@@ -32,10 +30,8 @@ constexpr gpio_num_t I2C1_PIN_SDA = static_cast<gpio_num_t>(CONFIG_I2C1_PIN_SDA)
 constexpr gpio_num_t I2C1_PIN_SCL = static_cast<gpio_num_t>(CONFIG_I2C1_PIN_SCL);
 } // namespace
 static_assert(I2C1_PIN_SDA != I2C1_PIN_SCL, "I2C1_PIN_SDA/SCL must be distinct pins");
-static_assert(!Board::pin_in_list(I2C1_PIN_SDA, CurrentBoard::RESERVED_PINS),
-              "I2C1_PIN_SDA conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(I2C1_PIN_SCL, CurrentBoard::RESERVED_PINS),
-              "I2C1_PIN_SCL conflicts with a pin already used by the current board");
+BOARD_ASSERT_PIN_NOT_BOARD(I2C1_PIN_SDA);
+BOARD_ASSERT_PIN_NOT_BOARD(I2C1_PIN_SCL);
 #if defined(CONFIG_APP_ENABLE_I2C0)
 static_assert(I2C1_PIN_SDA != I2C0_PIN_SDA && I2C1_PIN_SDA != I2C0_PIN_SCL &&
               I2C1_PIN_SCL != I2C0_PIN_SDA && I2C1_PIN_SCL != I2C0_PIN_SCL,

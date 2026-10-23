@@ -84,6 +84,8 @@ enum class NodeType : uint8_t
     MicIn,
     MidiProgram,
     Fm8,
+    Sampler,
+    Wm8960In,
     Unknown,
 };
 
@@ -235,6 +237,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Ns4168Out;
     if (strcmp(typeStr, "mic-in") == 0)
         return NodeType::MicIn;
+    if (strcmp(typeStr, "wm8960-in") == 0)
+        return NodeType::Wm8960In;
     if (strcmp(typeStr, "vu-meter") == 0 || strcmp(typeStr, "vu-meter-horizontal") == 0)
         return NodeType::VuMeter;
     if (strcmp(typeStr, "oscilloscope") == 0)
@@ -262,6 +266,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Switch;
     if (strcmp(typeStr, "wave-player") == 0)
         return NodeType::WavePlayer;
+    if (strcmp(typeStr, "sampler") == 0)
+        return NodeType::Sampler;
     if (strcmp(typeStr, "soundfont-player") == 0)
         return NodeType::SoundFontPlayer;
     if (strcmp(typeStr, "mda-piano") == 0)
@@ -307,7 +313,8 @@ inline NodeType nodeTypeFromString(const char *typeStr)
 
 inline bool isLinearWave(WaveType w) { return w == WaveType::LinearUp || w == WaveType::LinearDown; }
 
-inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
+// allowSuperSaw: FM oscillator (SuperSaw + Wavetable). allowWavetable: LFO (Wavetable only).
+inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false, bool allowWavetable = false)
 {
     if (s == nullptr)
         return WaveType::Sine;
@@ -325,7 +332,7 @@ inline WaveType waveTypeFromString(const char *s, bool allowSuperSaw = false)
         return WaveType::PinkNoise;
     if (allowSuperSaw && strcmp(s, "supersaw") == 0)
         return WaveType::SuperSaw;
-    if (allowSuperSaw && strcmp(s, "wavetable") == 0)
+    if ((allowSuperSaw || allowWavetable) && strcmp(s, "wavetable") == 0)
         return WaveType::Wavetable;
     if (strcmp(s, "linear-up") == 0)
         return WaveType::LinearUp;

@@ -3463,6 +3463,59 @@ body.show-oscilloscopes .oscilloscope-only-body {
   text-overflow: ellipsis;
 }
 
+/* Sampler editor popup (sampler-editor.js): nearly fills the page. ".modal.sampler-editor"
+   because the generic .modal rule further down would otherwise cap it at 480px / 80vh. */
+.modal.sampler-editor {
+  width: 96vw;
+  max-width: 96vw;
+  height: 92vh;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 1rem 1.25rem;
+}
+
+.sampler-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.8rem;
+  margin-bottom: 0.6rem;
+}
+
+.sampler-button-group {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.sampler-view {
+  position: relative;
+  flex: 1;
+  min-height: 160px;
+  border: 1px solid var(--card-border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+
+.sampler-canvas,
+.sampler-cursor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sampler-canvas {
+  touch-action: none;
+  cursor: grab;
+}
+
+.sampler-cursor {
+  pointer-events: none;
+}
+
 .soundfont-preset-label {
   margin-top: 0.15rem;
   font-size: 0.78rem;

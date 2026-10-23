@@ -185,14 +185,14 @@ export async function runAll() {
     });
     return expectClose(data[48], -4.95, 0.3, "1 ms after reset ");
   });
-  await test("hammond: single full drawbar peaks at 5V/9", async () => {
+  await test("hammond: single full drawbar peaks at 5V/3", async () => {
     const { data } = await render(0.5, (e) => {
       e.createNode("h", "hammond", { drawbars: [10, 0, 0, 0, 0, 0, 0, 0, 0], gain: 10 });
       e.setParam("h", "amplitude", 1, 0);
       e.setParam("h", "frequency", 200, 0);
       return out(e, "h", "value");
     });
-    return expectClose(peak(data), 5 / 9, 0.01);
+    return expectClose(peak(data), 5 / 3, 0.01); // kDrawbarNorm = kAudioPeakVolts / 3
   });
   await test("lfo triangle phase 0 starts at 0V, phase 90 starts at 5V", async () => {
     const r0 = await render(0.2, (e) => {
@@ -445,6 +445,22 @@ export async function runAll() {
     const half = (await wt(0, 4)).data;
     return expectClose(at(half, 0.125), 4, 0.05, "gain 4 peak ");
   });
+  await test("lfo: wavetable waveform (built and switched live), morph, phase", async () => {
+    const lfo = (params, switchLive = false) => render(0.6, async (e) => {
+      e.createNode("l", "lfo", { rate: 2, gain: 10, ...(switchLive ? {} : params) });
+      if (switchLive) Object.entries(params).forEach(([k, v]) => e.setParam("l", k, v));
+      await e._loadWavetableWorklet();
+      await Promise.resolve();
+      return out(e, "l", "value");
+    });
+    const sine = (await lfo({ waveType: "wavetable", morph: 0 })).data;
+    expectClose(at(sine, 0.125), 10, 0.05, "sine peak ");
+    const square = (await lfo({ morph: 10, waveType: "wavetable" }, true)).data;
+    expectClose(at(square, 0.1), 10, 0.05, "live square high ");
+    expectClose(at(square, 0.35), 0, 0.05, "live square low ");
+    const shifted = (await lfo({ waveType: "wavetable", morph: 0, phase: 90 })).data;
+    return expectClose(at(shifted, 0.0), 10, 0.1, "phase 90 starts at peak ");
+  });
   await test("smoke: build, wire and remove every node type", async () => {
     const types = ["oscillator", "fm-oscillator", "hammond", "lfo", "wavetable", "const", "up-down-button", "button", "knob",
       "switch", "output-switch", "audio-out", "usb-out", "gain", "linked-input", "linked-output", "filter",
@@ -452,7 +468,7 @@ export async function runAll() {
       "divide", "frequency-divider", "abs", "logic-and", "logic-or", "logic-xor", "logic-not", "value-mapper",
       "detune", "adsr", "dx-envelope", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "sample-hold",
       "burst-generator", "chorus", "delay", "reverb-light", "audio-output-link", "audio-input-link", "vu-meter",
-      "oscilloscope", "spectrum"];
+      "oscilloscope", "spectrum", "sampler"];
     await render(0.2, (e) => {
       types.forEach((t) => e.createNode(`n-${t}`, t, {}));
       for (const [id, params] of [["n-fm-oscillator", ["fmIndex", "feedback", "superSawDetune", "superSawMix", "dutyCycle", "waveType"]],
@@ -468,6 +484,9 @@ export async function runAll() {
       e.connect("n-lfo", "value", "n-oscillator", "pitchCv");
       e.disconnect("n-lfo", "value", "n-oscillator", "pitchCv");
       e.connect("n-lfo", "value", "n-audio-input-link", "gain3");
+      e.connect("n-lfo", "value", "n-sampler", "amplitude");
+      e.connect("n-lfo", "value", "n-sampler", "gain");
+      e.disconnect("n-lfo", "value", "n-sampler", "amplitude");
       const tap = out(e, "n-fm-oscillator", "value");
       types.forEach((t) => e.removeNode(`n-${t}`));
       return tap;
@@ -495,16 +514,17 @@ export async function runAll() {
       engine.onDeferredSamplesChange = (count) => { notified = count; };
       engine.createNode("w", "wave-player", { sampleFile: "a.wav" });
       engine.createNode("w0", "wave-player", { sampleFile: "" });
+      engine.createNode("sm", "sampler", { sampleFile: "b.wav" });
       engine.createNode("p", "mda-piano", {});
       engine.createNode("s", "soundfont-player", { path: "soundfonts/x.sf2" });
       if (fetched.length !== 0) throw new Error(`fetched while off: ${fetched}`);
-      if (engine.getDeferredSampleCount() !== 3 || notified !== 3) {
+      if (engine.getDeferredSampleCount() !== 4 || notified !== 4) {
         throw new Error(`deferred ${engine.getDeferredSampleCount()} notified ${notified}`);
       }
       engine.removeNode("s");
-      if (engine.getDeferredSampleCount() !== 2) throw new Error("removed node still deferred");
+      if (engine.getDeferredSampleCount() !== 3) throw new Error("removed node still deferred");
       engine.loadDeferredSamples();
-      if (fetched.length !== 2 || engine.getDeferredSampleCount() !== 0 || notified !== 0) {
+      if (fetched.length !== 3 || engine.getDeferredSampleCount() !== 0 || notified !== 0) {
         throw new Error(`after load: fetched ${fetched.length}, deferred ${engine.getDeferredSampleCount()}`);
       }
       return "ok";
@@ -512,5 +532,73 @@ export async function runAll() {
       window.fetch = realFetch;
     }
   });
+  // Sampler: a 1 s stereo ramp (L = t, R = -t) stands in for a decoded WAV, so the output
+  // level tells the playback position: out = position * AUDIO_PEAK_VOLTS (5).
+  const samplerRender = (seconds, params, gateOffAt = null) =>
+    render(seconds, (e, octx) => {
+      e.createNode("sm", "sampler", params);
+      const entry = e.nodes.get("sm");
+      const buf = octx.createBuffer(2, SR, SR);
+      const l = buf.getChannelData(0);
+      const r = buf.getChannelData(1);
+      for (let i = 0; i < SR; i += 1) {
+        l[i] = i / SR;
+        r[i] = -i / SR;
+      }
+      entry.buffer = buf;
+      e.setParam("sm", "gate", 10);
+      if (gateOffAt !== null) octx.suspend(gateOffAt).then(() => { e.setParam("sm", "gate", 0); octx.resume(); });
+      return out(e, "sm", "left");
+    });
+  await test("sampler editor: snap to the nearest zero crossing, left or right", async () => {
+    const { nearestZeroCrossing } = await import("/js/sampler-editor.js");
+    const buf = new OfflineAudioContext(1, 100, SR).createBuffer(1, 100, SR);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < 100; i += 1) d[i] = i < 20 ? -1 : i < 60 ? 1 : -1; // crossings at 19|20 and 59|60
+    d[20] = 0.1; // |0.1| < |-1|: frame 20 is the closer-to-zero side of the first crossing
+    const left = nearestZeroCrossing(buf, 35);
+    const right = nearestZeroCrossing(buf, 45);
+    if (left !== 20 || right !== 59) throw new Error(`got ${left} / ${right}, expected 20 / 59`);
+    return "20 / 59";
+  });
+  await test("sampler: gate plays from Start, stops at End", async () => {
+    const { data } = await samplerRender(1, { start: 0.5, end: 0.75 });
+    expectClose(at(data, 0.01), 2.55, 0.05, "start ");
+    expectClose(at(data, 0.2), 3.5, 0.05, "mid ");
+    return expectClose(peak(data, 0.3, 0.9), 0, 1e-6, "after end ");
+  });
+  await test("sampler: loop keeps going after gate off (amplitude unconnected = full level)", async () => {
+    const { data } = await samplerRender(1.5, { start: 0.2, end: 1, loop: true, loopStart: 0.4, loopEnd: 0.5 }, 0.5);
+    const v = at(data, 1.3);
+    if (!(v >= 2 - 0.05 && v <= 2.5 + 0.05)) throw new Error(`expected loop range 2..2.5, got ${v}`);
+    return `in loop at 1.3 s: ${v.toFixed(3)}`;
+  });
+  await test("sampler: gate off without loop plays on to End", async () => {
+    const { data } = await samplerRender(1.2, { start: 0, end: 0.8 }, 0.25);
+    expectClose(at(data, 0.2), 1, 0.05, "before gate off ");
+    expectClose(at(data, 0.6), 3, 0.05, "after gate off ");
+    return expectClose(peak(data, 0.85, 1.1), 0, 1e-6, "after end ");
+  });
+
+  await test("sampler + adsr: re-striking a still sounding voice restarts the attack from 0", async () => {
+    const { data } = await render(1, async (e, octx) => {
+      e.createNode("env", "adsr", { attack: 0.2, decay: 0.1, sustain: 1, release: 1 }, 2);
+      e.createNode("sm", "sampler", { loop: true }, 2);
+      const buf = octx.createBuffer(2, SR, SR);
+      buf.getChannelData(0).fill(0.5);
+      buf.getChannelData(1).fill(0.5);
+      e.nodes.get("sm").instances.forEach((i) => { i.buffer = buf; });
+      e.connect("env", "out", "sm", "amplitude");
+      const gate = (v) => { e.setVoiceParam("env", 0, "gate", v); e.setVoiceParam("sm", 0, "gate", v); };
+      gate(10);
+      octx.suspend(0.5).then(() => { gate(0); octx.resume(); });
+      octx.suspend(0.6).then(() => { gate(10); octx.resume(); });
+      return e._resolveOutputFromEntry(e.nodes.get("sm").instances[0], "left");
+    });
+    expectClose(at(data, 0.59), 2.28, 0.05, "releasing ");
+    expectClose(at(data, 0.607), 0, 0.1, "faded to 0 ");
+    return expectClose(at(data, 0.705), 1.25, 0.05, "new attack half way ");
+  });
+
   return results;
 }

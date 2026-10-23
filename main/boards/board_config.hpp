@@ -20,21 +20,6 @@
     #error "No valid board target selected in Kconfig! Run idf.py menuconfig to choose a board."
 #endif
 
-// The C6 SDIO pins belong to the esp_hosted component, so Kconfig can only seed them for a
-// fresh sdkconfig (see the end of main/Kconfig.projbuild). A value left over from another
-// board would silently kill Wi-Fi/BLE ("sdmmc_init_ocr ... 0x107"), so fail the build instead.
-#if !defined(CONFIG_BOARD_CUSTOM_P4) && defined(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK)
-#define BOARD_CHECK_HOSTED_PIN(cfg, pin) \
-    static_assert(cfg == static_cast<int>(CurrentBoard::pin), \
-                  "menuconfig -> Component config -> ESP-Hosted: " #cfg " does not match this board (" #pin ")")
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK, PIN_SDIO_CLK);
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD, PIN_SDIO_CMD);
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0, PIN_SDIO_D0);
-#if defined(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3)
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1, PIN_SDIO_D1);
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2, PIN_SDIO_D2);
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3, PIN_SDIO_D3);
-#endif
-BOARD_CHECK_HOSTED_PIN(CONFIG_ESP_HOSTED_HOST_RESET_GPIO, HOSTED_RESET_GPIO);
-#undef BOARD_CHECK_HOSTED_PIN
-#endif
+// C6 SDIO/reset pins: app_startup.hpp hands CurrentBoard::PIN_SDIO_* and HOSTED_RESET_GPIO to
+// esp_hosted at runtime; the CONFIG_ESP_HOSTED_HOST_SDIO_PIN_* Kconfig values are ignored
+// (except on the Custom board).

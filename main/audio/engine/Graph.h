@@ -454,9 +454,26 @@ inline void copyMidiCcDebugText(char *destination, size_t destinationSize, const
 // below). Also the shared body behind handleMidiEvent's own note on/off
 // delivery and releaseVoiceGate's sustain-pedal-up replay, so both paths stay
 // byte-identical instead of duplicating this switch.
+inline bool samplerPlayingInVoice(const Graph &graph, uint8_t voiceIdx)
+{
+    for (uint16_t w = 0; w < graph.widgetCount; ++w)
+    {
+        const WidgetSlot &slot = graph.widgets[w];
+        if (slot.type != NodeType::Sampler) continue;
+        const uint16_t v = slot.voiced ? voiceIdx : 0;
+        if (v < slot.instanceCount && graph.instances[slot.instanceBase + v].sampler.playing) return true;
+    }
+    return false;
+}
+
 inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_t voiceIdx, uint8_t note, bool noteOn,
                                uint8_t velocity, int side)
 {
+    // Note-on for a voice whose Sampler still plays (stolen at the voice limit, or a long
+    // release re-struck): its ADSRs restart from silence instead of re-attacking from their
+    // current level - otherwise every new note lacks its attack and the level creeps up note
+    // after note. The Sampler crossfades its old position out meanwhile (SamplerNode.h).
+    const bool restartEnvelopes = noteOn && samplerPlayingInVoice(graph, voiceIdx);
     const WidgetSlot &source = graph.widgets[sourceWidget];
     const uint16_t routeEnd = source.routeStart + source.routeCount;
     for (uint16_t r = source.routeStart; r < routeEnd; ++r)
@@ -518,7 +535,10 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 // Idle voices may not have rendered since the last Knob update.
                 // Configure before scheduling this note's attack/release.
                 nodes::adsr::updateParameters(target);
-                target.adsr->ramp.gate(noteOn);
+                if (restartEnvelopes)
+                    target.adsr->ramp.restart();
+                else
+                    target.adsr->ramp.gate(noteOn);
                 target.adsr->gatePrev = noteOn;
             }
             else if (target.type == NodeType::DxEnvelope)
@@ -545,6 +565,12 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                     target.wavePlayer.fadeGain = 1.0f;
                 }
                 target.wavePlayer.gatePrev = noteOn;
+            }
+            else if (target.type == NodeType::Sampler)
+            {
+                // Event-driven retrigger, same reasoning as WavePlayer above.
+                if (noteOn) nodes::sampler::trigger(target.sampler);
+                target.sampler.gatePrev = noteOn;
             }
             else if (target.type == NodeType::SoundFontPlayer)
             {
@@ -750,7 +776,7 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
     for (uint16_t w = 0; w < widgetCount; ++w)
     {
         if ((widgets[w].type != NodeType::Adsr && widgets[w].type != NodeType::DxEnvelope &&
-             widgets[w].type != NodeType::Fm8) ||
+             widgets[w].type != NodeType::Fm8 && widgets[w].type != NodeType::Sampler) ||
             widgets[w].outgoingEdgeCount == 0)
         {
             continue;
@@ -767,15 +793,18 @@ IRAM_ATTR inline void Graph::renderBlock(Outputs &out, size_t frames)
         // would never observe the very edge that should wake it, a
         // permanent deadlock. Force the voice live whenever that port is
         // actually wired, regardless of the envelope's current idle state.
-        const int gatePort = widgets[w].type == NodeType::Adsr ? 4 : (widgets[w].type == NodeType::Fm8 ? 1 : 8);
+        const NodeType type = widgets[w].type;
+        const int gatePort = type == NodeType::Adsr ? 4
+                           : type == NodeType::Fm8 ? 1
+                           : type == NodeType::Sampler ? nodes::sampler::kGatePort
+                                                       : 8;
         for (uint16_t v = 0; v < widgets[w].instanceCount; ++v)
         {
             NodeInstance &envelope = instances[widgets[w].instanceBase + v];
-            const bool idle = widgets[w].type == NodeType::Adsr
-                ? envelope.adsr->ramp.isIdle()
-                : (widgets[w].type == NodeType::Fm8
-                       ? (envelope.fm8->idle && !envelope.fm8->pendingOn)
-                       : envelope.dxEnvelope->scheduler.isIdle());
+            const bool idle = type == NodeType::Adsr    ? envelope.adsr->ramp.isIdle()
+                            : type == NodeType::Fm8     ? (envelope.fm8->idle && !envelope.fm8->pendingOn)
+                            : type == NodeType::Sampler ? !envelope.sampler.playing
+                                                        : envelope.dxEnvelope->scheduler.isIdle();
             const bool gateWired = (envelope.audioConnectedPortMask & synth::portBit(gatePort)) != 0;
             if (!idle || gateWired)
             {
@@ -1979,7 +2008,8 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         if ((slot.type == NodeType::Oscillator || slot.type == NodeType::Lfo || slot.type == NodeType::FmOscillator) &&
             strcmp(key, "waveType") == 0 && cJSON_IsString(item))
         {
-            const WaveType wave = waveTypeFromString(item->valuestring, slot.type == NodeType::FmOscillator);
+            const WaveType wave = waveTypeFromString(item->valuestring, slot.type == NodeType::FmOscillator,
+                                                     slot.type == NodeType::Lfo);
             for (uint16_t v = 0; v < slot.instanceCount; ++v)
             {
                 NodeInstance &inst = instances[slot.instanceBase + v];
@@ -2730,6 +2760,9 @@ inline void Graph::destroy()
             break;
         case NodeType::Wavetable:
             nodes::wavetable::destroy(inst);
+            break;
+        case NodeType::Lfo:
+            nodes::lfo::destroy(inst);
             break;
         case NodeType::FmOscillator:
             nodes::fmoscillator::destroy(inst);

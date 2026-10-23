@@ -24,10 +24,8 @@ constexpr gpio_num_t PIN_DIN = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_PDM_
 constexpr float GAIN = static_cast<float>(CONFIG_ONBOARD_AUDIO_PDM_MIC_GAIN);
 
 #if !defined(CONFIG_BOARD_CROWPANEL_5INCH)
-static_assert(!Board::pin_in_list(PIN_CLK, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_PDM_MIC_PIN_CLK conflicts with a pin already used by the current board");
-static_assert(!Board::pin_in_list(PIN_DIN, CurrentBoard::RESERVED_PINS),
-              "ONBOARD_AUDIO_PDM_MIC_PIN_DIN conflicts with a pin already used by the current board");
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_CLK);
+BOARD_ASSERT_PIN_NOT_BOARD(PIN_DIN);
 #endif
 static_assert(PIN_CLK == GPIO_NUM_NC || PIN_CLK != PIN_DIN, "PDM mic CLK and DIN must be distinct pins");
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)

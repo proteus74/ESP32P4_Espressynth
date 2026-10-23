@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261015-fm8-22">
+<link rel="stylesheet" href="/static/css/style.css?v=20261021-sampler-2">
 </head>
 <body>
 
@@ -1149,6 +1149,29 @@
   </div>
 </div>
 
+<div id="wm8960InSettingsOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>WM8960-In Settings</h3>
+    <label class="modal-field"><span>Input gain / PGA (-17.25 to 30 dB)</span><input type="number" id="wm8960InPgaInput" min="-17.25" max="30" step="0.75" value="24"></label>
+    <label class="modal-field">
+      <span>Mic boost</span>
+      <select id="wm8960InBoostSelect">
+        <option value="0">0 dB</option>
+        <option value="13">+13 dB</option>
+        <option value="20">+20 dB</option>
+        <option value="29">+29 dB</option>
+      </select>
+    </label>
+    <label class="modal-field"><span>ADC volume (-97 to 30 dB)</span><input type="number" id="wm8960InAdcInput" min="-97" max="30" step="0.5" value="0"></label>
+    <label class="modal-field"><span>Mic bias (electret mics)</span><input type="checkbox" id="wm8960InBiasCheck" checked></label>
+    <p class="modal-hint">Sent to the WM8960 over I2C whenever the preset is loaded or saved. Total gain is the sum of mic boost, input gain and ADC volume.</p>
+    <div class="modal-actions">
+      <button id="wm8960InSettingsCancel" class="btn-secondary">Cancel</button>
+      <button id="wm8960InSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="cvOutSettingsOverlay" class="modal-overlay hidden">
   <div class="modal">
     <h3>CV Out Settings</h3>
@@ -1483,6 +1506,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261018-fm8-27"></script>
+<script type="module" src="/static/js/main.js?v=20261023-wm8960-in-3"></script>
 </body>
 </html>

@@ -178,7 +178,7 @@ inline bool hasStereoOutput(NodeType type)
 {
     return type == NodeType::Chorus || type == NodeType::EspEq || ports::isGlobalOnly(type) ||
            type == NodeType::AudioOut || type == NodeType::UsbOut || type == NodeType::Es8311Out ||
-           type == NodeType::Wm8960Out || type == NodeType::Ns4168Out || type == NodeType::WavePlayer ||
+           type == NodeType::Wm8960Out || type == NodeType::Ns4168Out || type == NodeType::WavePlayer || type == NodeType::Sampler ||
            type == NodeType::SoundFontPlayer || type == NodeType::AudioOutputLink || type == NodeType::AudioInputLink ||
            type == NodeType::LinkedInput || type == NodeType::LinkedOutput ||
            type == NodeType::StepArpeggiator || type == NodeType::DrumSequencer || type == NodeType::Pan || type == NodeType::OutputSwitch ||
@@ -557,6 +557,25 @@ inline void groupEdgesBySourceWidget(Graph &g)
 // process-wide cache (see WavLoader.h), not this Graph - it can outlive
 // this Graph and be reused by the next one if the widget's sampleFile is
 // unchanged.
+inline const WaveSampleCache &resolveWaveSample(Graph &g, uint16_t widgetIndex, const char *sampleFile)
+{
+    WaveSampleCache &cache = g.waveSampleCache[widgetIndex];
+    if (!cache.attempted)
+    {
+        cache.attempted = true;
+        const int16_t *data = nullptr;
+        uint32_t frameCount = 0;
+        uint8_t channels = 0;
+        if (wavloader::load(sampleFile, data, frameCount, channels))
+        {
+            cache.data = data;
+            cache.frameCount = frameCount;
+            cache.channels = channels;
+        }
+    }
+    return cache;
+}
+
 inline void initWavePlayer(Graph &g, uint16_t widgetIndex, NodeInstance &inst, const WidgetParams &p)
 {
     inst.wavePlayer.rootNoteMidi = p.rootNoteMidi;
@@ -567,23 +586,18 @@ inline void initWavePlayer(Graph &g, uint16_t widgetIndex, NodeInstance &inst, c
     // Same cutoff/reason as Oscillator's/SoundFontPlayer's gainSmooth - see NodeState.h.
     inst.wavePlayer.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
 
-    WaveSampleCache &cache = g.waveSampleCache[widgetIndex];
-    if (!cache.attempted)
-    {
-        cache.attempted = true;
-        const int16_t *data = nullptr;
-        uint32_t frameCount = 0;
-        uint8_t channels = 0;
-        if (wavloader::load(p.sampleFile, data, frameCount, channels))
-        {
-            cache.data = data;
-            cache.frameCount = frameCount;
-            cache.channels = channels;
-        }
-    }
+    const WaveSampleCache &cache = resolveWaveSample(g, widgetIndex, p.sampleFile);
     inst.wavePlayer.sampleData = cache.data;
     inst.wavePlayer.frameCount = cache.frameCount;
     inst.wavePlayer.channels = cache.channels;
+}
+
+inline void initSampler(Graph &g, uint16_t widgetIndex, NodeInstance &inst, const WidgetParams &p)
+{
+    nodes::sampler::build(inst, p);
+    const WaveSampleCache &cache = resolveWaveSample(g, widgetIndex, p.sampleFile);
+    inst.sampler.sampleData = cache.data;
+    inst.sampler.frameCount = cache.frameCount;
 }
 
 inline void initSoundFontPlayer(Graph &g, uint16_t widgetIndex, NodeInstance &inst, const WidgetParams &p, bool firstInstance)
@@ -679,6 +693,9 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
         break;
     case NodeType::CvIn:
         nodes::cvin::build(inst, p);
+        break;
+    case NodeType::Wm8960In:
+        nodes::wm8960in::build(inst, p);
         break;
     case NodeType::CvOut:
         nodes::cvout::build(inst, p);
@@ -811,7 +828,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         size_t keepCount = 0;
         for (uint16_t i = 0; i < doc.widgetCount && keepCount < synth::kMaxWidgets; ++i)
         {
-            if (doc.widgets[i].type == NodeType::WavePlayer)
+            if (doc.widgets[i].type == NodeType::WavePlayer || doc.widgets[i].type == NodeType::Sampler)
             {
                 keepSampleFiles[keepCount++] = doc.widgets[i].params.sampleFile;
             }
@@ -998,7 +1015,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // shortly after a build). Its per-sample loop already reads the
             // sample data from PSRAM anyway, so PSRAM-backing its port/output
             // buffers too costs no new kind of latency, unlike most types.
-            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::SoundFontPlayer ||
+            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::Sampler || w.type == NodeType::SoundFontPlayer ||
                                       w.type == NodeType::MdaPiano);
             inst.outL = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
             if (inst.outL != nullptr) ++blockBufferCount;
@@ -1224,6 +1241,10 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             if (w.type == NodeType::WavePlayer)
             {
                 initWavePlayer(*g, i, inst, doc.widgets[i].params);
+            }
+            else if (w.type == NodeType::Sampler)
+            {
+                initSampler(*g, i, inst, doc.widgets[i].params);
             }
             else if (w.type == NodeType::SoundFontPlayer)
             {
@@ -1808,7 +1829,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     for (uint16_t i = 0; i < g->instanceCount; ++i)
     {
         NodeInstance &inst = g->instances[i];
-        const bool preferPsram = inst.type == NodeType::WavePlayer || inst.type == NodeType::SoundFontPlayer;
+        const bool preferPsram = inst.type == NodeType::WavePlayer || inst.type == NodeType::Sampler || inst.type == NodeType::SoundFontPlayer;
         const bool requireAllInputs = requiresInputBlockBuffers(inst.type);
         for (int p = 0; p < inst.audioInPortCount; ++p)
         {
