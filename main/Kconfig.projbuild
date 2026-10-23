@@ -1204,9 +1204,11 @@ menu "Espressynth"
                 UI is the only way to edit presets, so a network link is mandatory. Only the
                 Custom board can switch it off - then Wi-Fi is forced on instead.
 
+        # Always on (no prompt): the web UI is the only way to edit presets, and every build
+        # has Wi-Fi or Ethernet (see APP_NETWORK_NEEDS_WIFI above).
         config APP_ENABLE_WEBSERVER
-            bool "Enable Web Server (HTTP, Wi-Fi + Ethernet)"
-            default n
+            bool
+            default y
             depends on APP_ENABLE_WIFI || APP_ENABLE_ETHERNET
             help
                 Starts an HTTP server (esp_http_server) serving static files from a
