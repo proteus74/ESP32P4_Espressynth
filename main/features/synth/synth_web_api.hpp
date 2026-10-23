@@ -40,6 +40,9 @@
 #include "features/io/i2c_device_registry.h"
 #include "features/sd_card/sd_card_manager.hpp"
 #include "features/web/web_server.hpp"
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    #include "features/wifi/wifi_manager.hpp"
+#endif
 #include "synth_manager.hpp"
 #include "version.h"
 
@@ -1658,6 +1661,158 @@ esp_err_t device_settings_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+#if defined(CONFIG_APP_ENABLE_WIFI)
+// ---- /api/settings/network, /api/wifi/scan (Wi-Fi station; the password is write-only) ----
+
+// Fields shared by the settings and scan responses. The UI reads both the "wifi*" names (settings)
+// and the plain ones (scan).
+void add_wifi_status(cJSON *root) {
+    const bool connected = Feature::WiFi::is_connected();
+    char ip[16] = "";
+    esp_netif_ip_info_t info{};
+    if (connected && Feature::WiFi::get_ip_info(info) == ESP_OK) {
+        snprintf(ip, sizeof(ip), IPSTR, IP2STR(&info.ip));
+    }
+    cJSON_AddBoolToObject(root, "wifiAvailable", true);
+    cJSON_AddBoolToObject(root, "available", true);
+    cJSON_AddBoolToObject(root, "wifiEnabled", Feature::WiFi::is_enabled());
+    cJSON_AddBoolToObject(root, "enabled", Feature::WiFi::is_enabled());
+    cJSON_AddBoolToObject(root, "wifiConnected", connected);
+    cJSON_AddBoolToObject(root, "connected", connected);
+    cJSON_AddStringToObject(root, "wifiIp", ip);
+#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
+    cJSON_AddBoolToObject(root, "wifiPortal", Feature::WiFi::is_captive_portal_active());
+    cJSON_AddStringToObject(root, "wifiPortalSsid", CONFIG_WIFI_CAPTIVE_PORTAL_SSID);
+#endif
+}
+
+esp_err_t send_json_object(httpd_req_t *req, cJSON *root) {
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (out == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out);
+    cJSON_free(out);
+    return ESP_OK;
+}
+
+esp_err_t network_settings_get_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    if (root == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    // Ethernet is DHCP-only and the Wi-Fi station has no static-IP support, so the UI hides
+    // those controls (ethAvailable / wifiStaticIp).
+    cJSON_AddBoolToObject(root, "ethAvailable", false);
+    cJSON_AddBoolToObject(root, "wifiStaticIp", false);
+    cJSON_AddStringToObject(root, "wifiSsid", Feature::WiFi::configured_ssid());
+    add_wifi_status(root);
+    return send_json_object(req, root);
+}
+
+esp_err_t network_settings_post_handler(httpd_req_t *req) {
+    constexpr size_t kMaxBodyLen = 1024;
+    if (req->content_len == 0 || req->content_len > kMaxBodyLen) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid size");
+        return ESP_FAIL;
+    }
+    char body[kMaxBodyLen + 1];
+    size_t received = 0;
+    while (received < req->content_len) {
+        const int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_ParseWithLength(body, received);
+    if (root == nullptr) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
+        return ESP_FAIL;
+    }
+    const cJSON *enabled_item = cJSON_GetObjectItemCaseSensitive(root, "wifiEnabled");
+    const cJSON *ssid_item = cJSON_GetObjectItemCaseSensitive(root, "wifiSsid");
+    const cJSON *password_item = cJSON_GetObjectItemCaseSensitive(root, "wifiPassword");
+
+    const bool enabled = cJSON_IsBool(enabled_item) ? cJSON_IsTrue(enabled_item) : Feature::WiFi::is_enabled();
+    const char *ssid = cJSON_IsString(ssid_item) ? ssid_item->valuestring : Feature::WiFi::configured_ssid();
+    const char *password = cJSON_IsString(password_item) ? password_item->valuestring : "";
+
+    const char *error = nullptr;
+    if (strlen(ssid) > 32) {
+        error = "SSID too long (max 32)";
+    } else if (strlen(password) > 64 || (password[0] != '\0' && strlen(password) < 8)) {
+        error = "Password needs 8 to 64 characters";
+    }
+    if (error != nullptr) {
+        cJSON_Delete(root);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        char json[96];
+        snprintf(json, sizeof(json), "{\"error\":\"%s\"}", error);
+        httpd_resp_sendstr(req, json);
+        return ESP_OK;
+    }
+
+    // The UI never gets the saved password back, so a blank field means "keep it" as long as
+    // the SSID is unchanged; a new SSID with a blank password is an open network.
+    char keep_password[65] = {};
+    if (password[0] == '\0' && strcmp(ssid, Feature::WiFi::configured_ssid()) == 0) {
+        snprintf(keep_password, sizeof(keep_password), "%s", Feature::WiFi::configured_password());
+        password = keep_password;
+    }
+    const esp_err_t err = Feature::WiFi::apply_settings(enabled, ssid, password);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, err == ESP_OK ? "{\"applied\":true}" : "{\"applied\":false}");
+    return ESP_OK;
+}
+
+esp_err_t wifi_scan_start_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    if (!Feature::WiFi::scan_start()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "{\"error\":\"scan already running\"}");
+        return ESP_OK;
+    }
+    httpd_resp_sendstr(req, "{\"started\":true}");
+    return ESP_OK;
+}
+
+esp_err_t wifi_scan_result_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *networks = root != nullptr ? cJSON_AddArrayToObject(root, "networks") : nullptr;
+    if (root == nullptr || networks == nullptr) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    const Feature::WiFi::ScanState state = Feature::WiFi::scan_state();
+    cJSON_AddBoolToObject(root, "scanning", state == Feature::WiFi::ScanState::Running);
+    if (state == Feature::WiFi::ScanState::Failed) cJSON_AddStringToObject(root, "error", "scan failed");
+    if (state == Feature::WiFi::ScanState::Done) {
+        for (int i = 0; i < Feature::WiFi::async_scan_count; ++i) {
+            const auto &ap = Feature::WiFi::async_scan_results[i];
+            cJSON *entry = cJSON_CreateObject();
+            if (entry == nullptr) break;
+            cJSON_AddStringToObject(entry, "ssid", ap.ssid);
+            cJSON_AddNumberToObject(entry, "rssi", ap.rssi);
+            cJSON_AddBoolToObject(entry, "auth", ap.authmode != WIFI_AUTH_OPEN);
+            cJSON_AddItemToArray(networks, entry);
+        }
+    }
+    add_wifi_status(root);
+    return send_json_object(req, root);
+}
+#endif // CONFIG_APP_ENABLE_WIFI
+
 // ---- /api/version, /api/diagnostics/memory ----
 
 #if defined(CONFIG_CROWPANEL_BATTERY_STATUS)
@@ -2228,6 +2383,25 @@ inline void register_web_routes() {
         .uri = "/api/settings/device", .method = HTTP_GET, .handler = &device_settings_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &device_settings_uri);
+
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    static const httpd_uri_t network_get_uri = {
+        .uri = "/api/settings/network", .method = HTTP_GET, .handler = &network_settings_get_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &network_get_uri);
+    static const httpd_uri_t network_post_uri = {
+        .uri = "/api/settings/network", .method = HTTP_POST, .handler = &network_settings_post_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &network_post_uri);
+    static const httpd_uri_t wifi_scan_post_uri = {
+        .uri = "/api/wifi/scan", .method = HTTP_POST, .handler = &wifi_scan_start_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &wifi_scan_post_uri);
+    static const httpd_uri_t wifi_scan_get_uri = {
+        .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = &wifi_scan_result_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &wifi_scan_get_uri);
+#endif
 
     static const httpd_uri_t gpio_info_uri = {
         .uri = "/api/system/gpio", .method = HTTP_GET, .handler = &gpio_info_handler, .user_ctx = nullptr,

@@ -1,12 +1,12 @@
 import { COMB_FILTER_PORTS, COMB_FILTER_DEFAULTS, combFilterCv } from "./comb-filter-core.js?v=20260927-drum-pulse-1";
 import { OVERDRIVE_PORTS, OVERDRIVE_DEFAULTS, OVERDRIVE_MODE_NAMES, overdriveCv, overdriveModeIndex, overdriveDriveFactor, overdriveToneHz } from "./overdrive-core.js?v=20261003-od-3";
 import { createMidiFilterState, acceptsMidiFilter, midiFilterCriterion } from "./midi-filter-core.js?v=20260927-drum-pulse-1";
-import { AudioEngine } from "./audio-engine.js?v=20261023-wm8960-in-3";
+import { AudioEngine } from "./audio-engine.js?v=20261023-wifi-settings-1";
 import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
 import { openSamplerEditor } from "./sampler-editor.js?v=20261021-sampler-3";
-import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261023-wm8960-in-3";
+import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261023-wifi-settings-1";
 import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-21";
 
 // Header/status-bar icons: index.html marks them with data-ui-icon, swapped for the SVG tiles here.
@@ -599,6 +599,7 @@ function renderWifiStatus(data) {
   else if (data.wifiConnected || data.connected) wifiStatus.textContent = `Connected${data.wifiIp || data.ip ? ` — ${data.wifiIp || data.ip}` : ""}`;
   else if (data.wifiScanning || data.scanning) wifiStatus.textContent = "Scanning…";
   else if (data.wifiError || data.error) wifiStatus.textContent = `Error: ${data.wifiError || data.error}`;
+  else if (data.wifiPortal && (data.wifiEnabled || data.enabled)) wifiStatus.textContent = `Not connected — setup hotspot "${data.wifiPortalSsid}" is open`;
   else wifiStatus.textContent = data.wifiEnabled || data.enabled ? "Connecting…" : "Wi-Fi disabled";
 }
 
@@ -621,6 +622,8 @@ function applyNetworkData(data) {
   wifiSsidInput.value = data.wifiSsid || "";
   wifiPasswordInput.value = "";
   wifiDhcpInput.checked = data.wifiDhcp !== false;
+  // The firmware only does DHCP; hide the static-IP controls unless it says otherwise.
+  wifiDhcpInput.closest("label").hidden = data.wifiStaticIp === false;
   wifiIpInput.value = data.wifiIp || "";
   wifiMaskInput.value = data.wifiMask || "";
   wifiGwInput.value = data.wifiGw || "";
@@ -883,7 +886,7 @@ wifiScanButton.addEventListener("click", async () => {
     const started = await start.json();
     if (!start.ok || started.error) throw new Error(started.error || `HTTP ${start.status}`);
     let scan;
-    for (let attempt = 0; attempt < 8; ++attempt) {
+    for (let attempt = 0; attempt < 24; ++attempt) {
       await new Promise((resolve) => setTimeout(resolve, 750));
       const res = await fetch("/api/wifi/scan");
       scan = await res.json();

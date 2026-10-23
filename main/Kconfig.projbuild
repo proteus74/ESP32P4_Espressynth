@@ -1036,32 +1036,34 @@ menu "Espressynth"
                 all ship with the C6 soldered on; for a Custom ESP32-P4 Board, enable this
                 only if you've actually wired one up yourself.
 
+        # At least one network interface is mandatory (the web UI is the only way to edit
+        # presets): without Ethernet, Wi-Fi is forced on. Fixed boards always have Ethernet
+        # (APP_ENABLE_ETHERNET has no prompt there) or no Ethernet at all (Wi-Fi has no prompt
+        # there and defaults to y). A configuration with neither is rejected in board_config.hpp.
+        config APP_NETWORK_NEEDS_WIFI
+            bool
+            default y
+            depends on !APP_ENABLE_ETHERNET
+            select APP_ENABLE_WIFI
+
         if APP_ENABLE_HOSTED_COPROCESSOR
             config APP_ENABLE_WIFI
-                bool "Enable Wi-Fi Subsystem (ESP-Hosted / SDIO)"
+                bool "Enable Wi-Fi Subsystem (ESP-Hosted / SDIO)" if BOARD_HAS_ETHERNET
                 default y
                 help
                     Enables Wi-Fi connectivity via ESP-Hosted co-processor (ESP32-C6).
+                    Boards without Ethernet always build it in (it is their only network
+                    link). On boards with Ethernet it is optional.
 
             if APP_ENABLE_WIFI
-                config WIFI_SSID
-                    string "Wi-Fi SSID"
-                    default ""
-                    help
-                        Network to join in station mode. Leave empty to bring the Wi-Fi
-                        link up without auto-connecting (e.g. to drive it from application code).
-
-                config WIFI_PASSWORD
-                    string "Wi-Fi Password"
-                    default ""
-                    help
-                        Passphrase for WIFI_SSID. Leave empty for an open network.
-
+                # The station's SSID/password are NOT build-time settings: they are entered in
+                # the web UI (Settings -> Network) and stored in NVS (wifi_manager.hpp).
                 config WIFI_MAXIMUM_RETRY
                     int "Maximum connection retries"
                     default 5
                     help
-                        Number of reconnect attempts after a disconnect before giving up.
+                        Number of reconnect attempts after a disconnect before giving up (and,
+                        with the captive portal enabled below, opening the fallback hotspot).
 
                 config APP_ENABLE_WIFI_CAPTIVE_PORTAL
                     bool "Fall back to an Access Point + Captive Portal if the station can't connect"
@@ -1069,7 +1071,8 @@ menu "Espressynth"
                     select APP_ENABLE_WEBSERVER
                     help
                         Once WIFI_MAXIMUM_RETRY consecutive station connection attempts fail
-                        (wrong password, AP out of range, AP down, ...), start a SoftAP (SSID/
+                        (wrong password, AP out of range, AP down, ...) - or right at boot if no
+                        network has been configured in Settings yet - start a SoftAP (SSID/
                         password below) alongside the still-retrying station and run a captive
                         portal on it: a DNS server (components/dns_server) answers every query
                         with the ESP32's own AP IP, and the web server (auto-enabled by this
@@ -1083,7 +1086,7 @@ menu "Espressynth"
                 if APP_ENABLE_WIFI_CAPTIVE_PORTAL
                     config WIFI_CAPTIVE_PORTAL_SSID
                         string "Captive Portal AP SSID"
-                        default "ESP32P4-Setup"
+                        default "ESPRESSYNTH by Jolabi"
                         help
                             SSID the fallback Access Point broadcasts while no station
                             connection is up.
@@ -1102,7 +1105,7 @@ menu "Espressynth"
                         range 5 3600
                         help
                             While the captive portal AP is up, how often to retry joining
-                            WIFI_SSID in the background (another WIFI_MAXIMUM_RETRY-sized burst
+                            the configured network in the background (another WIFI_MAXIMUM_RETRY-sized burst
                             of attempts each time) so the device reconnects on its own once the
                             real network is reachable again, without needing a reboot.
                 endif
@@ -1192,12 +1195,14 @@ menu "Espressynth"
                 Type "help" for a list of available commands.
 
         config APP_ENABLE_ETHERNET
-            bool "Enable Ethernet / LAN (RMII EMAC)"
-            default n
+            bool "Enable Ethernet / LAN (RMII EMAC)" if BOARD_CUSTOM_P4
+            default y
             depends on BOARD_HAS_ETHERNET
             help
                 Enables 100M RJ45 Ethernet connection using the internal EMAC and PHY.
-                Only offered on boards with an Ethernet PHY (BOARD_HAS_ETHERNET).
+                Always built in on boards with an Ethernet PHY (BOARD_HAS_ETHERNET): the web
+                UI is the only way to edit presets, so a network link is mandatory. Only the
+                Custom board can switch it off - then Wi-Fi is forced on instead.
 
         config APP_ENABLE_WEBSERVER
             bool "Enable Web Server (HTTP, Wi-Fi + Ethernet)"

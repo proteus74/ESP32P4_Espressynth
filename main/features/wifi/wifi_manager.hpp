@@ -10,6 +10,8 @@
 #include "lwip/ip4_addr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
     #include "dns_server.h"
@@ -23,6 +25,11 @@ constexpr const char* TAG = "FeatureWiFi";
 inline esp_netif_t* sta_netif = nullptr;
 inline int retry_count = 0;
 inline bool connected = false;
+// Station settings, loaded from NVS in init() and changed through apply_settings() (web UI
+// Settings -> Network, CLI "wifi connect"). Empty SSID = nothing configured yet.
+inline char sta_ssid[33] = {};
+inline char sta_password[65] = {};
+inline bool wifi_enabled = true;
 
 #if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
 inline esp_netif_t* ap_netif = nullptr;
@@ -71,10 +78,16 @@ inline void start_captive_portal() {
 
     esp_netif_ip_info_t ip_info{};
     esp_netif_get_ip_info(ap_netif, &ip_info);
-    ESP_LOGW(TAG, "Could not join \"%s\" -- started fallback AP \"%s\" with captive portal at "
-             IPSTR " (retrying \"%s\" every %ds in the background)",
-             CONFIG_WIFI_SSID, CONFIG_WIFI_CAPTIVE_PORTAL_SSID, IP2STR(&ip_info.ip),
-             CONFIG_WIFI_SSID, CONFIG_WIFI_CAPTIVE_PORTAL_RETRY_INTERVAL_SEC);
+    if (sta_ssid[0] != '\0') {
+        ESP_LOGW(TAG, "Could not join \"%s\" -- started fallback AP \"%s\" with captive portal at "
+                 IPSTR " (retrying \"%s\" every %ds in the background)",
+                 sta_ssid, CONFIG_WIFI_CAPTIVE_PORTAL_SSID, IP2STR(&ip_info.ip),
+                 sta_ssid, CONFIG_WIFI_CAPTIVE_PORTAL_RETRY_INTERVAL_SEC);
+    } else {
+        ESP_LOGW(TAG, "No Wi-Fi network configured -- started hotspot \"%s\" with captive portal at " IPSTR
+                 " (set the network in Settings -> Network)",
+                 CONFIG_WIFI_CAPTIVE_PORTAL_SSID, IP2STR(&ip_info.ip));
+    }
 }
 
 // Tears the captive portal back down once the station has a real connection again.
@@ -92,7 +105,7 @@ inline void stop_captive_portal() {
 }
 
 inline void captive_portal_retry_timer_cb(void*) {
-    if (!connected) {
+    if (!connected && wifi_enabled && sta_ssid[0] != '\0') {
         retry_count = 0;
         esp_wifi_connect();
     }
@@ -102,11 +115,18 @@ inline void captive_portal_retry_timer_cb(void*) {
 inline void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        if (strlen(CONFIG_WIFI_SSID) > 0) {
+        if (!wifi_enabled) return;
+        if (sta_ssid[0] != '\0') {
             esp_wifi_connect();
         }
+#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
+        else {
+            start_captive_portal(); // nothing configured yet: open the setup hotspot right away
+        }
+#endif
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         connected = false;
+        if (!wifi_enabled) return;
         const auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
         if (retry_count < CONFIG_WIFI_MAXIMUM_RETRY) {
             ++retry_count;
@@ -150,8 +170,8 @@ inline bool is_captive_portal_active() {
 }
 #endif
 
-// Station credentials saved at runtime (CLI "wifi connect") in NVS. They take precedence over
-// the build-time CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD at boot; "wifi forget" clears them.
+// Station credentials saved in NVS (web UI Settings -> Network, CLI "wifi connect"). There is no
+// build-time SSID/password: without saved credentials the device opens the setup hotspot.
 constexpr const char* CREDENTIALS_NVS_NAMESPACE = "wifi_cred";
 
 /** @brief Load saved credentials; false if none are stored. Buffers must hold 33 / 65 bytes. */
@@ -176,7 +196,27 @@ inline esp_err_t save_credentials(const char* ssid, const char* password) {
     return err;
 }
 
-/** @brief Forget the saved credentials; the next boot uses the build-time ones again. */
+/** @brief Wi-Fi on/off switch from Settings -> Network (default on). */
+inline bool load_enabled() {
+    nvs_handle_t nvs;
+    uint8_t value = 1;
+    if (nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return true;
+    nvs_get_u8(nvs, "en", &value);
+    nvs_close(nvs);
+    return value != 0;
+}
+
+inline esp_err_t save_enabled(bool enabled) {
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) return err;
+    err = nvs_set_u8(nvs, "en", enabled ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(nvs);
+    nvs_close(nvs);
+    return err;
+}
+
+/** @brief Forget the saved credentials; the next boot opens the setup hotspot again. */
 inline esp_err_t clear_saved_credentials() {
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READWRITE, &nvs);
@@ -264,9 +304,85 @@ inline int scan(ScanResult* out, int max_results) {
     return n;
 }
 
+// Asynchronous scan for the web UI: scan_start() returns at once, a small task runs the blocking
+// scan() above, scan_get() reports the result.
+enum class ScanState { Idle, Running, Done, Failed };
+inline ScanResult async_scan_results[20];
+inline int async_scan_count = 0;
+inline volatile ScanState async_scan_state = ScanState::Idle;
+
+inline void async_scan_task(void*) {
+    const int n = scan(async_scan_results, 20);
+    async_scan_count = n > 0 ? n : 0;
+    async_scan_state = n >= 0 ? ScanState::Done : ScanState::Failed;
+    vTaskDelete(nullptr);
+}
+
+/** @brief Start a background scan; false if one is already running or the task can't start. */
+inline bool scan_start() {
+    if (async_scan_state == ScanState::Running) return false;
+    async_scan_state = ScanState::Running;
+    if (xTaskCreate(async_scan_task, "wifi_scan", 4096, nullptr, 4, nullptr) != pdPASS) {
+        async_scan_state = ScanState::Failed;
+        return false;
+    }
+    return true;
+}
+
+inline ScanState scan_state() {
+    return async_scan_state;
+}
+
+/**
+ * @brief Save and apply new station settings (Settings -> Network). An empty `ssid` clears the
+ *        saved network (the hotspot opens); `password` may be null/empty for an open network.
+ *        Safe to call from any task; the (re)connect happens asynchronously.
+ */
+inline esp_err_t apply_settings(bool enabled, const char* ssid, const char* password) {
+    if (ssid == nullptr) ssid = "";
+    wifi_enabled = enabled;
+    save_enabled(enabled);
+    if (ssid[0] == '\0') {
+        clear_saved_credentials();
+        save_enabled(enabled);
+        sta_ssid[0] = '\0';
+        sta_password[0] = '\0';
+    } else {
+        const esp_err_t err = save_credentials(ssid, password != nullptr ? password : "");
+        if (err != ESP_OK) return err;
+        std::strncpy(sta_ssid, ssid, sizeof(sta_ssid) - 1);
+        sta_ssid[sizeof(sta_ssid) - 1] = '\0';
+        std::strncpy(sta_password, password != nullptr ? password : "", sizeof(sta_password) - 1);
+        sta_password[sizeof(sta_password) - 1] = '\0';
+    }
+
+    if (!enabled) {
+        retry_count = 0;
+        esp_wifi_disconnect();
+#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
+        stop_captive_portal();
+#endif
+        return ESP_OK;
+    }
+    if (sta_ssid[0] == '\0') {
+        esp_wifi_disconnect();
+#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
+        start_captive_portal();
+#endif
+        return ESP_OK;
+    }
+    return connect(sta_ssid, sta_password);
+}
+
+/** @brief The saved station SSID (empty = none configured) and whether Wi-Fi is switched on. */
+inline const char* configured_ssid() { return sta_ssid; }
+inline const char* configured_password() { return sta_password; }
+inline bool is_enabled() { return wifi_enabled; }
+
 /**
  * @brief Initialize Wi-Fi station mode over the ESP-Hosted link (ESP32-C6 co-processor).
- *        Auto-connects to CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD if a SSID is configured.
+ *        Connects to the network saved in NVS; with none saved (or after WIFI_MAXIMUM_RETRY
+ *        failed attempts) the captive-portal hotspot opens instead.
  */
 inline esp_err_t init() {
     esp_err_t err = nvs_flash_init();
@@ -305,39 +421,31 @@ inline esp_err_t init() {
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-    // Saved (CLI) credentials win over the build-time ones.
-    static char ssid[33] = CONFIG_WIFI_SSID;
-    static char password[65] = CONFIG_WIFI_PASSWORD;
-    if (load_saved_credentials(ssid, sizeof(ssid), password, sizeof(password))) {
-        ESP_LOGI(TAG, "Using saved Wi-Fi credentials for \"%s\" (CLI: wifi forget to reset)", ssid);
+    // Saved credentials (Settings -> Network / CLI); nothing saved = no network configured.
+    if (!load_saved_credentials(sta_ssid, sizeof(sta_ssid), sta_password, sizeof(sta_password))) {
+        sta_ssid[0] = '\0';
+        sta_password[0] = '\0';
     }
-    if (strlen(ssid) > 0) {
+    wifi_enabled = load_enabled();
+    if (sta_ssid[0] != '\0') {
         wifi_config_t wifi_config{};
         // Fields need no terminator at full length (32-char SSID / 64-char PSK are valid).
-        std::memcpy(wifi_config.sta.ssid, ssid, strnlen(ssid, sizeof(wifi_config.sta.ssid)));
-        std::memcpy(wifi_config.sta.password, password, strnlen(password, sizeof(wifi_config.sta.password)));
-        wifi_config.sta.threshold.authmode = strlen(password) == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+        std::memcpy(wifi_config.sta.ssid, sta_ssid, strnlen(sta_ssid, sizeof(wifi_config.sta.ssid)));
+        std::memcpy(wifi_config.sta.password, sta_password, strnlen(sta_password, sizeof(wifi_config.sta.password)));
+        wifi_config.sta.threshold.authmode = strlen(sta_password) == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     }
 
     err = esp_wifi_start();
     if (err != ESP_OK) return err;
 
-#if defined(CONFIG_BOARD_JC8012P4A1) || defined(CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD)
-    if (strlen(CONFIG_WIFI_SSID) > 0) {
-        ESP_LOGI(TAG, "Wi-Fi initialized: ESP-Hosted SDIO(CLK:%d CMD:%d D0:%d), connecting to SSID \"%s\"",
-                 CurrentBoard::PIN_SDIO_CLK, CurrentBoard::PIN_SDIO_CMD, CurrentBoard::PIN_SDIO_D0, CONFIG_WIFI_SSID);
+    if (!wifi_enabled) {
+        ESP_LOGI(TAG, "Wi-Fi initialized but switched off in Settings");
+    } else if (sta_ssid[0] != '\0') {
+        ESP_LOGI(TAG, "Wi-Fi initialized, connecting to SSID \"%s\"", sta_ssid);
     } else {
-        ESP_LOGI(TAG, "Wi-Fi initialized: ESP-Hosted SDIO(CLK:%d CMD:%d D0:%d), no SSID configured",
-                 CurrentBoard::PIN_SDIO_CLK, CurrentBoard::PIN_SDIO_CMD, CurrentBoard::PIN_SDIO_D0);
+        ESP_LOGI(TAG, "Wi-Fi initialized, no network configured yet");
     }
-#else
-    if (strlen(CONFIG_WIFI_SSID) > 0) {
-        ESP_LOGI(TAG, "Wi-Fi initialized: connecting to SSID \"%s\"", CONFIG_WIFI_SSID);
-    } else {
-        ESP_LOGI(TAG, "Wi-Fi initialized, no SSID configured");
-    }
-#endif
     return ESP_OK;
 }
 

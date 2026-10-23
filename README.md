@@ -24,7 +24,7 @@ This repository is especially useful when you want to prototype an ESP32-P4 prod
 
 - JC8012P4A1
 - JC1060P470C 7-inch board
-- Waveshare ESP32-P4 Wi-Fi 6 Dev Kit
+- Waveshare ESP32-P4 Wi-Fi 6 Dev Kit (GPIO map and WM8960 Audio HAT wiring: [documentation/Boards](documentation/Boards/Waveshare_ESP32-P4-WIFI6_mit_WM8960_HAT.md))
 - Custom ESP32-P4 board definition
 
 ### Supported features
