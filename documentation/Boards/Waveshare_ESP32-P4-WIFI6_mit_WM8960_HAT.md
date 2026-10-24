@@ -1,136 +1,135 @@
-# Waveshare ESP32-P4-WIFI6-DEV-KIT mit WM8960 Audio HAT
+# Waveshare ESP32-P4-WIFI6-DEV-KIT with WM8960 Audio HAT
 
-Stand: 2026-10-23. Diese Seite beschreibt, wie das Waveshare-Board und das Waveshare **WM8960 Audio HAT**
-(Raspberry-Pi-Bauform) zusammen verdrahtet sind und welche GPIOs dabei belegt werden.
+Status: 2026-10-23. This page describes how the Waveshare board and the Waveshare **WM8960 Audio HAT**
+(Raspberry Pi form factor) are wired together and which GPIOs are occupied in the process.
 
-Quellen:
+Sources:
 
-- Schaltplan des Boards: [WAVESHARE_ESP32-P4-WIFI6-DEV-KIT.pdf](WAVESHARE_ESP32-P4-WIFI6-DEV-KIT.pdf), Block "Interface" (Stiftleiste `P6`)
-- Schaltplan des HATs: [WM8960_Audio_HAT_Schematic.pdf](../AudioHats/WM8960_Audio_HAT_Schematic.pdf), Stiftleiste `P1`
-- Board-Definition im Projekt: [waveshare_p4_wifi_dev_kit.hpp](../../main/boards/waveshare_p4_wifi_dev_kit.hpp)
-- Codec-Treiber: [wm8960_manager.hpp](../../main/features/audio/wm8960_manager.hpp)
+- Board schematic: [WAVESHARE_ESP32-P4-WIFI6-DEV-KIT.pdf](WAVESHARE_ESP32-P4-WIFI6-DEV-KIT.pdf), block "Interface" (pin header `P6`)
+- HAT schematic: [WM8960_Audio_HAT_Schematic.pdf](../AudioHats/WM8960_Audio_HAT_Schematic.pdf), pin header `P1`
+- Board definition in the project: [waveshare_p4_wifi_dev_kit.hpp](../../main/boards/waveshare_p4_wifi_dev_kit.hpp)
+- Codec driver: [wm8960_manager.hpp](../../main/features/audio/wm8960_manager.hpp)
 
-## 1. Das HAT auf der 40-Pin-Leiste
+## 1. The HAT on the 40-pin header
 
-Die 40-Pin-Leiste `P6` des Boards hat die Belegung einer Raspberry Pi Leiste. Das HAT nutzt davon nur
-die folgenden Pins. In der Spalte "Standard" steht der GPIO des ESP32-P4, auf den ein direkt
-aufgestecktes HAT trifft. In der Spalte "Projekt" steht, was in der `sdkconfig` dieses Projekts eingestellt ist.
+The 40-pin header `P6` of the board has the pin layout of a Raspberry Pi header. The HAT uses only the
+following pins. The "Standard" column gives the ESP32-P4 GPIO that a directly plugged-in HAT connects to. The "Project" column shows what is set in this project's `sdkconfig`.
 
-| HAT-Signal | Pin auf `P6` | Raspberry-Pi-Name | Standard (ESP32-P4) | Projekt (`sdkconfig`) |
+| HAT signal | Pin on `P6` | Raspberry Pi name | Standard (ESP32-P4) | Project (`sdkconfig`) |
 | --- | --- | --- | --- | --- |
 | I2C SDA | 3 | BCM2 | GPIO7 | GPIO7 (I2C0) |
 | I2C SCL | 5 | BCM3 | GPIO8 | GPIO8 (I2C0) |
 | I2S BCLK (`I2S_CLK`) | 12 | BCM18 | GPIO22 | GPIO22 |
 | I2S LRCLK (`I2S_LRCLK`) | 35 | BCM19 | GPIO53 | GPIO53 |
-| I2S ADC, Mikrofon zum ESP (`I2S_ADC`) | 38 | BCM20 | GPIO27 | **GPIO48** |
-| I2S DAC, ESP zum Lautsprecher (`I2S_DAC`) | 40 | BCM21 | GPIO45 | **GPIO47** |
-| Taster `K1` | 11 | BCM17 | GPIO21 | aus (`-1`) |
-| 3,3 V | 1, 17 | | | |
+| I2S ADC, microphone to ESP (`I2S_ADC`) | 38 | BCM20 | GPIO27 | **GPIO48** |
+| I2S DAC, ESP to loudspeaker (`I2S_DAC`) | 40 | BCM21 | GPIO45 | **GPIO47** |
+| Button `K1` | 11 | BCM17 | GPIO21 | off (`-1`) |
+| 3.3 V | 1, 17 | | | |
 | 5 V | 2, 4 | | | |
 | GND | 6, 9, 14, 20, 25, 30, 34, 39 | | | |
 
-Der Master-Takt (MCLK) kommt nicht von der Leiste. Das HAT hat einen eigenen 24-MHz-Quarzoszillator
-(`XTAL1`). Im Treiber ist `mclk` deshalb auf "nicht belegt" gesetzt.
+The master clock (MCLK) does not come from the header. The HAT has its own 24 MHz crystal oscillator
+(`XTAL1`). In the driver, `mclk` is therefore set to "not assigned".
 
-**DIN und DOUT weichen vom Standard ab.** Im Projekt sind GPIO48 (Pin 33) und GPIO47 (Pin 37)
-konfiguriert, also nicht die Pins 38 und 40, an denen das HAT seine Datenleitungen hat. Der Grund ist,
-dass beide Standard-Pins auf diesem Board schon belegt sind:
+**DIN and DOUT deviate from the standard.** The project uses GPIO48 (pin 33) and GPIO47 (pin 37),
+not pins 38 and 40, where the HAT has its data lines. The reason is
+that both standard pins are already occupied on this board:
 
-- **GPIO27** (ADC-Daten, Pin 38) gehört mit GPIO26 zum USB-Device. Die Prüfung beim Bauen lehnt GPIO27 ab,
-  solange `APP_ENABLE_USB_DEVICE` an ist.
-- **GPIO45** (DAC-Daten, Pin 40) ist die Stromfreigabe der SD-Karte (`PIN_SDMMC_PWR_EN`). Sie ist
-  reserviert, solange `APP_ENABLE_SDCARD` an ist.
+- **GPIO27** (ADC data, pin 38) belongs together with GPIO26 to the USB device. The build check rejects GPIO27
+  as long as `APP_ENABLE_USB_DEVICE` is on.
+- **GPIO45** (DAC data, pin 40) is the power enable of the SD card (`PIN_SDMMC_PWR_EN`). It is
+  reserved as long as `APP_ENABLE_SDCARD` is on.
 
-Deshalb sind die HAT-Leitungen ADC (Pin 38) und DAC (Pin 40) mit Drahtbrücken auf Pin 33 (GPIO48) und
-Pin 37 (GPIO47) geführt. So ist der Aufbau tatsächlich gebaut (bestätigt). Wer das HAT direkt aufsteckt,
-muss die beiden Pins in `menuconfig` auf 27 und 45 zurücksetzen und dafür USB-Device und SD-Karte abschalten.
+Therefore the HAT lines ADC (pin 38) and DAC (pin 40) are routed with jumper wires to pin 33 (GPIO48) and
+pin 37 (GPIO47). This is how the setup was actually built (confirmed). If you plug the HAT in directly,
+you must reset the two pins in `menuconfig` to 27 and 45 and disable USB device and SD card.
 
-### Eigenschaften des HATs
+### Properties of the HAT
 
-- Codec WM8960, I2C-Adresse `0x1A` (7 Bit), I2C-Bus 0.
-- Zwei analoge MEMS-Mikrofone (AOS3729A-T42) an `LINPUT1` und `RINPUT1`, mit Mikrofon-Bias (`MICBIAS`).
-- Kopfhörerbuchse 3,5 mm sowie Lautsprecherausgang (Klasse D, vier Pins `LP`, `LN`, `RN`, `RP`).
-- Die ADC-Einstellungen (Eingangsverstärkung, Mikrofon-Boost, ADC-Lautstärke, Bias) lassen sich im Widget
-  "WM8960-In" per Doppelklick einstellen, siehe [wm8960-in.html](../../data/help/widgets/wm8960-in.html).
+- Codec WM8960, I2C address `0x1A` (7 bit), I2C bus 0.
+- Two analog MEMS microphones (AOS3729A-T42) on `LINPUT1` and `RINPUT1`, with microphone bias (`MICBIAS`).
+- 3.5 mm headphone jack and loudspeaker output (class D, four pins `LP`, `LN`, `RN`, `RP`).
+- The ADC settings (input gain, microphone boost, ADC volume, bias) can be adjusted in the widget
+  "WM8960-In" via double-click, see [wm8960-in.html](../../data/help/widgets/wm8960-in.html).
 
-## 2. Einstellungen für diese Kombination
+## 2. Settings for this combination
 
-`idf.py menuconfig`, Board "Waveshare ESP32-P4 WiFi Dev Kit":
+`idf.py menuconfig`, board "Waveshare ESP32-P4 WiFi Dev Kit":
 
-| Eintrag | Wert |
+| Entry | Value |
 | --- | --- |
-| `ONBOARD_AUDIO_WM8960` | an |
+| `ONBOARD_AUDIO_WM8960` | on |
 | `ONBOARD_AUDIO_WM8960_I2S_PORT` | 1 |
 | `ONBOARD_AUDIO_WM8960_I2C_PORT` | 0 |
 | `ONBOARD_AUDIO_WM8960_PIN_BCLK` | 22 |
 | `ONBOARD_AUDIO_WM8960_PIN_LRCK` | 53 |
 | `ONBOARD_AUDIO_WM8960_PIN_DIN` | 48 |
 | `ONBOARD_AUDIO_WM8960_PIN_DOUT` | 47 |
-| `ONBOARD_AUDIO_WM8960_PIN_BUTTON` | -1 (für den Taster `K1`: 21) |
-| `ONBOARD_AUDIO_ES8311` | **aus** (siehe unten) |
+| `ONBOARD_AUDIO_WM8960_PIN_BUTTON` | -1 (for button `K1`: 21) |
+| `ONBOARD_AUDIO_ES8311` | **off** (see below) |
 | `I2C0_PIN_SDA` / `I2C0_PIN_SCL` | 7 / 8 |
 
-**Der Onboard-Codec ES8311 und das HAT schließen sich aus.** Der Verstärker-Steuerpin des ES8311 ist
-GPIO53, und das ist die LRCLK-Leitung des HATs.
+**The onboard codec ES8311 and the HAT are mutually exclusive.** The amplifier control pin of the ES8311 is
+GPIO53, and that is the LRCLK line of the HAT.
 
-Der Taster `K1` liegt gegen GND und hat einen 4,7-kΩ-Pull-up nach 3,3 V. Er ist aktiv bei Low.
+Button `K1` is connected to GND and has a 4.7 kΩ pull-up to 3.3 V. It is active low.
 
-## 3. Was sonst auf dem Board belegt ist
+## 3. What else is occupied on the board
 
-Diese GPIOs sind in der Board-Definition als belegt eingetragen. Das HAT und eigene Funktionen dürfen
-sie nicht nutzen. Die Bauprüfung meldet eine Kollision mit Pinnummer und Namen.
+These GPIOs are marked as occupied in the board definition. The HAT and your own functions must not
+use them. The build check reports a collision with pin number and name.
 
-| Funktion | GPIOs |
+| Function | GPIOs |
 | --- | --- |
-| ES8311 (I2S + Takt) | 9, 10, 11, 12, 13 |
-| Verstärker des ES8311 (nur mit ES8311 an) | 53 |
-| ESP32-C6 über SDIO (ESP-Hosted) | 14, 15, 16, 17, 18, 19 |
-| ESP32-C6 Reset / Wake | 54 / 6 |
-| SD-Karte (SDMMC) | 39, 40, 41, 42, 43, 44 |
-| SD-Karte Stromfreigabe (nur mit SD-Karte an) | 45 |
-| Ethernet (RMII und Verwaltung) | 28, 29, 30, 31, 34, 35, 49, 50, 51, 52 |
-| USB-Device (Projektregel) | 26, 27 |
-| I2C0 (Projekt) | 7, 8 |
+| ES8311 (I2S + clock) | 9, 10, 11, 12, 13 |
+| Amplifier of the ES8311 (only with ES8311 on) | 53 |
+| ESP32-C6 via SDIO (ESP-Hosted) | 14, 15, 16, 17, 18, 19 |
+| ESP32-C6 reset / wake | 54 / 6 |
+| SD card (SDMMC) | 39, 40, 41, 42, 43, 44 |
+| SD card power enable (only with SD card on) | 45 |
+| Ethernet (RMII and management) | 28, 29, 30, 31, 34, 35, 49, 50, 51, 52 |
+| USB device (project rule) | 26, 27 |
+| I2C0 (project) | 7, 8 |
 
-An der 40-Pin-Leiste liegen außerdem GPIO24 und GPIO25 (Pins 27 und 28). Sie sind über 0-Ω-Widerstände
-mit den USB-Leitungen `USB1P1_N` und `USB1P1_P` des Boards verbunden.
+Also on the 40-pin header are GPIO24 and GPIO25 (pins 27 and 28). They are connected via 0 Ω resistors
+to the USB lines `USB1P1_N` and `USB1P1_P` of the board.
 
-Frei an der Leiste (in dieser Konfiguration, ohne Gewähr für Zusatzbelegungen durch weitere
-Funktionen): GPIO0, 1, 2, 3, 4, 5, 20, 21, 23, 32, 33, 36, 37, 38, 46.
+Free on the header (in this configuration, no guarantee against additional assignments by other
+functions): GPIO0, 1, 2, 3, 4, 5, 20, 21, 23, 32, 33, 36, 37, 38, 46.
 
-## 4. Die 40-Pin-Leiste `P6` komplett
+## 4. The 40-pin header `P6` in full
 
-Aus dem Schaltplan des Boards abgelesen. Die Spalte "Projekt" zeigt die aktuelle Nutzung.
+Read from the board schematic. The "Project" column shows the current use.
 
-| Pin | GPIO | Pi-Name | Projekt | | Pin | GPIO | Pi-Name | Projekt |
+| Pin | GPIO | Pi name | Project | | Pin | GPIO | Pi name | Project |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 3,3 V | | | | 2 | 5 V | | |
+| 1 | 3.3 V | | | | 2 | 5 V | | |
 | 3 | GPIO7 | SDA | I2C0 SDA | | 4 | 5 V | | |
 | 5 | GPIO8 | SCL | I2C0 SCL | | 6 | GND | | |
-| 7 | GPIO23 | BCM4 | frei | | 8 | GPIO37 | TXD | frei |
-| 9 | GND | | | | 10 | GPIO38 | RXD | frei |
-| 11 | GPIO21 | BCM17 | frei (HAT-Taster) | | 12 | GPIO22 | BCM18 | WM8960 BCLK |
-| 13 | GPIO20 | BCM27 | frei | | 14 | GND | | |
-| 15 | GPIO6 | BCM22 | ESP32-C6 Wake | | 16 | GPIO5 | BCM23 | frei |
-| 17 | 3,3 V | | | | 18 | GPIO4 | BCM24 | frei |
-| 19 | GPIO3 | MOSI | frei | | 20 | GND | | |
-| 21 | GPIO2 | MISO | frei | | 22 | GPIO1 | BCM25 | frei |
-| 23 | GPIO0 | SCLK | frei | | 24 | GPIO36 | CE0 | frei |
-| 25 | GND | | | | 26 | GPIO32 | CE1 | frei |
-| 27 | GPIO24 | ID_SD | USB (Board) | | 28 | GPIO25 | ID_SC | USB (Board) |
-| 29 | GPIO33 | BCM5 | frei | | 30 | GND | | |
-| 31 | GPIO26 | BCM6 | USB-Device | | 32 | GPIO54 | BCM12 | ESP32-C6 Reset |
-| 33 | GPIO48 | BCM13 | WM8960 DIN (Projekt) | | 34 | GND | | |
-| 35 | GPIO53 | BCM19 | WM8960 LRCK | | 36 | GPIO46 | BCM16 | frei |
-| 37 | GPIO47 | BCM26 | WM8960 DOUT (Projekt) | | 38 | GPIO27 | BCM20 | USB-Device |
-| 39 | GND | | | | 40 | GPIO45 | BCM21 | SD-Karte Strom |
+| 7 | GPIO23 | BCM4 | free | | 8 | GPIO37 | TXD | free |
+| 9 | GND | | | | 10 | GPIO38 | RXD | free |
+| 11 | GPIO21 | BCM17 | free (HAT button) | | 12 | GPIO22 | BCM18 | WM8960 BCLK |
+| 13 | GPIO20 | BCM27 | free | | 14 | GND | | |
+| 15 | GPIO6 | BCM22 | ESP32-C6 wake | | 16 | GPIO5 | BCM23 | free |
+| 17 | 3.3 V | | | | 18 | GPIO4 | BCM24 | free |
+| 19 | GPIO3 | MOSI | free | | 20 | GND | | |
+| 21 | GPIO2 | MISO | free | | 22 | GPIO1 | BCM25 | free |
+| 23 | GPIO0 | SCLK | free | | 24 | GPIO36 | CE0 | free |
+| 25 | GND | | | | 26 | GPIO32 | CE1 | free |
+| 27 | GPIO24 | ID_SD | USB (board) | | 28 | GPIO25 | ID_SC | USB (board) |
+| 29 | GPIO33 | BCM5 | free | | 30 | GND | | |
+| 31 | GPIO26 | BCM6 | USB device | | 32 | GPIO54 | BCM12 | ESP32-C6 reset |
+| 33 | GPIO48 | BCM13 | WM8960 DIN (project) | | 34 | GND | | |
+| 35 | GPIO53 | BCM19 | WM8960 LRCK | | 36 | GPIO46 | BCM16 | free |
+| 37 | GPIO47 | BCM26 | WM8960 DOUT (project) | | 38 | GPIO27 | BCM20 | USB device |
+| 39 | GND | | | | 40 | GPIO45 | BCM21 | SD card power |
 
-## 5. Was geprüft ist
+## 5. What has been verified
 
-- **Schaltpläne:** Die Zuordnung der Pins stammt aus den beiden PDFs. Sie passt zur Raspberry-Pi-Belegung
-  und zu den Pins, mit denen das Projekt bereits läuft (I2C 7/8, BCLK 22, LRCK 53).
-- **Am Gerät (2026-10-23):** Der Codec meldet sich nach dem Start ("WM8960 initialized on I2S1, BCLK 22,
-  LRCK 53, DOUT 47, DIN 48"). Das Widget "WM8960-In" liefert Mikrofondaten über GPIO48. Ein 1-kHz-Ton
-  vom PC-Lautsprecher wurde auf beiden Kanälen aufgenommen. Die Gain-Einstellungen im Widget gelangen
-  per I2C zum Codec, der Rauschpegel folgt ihnen.
-- **Nicht geprüft:** Der Ausgang über GPIO47 (DAC-Daten) und der Taster `K1`.
+- **Schematics:** The pin assignment comes from the two PDFs. It matches the Raspberry Pi pin layout
+  and the pins the project already runs with (I2C 7/8, BCLK 22, LRCK 53).
+- **On the device (2026-10-23):** The codec reports itself after startup ("WM8960 initialized on I2S1, BCLK 22,
+  LRCK 53, DOUT 47, DIN 48"). The widget "WM8960-In" delivers microphone data via GPIO48. A 1 kHz tone
+  from a PC loudspeaker was recorded on both channels. The gain settings in the widget reach the codec
+  via I2C, and the noise level follows them.
+- **Not verified:** The output via GPIO47 (DAC data) and button `K1`.

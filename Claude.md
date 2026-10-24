@@ -1,23 +1,23 @@
-Wenn du den Quellcode kompilieren willst, dann nutze diese Zeilen:
+If you want to compile the source code, use these lines:
 . C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1
 idf.py build
 
-Nicht `C:\esp\v6.1\esp-idf\export.ps1` nutzen: das aktiviert eine andere Python-venv als das EIM-Profil,
-und `idf.py` verweigert dann den Build in `build/`, der mit der jeweils anderen venv konfiguriert wurde.
+Do not use `C:\esp\v6.1\esp-idf\export.ps1`: it activates a different Python venv than the EIM profile,
+and `idf.py` then refuses to build in `build/`, which was configured with the other venv.
 
-Flashen: idf.py -p <COM-Port> flash
+Flashing: idf.py -p <COM-Port> flash
 
-Es gibt nur eine Konfiguration: die `sdkconfig` im Projektverzeichnis, bearbeitet mit `idf.py menuconfig`.
-Immer von ihr aus bauen - kein `-B <anderer Build-Ordner>`, kein `-D SDKCONFIG=...`, keine
-board-spezifischen `SDKCONFIG_DEFAULTS`. Das Board wird in menuconfig gewählt (Espressynth -> Board
-Configuration) und leitet seine festen Pins/Fähigkeiten selbst ab (main/Kconfig.projbuild, siehe README
-"Configuration model"). Zusatzhardware wie WM8960 ist kein Board-Default, sondern ein Feature in menuconfig.
+There is only one configuration: the `sdkconfig` in the project directory, edited with `idf.py menuconfig`.
+Always build from it - no `-B <other build folder>`, no `-D SDKCONFIG=...`, no
+board-specific `SDKCONFIG_DEFAULTS`. The board is selected in menuconfig (Espressynth -> Board
+Configuration) and derives its fixed pins/capabilities itself (main/Kconfig.projbuild, see README
+"Configuration model"). Additional hardware such as WM8960 is not a board default but a feature in menuconfig.
 
-Einzige Ausnahme: `python deploy.py --all` baut Release-Images für alle Boards außer Custom, jedes in
-`build/boards/<board>/` mit einer generierten sdkconfig (`sdkconfig.defaults` + Board-Wahl). Das macht
-nur deploy.py, nie von Hand. `python deploy.py` ohne `--all` baut das in menuconfig gewählte Board aus
-der Root-`sdkconfig` in `build/`. Ergebnis jeweils `build/EspressiveSynths-<board>.bin`.
+Only exception: `python deploy.py --all` builds release images for all boards except Custom, each in
+`build/boards/<board>/` with a generated sdkconfig (`sdkconfig.defaults` + board choice). Only
+deploy.py does this, never by hand. `python deploy.py` without `--all` builds the board selected in menuconfig from the
+root `sdkconfig` into `build/`. Result in each case: `build/EspressiveSynths-<board>.bin`.
 
-Nur wenn `--all` für alle Boards klappt: deploy.py ersetzt `../Espressynth_Website/static/firmware/`
-(je Board Partition-Binaries + ESP-Web-Tools-`manifest.json`, flashbar über `/flash` der Webseite) und
-erhöht danach `FIRMWARE_VERSION` in `main/version.h` um 0.01. `main/version.h` nicht von Hand hochzählen.
+Only if `--all` succeeds for all boards: deploy.py replaces `../Espressynth_Website/static/firmware/`
+(per board partition binaries + ESP Web Tools `manifest.json`, flashable via `/flash` on the website) and
+then increments `FIRMWARE_VERSION` in `main/version.h` by 0.01. Do not increment `main/version.h` by hand.

@@ -1,4 +1,4 @@
 # Agent Rules
 
-- Immer Code Graph (`codegraph_explore`) nutzen statt Dateien direkt zu lesen/durchsuchen.
-- Immer Caveman-Modus oder  chisle für Antworten nutzen.
+- Always use the Code Graph (`codegraph_explore`) instead of reading/searching files directly.
+- Always use Caveman mode or chisle for responses.

@@ -1,309 +1,309 @@
-# Speicherbudget für die Audio-Engine
+# Memory Budget for the Audio Engine
 
-Stand: 2026-10-04. Abschnitte 1–3 enthalten ursprüngliche statische Untersuchung von Commit `2798cc6`. Umsetzung auf Basis von `b8342ce`, ESP-IDF `v6.1`, ESP32-P4: siehe Abschnitt 5. Dort stehen tatsächlich verwendete Einstellungen, Hardwaremessungen und verbleibende Abnahmegrenzen; ursprüngliche Versuchswerte sind keine zusätzlichen Freigaben.
+Status: 2026-10-04. Sections 1–3 contain the original static analysis of commit `2798cc6`. Implementation based on `b8342ce`, ESP-IDF `v6.1`, ESP32-P4: see section 5. It contains the settings actually used, hardware measurements and remaining acceptance limits; the original trial values are not additional approvals.
 
-## Ziel und wichtigste Ergebnisse
+## Goal and main results
 
-Mehr **internen, zusammenhängenden P4-RAM** für Audiozustände und Blockpuffer verfügbar machen, während WiFi und BLE eingeschaltet bleiben. Freies PSRAM allein löst diesen Engpass nicht: `GraphBuilder` reduziert Stimmen, wenn deren zeitkritischer Zustand nicht in internen RAM passt.
+Make **more internal, contiguous P4 RAM** available for audio state and block buffers while WiFi and BLE stay enabled. Free PSRAM alone does not solve this bottleneck: `GraphBuilder` reduces voices when their time-critical state does not fit into internal RAM.
 
-Die aussichtsreichsten Kandidaten sind NimBLE-Allokationen im PSRAM, kleinere BLE-Pools und gezielt begrenzte Web-Allokationen. Danach folgen Hosted-Queues und gemessene Task-Stacks. Ein verbindliches Gesamteinsparpotenzial lässt sich ohne Heap-/Linker- und Laufzeitmessungen nicht angeben; Effekte überlappen und dürfen nicht einfach addiert werden.
+The most promising candidates are NimBLE allocations in PSRAM, smaller BLE pools and deliberately limited web allocations. Hosted queues and measured task stacks follow after that. A binding total savings potential cannot be stated without heap/linker and runtime measurements; effects overlap and must not simply be added together.
 
-| Speicherbereich | Bedeutung für dieses Projekt |
+| Memory area | Meaning for this project |
 | --- | --- |
-| P4 interner RAM | Audiozustände, Stacks, Heap, bestimmte DMA-/Transportpuffer; primäres Optimierungsziel |
-| P4 PSRAM | Geeignet für weniger zeitkritische Daten; Verlagerung spart internen RAM, aber keinen Gesamtspeicher |
-| ESP32-C6 RAM | WiFi-Funkstack und BLE-Controller; Einsparungen hier werden nicht zum P4-Audiobudget |
-| Flash | Weniger eingebundener Code ist nicht automatisch weniger Laufzeit-RAM |
+| P4 internal RAM | Audio state, stacks, heap, certain DMA/transport buffers; primary optimization target |
+| P4 PSRAM | Suitable for less time-critical data; moving data saves internal RAM, but not total memory |
+| ESP32-C6 RAM | WiFi radio stack and BLE controller; savings here do not count toward the P4 audio budget |
+| Flash | Less linked code does not automatically mean less runtime RAM |
 
-`network_init_task()` initialisiert ESP-Hosted gemeinsam für WiFi/BLE. Der NimBLE-Host läuft auf dem P4; `Feature::BLE::init()` bindet ihn an den C6-Controller. Deshalb nicht die üblichen lokalen ESP32-WiFi-RX/TX-Tipps ungeprüft auf den P4 übertragen.
+`network_init_task()` initializes ESP-Hosted jointly for WiFi/BLE. The NimBLE host runs on the P4; `Feature::BLE::init()` binds it to the C6 controller. Therefore, do not transfer the usual local ESP32 WiFi RX/TX tips to the P4 without verification.
 
-## 1. Ausgangsmessung, bevor Parameter geändert werden
+## 1. Baseline measurement before changing parameters
 
-Vorhandene Diagnose wiederverwenden:
+Reuse the existing diagnostics:
 
 - [MemoryDiagnostics.cpp](../main/features/synth/MemoryDiagnostics.cpp), `snapshot()`, `captureReloadPhase()`, `setGraphStats()`.
-- [synth_web_api.hpp](../main/features/synth/synth_web_api.hpp), `memory_diagnostics_handler()`, Route `/api/diagnostics/memory`.
-- Bereits enthalten: freier/größter/minimaler interner Heap und PSRAM, Synth-Stackreserve, Instanz-/Blockpuffergrößen und PSRAM-Fallbacks.
+- [synth_web_api.hpp](../main/features/synth/synth_web_api.hpp), `memory_diagnostics_handler()`, route `/api/diagnostics/memory`.
+- Already included: free/largest/minimum internal heap and PSRAM, synth stack reserve, instance/block buffer sizes and PSRAM fallbacks.
 
-Zusätzlich für einen Messbuild: Snapshots vor/nach Hosted-, BLE-, WiFi-, Web- und Synth-Initialisierung; internen DMA-fähigen Heap getrennt erfassen; High-Water-Marks der übrigen Tasks ergänzen. Flash-/NVS-Aufrufe und seltene Fehlerpfade gehören zur Stackmessung. ESP-IDF-Stackgrößen und die hier verwendeten High-Water-Marks in Bytes auswerten.
+Additionally for a measurement build: snapshots before/after hosted, BLE, WiFi, web and synth initialization; capture internal DMA-capable heap separately; add high-water marks for the remaining tasks. Flash/NVS calls and rare error paths belong to the stack measurement. Evaluate ESP-IDF stack sizes and the high-water marks used here in bytes.
 
-| Variante | Funkzustand | Zweck |
+| Variant | Radio state | Purpose |
 | --- | --- | --- |
-| A | WiFi aus, BLE aus | Grundlast; Ethernet/Web/LVGL ansonsten unverändert lassen |
-| B | WiFi an, BLE aus | Hosted + WiFi isolieren |
-| C | WiFi aus, BLE an | Hosted + NimBLE isolieren |
-| D | WiFi an, BLE an | Zielbetrieb; gemeinsame Hosted-Kosten nicht doppelt zählen |
+| A | WiFi off, BLE off | Base load; leave Ethernet/web/LVGL otherwise unchanged |
+| B | WiFi on, BLE off | Isolate hosted + WiFi |
+| C | WiFi off, BLE on | Isolate hosted + NimBLE |
+| D | WiFi on, BLE on | Target operation; do not count shared hosted costs twice |
 
-Pro Variante gleiches Board, Preset, Stimmenzahl, Displayzustand und gleiche USB-Geräte verwenden. Boot, Leerlauf, BLE-Scan, Pairing, drei Verbindungen, MIDI-Bursts, Web-Upload/Download, AP-Fallback, Reconnect und Presetwechsel erfassen. Im Zustand ohne Webzugang dieselben Werte seriell ausgeben. Mindestens 100 Presetwechsel und 30 Minuten kombinierte Last als ersten Regressionstest vorsehen; das ersetzt keinen längeren Dauertest.
+For each variant use the same board, preset, voice count, display state and USB devices. Record boot, idle, BLE scan, pairing, three connections, MIDI bursts, web upload/download, AP fallback, reconnect and preset change. In the state without web access, output the same values over serial. Plan at least 100 preset changes and 30 minutes of combined load as the first regression test; this does not replace a longer endurance test.
 
-Neben freien Bytes immer `internalLargest`, `internalMinimum`, effektive Stimmenzahl, MIDI-Drops, Render-Overruns, DMA-Underruns und Render-p99 dokumentieren. Die Heap-Minima gelten über die bisherige Laufzeit: Vergleichsläufe jeweils nach Neustart beginnen. Mehr freie Bytes bei weniger Stimmen sind kein Gewinn.
+Always document `internalLargest`, `internalMinimum`, effective voice count, MIDI drops, render overruns, DMA underruns and render p99 alongside free bytes. The heap minima apply over the runtime so far: start comparison runs after a reboot in each case. More free bytes with fewer voices is not a gain.
 
-Für jeden Kandidaten separaten Build erzeugen und `idf.py size`, `idf.py size-components` sowie bei Bedarf `idf.py size-files` vergleichen. Aktueller Workspace enthält kein App-Mapfile direkt unter `build`; vorhandene Build-Metadaten sind kein Nachweis für die RAM-Belegung des aktuellen Quellstands. Einstellungen in `sdkconfig.defaults` bzw. passenden Board-Defaults dauerhaft ablegen; bestehendes `sdkconfig` für Testbuilds ausdrücklich neu konfigurieren, da Defaults bestehende Werte nicht einfach überschreiben.
+For each candidate, create a separate build and compare `idf.py size`, `idf.py size-components` and, if needed, `idf.py size-files`. The current workspace contains no app mapfile directly under `build`; existing build metadata is no proof of the RAM usage of the current source state. Store settings permanently in `sdkconfig.defaults` or the matching board defaults; explicitly reconfigure the existing `sdkconfig` for test builds, since defaults do not simply overwrite existing values.
 
-## 2. Priorisierte Maßnahmen
+## 2. Prioritized measures
 
-### P1 — NimBLE-Daten gezielt nach PSRAM verlagern
+### P1 — Move NimBLE data specifically to PSRAM
 
-**Befund:** `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y`; PSRAM ist bereits aktiviert. `CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC=y`, aber `CONFIG_BT_NIMBLE_MEMPOOL_RUNTIME_ALLOC` ist aus. NimBLE-Hoststack: 4096 Bytes.
+**Finding:** `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y`; PSRAM is already enabled. `CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC=y`, but `CONFIG_BT_NIMBLE_MEMPOOL_RUNTIME_ALLOC` is off. NimBLE host stack: 4096 bytes.
 
-**Arbeit:** Zuerst ausschließlich `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y` testen. Lokal vorhandenes IDF-Kconfig beschreibt diese Auswahl für dynamische Host-Allokationen. Tatsächliche Pool-, Peer- und HCI-Allokationspfade separat prüfen: Die Option verschiebt weder pauschal alle statischen Daten noch jeden Hosted-Puffer. Hoststack und DMA-Puffer nicht ohne Nachweis mitverlagern; BLE speichert Bonding-Daten in NVS.
+**Work:** First test exclusively `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`. The locally available IDF Kconfig describes this selection for dynamic host allocations. Check the actual pool, peer and HCI allocation paths separately: the option moves neither all static data nor every hosted buffer across the board. Do not co-move the host stack and DMA buffers without evidence; BLE stores bonding data in NVS.
 
-**Potenzial:** Anteil der bisher intern angelegten dynamischen NimBLE-Daten; Bytes müssen gemessen werden. Kein fester Gewinn von beispielsweise „50 KB“ belegt. Prüfen, ob ausgelagerte Daten dieselben Pools enthalten, die unter P1 unten verkleinert werden sollen.
+**Potential:** Share of the NimBLE dynamic data previously allocated internally; bytes must be measured. No fixed gain of, for example, "50 KB" is proven. Check whether the moved data contains the same pools that are to be reduced under P1 below.
 
-**Abnahme:** Pairing/Bonding über Neustart, HID und MIDI gleichzeitig, maximale Verbindungszahl, Reconnect und WLAN-Last funktionieren ohne zusätzliche MIDI-Drops, Cachefehler oder schlechtere Audio-p99. PSRAM-Allokationsfehler müssen kontrolliert behandelt werden.
+**Acceptance:** Pairing/bonding across reboot, HID and MIDI simultaneously, maximum connection count, reconnect and WLAN load work without additional MIDI drops, cache errors or worse audio p99. PSRAM allocation failures must be handled in a controlled way.
 
-### P1 — BLE-Pools an tatsächlichen Bedarf anpassen
+### P1 — Adjust BLE pools to actual need
 
-Aktuelle Werte aus `sdkconfig`:
+Current values from `sdkconfig`:
 
-| Parameter | Ist | Separater Versuch |
+| Parameter | Current | Separate trial |
 | --- | ---: | --- |
-| `BT_NIMBLE_MAX_CONNECTIONS` | 3 | 3 beibehalten; 1/2 nur als ausdrücklich eingeschränktes Geräteprofil |
-| `BT_NIMBLE_MSYS_1_BLOCK_COUNT` / `BLOCK_SIZE` | 12 / 256 | zunächst beibehalten |
-| `BT_NIMBLE_MSYS_2_BLOCK_COUNT` / `BLOCK_SIZE` | 24 / 320 | Count 16, danach ggf. 12 |
-| `BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT` / `ACL_SIZE` | 24 / 255 | Count 16; Größe zunächst beibehalten |
-| `BT_NIMBLE_TRANSPORT_EVT_COUNT` | 30 | zunächst 20 |
-| `BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT` | 8 | zunächst beibehalten; Scan-Bursts testen |
-| `BT_NIMBLE_ATT_PREFERRED_MTU` | 256 | erst später 128 testen |
-| `BT_NIMBLE_ATT_MAX_PREP_ENTRIES` | 64 | Nutzung von Prepare Writes und zulässigen Kconfig-Bereich prüfen |
-| `BT_NIMBLE_GATT_MAX_PROCS` | 4 | erst nach Messung paralleler Discovery/Subscriptions verkleinern |
+| `BT_NIMBLE_MAX_CONNECTIONS` | 3 | keep 3; 1/2 only as an explicitly restricted device profile |
+| `BT_NIMBLE_MSYS_1_BLOCK_COUNT` / `BLOCK_SIZE` | 12 / 256 | keep for now |
+| `BT_NIMBLE_MSYS_2_BLOCK_COUNT` / `BLOCK_SIZE` | 24 / 320 | count 16, then possibly 12 |
+| `BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT` / `ACL_SIZE` | 24 / 255 | count 16; keep size for now |
+| `BT_NIMBLE_TRANSPORT_EVT_COUNT` | 30 | 20 for now |
+| `BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT` | 8 | keep for now; test scan bursts |
+| `BT_NIMBLE_ATT_PREFERRED_MTU` | 256 | test 128 only later |
+| `BT_NIMBLE_ATT_MAX_PREP_ENTRIES` | 64 | check use of prepare writes and the permissible Kconfig range |
+| `BT_NIMBLE_GATT_MAX_PROCS` | 4 | reduce only after measuring parallel discovery/subscriptions |
 
-Alle Namen in dieser Tabelle tragen in `sdkconfig` den Präfix `CONFIG_`. Zulässige Werte/Abhängigkeiten vor jedem Versuch im verwendeten IDF bestätigen.
+All names in this table carry the prefix `CONFIG_` in `sdkconfig`. Confirm permissible values/dependencies in the IDF in use before each trial.
 
-Die beiden MSYS-Pools ergeben rechnerisch `12*256 + 24*320 = 10.752` Bytes nominelle Blockkapazität. `MSYS_2` von 24 auf 12 spart darin **3.840 Bytes**, ohne Verwaltungs-/Alignmenteffekte. ACL 24 auf 16 entspricht **2.040 Bytes** nomineller Payload-Kapazität; Events 30 auf 20 entsprechen bei Größe 70 **700 Bytes**. Diese Zahlen sind keine gemessenen internen Heapgewinne und keine unabhängige Gesamtsumme: Transportimplementierung, Speicherort und Poolbeziehungen zuerst bestätigen.
+The two MSYS pools arithmetically give `12*256 + 24*320 = 10.752` bytes nominal block capacity. Reducing `MSYS_2` from 24 to 12 saves **3.840 bytes** therein, excluding management/alignment effects. ACL from 24 to 16 corresponds to **2.040 bytes** nominal payload capacity; events from 30 to 20 correspond to **700 bytes** at size 70. These figures are not measured internal heap gains and not an independent total: confirm the transport implementation, storage location and pool relationships first.
 
-MTU-Verkleinerung spart nicht automatisch Pool-RAM, solange Blockgrößen gleich bleiben. Sie kann größere BLE-MIDI-Nachrichten und HID-Discovery beeinflussen. Poolzahl, MTU und Blockgröße deshalb nicht gleichzeitig ändern.
+Reducing the MTU does not automatically save pool RAM as long as block sizes stay the same. It can affect larger BLE-MIDI messages and HID discovery. Therefore do not change pool count, MTU and block size at the same time.
 
-`CONFIG_BT_NIMBLE_MEMPOOL_RUNTIME_ALLOC=y` ist ein **nachgelagerter Versuch**: Laut lokalem IDF-Kconfig werden Blöcke dann während der Nutzung alloziert/freigegeben. Das kann Leerlaufverbrauch senken, erhöht aber Allokationsaktivität und mögliche Fragmentierung; der Lastpeak bleibt entscheidend. Zunächst feste, ausreichend dimensionierte Pools bevorzugen.
+`CONFIG_BT_NIMBLE_MEMPOOL_RUNTIME_ALLOC=y` is a **downstream trial**: according to the local IDF Kconfig, blocks are then allocated/freed during use. This can lower idle consumption, but increases allocation activity and possible fragmentation; the load peak remains decisive. First prefer fixed, sufficiently sized pools.
 
-### P1 — WebSocket-Speicherspitzen begrenzen
+### P1 — Limit WebSocket memory peaks
 
-**Fundstelle:** [synth_web_api.hpp](../main/features/synth/synth_web_api.hpp), `websocket_handler()`, insbesondere `malloc(frame.len + 1)` um Zeile 1633.
+**Location:** [synth_web_api.hpp](../main/features/synth/synth_web_api.hpp), `websocket_handler()`, in particular `malloc(frame.len + 1)` around line 1633.
 
-Die vom Client angegebene Länge wird vor einer Obergrenze alloziert. Danach entsteht ein cJSON-Baum. Die Prüfung gegen `sizeof(LiveParamMsg::json)` erfolgt erst beim Weiterreichen an die Engine und schützt diesen ersten Peak nicht; lokal behandelte Nachrichtentypen haben andere Anforderungen.
+The length specified by the client is allocated before an upper bound. A cJSON tree is then created. The check against `sizeof(LiveParamMsg::json)` only happens when passing on to the engine and does not protect this first peak; locally handled message types have different requirements.
 
-**Arbeit:** Protokollweit zulässige Maximallänge aus allen verwendeten Nachrichten bestimmen, vor Addition/Allokation prüfen und übergroße Frames kontrolliert ablehnen bzw. Verbindung schließen. Danach Payload explizit in PSRAM anlegen, sofern deren Verwendung keine Cache-aus-Zugriffe erfordert. Parser-Allokationen separat betrachten. Keine pro Request umgeschalteten globalen cJSON-Hooks: Andere Tasks können gleichzeitig parsen.
+**Work:** Determine the protocol-wide maximum permissible length from all messages used, check it before addition/allocation and reject oversized frames in a controlled way or close the connection. Then explicitly allocate the payload in PSRAM, provided its use does not require cache-off access. Consider parser allocations separately. No per-request switched global cJSON hooks: other tasks may parse at the same time.
 
-**Potenzial:** Lastabhängiger Heap-Peak und Fragmentierung; kein dauerhafter fixer Gewinn. Bei der aktuellen `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384` bevorzugen kleine normale Allokationen internen Speicher.
+**Potential:** Load-dependent heap peak and fragmentation; no fixed permanent gain. With the current `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384`, small normal allocations prefer internal memory.
 
-**Abnahme:** Alle gültigen Web-MIDI-/Parameter-/Geräteeinstellungsnachrichten funktionieren; Grenzwert, Übergröße, ungültiges JSON und Verbindungsabbruch geben Speicher zuverlässig frei. Heap nach wiederholten Requests stabil; keine Audioaussetzer unter Request-Bursts.
+**Acceptance:** All valid web MIDI/parameter/device setting messages work; limit, oversize, invalid JSON and connection abort reliably free memory. Heap stable after repeated requests; no audio dropouts under request bursts.
 
-### P2 — ESP-Hosted-Queues verkleinern, DMA-Staging beibehalten
+### P2 — Reduce ESP-Hosted queues, keep DMA staging
 
-**Befund:** `CONFIG_ESP_HOSTED_HOST_SDIO_TX_Q_SIZE=20`, `RX_Q_SIZE=20`, `RX_STAGING_SLOTS=2`; RPC maximal 16 ausstehende Anforderungen. Hosted-Stack-Konfigurationen stehen auf 4096 Bytes, externe Taskstacks sind für Hosted aus.
+**Finding:** `CONFIG_ESP_HOSTED_HOST_SDIO_TX_Q_SIZE=20`, `RX_Q_SIZE=20`, `RX_STAGING_SLOTS=2`; RPC at most 16 pending requests. Hosted stack configurations are 4096 bytes, external task stacks are off for hosted.
 
-**Arbeit:** Im verwendeten Hosted-Transport tatsächliche Queueelemente, Payload-Eigentümer und Allokations-Caps bestimmen. TX/RX separat von 20 auf 12 testen. RPC-Pending-Limit erst nach Messung des gleichzeitigen Bedarfs von Scan, BLE, Status und OTA reduzieren. Keine pauschale Rechnung „40 Slots mal Paketgröße“: Queues können nur Referenzen halten; reservierter Speicher und gehaltene Payloads unterscheiden sich.
+**Work:** In the hosted transport used, determine the actual queue elements, payload owners and allocation caps. Test TX/RX separately from 20 to 12. Reduce the RPC pending limit only after measuring the concurrent need of scan, BLE, status and OTA. No blanket calculation "40 slots times packet size": queues can only hold references; reserved memory and held payloads differ.
 
-`RX_STAGING_SLOTS=2` ist laut lokalem `managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/Kconfig.host.sdio` bereits das Minimum. Nicht auf 1 setzen. Shared SDIO muss BLE-MIDI auch während WiFi-Uploads bedienen können. Geringerer Durchsatz ist nur akzeptabel, wenn UI und Audioanforderungen weiter erfüllt bleiben.
+`RX_STAGING_SLOTS=2` is already the minimum according to the local `managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/Kconfig.host.sdio`. Do not set it to 1. Shared SDIO must still serve BLE-MIDI during WiFi uploads. Lower throughput is acceptable only if UI and audio requirements remain met.
 
-**Potenzial:** Zu messen; Queueverwaltung plus gegebenenfalls geringere Zahl gleichzeitig gehaltener Pakete. DMA-/Staging-Speicher nicht blind in PSRAM verlagern. Änderungen möglichst über öffentliche Kconfig-Optionen, nicht durch unversionierte Edits unter `managed_components`.
+**Potential:** To be measured; queue management plus possibly fewer simultaneously held packets. Do not blindly move DMA/staging memory to PSRAM. Make changes preferably via public Kconfig options, not through unversioned edits under `managed_components`.
 
-### P2 — Nicht verwendete BLE-Rollen und Discovery-Ressourcen reduzieren
+### P2 — Reduce unused BLE roles and discovery resources
 
-**Befund:** Central, Peripheral, Broadcaster, Observer sowie GATT-Client und -Server sind aktiviert. Das Projekt beschreibt seinen BLE-Betrieb in [Kconfig.projbuild](../main/Kconfig.projbuild) als Central für HID/MIDI. [ble_manager.hpp](../main/features/ble/ble_manager.hpp), `init()`, ruft `peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 20, 32, 32)` auf.
+**Finding:** Central, peripheral, broadcaster, observer as well as GATT client and server are enabled. The project describes its BLE operation in [Kconfig.projbuild](../main/Kconfig.projbuild) as central for HID/MIDI. [ble_manager.hpp](../main/features/ble/ble_manager.hpp), `init()`, calls `peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 20, 32, 32)`.
 
-**Arbeit:** Peripheral/Broadcaster und unnötige lokale GATT-Serverdienste nach Prüfung der Abhängigkeiten einzeln deaktivieren. Central, Observer, GATT-Client, Verschlüsselung, Bonding und NVS-Persistenz erhalten. Die zahlreichen aktivierten `BT_NIMBLE_*_SERVICE`-Optionen sind nur Kandidaten: Unreferenzierte Services können bereits vom Linker entfernt werden.
+**Work:** Disable peripheral/broadcaster and unnecessary local GATT server services individually after checking dependencies. Keep central, observer, GATT client, encryption, bonding and NVS persistence. The many enabled `BT_NIMBLE_*_SERVICE` options are only candidates: unreferenced services may already be removed by the linker.
 
-Für `peer_init` erst Definition, Allokationsstrategie und tatsächliche Discovery-Auslastung prüfen; die Zahlen 20/32/32 nicht unbelegt mit der Verbindungszahl multiplizieren. Generische HID-Geräte können deutlich mehr Services/Characteristics benötigen als reine MIDI-Geräte. Kleinere Grenzen müssen eine fehlgeschlagene Discovery sauber beenden und ihre Ressourcen freigeben.
+For `peer_init`, first check the definition, allocation strategy and actual discovery utilization; do not multiply the numbers 20/32/32 by the connection count without evidence. Generic HID devices can need significantly more services/characteristics than pure MIDI devices. Smaller limits must cleanly terminate a failed discovery and release its resources.
 
-**Potenzial:** Unbekannt; Flash- und RAM-Deltas getrennt ausweisen. Kein Abschalten von Sicherheit als Speicheroptimierung.
+**Potential:** Unknown; report flash and RAM deltas separately. Switching off security is not a memory optimization.
 
-### P2 — Task-Stacks nach Messung reduzieren
+### P2 — Reduce task stacks after measurement
 
-| Fundstelle | Reservierung | Bewertung |
+| Location | Reservation | Assessment |
 | --- | ---: | --- |
-| `web_server.hpp`, `Feature::Web::begin()` | 10.240 B | Dateiexplorer/Upload benötigen laut Code mehr als den Standardstack |
-| `display_lvgl.hpp`, `Feature::LVGL::init()` | 16.384 B | PNG-Decoding und VFS als Spitzenlast berücksichtigen |
-| `synth_manager.hpp`, `preset_nav` | 4.096 B | Navigation und Dateisystempfade messen |
-| `i2c_bus_manager.hpp`, Worker | je 4.096 B | Pro aktiviertem Bus; Fehler-/Loggingpfade messen |
-| NimBLE-Host | 4.096 B | Pairing, Discovery, Notifications und NVS messen |
-| `app_startup.hpp`, `network_init` | 12.288 B | Nur Boot-Peak: Task löscht sich bereits selbst |
-| `app_startup.hpp`, `sd_card_init` | 6.144 B | Boot-Reservierung getrennt von dauerhaften Tasks bewerten |
+| `web_server.hpp`, `Feature::Web::begin()` | 10.240 B | File explorer/upload need more than the standard stack according to the code |
+| `display_lvgl.hpp`, `Feature::LVGL::init()` | 16.384 B | Consider PNG decoding and VFS as peak load |
+| `synth_manager.hpp`, `preset_nav` | 4.096 B | Measure navigation and filesystem paths |
+| `i2c_bus_manager.hpp`, worker | 4.096 B each | Per enabled bus; measure error/logging paths |
+| NimBLE host | 4.096 B | Measure pairing, discovery, notifications and NVS |
+| `app_startup.hpp`, `network_init` | 12.288 B | Boot peak only: task already deletes itself |
+| `app_startup.hpp`, `sd_card_init` | 6.144 B | Evaluate boot reservation separately from permanent tasks |
 
-Zunächst Reserven erfassen, danach Kandidaten einzeln in kleinen Schritten reduzieren und eine begründete Sicherheitsreserve behalten. Beispiel: HTTP 10.240 auf 8.192 Bytes würde **2.048 Bytes** dauerhaft sparen, ist aber ohne Lastmessung nicht freigegeben. Große lokale JSON-/Uploadpuffer als mögliche Ursache des Stackbedarfs prüfen; deren Auslagerung spart erst dann internen RAM, wenn auch der reservierte Stack kleiner wird.
+First capture the reserves, then reduce candidates individually in small steps and keep a justified safety margin. Example: HTTP 10.240 to 8.192 bytes would save **2.048 bytes** permanently, but is not approved without a load measurement. Check large local JSON/upload buffers as a possible cause of the stack demand; moving them out only saves internal RAM if the reserved stack also becomes smaller.
 
-HTTP-Stack bleibt intern: `web_server.hpp` setzt absichtlich `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT` und dokumentiert den Flash-/Cachefehler mit PSRAM-Stack. Gleiches Risiko bei NVS-/Dateisystempfaden anderer Tasks prüfen. `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` verlagert gewöhnliche `xTaskCreate...`-Stacks nicht automatisch. [ESP-IDF v6.1: External RAM](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32p4/api-guides/external-ram.html).
+The HTTP stack stays internal: `web_server.hpp` deliberately sets `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT` and documents the flash/cache error with a PSRAM stack. Check the same risk for NVS/filesystem paths of other tasks. `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` does not automatically move ordinary `xTaskCreate...` stacks. [ESP-IDF v6.1: External RAM](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32p4/api-guides/external-ram.html).
 
-### P2 — AP-Fallback nur bei Bedarf anlegen
+### P2 — Create AP fallback only when needed
 
-**Fundstellen:** [wifi_manager.hpp](../main/features/wifi/wifi_manager.hpp), `init()`, `start_captive_portal()`, `stop_captive_portal()`.
+**Locations:** [wifi_manager.hpp](../main/features/wifi/wifi_manager.hpp), `init()`, `start_captive_portal()`, `stop_captive_portal()`.
 
-Das AP-Netif wird bei aktivierter Captive-Portal-Funktion schon beim Start angelegt, obwohl zunächst STA-Modus verwendet wird. Beim erfolgreichen Reconnect werden DNS und AP-Modus beendet, das Netif bleibt bestehen. DNS startet bereits bedarfsgesteuert; hierfür keinen weiteren Dauerverbrauch behaupten.
+The AP netif is created at startup when the captive portal function is enabled, although STA mode is used initially. On successful reconnect, DNS and AP mode are stopped; the netif remains. DNS already starts on demand; do not claim any further permanent consumption for it.
 
-**Arbeit:** AP-Netif und gegebenenfalls Retry-Timer erst bei Fallback erzeugen, nach sauberem Ende wieder freigeben. Eventhandler-/DHCP-Lebenszyklus korrekt abmelden; wiederholtes Anlegen/Löschen darf keine Lecks oder Rennen erzeugen. Zuerst mit dauerhaftem Netif vergleichen: Wenn Gewinn klein und Fragmentierung höher ist, bestehende Lösung behalten.
+**Work:** Create the AP netif and possibly the retry timer only on fallback, and release them again after a clean end. Correctly unregister event handler/DHCP lifecycle; repeated create/delete must not produce leaks or races. First compare against a permanent netif: if the gain is small and fragmentation higher, keep the existing solution.
 
-**Potenzial:** Kleiner, noch ungemessener P4-Gewinn im normalen STA-Betrieb. AP-Funkressourcen auf dem C6 getrennt ausweisen. Captive Portal vollständig auszuschalten ist ein Funktionsprofil, keine transparente Optimierung.
+**Potential:** Small, not yet measured P4 gain in normal STA operation. Report AP radio resources on the C6 separately. Fully disabling the captive portal is a functional profile, not a transparent optimization.
 
-### P3 — lwIP und globale malloc-Policy erst danach
+### P3 — lwIP and global malloc policy only afterwards
 
-`LWIP_MAX_SOCKETS=16`, `httpd.max_open_sockets=12`, TCP-Sendepuffer/Fenster jeweils 5760 Bytes, IPv6 an. Die Socketzahl wurde laut `web_server.hpp` bewusst wegen paralleler Browserrequests, WebSocket und Watchdogproblemen angehoben. Deshalb nicht zuerst verkleinern. TCP-Fenster gegebenenfalls separat auf 4320 Bytes testen; dies ist ein Versuchswert, keine garantierte Einsparung pro Verbindung. Ethernet ist ebenfalls aktiviert und nutzt lwIP mit.
+`LWIP_MAX_SOCKETS=16`, `httpd.max_open_sockets=12`, TCP send buffer/window each 5760 bytes, IPv6 on. According to `web_server.hpp`, the socket count was deliberately raised because of parallel browser requests, WebSocket and watchdog problems. Therefore do not reduce it first. The TCP window may be tested separately at 4320 bytes; this is a trial value, not a guaranteed saving per connection. Ethernet is also enabled and uses lwIP as well.
 
-`SPIRAM_MALLOC_ALWAYSINTERNAL=16384` kann später versuchsweise auf 4096 gesenkt werden, nachdem Allokationen in Audio-, Flash- und Treiberpfaden geprüft wurden. Explizite PSRAM-Allokationen für bekannte unkritische Daten sind zunächst gezielter. `SPIRAM_MALLOC_RESERVE_INTERNAL=32768` ist kein belegter „verschwendeter 32-KiB-Puffer“; dessen Änderung erzeugt kein zusätzliches physisches RAM. DMA-/Stackreserven erhalten.
+`SPIRAM_MALLOC_ALWAYSINTERNAL=16384` may later be experimentally lowered to 4096, after allocations in audio, flash and driver paths have been checked. Explicit PSRAM allocations for known non-critical data are more targeted in the first step. `SPIRAM_MALLOC_RESERVE_INTERNAL=32768` is not a proven "wasted 32 KiB buffer"; changing it creates no additional physical RAM. Keep DMA/stack reserves.
 
-IPv6 nur in einem ausdrücklich IPv4-only vorgesehenen Profil deaktivieren. `SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY` bzw. gezielte `EXT_RAM_BSS_ATTR`-Platzierung können statische, nicht zeitkritische Daten verlagern; erst Linkermap prüfen, anschließend Cache-aus-Pfade testen. Keine pauschale Verlagerung des Audiozustands. Die IDF-Dokumentation erläutert malloc-Schwelle, BSS-Platzierung und Cachebeschränkungen: [External RAM, v6.1](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32p4/api-guides/external-ram.html).
+Disable IPv6 only in a profile explicitly intended as IPv4-only. `SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY` or targeted `EXT_RAM_BSS_ATTR` placement can move static, non-time-critical data; check the linker map first, then test cache-off paths. No blanket relocation of the audio state. The IDF documentation explains the malloc threshold, BSS placement and cache restrictions: [External RAM, v6.1](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32p4/api-guides/external-ram.html).
 
-## 3. Bereits umgesetzt und weitere Grenzen
+## 3. Already implemented and further limits
 
-- `Graph::allocate()` ist laut [Graph.h](../main/audio/engine/Graph.h) bereits PSRAM-first. Dies nicht erneut als neue Einsparung zählen.
-- Live-Parameter-, MIDI-Debug- und LVGL-Knob-Aktivitätsqueues nutzen bereits PSRAM (`synth_manager.hpp`, `SynthEngine::begin()`).
-- `SynthEngine::loaderTaskLoop()` fordert beim Reload bereits Pre-Free des alten Graphen an. Eine angebliche generelle Doppelbelegung alter/neuer Graphen wäre hier keine neue Erkenntnis. Timeout-/Fehlerpfade separat untersuchen, falls die Diagnose dort Peaks zeigt.
-- Display-Bildcache nutzt PSRAM; bestimmte MIPI-Varianten besitzen zusätzliche Vollbildpuffer. Deren Reduktion ist vorrangig PSRAM-/Bandbreitenoptimierung und boardabhängig. SPI-Puffer sind DMA-markiert; keine pauschale Gleichbehandlung.
-- Zeitkritische Audiozustände, DSP-Tabellen und Blockpuffer nicht allein für eine höhere Anzeige „freier interner RAM“ ins PSRAM schieben. Mehr Cachekonkurrenz mit Display und Funk kann Stimmenzahl und Echtzeitfähigkeit verschlechtern.
-- Browser-JavaScript-Verkleinerung spart hauptsächlich Browser-/Flashressourcen, nicht automatisch P4-Laufzeit-RAM.
-- Ein optionaler späterer Funk-Aus-Modus benötigt echten Stop-/Deinit-Lebenszyklus. Disconnect allein ist keine garantierte Speicherfreigabe. Shared Hosted-Transport darf bei weiterlaufendem BLE oder WiFi nicht abgebaut werden; Ethernet/Webzugriff berücksichtigen. Für das Ziel „beide aktiviert“ zunächst nachrangig.
+- `Graph::allocate()` is already PSRAM-first according to [Graph.h](../main/audio/engine/Graph.h). Do not count this again as a new saving.
+- Live parameter, MIDI debug and LVGL knob activity queues already use PSRAM (`synth_manager.hpp`, `SynthEngine::begin()`).
+- `SynthEngine::loaderTaskLoop()` already requests a pre-free of the old graph on reload. A supposed general double allocation of old/new graphs would not be a new finding here. Examine timeout/error paths separately if diagnostics show peaks there.
+- Display image cache uses PSRAM; certain MIPI variants have additional full-frame buffers. Reducing them is primarily PSRAM/bandwidth optimization and board-dependent. SPI buffers are DMA-marked; no blanket equal treatment.
+- Do not push time-critical audio state, DSP tables and block buffers into PSRAM solely for a higher display of "free internal RAM". More cache competition with display and radio can worsen voice count and real-time capability.
+- Browser JavaScript minification mainly saves browser/flash resources, not automatically P4 runtime RAM.
+- An optional later radio-off mode requires a real stop/deinit lifecycle. Disconnect alone is no guaranteed memory release. The shared hosted transport must not be torn down while BLE or WiFi keeps running; consider Ethernet/web access. For the goal "both enabled", this is secondary for now.
 
-## 4. Abarbeitungsplan
+## 4. Work plan
 
-- [x] **M0 Umsetzung:** Referenz sichern, frisch bauen/flashen, DMA-/Taskdiagnose ergänzen; A/C/D gemessen. B scheitert am vorhandenen Linkerproblem, siehe offene Abnahme.
-- [x] **M1 Umsetzung:** Externe NimBLE-Allokationen testen und übernehmen; Vergleich mit Referenz durchgeführt.
-- [x] **M2 Umsetzung:** MSYS2 16, ACL 16, Events 20 einzeln bauen/flashen; verfügbares MIDI-Gerät funktioniert. Drei Geräte und echte WiFi-Datenlast bleiben offen.
-- [x] **M3:** WebSocket-Grenze 8 KiB, Payload/Broadcast in PSRAM; zusätzlicher Preset-Upload als 1-KiB-Stream. Grenz-/Abbruchtests bestanden.
-- [x] **M4:** TX/RX jeweils 12 einzeln getestet; Allokationspfade geprüft. RPC 16 und DMA-Staging 2 bleiben erhalten.
-- [x] **M5:** Peripheral/Broadcaster deaktiviert; Central/Observer/Client und Sicherheit erhalten. Gemeinsame Peer-Pools 20/32/32 nach Prüfung beibehalten.
-- [x] **M6:** Dauerhafte Taskreserven gemessen; Synth, Loader, LVGL und HTTP reduziert. Nicht ausreichend belastete oder knapp dimensionierte Tasks bleiben erhalten.
-- [x] **M7 Umsetzung:** AP-Netif bedarfsgesteuert anlegen und nach Reconnect freigeben. Boot-Messung erfolgt; tatsächlicher AP-/STA-Wechsel bleibt offen.
-- [x] **M8 Bewertung:** Globale malloc-Policy, lwIP und BSS nach RAM-Gewinn unverändert lassen; kein belegter Nutzen gegenüber zusätzlichen Risiken.
-- [x] **M9 Umsetzung:** Defaults aktualisiert, 100 identische Reloads, Vergleichstest, 30-Minuten-Lauf und kontrollierter BLE-Reconnect bestanden. Zusätzliche Hardware-Abnahme bleibt unten ausdrücklich offen.
+- [x] **M0 implementation:** Secure reference, fresh build/flash, add DMA/task diagnostics; A/C/D measured. B fails on the existing linker problem, see open acceptance.
+- [x] **M1 implementation:** Test and adopt external NimBLE allocations; comparison with reference performed.
+- [x] **M2 implementation:** MSYS2 16, ACL 16, events 20 built/flashed individually; available MIDI device works. Three devices and real WiFi data load remain open.
+- [x] **M3:** WebSocket limit 8 KiB, payload/broadcast in PSRAM; additional preset upload as 1 KiB stream. Limit/abort tests passed.
+- [x] **M4:** TX/RX each tested individually at 12; allocation paths checked. RPC 16 and DMA staging 2 remain.
+- [x] **M5:** Peripheral/broadcaster disabled; central/observer/client and security retained. Shared peer pools 20/32/32 kept after review.
+- [x] **M6:** Permanent task reserves measured; synth, loader, LVGL and HTTP reduced. Insufficiently loaded or tightly dimensioned tasks remain unchanged.
+- [x] **M7 implementation:** Create AP netif on demand and release after reconnect. Boot measurement done; actual AP/STA switching remains open.
+- [x] **M8 assessment:** Keep global malloc policy, lwIP and BSS unchanged after RAM gain; no proven benefit versus additional risks.
+- [x] **M9 implementation:** Defaults updated, 100 identical reloads, comparison test, 30-minute run and controlled BLE reconnect passed. Additional hardware acceptance remains explicitly open below.
 
-Jede Maßnahme erhält ein Ergebnis in dieser Tabelle; nicht wirksame oder instabile Versuche werden verworfen:
+Every measure receives a result in this table; ineffective or unstable trials are discarded:
 
-| Maßnahme / Konfiguration | Intern frei vorher/nachher | Größter Block vorher/nachher | Minimum unter Last | PSRAM-Delta | Stimmen / Audio-p99 / Drops | Entscheidung |
+| Measure / configuration | Internal free before/after | Largest block before/after | Minimum under load | PSRAM delta | Voices / audio p99 / drops | Decision |
 | --- | --- | --- | --- | --- | --- | --- |
-| Referenz / optimiert, identischer Kurzlasttest | 51.515 / 110.179 B nach Last | 31.744 / 31.744 B in diesem Vergleichsboot | 20 / 47.216 B | −21.064 B frei | 3 Stimmen; p99-Median 2.176 / 2.112 µs; 0 MIDI-Drops | RAM-Gewinn bestätigt; Audio-Basislast bleibt |
+| Reference / optimized, identical short load test | 51.515 / 110.179 B after load | 31.744 / 31.744 B in this comparison boot | 20 / 47.216 B | −21.064 B free | 3 voices; p99 median 2.176 / 2.112 µs; 0 MIDI drops | RAM gain confirmed; audio base load remains |
 
-**Freigabekriterium:** Bei identischem Preset und gleicher Stimmenzahl steigt der nutzbare interne Speicher bzw. sinkt der Lastpeak reproduzierbar, ohne Regression bei MIDI, Audio, UI, Bonding, Reconnect oder Flashzugriffen. Erst danach höhere Stimmenzahlen ausprobieren.
+**Release criterion:** With identical preset and same voice count, the usable internal memory rises or the load peak falls reproducibly, without regression in MIDI, audio, UI, bonding, reconnect or flash access. Only then try higher voice counts.
 
-## 5. Umsetzung und Hardwaremessungen
+## 5. Implementation and hardware measurements
 
-### Messbedingungen
+### Measurement conditions
 
-ESP32-P4 an `COM15`, Web unter `http://192.168.1.121`. Ausschließlich `FatSuperSaw`, unveränderte Preset-Datei und drei Stimmen. Preset bleibt als zuletzt geladenes Startpreset erhalten. Alle erfolgreichen Stufen wurden einzeln mit `idf.py build` kompiliert, mit `idf.py -p COM15 app-flash` hochgeladen und anschließend über `/api/diagnostics/memory` gemessen. LittleFS, Webpartition und NVS wurden nicht neu geflasht. Einstellungen stehen dauerhaft in `sdkconfig.defaults`; vorhandenes `sdkconfig` wurde für Versuche ausdrücklich angepasst.
+ESP32-P4 on `COM15`, web at `http://192.168.1.121`. Exclusively `FatSuperSaw`, unchanged preset file and three voices. Preset remains as the last loaded startup preset. All successful stages were compiled individually with `idf.py build`, uploaded with `idf.py -p COM15 app-flash` and then measured via `/api/diagnostics/memory`. LittleFS, web partition and NVS were not reflashed. Settings are stored permanently in `sdkconfig.defaults`; the existing `sdkconfig` was explicitly adjusted for trials.
 
-WiFi und BLE sind im finalen Zielprofil eingeschaltet. WLAN-SSID ist leer; Webverkehr läuft über Ethernet. Ein gespeichertes BLE-MIDI-Gerät verbindet sich nach Neustarts wieder. Neue Paarung, Verschlüsselungsnachweis und parallele HID-/Dreigerätenutzung wurden nicht vorgetäuscht. WiFi-Last auf dem C6 kann aus Ethernetverkehr nicht abgeleitet werden.
+WiFi and BLE are enabled in the final target profile. WLAN SSID is empty; web traffic runs over Ethernet. A stored BLE-MIDI device reconnects after restarts. New pairing, encryption proof and parallel HID/three-device use were not simulated. WiFi load on the C6 cannot be derived from Ethernet traffic.
 
-Momentwerte schwanken um mehrere KiB durch TCP-/RPC-Puffer und Verbindungsaufbau. Tabellenwerte sind konkrete Snapshots, keine isoliert addierbaren Einsparungen. Heap-Minimum gilt seit Boot; ursprünglicher Langzeitwert von 20 Bytes wurde auch im frischen Referenzvergleich unter Last wieder gemeldet. `heap_caps_get_minimum_free_size()` addiert Tiefstwerte einzelner Regionen, die zu unterschiedlichen Zeiten aufgetreten sein können: konservative Untergrenze, kein Beweis, dass insgesamt gleichzeitig nur 20 Bytes frei waren. Größter interner Block beträgt optimiert je nach Boot/Allokationsreihenfolge 31.744 oder 45.056 Bytes; Wachstum auf 44 KiB ist nicht bei jedem Boot garantiert.
+Momentary values fluctuate by several KiB due to TCP/RPC buffers and connection setup. Table values are concrete snapshots, not individually additive savings. The heap minimum applies since boot; the original long-term value of 20 bytes was reported again under load even in the fresh reference comparison. `heap_caps_get_minimum_free_size()` adds the low points of individual regions that may have occurred at different times: a conservative lower bound, not proof that only 20 bytes were free overall at the same time. The largest internal block is optimized at 31.744 or 45.056 bytes depending on boot/allocation order; growth to 44 KiB is not guaranteed on every boot.
 
-### Einzelstufen
+### Individual stages
 
-Alle Zahlen in Bytes. Zu jeder erfolgreichen Stufe liegen Build-/Flashlogs und JSON-Snapshots lokal unter `build/memory-audit/` (ignorierte Arbeitsartefakte).
+All numbers in bytes. Build/flash logs and JSON snapshots for each successful stage are stored locally under `build/memory-audit/` (ignored working artifacts).
 
-| Stufe | Änderung | Intern frei | Größter Block | Bisheriges Minimum | PSRAM frei | Build / Upload |
+| Stage | Change | Internal free | Largest block | Previous minimum | PSRAM free | Build / upload |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| 00 | Frische Ausgangsfirmware | 54.491 | 31.744 | 41.160 | 26.271.352 | bestanden |
-| 01 | DMA-, MIDI-/Overrun- und Taskdiagnose ergänzen | 52.831 | 31.744 | 24.472 | 26.271.344 | bestanden |
-| 02 | NimBLE `MEM_ALLOC_MODE_EXTERNAL` | 79.015 | 31.744 | 44.844 | 26.243.432 | bestanden |
-| 03 | MSYS2-Blöcke 24 auf 16 | 83.059 | 31.744 | 60.816 | 26.245.996 | bestanden |
-| 04 | ACL-RX-Blöcke 24 auf 16 | 83.039 | 31.744 | 60.816 | 26.248.428 | bestanden |
-| 05 | Event-Blöcke 30 auf 20 | 83.075 | 31.744 | 59.276 | 26.249.312 | bestanden |
-| 06 | WS-Payload/Broadcast in PSRAM, Grenze 8 KiB | 83.075 | 31.744 | 60.816 | 26.249.312 | bestanden |
-| 07 | Hosted TX-Queue 20 auf 12 | 81.195 | 31.744 | 52.620 | 26.249.312 | bestanden |
-| 08 | Hosted RX-Queue 20 auf 12 | 81.839 | 31.744 | 52.620 | 26.249.312 | bestanden |
-| 09 | Preset speichern: 1-KiB-Stream statt gesamtem Body | 83.775 | 31.744 | 60.816 | 26.249.320 | bestanden |
-| 10 | BLE-Peripheral deaktivieren | 76.783 | 31.744 | 43.512 | 26.250.264 | bestanden |
-| 11 | BLE-Broadcaster deaktivieren | 84.335 | 31.744 | 60.832 | 26.250.276 | bestanden |
-| 12 | Synth-Stack 32 auf 12 KiB | 102.355 | 45.056 | 74.152 | 26.250.276 | bestanden |
-| 13 | LVGL-Stack 16 auf 12 KiB | 106.479 | 45.056 | 79.268 | 26.250.276 | bestanden |
-| 14 | HTTP-Stack 10 auf 8 KiB | 108.863 | 31.744 | 69.552 | 26.250.276 | bestanden |
-| 15 | Loader-Stack 8 auf 6 KiB | 110.551 | 45.056 | 75.216 | 26.250.276 | bestanden |
-| 16 | AP-Netif erst im Fallback erzeugen | 113.651 | 45.056 | 85.428 | 26.250.284 | bestanden |
-| 17 | Dauerhafte Defaults prüfen | 111.231 | 45.056 | 77.232 | 26.250.276 | bestanden |
-| Final | Zielkonfiguration explizit neu konfigurieren | 110.815 | 45.056 | 79.268 | 26.250.276 | bestanden |
+| 00 | Fresh baseline firmware | 54.491 | 31.744 | 41.160 | 26.271.352 | passed |
+| 01 | Add DMA, MIDI/overrun and task diagnostics | 52.831 | 31.744 | 24.472 | 26.271.344 | passed |
+| 02 | NimBLE `MEM_ALLOC_MODE_EXTERNAL` | 79.015 | 31.744 | 44.844 | 26.243.432 | passed |
+| 03 | MSYS2 blocks 24 to 16 | 83.059 | 31.744 | 60.816 | 26.245.996 | passed |
+| 04 | ACL RX blocks 24 to 16 | 83.039 | 31.744 | 60.816 | 26.248.428 | passed |
+| 05 | Event blocks 30 to 20 | 83.075 | 31.744 | 59.276 | 26.249.312 | passed |
+| 06 | WS payload/broadcast in PSRAM, limit 8 KiB | 83.075 | 31.744 | 60.816 | 26.249.312 | passed |
+| 07 | Hosted TX queue 20 to 12 | 81.195 | 31.744 | 52.620 | 26.249.312 | passed |
+| 08 | Hosted RX queue 20 to 12 | 81.839 | 31.744 | 52.620 | 26.249.312 | passed |
+| 09 | Save preset: 1 KiB stream instead of whole body | 83.775 | 31.744 | 60.816 | 26.249.320 | passed |
+| 10 | Disable BLE peripheral | 76.783 | 31.744 | 43.512 | 26.250.264 | passed |
+| 11 | Disable BLE broadcaster | 84.335 | 31.744 | 60.832 | 26.250.276 | passed |
+| 12 | Synth stack 32 to 12 KiB | 102.355 | 45.056 | 74.152 | 26.250.276 | passed |
+| 13 | LVGL stack 16 to 12 KiB | 106.479 | 45.056 | 79.268 | 26.250.276 | passed |
+| 14 | HTTP stack 10 to 8 KiB | 108.863 | 31.744 | 69.552 | 26.250.276 | passed |
+| 15 | Loader stack 8 to 6 KiB | 110.551 | 45.056 | 75.216 | 26.250.276 | passed |
+| 16 | Create AP netif only in fallback | 113.651 | 45.056 | 85.428 | 26.250.284 | passed |
+| 17 | Check permanent defaults | 111.231 | 45.056 | 77.232 | 26.250.276 | passed |
+| Final | Explicitly reconfigure target configuration | 110.815 | 45.056 | 79.268 | 26.250.276 | passed |
 
-Größter dauerhafter Gewinn stammt aus NimBLE-Verlagerung und Stack-Reservierungen. Vier Stack-Kürzungen sparen zusammen exakt **28.672 Bytes Reservierung**. Der AP-Versuch zeigte etwa 3 KiB Unterschied im Boot-Snapshot; Schwankungen verhindern genaue isolierte Zuschreibung. Webänderungen begrenzen überwiegend Lastspitzen, statt einen zusätzlichen festen Leerlaufgewinn zu liefern. Kleinere BLE-Pools sparen nach PSRAM-Verlagerung teilweise PSRAM.
+The largest permanent gain comes from the NimBLE relocation and stack reservations. Four stack reductions together save exactly **28.672 bytes of reservation**. The AP trial showed about 3 KiB difference in the boot snapshot; fluctuations prevent exact isolated attribution. Web changes mainly limit load peaks instead of delivering an additional fixed idle gain. Smaller BLE pools partly save PSRAM after relocation to PSRAM.
 
-### Konfiguration und bewusst beibehaltene Grenzen
+### Configuration and deliberately retained limits
 
-- BLE: Central, Observer, GATT-Client, drei Verbindungen, drei Bonds, MTU 256, Security und NVS-Persistenz bleiben aktiv. Peripheral/Broadcaster fallen weg. MSYS1 bleibt 12 × 256; MSYS2 16 × 320; ACL 16 × 255; Events 20 × 70; Discard-Events 8; vier GATT-Prozeduren. Prepare-Write-Grenze 64 unverändert; als Central kein belegter Gewinn durch zusätzliche Reduktion.
-- `peer_init(3, 20, 32, 32)` reserviert gemeinsame Service-/Characteristic-/Descriptor-Pools. Keine unbelegte Multiplikation mit drei Peers. Grenzen bleiben für generisches HID erhalten. Runtime-Mempool-Allokation bleibt aus; feste Pools vermeiden zusätzliche Heapaktivität im MIDI-Pfad.
-- Hosted: TX/RX je 12. Queueelemente enthalten Verwaltungsdaten/Referenzen; kein nachgewiesener Gewinn von 40 vollständigen SDIO-Paketen. SDIO-DMA-Staging bleibt beim Minimum 2; RPC-Limit 16 und Transport-Stacks 4 KiB bleiben erhalten. Keine unversionierten Änderungen in `managed_components`.
-- HTTP-Stack bleibt intern. Payload und Broadcast dürfen in PSRAM liegen; Dateischreibpuffer bleibt wegen Flash-/Cachezugriffen intern. Keine wechselnden globalen cJSON-Hooks.
-- Preset-POST schreibt in temporäre Datei und ersetzt Ziel erst nach vollständigem Empfang und erfolgreichem Schreiben/Schließen. Abbruch/Schreibfehler löschen temporäre Datei und erhalten ursprüngliches Preset. Gleichzeitig belegte Flashdateien benötigen Platz; bei Platzmangel wird Fehler gemeldet.
-- AP-Netif nutzt nativen IDF-Lebenszyklus. STA-Netif bleibt erhalten; IDF behält dessen globale Handler beim Löschen des AP-Netifs. Retry-Timer bleibt mit kleiner fester Reservierung bestehen. DNS war bereits bedarfsgesteuert.
-- Navigation bleibt bei 4 KiB: früherer 2-KiB-Absturz dokumentiert, Navigationstiefe mit fest vorgeschriebenem Preset nicht belastet. I2C-Worker bleiben je 4 KiB: vollständige CV-/Fehlerlast fehlt. NimBLE-, Hosted-, USB- und Main-Stacks bleiben erhalten; teilweise geringe Reserven beziehungsweise ungetestete Security-/OTA-/Treiberpfade.
-- lwIP: 16 Sockets, HTTP 12, TCP-Fenster/Sendepuffer 5.760 Bytes, IPv6 erhalten. malloc-Schwelle 16 KiB und interne Reserve 32 KiB bleiben erhalten. Keine pauschale BSS-/DSP-Verlagerung nach PSRAM. Linkermap zeigt statischen DIRAM-Verbrauch von 276.924 Bytes, einschließlich 156.494 Bytes Text; gemeldeter Linker-Rest ist kein freier Laufzeitheap.
+- BLE: central, observer, GATT client, three connections, three bonds, MTU 256, security and NVS persistence remain active. Peripheral/broadcaster are dropped. MSYS1 stays 12 × 256; MSYS2 16 × 320; ACL 16 × 255; events 20 × 70; discard events 8; four GATT procedures. Prepare-write limit 64 unchanged; as central, no proven gain from further reduction.
+- `peer_init(3, 20, 32, 32)` reserves shared service/characteristic/descriptor pools. No unproven multiplication by three peers. Limits remain for generic HID. Runtime mempool allocation stays off; fixed pools avoid additional heap activity in the MIDI path.
+- Hosted: TX/RX 12 each. Queue elements contain management data/references; no proven gain from 40 full SDIO packets. SDIO DMA staging stays at the minimum of 2; RPC limit 16 and transport stacks 4 KiB remain. No unversioned changes in `managed_components`.
+- HTTP stack stays internal. Payload and broadcast may lie in PSRAM; file write buffer stays internal due to flash/cache access. No switched global cJSON hooks.
+- Preset POST writes to a temporary file and replaces the target only after complete reception and successful write/close. Abort/write error deletes the temporary file and keeps the original preset. Flash files that are in use need space; if space is short, an error is reported.
+- AP netif uses the native IDF lifecycle. STA netif remains; IDF keeps its global handlers when the AP netif is deleted. Retry timer remains with a small fixed reservation. DNS was already on demand.
+- Navigation stays at 4 KiB: the earlier 2 KiB crash is documented, navigation depth with the fixed preset was not stressed. I2C workers stay at 4 KiB each: full CV/error load is missing. NimBLE, hosted, USB and main stacks remain; some reserves are small or security/OTA/driver paths are untested.
+- lwIP: 16 sockets, HTTP 12, TCP window/send buffer 5.760 bytes, IPv6 retained. malloc threshold 16 KiB and internal reserve 32 KiB remain. No blanket BSS/DSP relocation to PSRAM. The linker map shows static DIRAM consumption of 276.924 bytes, including 156.494 bytes of text; the reported linker remainder is not free runtime heap.
 
-### Stackreserven nach Last
+### Stack reserves under load
 
-| Task | Reservierung vorher / nachher | Kleinste gemessene Reserve nach Änderung |
+| Task | Reservation before / after | Smallest measured reserve after change |
 | --- | ---: | ---: |
 | Synth | 32.768 / 12.288 B | 9.292 B |
-| Preset-Loader | 8.192 / 6.144 B | 2.212 B im Dauertest; 3.188 B nach isolierten FatSuperSaw-Reloads |
-| LVGL | 16.384 / 12.288 B | 7.560 B inklusive Splash-PNG |
-| HTTP | 10.240 / 8.192 B | 4.716 B inklusive Uploads |
+| Preset loader | 8.192 / 6.144 B | 2.212 B in endurance test; 3.188 B after isolated FatSuperSaw reloads |
+| LVGL | 16.384 / 12.288 B | 7.560 B including splash PNG |
+| HTTP | 10.240 / 8.192 B | 4.716 B including uploads |
 
-Diese Reserven beziehen sich auf vorgegebenes Preset und vorhandene Hardware. Andere DSP-Graphs, USB-Audio-Mixing und vollständige Dateiexplorer-/HID-/CV-Last benötigen zusätzliche Abnahme; Stackgrößen nicht aus diesem Einzelprofil weiter reduzieren.
+These reserves refer to the specified preset and existing hardware. Other DSP graphs, USB audio mixing and full file explorer/HID/CV load require additional acceptance; do not reduce stack sizes further based on this single profile.
 
-### Funkmatrix nach Optimierung
+### Radio matrix after optimization
 
-Ethernet, Display, USB und `FatSuperSaw` bleiben gleich. Matrix misst P4-RAM, nicht C6-RAM.
+Ethernet, display, USB and `FatSuperSaw` remain the same. The matrix measures P4 RAM, not C6 RAM.
 
-| Variante | Intern frei | Größter Block | Boot-Minimum | Ergebnis |
+| Variant | Internal free | Largest block | Boot minimum | Result |
 | --- | ---: | ---: | ---: | --- |
-| A: WiFi/BLE aus | 179.991 B | 49.152 B | 122.152 B | gemessen mit vorübergehend bedingt registrierter NimBLE-Hilfskomponente |
-| B: WiFi an, BLE aus | — | — | — | Linkerfehler, keine Laufzeitmessung |
-| C: WiFi aus, BLE an | 116.595 B | 45.056 B | 85.968 B | Build, Flash und MIDI-Reconnect bestanden |
-| D: WiFi/BLE an | 111.595 B | 45.056 B | 72.916 B | wiederhergestellter Zielbuild bestanden |
+| A: WiFi/BLE off | 179.991 B | 49.152 B | 122.152 B | measured with temporarily conditionally registered NimBLE helper component |
+| B: WiFi on, BLE off | — | — | — | linker error, no runtime measurement |
+| C: WiFi off, BLE on | 116.595 B | 45.056 B | 85.968 B | build, flash and MIDI reconnect passed |
+| D: WiFi/BLE on | 111.595 B | 45.056 B | 72.916 B | restored target build passed |
 
-Vollständig abgeschaltetes Bluetooth baut mit ursprünglicher unconditional IDF-Beispielkomponente nicht: `host/ble_hs.h` fehlt. Bedingte lokale Registrierung erlaubte Messung A, wurde anschließend verworfen. WiFi-only scheitert auch mit ursprünglich registrierter Komponente und lediglich deaktiviertem App-BLE an `--enable-non-contiguous-regions discards section .bss.g_wifi_osi_funcs` / `unresolvable R_RISCV_HI20 relocation`. Keine unbelegte Zahl für B. Ein zukünftiges Funk-Aus-Profil benötigt eigene Build-/Linker-Abnahme.
+Fully disabled Bluetooth does not build with the original unconditional IDF example component: `host/ble_hs.h` is missing. Conditional local registration allowed measurement A, which was subsequently discarded. WiFi-only fails even with the originally registered component and merely disabled app BLE with `--enable-non-contiguous-regions discards section .bss.g_wifi_osi_funcs` / `unresolvable R_RISCV_HI20 relocation`. No unproven number for B. A future radio-off profile requires its own build/linker acceptance.
 
-Beim Wiederherstellen einer Konfigurationskopie wird `idf.py reconfigure` ausdrücklich ausgeführt: `Copy-Item` kann alten Änderungszeitpunkt erhalten und Ninja sonst veraltete generierte Konfiguration weiterverwenden. Finale generierte Header bestätigen WiFi und App-Bluetooth eingeschaltet.
+When restoring a configuration copy, `idf.py reconfigure` is explicitly executed: `Copy-Item` can preserve an old modification time, and Ninja would otherwise keep using stale generated configuration. Final generated headers confirm WiFi and app Bluetooth are enabled.
 
-### Belastung und Abnahme
+### Load and acceptance
 
-**100 Reloads:** ausschließlich `POST /api/preset/select?name=FatSuperSaw`, Generation 3 bis 103, alle erfolgreich. Intern frei vorher/nachher 111.259 / 110.195 Bytes; PSRAM frei identisch 26.250.276 Bytes; größter interner Block 45.056 Bytes; Lebenszeit-Minimum 38.908 Bytes. Drei Stimmen, 25 Graph-Instanzen, 57 interne Blockpuffer mit zusammen 29.184 Bytes, keine Output-PSRAM-Fallbacks und keine MIDI-Drops. Einzelne Netzwerkpuffer verursachen kleine Momentdifferenzen; kein fortlaufender Graph-/PSRAM-Verlust belegt.
+**100 reloads:** exclusively `POST /api/preset/select?name=FatSuperSaw`, generation 3 to 103, all successful. Internal free before/after 111.259 / 110.195 bytes; PSRAM free identical 26.250.276 bytes; largest internal block 45.056 bytes; lifetime minimum 38.908 bytes. Three voices, 25 graph instances, 57 internal block buffers totaling 29.184 bytes, no output PSRAM fallbacks and no MIDI drops. Individual network buffers cause small momentary differences; no continuous graph/PSRAM loss proven.
 
-**Web-Grenzen:** ungültiges JSON verwirft Nachricht ohne Absturz; 8.192-Byte-Textframe bleibt verbunden, 8.193-Byte-Frame schließt Session. Abgebrochener HTTP-Save erhält Originaldatei bytegenau. Um 96 KiB Leerraum erweitertes, semantisch identisches FatSuperSaw lässt sich speichern; anschließend Originalbytes wiederhergestellt. Tests nach HTTP-Stack-Kürzung erneut bestanden.
+**Web limits:** invalid JSON discards the message without a crash; an 8.192-byte text frame stays connected, an 8.193-byte frame closes the session. An aborted HTTP save preserves the original file byte-for-byte. A FatSuperSaw expanded by 96 KiB of whitespace, semantically identical, can be saved; afterwards the original bytes were restored. Tests passed again after the HTTP stack reduction.
 
-**Direkter Referenzvergleich:** gespeicherte Referenz enthält zusätzliche Diagnose, aber keine Speicheroptimierungen. Referenz und Finalbinary jeweils frisch auf App-Partition geflasht. Identisch: 300 Dreiklangzyklen mit 70 ms Note-on/30 ms Pause, 20 Presetdownloads parallel, anschließend fünf Reloads und zwei Sekunden Nachlauf.
+**Direct reference comparison:** the stored reference contains additional diagnostics but no memory optimizations. Reference and final binary each freshly flashed to the app partition. Identical: 300 triad cycles with 70 ms note-on/30 ms pause, 20 preset downloads in parallel, then five reloads and two seconds of tail.
 
-| Messwert | Referenz | Optimiert |
+| Measurement | Reference | Optimized |
 | --- | ---: | ---: |
-| Intern frei vor / nach Test | 52.123 / 51.515 B | 110.771 / 110.179 B |
-| Minimum seit Boot | 20 B | 47.216 B |
-| Größter Block nach Test | 31.744 B | 31.744 B |
-| PSRAM frei nach Test | 26.271.340 B | 26.250.276 B |
-| Stimmen / Graph-Instanzen | 3 / 25 | 3 / 25 |
-| MIDI-Drops | 0 | 0 |
-| Neue Render-Overruns im Test | 271 | 276 |
-| Median der gemeldeten Render-p99-Werte | 2.176 µs | 2.112 µs |
-| Mittelwert der gemeldeten Render-p99-Werte | 2.377 µs | 2.395 µs |
-| Größter gemeldeter p99-Wert | 5.888 µs | 6.656 µs |
+| Internal free before / after test | 52.123 / 51.515 B | 110.771 / 110.179 B |
+| Minimum since boot | 20 B | 47.216 B |
+| Largest block after test | 31.744 B | 31.744 B |
+| PSRAM free after test | 26.271.340 B | 26.250.276 B |
+| Voices / graph instances | 3 / 25 | 3 / 25 |
+| MIDI drops | 0 | 0 |
+| New render overruns in test | 271 | 276 |
+| Median of reported render p99 values | 2.176 µs | 2.112 µs |
+| Mean of reported render p99 values | 2.377 µs | 2.395 µs |
+| Largest reported p99 value | 5.888 µs | 6.656 µs |
 
-**Bewertung:** Rund 57,3 KiB zusätzlicher interner Heap im vergleichbaren Lastzustand; etwa 20,6 KiB weniger freies PSRAM. Audio-p99 im Mittel nahezu gleich; Einzelmessung liefert keinen statistischen Nachweis identischer Extremwerte. Audio-Overruns und DMA-Underruns existieren bereits in Referenz. Nutzer hat Weblade-Underruns ausdrücklich akzeptiert; diese gelten nicht als Abnahmefehler. Ungeplante Neustarts, MIDI-Drops, Stimmenreduktion oder PSRAM-Fallbacks bleiben Abnahmefehler.
+**Assessment:** About 57.3 KiB additional internal heap in the comparable load state; about 20.6 KiB less free PSRAM. Mean audio p99 nearly identical; a single measurement provides no statistical proof of identical extremes. Audio overruns and DMA underruns already exist in the reference. The user explicitly accepted web-load underruns; these do not count as acceptance failures. Unplanned restarts, MIDI drops, voice reduction or PSRAM fallbacks remain acceptance failures.
 
-**30-Minuten-Test:** zweiter Lauf erfolgreich über 1.801,6 Sekunden. 3.527 Dreiklangzyklen, 873 Presetdownloads, 29 angeforderte FatSuperSaw-Reloads und sechs BLE-Scans. Keine ungeplanten Neustarts, keine MIDI-Drops, durchgehend interne Graph-Instanzen/Blockpuffer und keine Output-PSRAM-Fallbacks. Erster Lauf wurde nach 395 Sekunden durch vom Nutzer bestätigten manuellen Reset unterbrochen, nicht als Firmwareabsturz gewertet. MIDI wird über bestehenden Web-MIDI-Pfad injiziert; tatsächlicher BLE-MIDI-Burst von drei Geräten wird damit nicht ersetzt.
+**30-minute test:** second run successful over 1.801,6 seconds. 3.527 triad cycles, 873 preset downloads, 29 requested FatSuperSaw reloads and six BLE scans. No unplanned restarts, no MIDI drops, internal graph instances/block buffers throughout and no output PSRAM fallbacks. The first run was interrupted after 395 seconds by a manual reset confirmed by the user; it was not counted as a firmware crash. MIDI is injected via the existing web MIDI path; an actual BLE-MIDI burst from three devices is not replaced by this.
 
-| Dauertest-Messwert | Ergebnis |
+| Endurance test measurement | Result |
 | --- | ---: |
-| Intern frei am Anfang / Ende | 106.803 / 112.443 B |
-| Bereich der Minuten-Snapshots | 104.539–112.867 B |
-| Konservative Heap-Untergrenze seit Boot | 46.440 B |
-| Größter interner Block am Ende | 45.056 B |
-| PSRAM frei am Anfang / Ende | 26.250.284 / 22.318.120 B |
-| MIDI-Drops | 0 |
-| Median gemeldeter Render-p99-Werte | 2.112 µs |
-| Neue Render-Overruns während Lauf | 5.214; einschließlich akzeptierter Web-/Reload-Last |
+| Internal free at start / end | 106.803 / 112.443 B |
+| Range of minute snapshots | 104.539–112.867 B |
+| Conservative heap lower bound since boot | 46.440 B |
+| Largest internal block at end | 45.056 B |
+| PSRAM free at start / end | 26.250.284 / 22.318.120 B |
+| MIDI drops | 0 |
+| Median of reported render p99 values | 2.112 µs |
+| New render overruns during run | 5.214; including accepted web/reload load |
 
-Messabweichung: Generation 1 bis 31 enthält einen zusätzlichen Reload außerhalb der 29 angeforderten Reloads. Generation 2 meldete kurz fünf konfigurierte statt drei Stimmen; maximal drei aktive Stimmen gemessen. Danach wieder drei konfigurierte Stimmen. PSRAM zeigte einmalige zusätzliche Belegung von etwa 3,75 MiB, anschließend Plateau mit temporären Reload-Schwankungen; kein fortlaufender interner Heapverlust. Ursache dieser zusätzlichen Laufzeitaktivität nicht belegt. Dauertest deshalb als Stabilität unter kombinierter Aktivität lesen; strikt gleicher Drei-Stimmen-Vergleich ist oben separat dokumentiert. Gespeicherte FatSuperSaw-Datei am Ende semantisch identisch mit ursprünglicher Sicherung.
+Measurement deviation: generation 1 to 31 contains one additional reload outside the 29 requested reloads. Generation 2 briefly reported five configured instead of three voices; at most three active voices were measured. Afterwards three configured voices again. PSRAM showed a one-time additional occupation of about 3.75 MiB, then a plateau with temporary reload fluctuations; no continuous internal heap loss. The cause of this additional runtime activity is not proven. Therefore read the endurance test as stability under combined activity; the strictly equal three-voice comparison is documented separately above. The stored FatSuperSaw file at the end is semantically identical to the original backup.
 
-**BLE-Reconnect:** gespeichertes, verbundenes MIDI-Gerät kontrolliert getrennt, Disconnect bestätigt, bestehendes Autoconnect erneut aktiviert. MIDI-Verbindung nach 1.046 ms wiederhergestellt; ursprüngliche Auto-Einstellung erhalten, kein Bond gelöscht. Danach 110.871 Bytes intern frei, größter Block 45.056 Bytes, MIDI-Drops weiterhin 0 und identischer interner Graph.
+**BLE reconnect:** stored, connected MIDI device disconnected in a controlled way, disconnect confirmed, existing autoconnect re-enabled. MIDI connection restored after 1.046 ms; original auto setting retained, no bond deleted. Afterwards 110.871 bytes internal free, largest block 45.056 bytes, MIDI drops still 0 and identical internal graph.
 
-**Buildgröße:** `idf.py size` und `idf.py size-components` ausgeführt. Referenzbinary mit Diagnose 2.277.824 Bytes, optimiert 2.258.608 Bytes, Differenz −19.216 Bytes Flash. Finaler statischer DIRAM-Verbrauch 276.924 Bytes. Flashersparnis nicht als zusätzlichen Heapgewinn zählen. Fehlgeschlagene Varianten wurden nicht hochgeladen; bestätigte Zielkonfiguration ist wieder aktiv.
+**Build size:** `idf.py size` and `idf.py size-components` run. Reference binary with diagnostics 2.277.824 bytes, optimized 2.258.608 bytes, difference −19.216 bytes flash. Final static DIRAM consumption 276.924 bytes. Flash saving is not counted as additional heap gain. Failed variants were not uploaded; the confirmed target configuration is active again.
 
-### Verbleibende Hardware-Abnahme
+### Remaining hardware acceptance
 
-- [x] 30-Minuten-Lauf abschließen, Abweichungen und Endwerte eintragen; BLE-Reconnect prüfen.
-- [ ] Drei BLE-Geräte, HID und MIDI parallel, neue Paarung/Bond-Key-Persistenz und echte BLE-MIDI-Bursts unter WLAN-Upload testen. Hardware fehlt; drei Verbindungen bleiben konfiguriert.
-- [ ] WLAN-SSID konfigurieren, reale WiFi-Datenlast und wiederholte STA/AP-Fallback-/Reconnect-Zyklen prüfen. Keine Zugangsdaten vorhanden; Ethernet ist kein Ersatz für diesen Test.
-- [ ] WiFi-only-Laufzeitmessung ergänzen; Linkerproblem im Nachtrag unten behoben.
-- [ ] Andere große DSP-Presets, USB-Audio-Mixing, volle CV-/Dateiexplorer-Last und längeren Dauertest zusätzlich abnehmen.
+- [x] Complete the 30-minute run, enter deviations and final values; check BLE reconnect.
+- [ ] Three BLE devices, HID and MIDI in parallel, new pairing/bond key persistence and real BLE-MIDI bursts under WLAN upload. Hardware missing; three connections remain configured.
+- [ ] Configure WLAN SSID, check real WiFi data load and repeated STA/AP fallback/reconnect cycles. No credentials available; Ethernet is no substitute for this test.
+- [ ] Add WiFi-only runtime measurement; linker problem fixed in the addendum below.
+- [ ] Additionally accept other large DSP presets, USB audio mixing, full CV/file explorer load and a longer endurance test.
 
-**Abschließender Geräteabgleich:** Finale Kompilierung erfolgreich; SHA-256 des Build-Binaries stimmt mit hochgeladener Firmware überein. Webdiagnose: 113.043 Bytes intern frei (110,4 KiB), größter Block 45.056 Bytes (44 KiB), DMA-fähig intern frei 67.247 Bytes; FatSuperSaw aktiv, BLE bereit und ein gespeichertes Auto-Gerät verbunden, MIDI-Drops 0. Momentwert schwankt mit Netzwerkaktivität; vergleichbarer Gewinn bleibt 57,3 KiB. Einzelne Funk-/Hardware-Abnahmen bleiben oben ausdrücklich offen.
+**Final device check:** Final compilation successful; SHA-256 of the build binary matches the uploaded firmware. Web diagnostics: 113.043 bytes internal free (110.4 KiB), largest block 45.056 bytes (44 KiB), DMA-capable internal free 67.247 bytes; FatSuperSaw active, BLE ready and one stored auto device connected, MIDI drops 0. Momentary value fluctuates with network activity; comparable gain remains 57.3 KiB. Individual radio/hardware acceptances remain explicitly open above.
 
-### Nachtrag: WiFi-only-Buildfehler
+### Addendum: WiFi-only build error
 
-Nach dem Audit war lokal `CONFIG_APP_ENABLE_WIFI=y`, `CONFIG_APP_ENABLE_BLUETOOTH=n` und SDK-Bluetooth weiterhin eingeschaltet. Dieses Profil reproduzierte den oben dokumentierten Linkerfehler. Ursache: IDF 6.1 definiert auf P4 ohne native WiFi-Hardware `g_wifi_osi_funcs` als schwaches Objekt eines leeren Structs, also mit Größe null. Binutils verwirft dessen Section beim Linken mit `--enable-non-contiguous-regions`; verbliebene Referenzen verursachen anschließend RISC-V-Relocation-Fehler. Kein nachgewiesener RAM-Überlauf.
+After the audit, locally `CONFIG_APP_ENABLE_WIFI=y`, `CONFIG_APP_ENABLE_BLUETOOTH=n` and SDK Bluetooth remained enabled. This profile reproduced the linker error documented above. Cause: IDF 6.1 defines `g_wifi_osi_funcs` on P4 without native WiFi hardware as a weak object of an empty struct, i.e. with size zero. Binutils discards its section during linking with `--enable-non-contiguous-regions`; remaining references then cause RISC-V relocation errors. No proven RAM overflow.
 
-`main/wifi_remote_compat.c` ersetzt ausschließlich bei Remote-WiFi ohne native WiFi-Hardware den unbenutzten Platzhalter durch ein starkes Ein-Byte-Objekt. Hosted überträgt die Konfigurationswerte per RPC, keine OSI-Funktionstabelle. Native WiFi-Konfigurationen behalten ihre echte Tabelle. Die globale RAM-Aufteilung und SDK-Dateien bleiben unverändert. Die Datei wird über `main/CMakeLists.txt` registriert. WiFi-only-Build und Gegenprüfung mit WiFi + BLE erfolgreich. Anschließend ursprüngliche WiFi-only-Konfiguration wiederhergestellt und erneut gebaut; Laufzeitmessung der Matrix B weiterhin offen.
+`main/wifi_remote_compat.c` replaces the unused placeholder with a strong one-byte object only for remote WiFi without native WiFi hardware. Hosted transfers the configuration values via RPC, not an OSI function table. Native WiFi configurations keep their real table. The global RAM layout and SDK files remain unchanged. The file is registered via `main/CMakeLists.txt`. WiFi-only build and cross-check with WiFi + BLE successful. The original WiFi-only configuration was then restored and rebuilt; runtime measurement of matrix B remains open.
 
-Der vorhandene Buildcache verwendet `C:/Espressif/tools/python/v6.1/venv/Scripts/python.exe`. Eine Shell mit anderer IDF-Python-Umgebung meldet separat einen Cache-Konflikt. Zur Prüfung wurde dieselbe Python-Umgebung wie im vorhandenen Cache verwendet.
+The existing build cache uses `C:/Espressif/tools/python/v6.1/venv/Scripts/python.exe`. A shell with a different IDF Python environment reports a cache conflict separately. For verification, the same Python environment as in the existing cache was used.
