@@ -63,6 +63,8 @@ constexpr uint8_t STC8_GPIO_OUT_LCD_BL_POWER  = 3;
 constexpr uint8_t STC8_PWM_LCD_BL             = 0;
 
 // Audio: NS4168 class-D amp (I2S only, no MCLK) + PDM microphone.
+// HARDWARE: the ferrite beads at the speaker output must be removed (board mod); with them the sound
+// is not clean.
 constexpr gpio_num_t PIN_I2S_MCLK  = GPIO_NUM_NC;
 constexpr gpio_num_t PIN_I2S_BCLK  = GPIO_NUM_22;
 constexpr gpio_num_t PIN_I2S_DOUT  = GPIO_NUM_23;

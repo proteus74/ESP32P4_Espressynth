@@ -39,6 +39,7 @@ constexpr gpio_num_t PIN_DIN  = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_ES8
 constexpr gpio_num_t PIN_PA   = static_cast<gpio_num_t>(CONFIG_ONBOARD_AUDIO_ES8311_PIN_PA);
 
 inline esp_codec_dev_handle_t s_codec_dev = nullptr;
+inline i2s_chan_handle_t s_tx_handle = nullptr;
 
 // True DMA-ring-underrun tracking, as opposed to SynthEngine::renderOverrunCount() (a render-
 // *budget* miss - the DMA ring's ~AUDIO_I2S_DMA_DESC_NUM*AUDIO_I2S_DMA_FRAME_NUM frames of
@@ -65,6 +66,11 @@ bool IRAM_ATTR onSendQueueOverflow(i2s_chan_handle_t /*handle*/, i2s_event_data_
  */
 inline esp_codec_dev_handle_t get_handle() {
     return s_codec_dev;
+}
+
+/** @brief I2S TX channel behind the codec; the synth engine enables it with its first block. */
+inline i2s_chan_handle_t get_tx_handle() {
+    return s_tx_handle;
 }
 
 /** @brief True DMA-ring underrun count since boot (see on_send_q_ovf comment above). */
@@ -224,6 +230,13 @@ inline esp_err_t init() {
     if (esp_codec_dev_set_in_gain(s_codec_dev, DEFAULT_MIC_GAIN_DB) != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set ES8311 mic gain");
     }
+
+    s_tx_handle = tx_handle;
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    // esp_codec_dev_open() enabled TX; switch it off again until the engine's first block (see the
+    // note in ns4168_manager.hpp). RX stays on, so BCLK/WS/MCLK keep running for the codec.
+    i2s_channel_disable(tx_handle);
+#endif
 
     ESP_LOGI(TAG,
              "ES8311 initialized on I2S%d (MCLK:%d BCLK:%d LRCK:%d DOUT:%d DIN:%d, PA:%d), %lu Hz / %u-bit / %u ch, "

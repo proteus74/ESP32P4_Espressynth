@@ -215,7 +215,7 @@ total_frames = AUDIO_I2S_DMA_DESC_NUM * AUDIO_I2S_DMA_FRAME_NUM
 latency_ms   = total_frames / 44100 * 1000
 ```
 
-Default 6 × 240 = 1440 frames ≈ **32.6 ms**. A bigger ring buys more headroom against a writer stall (e.g. the `tone` CLI command briefly starving the audio writer of CPU) before it audibly clicks/pops; a smaller ring trades that headroom for lower latency. `AUDIO_I2S_DMA_FRAME_NUM`'s upper range (960) stays under the I2S driver's hard 4095-byte per-descriptor ceiling (1023 frames at 4 bytes/frame).
+Default 3 × 128 = 384 frames ≈ **8.7 ms**. A bigger ring buys more headroom against a writer stall (e.g. a render block that takes longer than its budget while the web UI loads) before it audibly clicks/pops; a smaller ring trades that headroom for lower latency. The ring needs at least 2 descriptors. See [documentation/audio-latency.md](documentation/audio-latency.md) for how the defaults were chosen and measured. `AUDIO_I2S_DMA_FRAME_NUM`'s upper range (960) stays under the I2S driver's hard 4095-byte per-descriptor ceiling (1023 frames at 4 bytes/frame).
 
 **2. Synth engine render block** -- `AUDIO_SYNTH_BLOCK_SIZE` (`synth::kBlockSize` in `SynthConfig.h`, only relevant with the node-graph synth engine enabled). The synth's render task works in fixed-size blocks, not sample-by-sample: each loop iteration walks the whole node graph once to produce this many samples, then writes the block onward (to the codec mix and/or USB speaker mix).
 
@@ -225,7 +225,7 @@ block_time_ms = AUDIO_SYNTH_BLOCK_SIZE / 44100 * 1000
 
 Default 128 samples ≈ **2.9 ms**. This is also the render task's real-time CPU budget per block (see `audioCoreLoadPercent()` / the CLI `top` audio-core load -- ≥100% means a block took longer to render than it takes to play, i.e. underrun risk): a MIDI note-on can only take effect at the start of the *next* block, so it waits on average half a block, up to a full block worst case, before it's heard. Smaller blocks lower that latency but raise overhead (node dispatch, control-rate smoothing, envelope/LFO updates all repeat more often per second of audio); larger blocks are the opposite.
 
-**Total** is roughly the sum of both stages -- e.g. defaults give ~32.6 ms (I2S) + ~2.9 ms (synth) ≈ 35.5 ms from a rendered sample to sound.
+**Total** is roughly the sum of both stages plus the wait for the next block start -- e.g. defaults give ~8.7 ms (I2S) + ~2.9 ms (synth) ≈ 11.6 ms from a rendered sample to sound, ~11 ms on average from a USB-MIDI note-on (calculated, see the document above).
 
 This makes the firmware suitable for audio prototypes such as:
 

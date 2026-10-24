@@ -4,6 +4,8 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 
 ## [Unreleased]
 
+- Audio: Der I2S-TX-Kanal von ES8311, WM8960 und NS4168 wird bei eingebauter Synth-Engine erst mit dem ersten Engine-Block eingeschaltet. Damit entfallen die 40–87 "Underruns" beim Booten (der DMA-Ring lief leer, bevor die Engine startete, es ging nur Stille verloren). Auf dem CrowPanel getestet (0 Underruns beim Booten); ES8311/WM8960 kompiliert, nicht auf Hardware.
+- Audio-Latenz: neue Standardwerte DMA-Ring 3 × 128 Frames (vorher 6 × 240) bei Render-Block 128 (vorher in der lokalen `sdkconfig` 512). Note-Ein bis Ton sinkt von ca. 38 ms auf ca. 11 ms (berechnet), der freie interne RAM steigt um ca. 80 KB; auf dem CrowPanel keine DMA-Underruns beim Spielen, auch nicht mit parallelen Web-Downloads. Messung und Begründung: `documentation/audio-latency.md`, Testskript `tools/audio_latency_test.py`.
 - Browser-Vorschau (`audio-engine.js`) an die Firmware angeglichen:
   - Filter und Curtis-Filter laufen jetzt als exakte Ports von `FilterNode.h`/`CurtisFilterNode.h` (lineares Q, 6-dB-Stufen, TPT-Kaskade mit Sättigung).
   - Reverb Light ist jetzt der Schroeder-Hall der Firmware statt eines Faltungshalls mit Zufalls-Impuls.

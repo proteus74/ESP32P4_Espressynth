@@ -162,22 +162,22 @@ menu "Espressynth"
             endmenu
         endif
 
+
+        choice APP_P4_CHIP_REV
+            prompt "ESP32-P4 Chip Version"
+            default APP_P4_CHIP_REV_V3
+            help
+                Silicon revision of the ESP32-P4 on the board (printed by esptool as
+                "Chip type: ESP32-P4 (revision vX.Y)"). Revisions <3.0 and >=3.0 are mutually
+                exclusive: a binary built for one is refused by the bootloader/flasher on the other.
+
+            config APP_P4_CHIP_REV_V1
+                bool "v1.x (also 0.x)"
+                select ESP32P4_SELECTS_REV_LESS_V3
+            config APP_P4_CHIP_REV_V3
+                bool "v3.x"
+        endchoice
     endmenu
-
-    choice APP_P4_CHIP_REV
-        prompt "ESP32-P4 Chip Version"
-        default APP_P4_CHIP_REV_V3
-        help
-            Silicon revision of the ESP32-P4 on the board (printed by esptool as
-            "Chip type: ESP32-P4 (revision vX.Y)"). Revisions <3.0 and >=3.0 are mutually
-            exclusive: a binary built for one is refused by the bootloader/flasher on the other.
-
-        config APP_P4_CHIP_REV_V1
-            bool "v1.x (also 0.x)"
-            select ESP32P4_SELECTS_REV_LESS_V3
-        config APP_P4_CHIP_REV_V3
-            bool "v3.x"
-    endchoice
 
     menu "Features"
 
@@ -613,7 +613,7 @@ menu "Espressynth"
             config AUDIO_I2S_DMA_DESC_NUM
                 int "I2S DMA descriptor count (onboard codecs)"
                 range 2 16
-                default 6
+                default 3
                 depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960 || ONBOARD_AUDIO_PDM_MIC
                 help
                     Part 1 of the I2S output buffer's size, shared by every
@@ -659,7 +659,7 @@ menu "Espressynth"
             config AUDIO_I2S_DMA_FRAME_NUM
                 int "I2S DMA frames per descriptor (onboard codecs)"
                 range 32 960
-                default 240
+                default 128
                 depends on ONBOARD_AUDIO_ES8311 || ONBOARD_AUDIO_NS4168 || ONBOARD_AUDIO_WM8960 || ONBOARD_AUDIO_PDM_MIC
                 help
                     Part 2 of the I2S output buffer's size -- see
@@ -673,8 +673,14 @@ menu "Espressynth"
                     AUDIO_I2S_DMA_DESC_NUM ring chunks, i.e. how large a
                     single DMA transfer is.
 
-                    Default 240 frames/descriptor * 6 descriptors = 1440
-                    frames total ~= 32.6 ms @ 44.1kHz. The upper end of the
+                    Default 128 frames/descriptor * 3 descriptors = 384
+                    frames total ~= 8.7 ms @ 44.1kHz (with the default 128
+                    render block). Measured on the CrowPanel with a 5-voice
+                    chord pattern plus parallel web downloads: no DMA underrun
+                    down to 2 descriptors (5.8 ms), but render spikes reached
+                    4.3 ms, so 3 keeps ~2x headroom. The old 6 x 240 (32.6 ms)
+                    never underran either and just cost ~25 ms of latency.
+                    The upper end of the
                     range (960) is headroom under the I2S driver's hard
                     per-descriptor buffer ceiling (4095 bytes,
                     I2S_DMA_BUFFER_MAX_SIZE in esp_driver_i2s/i2s_common.c)

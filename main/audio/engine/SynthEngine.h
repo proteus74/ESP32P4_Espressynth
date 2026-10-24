@@ -64,7 +64,8 @@ public:
     // once at startup before the first preset-changed notification (if any)
     // arrives.
     void begin(esp_codec_dev_handle_t codecHandle, i2s_chan_handle_t secondaryI2sTxHandle,
-               i2s_chan_handle_t ns4168I2sTxHandle, QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue, const char *initialPresetPath);
+               i2s_chan_handle_t ns4168I2sTxHandle, QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue, const char *initialPresetPath,
+               i2s_chan_handle_t esI2sTxHandle = nullptr);
 
     // Enqueues a USB-MIDI event for the render task to apply before its next
     // block. Non-blocking; drops the event if the queue is full rather than
@@ -862,6 +863,10 @@ private:
     esp_codec_dev_handle_t codecHandle_ = nullptr;
     i2s_chan_handle_t secondaryI2sTxHandle_ = nullptr;
     i2s_chan_handle_t ns4168I2sTxHandle_ = nullptr;
+    // The codec managers leave their TX channels disabled when the synth is built in; each is
+    // enabled right before the first block written to it (the DMA then never runs dry before the
+    // engine has started, which used to count 40-80 harmless "underruns" at every boot).
+    i2s_chan_handle_t esI2sTxHandle_ = nullptr;
     QueueHandle_t presetChangedQueue_ = nullptr;
     QueueHandle_t liveParamQueue_ = nullptr;
     QueueHandle_t liveWavetableQueue_ = nullptr; // any task -> render task, LiveWavetableMsg (see postLiveWavetable)
@@ -1269,7 +1274,7 @@ inline SynthEngine::TimingSnapshot SynthEngine::consumeTimingSnapshot()
 
 inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_handle_t secondaryI2sTxHandle,
                                 i2s_chan_handle_t ns4168I2sTxHandle, QueueHandle_t presetChangedQueue, QueueHandle_t liveParamQueue,
-                                const char *initialPresetPath)
+                                const char *initialPresetPath, i2s_chan_handle_t esI2sTxHandle)
 {
     dsp::initSineLut();    // once, here - never recomputed once the render task starts
     dsp::initVcaExpLut();  // same pattern, see DspPrimitives.h
@@ -1279,6 +1284,7 @@ inline void SynthEngine::begin(esp_codec_dev_handle_t codecHandle, i2s_chan_hand
     codecHandle_ = codecHandle;
     secondaryI2sTxHandle_ = secondaryI2sTxHandle;
     ns4168I2sTxHandle_ = ns4168I2sTxHandle;
+    esI2sTxHandle_ = esI2sTxHandle;
     presetChangedQueue_ = presetChangedQueue;
     liveParamQueue_ = liveParamQueue;
     snprintf(currentPresetPath_, sizeof(currentPresetPath_), "%s", initialPresetPath);
@@ -2010,6 +2016,13 @@ inline void SynthEngine::taskLoop()
                 discontinuityReport.publish({"ES8311", esMaxStep});
             }
             esConvertUs = esp_timer_get_time() - esConvertStartUs;
+            static bool s_esTxEnabled = false;
+            if (!s_esTxEnabled)
+            {
+                s_esTxEnabled = true;
+                if (esI2sTxHandle_ != nullptr)
+                    i2s_channel_enable(esI2sTxHandle_);
+            }
             const int64_t esWriteStartUs = esp_timer_get_time();
             esp_codec_dev_write(codecHandle_, esChunk, sizeof(esChunk));
             esWriteUs = esp_timer_get_time() - esWriteStartUs;
@@ -2020,6 +2033,7 @@ inline void SynthEngine::taskLoop()
         {
             int16_t lastL = 0;
             int64_t lastClickLogUs = 0;
+            bool txEnabled = false; // channel enabled with the first block, see esI2sTxHandle_
         };
         auto writeRawI2sSink = [&](i2s_chan_handle_t handle, const SinkParams &syn, const float *L,
                                    const float *R, int16_t *chunk, RawSinkState &state, const char *name,
@@ -2059,6 +2073,11 @@ inline void SynthEngine::taskLoop()
                 discontinuityReport.publish({name, maxStep});
             }
             convertUs = esp_timer_get_time() - convertStartUs;
+            if (!state.txEnabled)
+            {
+                state.txEnabled = true;
+                i2s_channel_enable(handle);
+            }
             const int64_t writeStartUs = esp_timer_get_time();
             size_t bytesWritten = 0;
             i2s_channel_write(handle, chunk, sizeof(int16_t) * synth::kBlockSize * 2, &bytesWritten, portMAX_DELAY);

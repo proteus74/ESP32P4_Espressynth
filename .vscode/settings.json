@@ -41,5 +41,5 @@
     ".devcon*": true,
     ".vscode*": true
   },
-  "idf.port": "COM9"
+  "idf.port": "COM38"
 }

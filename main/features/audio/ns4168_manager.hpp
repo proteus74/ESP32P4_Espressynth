@@ -154,11 +154,17 @@ inline esp_err_t init() {
     if (i2s_channel_register_event_callback(tx_handle, &underrun_callbacks, nullptr) != ESP_OK) {
         ESP_LOGW(TAG, "Failed to register I2S underrun callback");
     }
+#if !defined(CONFIG_APP_ENABLE_SYNTH)
     if ((err = i2s_channel_enable(tx_handle)) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(err));
         i2s_del_channel(tx_handle);
         return err;
     }
+#else
+    // With the synth engine, the engine is the only writer and enables the TX channel together with
+    // its first block (SynthEngine.h). Enabling it here would let the DMA ring run dry from now until
+    // the engine has loaded its preset and started - counted as underruns, although nothing was lost.
+#endif
     s_tx_handle = tx_handle;
 
     err = enable_amp();

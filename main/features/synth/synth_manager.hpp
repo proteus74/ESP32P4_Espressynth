@@ -659,8 +659,10 @@ inline esp_err_t init() {
     esp_codec_dev_handle_t codec = nullptr;
     i2s_chan_handle_t secondaryI2sTxHandle = nullptr;
     i2s_chan_handle_t ns4168I2sTxHandle = nullptr;
+    i2s_chan_handle_t esI2sTxHandle = nullptr;
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
     codec = Feature::Audio::ES8311::get_handle();
+    esI2sTxHandle = Feature::Audio::ES8311::get_tx_handle();
 #endif
 #if defined(CONFIG_ONBOARD_AUDIO_WM8960)
     secondaryI2sTxHandle = Feature::Audio::WM8960::get_tx_handle();
@@ -723,7 +725,8 @@ inline esp_err_t init() {
     // Deferred preset writes (PresetWriteCache.hpp): flash writes wait for an output pause.
     presetcache::init([](uint32_t ms) { return s_engine.outputSilentFor(ms); });
 
-    s_engine.begin(codec, secondaryI2sTxHandle, ns4168I2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath);
+    s_engine.begin(codec, secondaryI2sTxHandle, ns4168I2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath,
+                   esI2sTxHandle);
 
     ESP_LOGI(TAG, "Synth engine started (preset: %s)",
              initialPresetName[0] != '\0' ? initialPresetName : "current.json");
