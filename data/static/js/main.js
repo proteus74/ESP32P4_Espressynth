@@ -297,6 +297,12 @@ document.getElementById("menuNew").addEventListener("click", (e) => {
   handleNewPreset();
 });
 
+document.getElementById("menuNewWithTemplate").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  handleNewPreset({ template: NEW_PRESET_TEMPLATE });
+});
+
 document.getElementById("menuSave").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
@@ -1141,6 +1147,7 @@ document.getElementById("saveAsSave").addEventListener("click", async () => {
   closeSaveAsModal();
   if (ok) {
     currentPresetName = name;
+    unsavedTemplate = false;
     await refreshPresetMenu();
     showToast("Preset saved");
   } else {
@@ -7384,7 +7391,7 @@ const KNOB_MAX_COUNT = 16;
 const KNOB_MAX_LAYERS = 8;
 
 function createKnobControl() {
-  return { cc: null, channel: null, raw: 0, point1In: 0, point1Out: 0, point2In: 127, point2Out: CV_MAX_VOLTS, constraintMin: null, constraintMax: null, listText: "" };
+  return { cc: null, channel: null, raw: 127, point1In: 0, point1Out: 0, point2In: 127, point2Out: CV_MAX_VOLTS, constraintMin: null, constraintMax: null, listText: "" };
 }
 
 function createKnobLayer(bindingSource = null) {
@@ -24640,13 +24647,16 @@ async function saveToServer(name) {
   }
 }
 
+// True while the "New with template" draft is open: it lives in the browser until Save As.
+let unsavedTemplate = false;
+
 async function savePresetNow() {
-  
-  
-  
-  
-  
-  if (restoringPreset) return;
+
+
+
+
+
+  if (restoringPreset || unsavedTemplate) return;
   // A cable-driven change (e.g. a CV into MIDI In's "voices") must not rewrite the preset on
   // the device over and over - see deliverToWidget().
   if (deviceSyncMuteDepth > 0) return;
@@ -24715,7 +24725,159 @@ async function handleExplicitSave() {
   }
 }
 
-function handleNewPreset() {
+const NEW_PRESET_TEMPLATE = {
+  "schemaVersion": 4,
+  "masterClock": { "bpm": 120 },
+  "title": "",
+  "description": "",
+  "longDescription": "",
+  "author": "",
+  "uiTabOrder": ["generator", "fx"],
+  "uiPages": [
+    {
+      "id": "generator",
+      "title": "Sound Generation",
+      "toMasterUi": { "x": -160, "y": -300 }
+    }
+  ],
+  "pages": {
+    "generator": {
+      "widgets": [
+        {
+          "id": "widget-4",
+          "type": "midi-in",
+          "label": "Midi-In",
+          "ui": { "x": -1440, "y": -400, "pageId": "generator" },
+          "params": {
+            "channel": null,
+            "voices": 4,
+            "overflowMode": "steal-oldest",
+            "glide": false,
+            "glideTime": 0,
+            "pitchBendRangeCents": 200,
+            "pitchBendQuantizeCents": false,
+            "keyMask": "ffffffffffffffffffffffffffffffff"
+          }
+        },
+        {
+          "id": "widget-12",
+          "type": "fm-oscillator",
+          "label": "Oscillator",
+          "ui": { "x": -660, "y": -380, "pageId": "generator" },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 10,
+            "fmIndex": 0,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-13",
+          "type": "adsr",
+          "label": "ADSR",
+          "ui": { "x": -1040, "y": -180, "pageId": "generator" },
+          "params": {
+            "attack": 0.001,
+            "decay": 2.237624729269802,
+            "sustain": 0.7421052631578947,
+            "release": 0.8851485148514847,
+            "attackMaxSeconds": 4,
+            "attackCurve": "linear",
+            "decayMaxSeconds": 4,
+            "decayCurve": "linear",
+            "releaseMaxSeconds": 4,
+            "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 151833.89999999106,
+            "liveSegmentStartLevel": 0.9654353875496001,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-1",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": { "x": -160, "y": -300 },
+          "params": { "labels": ["", "", "", "", "", "", "", ""] }
+        }
+      ],
+      "connections": [
+        { "id": "conn-24", "from": { "widgetId": "widget-4", "portId": "pitchCv" }, "to": { "widgetId": "widget-12", "portId": "pitchCv" }, "color": "#a3e635" },
+        { "id": "conn-25", "from": { "widgetId": "widget-4", "portId": "gate" }, "to": { "widgetId": "widget-13", "portId": "gate" }, "color": "#4ade80" },
+        { "id": "conn-26", "from": { "widgetId": "widget-13", "portId": "out" }, "to": { "widgetId": "widget-12", "portId": "amplitude" }, "color": "#2dd4bf" },
+        { "id": "conn-27", "from": { "widgetId": "widget-12", "portId": "value" }, "to": { "widgetId": "widget-1", "portId": "in1" }, "color": "#22d3ee" }
+      ]
+    },
+    "fx": {
+      "widgets": [
+        {
+          "id": "widget-2",
+          "type": "audio-input-link",
+          "label": "Audio Outputs",
+          "ui": { "x": -1500, "y": -420, "pageId": "fx" },
+          "params": {
+            "gains": [10, 10, 10, 10, 10, 10, 10, 10],
+            "labels": ["", "", "", "", "", "", "", ""]
+          }
+        },
+        {
+          "id": "widget-6",
+          "type": "es8311-out",
+          "label": "ES8311-Out",
+          "ui": { "x": -800, "y": -240, "pageId": "fx" },
+          "params": { "muted": false, "gain": 10 }
+        },
+        {
+          "id": "widget-7",
+          "type": "audio-out",
+          "label": "JS Audio-Out",
+          "ui": { "x": -800, "y": -60, "pageId": "fx" },
+          "params": { "muted": false, "gain": 10 }
+        },
+        {
+          "id": "widget-8",
+          "type": "wm8960-out",
+          "label": "WM8960-Out",
+          "ui": { "x": -800, "y": -420, "pageId": "fx" },
+          "params": { "muted": false, "gain": 10 }
+        },
+        {
+          "id": "widget-11",
+          "type": "usb-out",
+          "label": "USB-Out",
+          "ui": { "x": -800, "y": 120, "pageId": "fx" },
+          "params": { "muted": false, "gain": 10 }
+        }
+      ],
+      "connections": [
+        { "id": "conn-20", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-11", "portId": "left" }, "color": "#f87171" },
+        { "id": "conn-21", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-11", "portId": "right" }, "color": "#f87171" },
+        { "id": "conn-38", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-8", "portId": "left" }, "color": "#f87171" },
+        { "id": "conn-39", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-8", "portId": "right" }, "color": "#f87171" },
+        { "id": "conn-42", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-6", "portId": "left" }, "color": "#f87171" },
+        { "id": "conn-43", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-6", "portId": "right" }, "color": "#f87171" },
+        { "id": "conn-44", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-7", "portId": "left" }, "color": "#f87171" },
+        { "id": "conn-45", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-7", "portId": "right" }, "color": "#f87171" }
+      ]
+    }
+  },
+  "firmwareVersion": "0.33"
+};
+
+// options.template: a preset object to show as the new, unsaved preset instead of the built-in init layout.
+async function handleNewPreset({ template = null } = {}) {
   const generatorWidgetCount = generatorPageNames().reduce(
     (count, name) => count + pages[name].canvasContentEl.querySelectorAll('.widget-instance:not([data-widget-type="audio-output-link"])').length,
     0
@@ -24729,8 +24891,15 @@ function handleNewPreset() {
   
   
   currentPresetName = null;
+  unsavedTemplate = false;
   presetDescription = { title: "", description: "", longDescription: "", author: "" };
-  loadInitTemplate();
+  if (template) {
+    unsavedTemplate = true;
+    await applyPresetData(template, { fitToView: true });
+    showToast("Template loaded - use Save As to keep it");
+  } else {
+    loadInitTemplate();
+  }
   refreshPresetMenu();
 }
 
@@ -25291,6 +25460,7 @@ async function loadPresetOnStartup() {
     const headerName = res.headers.get("X-Preset-Name") || "";
     const data = await res.json();
     currentPresetName = headerName || null;
+    unsavedTemplate = false;
     await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {
@@ -25320,6 +25490,7 @@ async function loadPresetByName(name, { activate = true } = {}) {
     const data = await res.json();
     if (generation !== presetLoadGeneration) return;
     currentPresetName = headerName || null;
+    unsavedTemplate = false;
     await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {

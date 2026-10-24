@@ -6,6 +6,24 @@ The codebase is intentionally organized around feature modules instead of a sing
 
 This repository is especially useful when you want to prototype an ESP32-P4 product or a feature-rich embedded UI system without starting from scratch every time.
 
+## Web patch editor
+
+The firmware serves a browser-based modular editor. You build a synth by placing nodes and patching cables, and the ESP32-P4 runs the resulting audio graph in real time.
+
+![Sound Generation page with a supersaw pad patch](documentation/images/patch-example.png)
+
+*Sound Generation page: MIDI-In drives a supersaw oscillator, an LFO modulates its detune, a filter envelope sweeps the low-pass filter, and an amp envelope opens the VCA before the signal goes to the master bus.*
+
+![FX & Masteroutput page with delay, reverb and hardware outputs](documentation/images/fx-chain.png)
+
+*FX & Masteroutput page: the voice buses run through delay and reverb into the hardware outputs (WM8960, ES8311, USB audio) and the in-browser preview.*
+
+![Add Node picker](documentation/images/add-node.png)
+
+*Right-click on empty canvas to open the node picker. It lists 60+ node types in groups such as MIDI, generators, modulators, filters, effects, math and control.*
+
+The [web editor guide](documentation/WebEditor.md) covers menus, settings and editing shortcuts.
+
 ## At a glance
 
 | Category | Summary |
