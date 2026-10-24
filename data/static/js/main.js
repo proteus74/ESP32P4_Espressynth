@@ -406,7 +406,6 @@ const ethIpInput = document.getElementById("ethIpInput");
 const ethMaskInput = document.getElementById("ethMaskInput");
 const ethGwInput = document.getElementById("ethGwInput");
 const ethDnsInput = document.getElementById("ethDnsInput");
-const wifiEnabledInput = document.getElementById("wifiEnabledInput");
 const wifiSsidInput = document.getElementById("wifiSsidInput");
 const wifiPasswordInput = document.getElementById("wifiPasswordInput");
 const wifiDhcpInput = document.getElementById("wifiDhcpInput");
@@ -605,8 +604,8 @@ function renderWifiStatus(data) {
   else if (data.wifiConnected || data.connected) wifiStatus.textContent = `Connected${data.wifiIp || data.ip ? ` — ${data.wifiIp || data.ip}` : ""}`;
   else if (data.wifiScanning || data.scanning) wifiStatus.textContent = "Scanning…";
   else if (data.wifiError || data.error) wifiStatus.textContent = `Error: ${data.wifiError || data.error}`;
-  else if (data.wifiPortal && (data.wifiEnabled || data.enabled)) wifiStatus.textContent = `Not connected — setup hotspot "${data.wifiPortalSsid}" is open`;
-  else wifiStatus.textContent = data.wifiEnabled || data.enabled ? "Connecting…" : "Wi-Fi disabled";
+  else if (data.wifiPortal) wifiStatus.textContent = `Not connected — setup hotspot "${data.wifiPortalSsid}" is open`;
+  else wifiStatus.textContent = "Connecting…";
 }
 
 ethDhcpInput.addEventListener("change", updateStaticFieldsVisibility);
@@ -624,7 +623,6 @@ function applyNetworkData(data) {
   ethMaskInput.value = data.ethMask || "";
   ethGwInput.value = data.ethGw || "";
   ethDnsInput.value = data.ethDns || "";
-  wifiEnabledInput.checked = data.wifiEnabled === true;
   wifiSsidInput.value = data.wifiSsid || "";
   wifiPasswordInput.value = "";
   wifiDhcpInput.checked = data.wifiDhcp !== false;
@@ -646,7 +644,6 @@ function currentNetworkSnapshot() {
     ethMask: ethMaskInput.value.trim(),
     ethGw: ethGwInput.value.trim(),
     ethDns: ethDnsInput.value.trim(),
-    wifiEnabled: wifiEnabledInput.checked,
     wifiSsid: wifiSsidInput.value.trim(),
     wifiPassword: wifiPasswordInput.value,
     wifiDhcp: wifiDhcpInput.checked,
@@ -664,9 +661,7 @@ function updateGpioSummary() {
 
 function updateNetworkSummary() {
   const ethPart = ethDhcpInput.checked ? "Ethernet: DHCP" : "Ethernet: Static IP";
-  const wifiPart = !wifiEnabledInput.checked
-    ? "Wi-Fi disabled"
-    : `Wi-Fi: ${wifiSsidInput.value.trim() || "(no SSID)"}${wifiDhcpInput.checked ? "" : " (static IP)"}`;
+  const wifiPart = `Wi-Fi: ${wifiSsidInput.value.trim() || "(no SSID)"}${wifiDhcpInput.checked ? "" : " (static IP)"}`;
   networkSummaryText.textContent = [
     !document.getElementById("ethSettingsGroup").hidden && ethPart,
     !document.getElementById("wifiSettingsGroup").hidden && wifiPart,
@@ -848,7 +843,6 @@ async function closeNetworkSettings({ save } = {}) {
     ethMask: ethMaskInput.value.trim(),
     ethGw: ethGwInput.value.trim(),
     ethDns: ethDnsInput.value.trim(),
-    wifiEnabled: wifiEnabledInput.checked,
     wifiSsid: wifiSsidInput.value.trim(),
     wifiPassword: wifiPasswordInput.value,
     wifiDhcp: wifiDhcpInput.checked,

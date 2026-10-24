@@ -10,12 +10,12 @@
 //
 
 void init_style_button_MAIN_DEFAULT(lv_style_t *style) {
-    lv_style_set_bg_color(style, lv_color_hex(0xa9a9a9));
+    lv_style_set_bg_color(style, lv_color_hex(0x141414));
     lv_style_set_shadow_width(style, 2);
     lv_style_set_shadow_ofs_x(style, 2);
     lv_style_set_shadow_color(style, lv_color_hex(0x000000));
     lv_style_set_radius(style, 2);
-    lv_style_set_border_color(style, lv_color_hex(0xff0000));
+    lv_style_set_border_color(style, lv_color_hex(0x7d7d7d));
     lv_style_set_border_opa(style, 255);
     lv_style_set_border_width(style, 1);
 };

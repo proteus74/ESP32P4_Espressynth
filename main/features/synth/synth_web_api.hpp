@@ -1675,8 +1675,8 @@ void add_wifi_status(cJSON *root) {
     }
     cJSON_AddBoolToObject(root, "wifiAvailable", true);
     cJSON_AddBoolToObject(root, "available", true);
-    cJSON_AddBoolToObject(root, "wifiEnabled", Feature::WiFi::is_enabled());
-    cJSON_AddBoolToObject(root, "enabled", Feature::WiFi::is_enabled());
+    cJSON_AddBoolToObject(root, "wifiEnabled", true); // always on; the Kconfig option APP_ENABLE_WIFI decides
+    cJSON_AddBoolToObject(root, "enabled", true);
     cJSON_AddBoolToObject(root, "wifiConnected", connected);
     cJSON_AddBoolToObject(root, "connected", connected);
     cJSON_AddStringToObject(root, "wifiIp", ip);
@@ -1737,11 +1737,9 @@ esp_err_t network_settings_post_handler(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
         return ESP_FAIL;
     }
-    const cJSON *enabled_item = cJSON_GetObjectItemCaseSensitive(root, "wifiEnabled");
     const cJSON *ssid_item = cJSON_GetObjectItemCaseSensitive(root, "wifiSsid");
     const cJSON *password_item = cJSON_GetObjectItemCaseSensitive(root, "wifiPassword");
 
-    const bool enabled = cJSON_IsBool(enabled_item) ? cJSON_IsTrue(enabled_item) : Feature::WiFi::is_enabled();
     const char *ssid = cJSON_IsString(ssid_item) ? ssid_item->valuestring : Feature::WiFi::configured_ssid();
     const char *password = cJSON_IsString(password_item) ? password_item->valuestring : "";
 
@@ -1768,7 +1766,7 @@ esp_err_t network_settings_post_handler(httpd_req_t *req) {
         snprintf(keep_password, sizeof(keep_password), "%s", Feature::WiFi::configured_password());
         password = keep_password;
     }
-    const esp_err_t err = Feature::WiFi::apply_settings(enabled, ssid, password);
+    const esp_err_t err = Feature::WiFi::apply_settings(ssid, password);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, err == ESP_OK ? "{\"applied\":true}" : "{\"applied\":false}");

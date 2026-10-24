@@ -29,7 +29,6 @@ inline bool connected = false;
 // Settings -> Network, CLI "wifi connect"). Empty SSID = nothing configured yet.
 inline char sta_ssid[33] = {};
 inline char sta_password[65] = {};
-inline bool wifi_enabled = true;
 
 #if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
 inline esp_netif_t* ap_netif = nullptr;
@@ -105,7 +104,7 @@ inline void stop_captive_portal() {
 }
 
 inline void captive_portal_retry_timer_cb(void*) {
-    if (!connected && wifi_enabled && sta_ssid[0] != '\0') {
+    if (!connected && sta_ssid[0] != '\0') {
         retry_count = 0;
         esp_wifi_connect();
     }
@@ -115,7 +114,6 @@ inline void captive_portal_retry_timer_cb(void*) {
 inline void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        if (!wifi_enabled) return;
         if (sta_ssid[0] != '\0') {
             esp_wifi_connect();
         }
@@ -126,7 +124,6 @@ inline void wifi_event_handler(void* arg, esp_event_base_t event_base,
 #endif
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         connected = false;
-        if (!wifi_enabled) return;
         const auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
         if (retry_count < CONFIG_WIFI_MAXIMUM_RETRY) {
             ++retry_count;
@@ -191,26 +188,6 @@ inline esp_err_t save_credentials(const char* ssid, const char* password) {
     if (err != ESP_OK) return err;
     err = nvs_set_str(nvs, "ssid", ssid);
     if (err == ESP_OK) err = nvs_set_str(nvs, "pass", password != nullptr ? password : "");
-    if (err == ESP_OK) err = nvs_commit(nvs);
-    nvs_close(nvs);
-    return err;
-}
-
-/** @brief Wi-Fi on/off switch from Settings -> Network (default on). */
-inline bool load_enabled() {
-    nvs_handle_t nvs;
-    uint8_t value = 1;
-    if (nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return true;
-    nvs_get_u8(nvs, "en", &value);
-    nvs_close(nvs);
-    return value != 0;
-}
-
-inline esp_err_t save_enabled(bool enabled) {
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open(CREDENTIALS_NVS_NAMESPACE, NVS_READWRITE, &nvs);
-    if (err != ESP_OK) return err;
-    err = nvs_set_u8(nvs, "en", enabled ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;
@@ -338,13 +315,10 @@ inline ScanState scan_state() {
  *        saved network (the hotspot opens); `password` may be null/empty for an open network.
  *        Safe to call from any task; the (re)connect happens asynchronously.
  */
-inline esp_err_t apply_settings(bool enabled, const char* ssid, const char* password) {
+inline esp_err_t apply_settings(const char* ssid, const char* password) {
     if (ssid == nullptr) ssid = "";
-    wifi_enabled = enabled;
-    save_enabled(enabled);
     if (ssid[0] == '\0') {
         clear_saved_credentials();
-        save_enabled(enabled);
         sta_ssid[0] = '\0';
         sta_password[0] = '\0';
     } else {
@@ -356,14 +330,6 @@ inline esp_err_t apply_settings(bool enabled, const char* ssid, const char* pass
         sta_password[sizeof(sta_password) - 1] = '\0';
     }
 
-    if (!enabled) {
-        retry_count = 0;
-        esp_wifi_disconnect();
-#if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
-        stop_captive_portal();
-#endif
-        return ESP_OK;
-    }
     if (sta_ssid[0] == '\0') {
         esp_wifi_disconnect();
 #if defined(CONFIG_APP_ENABLE_WIFI_CAPTIVE_PORTAL)
@@ -374,10 +340,9 @@ inline esp_err_t apply_settings(bool enabled, const char* ssid, const char* pass
     return connect(sta_ssid, sta_password);
 }
 
-/** @brief The saved station SSID (empty = none configured) and whether Wi-Fi is switched on. */
+/** @brief The saved station SSID / password (empty = none configured). */
 inline const char* configured_ssid() { return sta_ssid; }
 inline const char* configured_password() { return sta_password; }
-inline bool is_enabled() { return wifi_enabled; }
 
 /**
  * @brief Initialize Wi-Fi station mode over the ESP-Hosted link (ESP32-C6 co-processor).
@@ -426,7 +391,6 @@ inline esp_err_t init() {
         sta_ssid[0] = '\0';
         sta_password[0] = '\0';
     }
-    wifi_enabled = load_enabled();
     if (sta_ssid[0] != '\0') {
         wifi_config_t wifi_config{};
         // Fields need no terminator at full length (32-char SSID / 64-char PSK are valid).
@@ -439,9 +403,7 @@ inline esp_err_t init() {
     err = esp_wifi_start();
     if (err != ESP_OK) return err;
 
-    if (!wifi_enabled) {
-        ESP_LOGI(TAG, "Wi-Fi initialized but switched off in Settings");
-    } else if (sta_ssid[0] != '\0') {
+    if (sta_ssid[0] != '\0') {
         ESP_LOGI(TAG, "Wi-Fi initialized, connecting to SSID \"%s\"", sta_ssid);
     } else {
         ESP_LOGI(TAG, "Wi-Fi initialized, no network configured yet");

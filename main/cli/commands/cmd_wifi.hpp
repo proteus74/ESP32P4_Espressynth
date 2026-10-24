@@ -84,8 +84,8 @@ inline int wifi_scan() {
 }
 
 inline int wifi_connect(const char* ssid, const char* password) {
-    // Same path as Settings -> Network: saves to NVS, switches Wi-Fi on and (re)connects.
-    const esp_err_t err = Feature::WiFi::apply_settings(true, ssid, password);
+    // Same path as Settings -> Network: saves to NVS and (re)connects.
+    const esp_err_t err = Feature::WiFi::apply_settings(ssid, password);
     if (err != ESP_OK) {
         printf("Connect failed: %s\n", esp_err_to_name(err));
         return 1;

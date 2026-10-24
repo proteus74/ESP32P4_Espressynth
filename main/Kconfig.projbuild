@@ -164,6 +164,21 @@ menu "Espressynth"
 
     endmenu
 
+    choice APP_P4_CHIP_REV
+        prompt "ESP32-P4 Chip Version"
+        default APP_P4_CHIP_REV_V3
+        help
+            Silicon revision of the ESP32-P4 on the board (printed by esptool as
+            "Chip type: ESP32-P4 (revision vX.Y)"). Revisions <3.0 and >=3.0 are mutually
+            exclusive: a binary built for one is refused by the bootloader/flasher on the other.
+
+        config APP_P4_CHIP_REV_V1
+            bool "v1.x (also 0.x)"
+            select ESP32P4_SELECTS_REV_LESS_V3
+        config APP_P4_CHIP_REV_V3
+            bool "v3.x"
+    endchoice
+
     menu "Features"
 
 
@@ -755,6 +770,7 @@ menu "Espressynth"
         choice APP_UI_LAYOUT
             prompt "EEZ UI layout"
             default APP_UI_LAYOUT_800_480 if BOARD_CROWPANEL_5INCH
+            default APP_UI_LAYOUT_1280_800 if BOARD_JC8012P4A1
             default APP_UI_LAYOUT_1024_600
             help
                 Which EEZ Studio UI export (eezstudio/src/ui/<layout>) is compiled in.
@@ -762,7 +778,10 @@ menu "Espressynth"
 
             config APP_UI_LAYOUT_1024_600
                 bool "1024x600 (eezstudio/src/ui/1024_800)"
-                depends on BOARD_HAS_VARIABLE_DISPLAY || !BOARD_CROWPANEL_5INCH
+                depends on BOARD_HAS_VARIABLE_DISPLAY || !(BOARD_CROWPANEL_5INCH || BOARD_JC8012P4A1)
+            config APP_UI_LAYOUT_1280_800
+                bool "1280x800 (eezstudio/src/ui/1280_800)"
+                depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_JC8012P4A1
             config APP_UI_LAYOUT_800_480
                 bool "800x480 (eezstudio/src/ui/800_480)"
                 depends on BOARD_HAS_VARIABLE_DISPLAY || BOARD_CROWPANEL_5INCH

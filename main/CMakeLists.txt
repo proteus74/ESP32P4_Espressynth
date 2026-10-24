@@ -3,6 +3,8 @@
 # include path - every layout exports the same file and symbol names.
 if(CONFIG_APP_UI_LAYOUT_800_480)
     set(EEZ_UI_DIR "../eezstudio/src/ui/800_480")
+elseif(CONFIG_APP_UI_LAYOUT_1280_800)
+    set(EEZ_UI_DIR "../eezstudio/src/ui/1280_800")
 else()
     set(EEZ_UI_DIR "../eezstudio/src/ui/1024_800")
 endif()

@@ -1363,7 +1363,11 @@ inline esp_err_t init() {
     touch_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GSL3680_ADDRESS;
     touch_io_config.lcd_cmd_bits = 8;
 #endif
+#if defined(CONFIG_BOARD_JC1060P470C_7_INCH) || defined(CONFIG_BOARD_CROWPANEL_5INCH)
     touch_io_config.scl_speed_hz = Board::i2c_bus_frequency_hz(0);
+#else
+    touch_io_config.scl_speed_hz = 400000; // GSL3680: vendor BSP speed (loads the firmware ~3x faster than 100 kHz)
+#endif
     touch_io_config.control_phase_bytes = 1;
     touch_io_config.flags.disable_control_phase = 1;
     // Never let a missing/unresponsive touch controller block the LVGL task

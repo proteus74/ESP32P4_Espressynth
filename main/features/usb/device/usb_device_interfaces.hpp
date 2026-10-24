@@ -1,4 +1,5 @@
 #pragma once
+#include "sdkconfig.h"
 
 // USB interface numbering for the composite device, shared between the descriptor builder
 // (usb_device_descriptors.cpp) and any class implementation that needs to recognize its own

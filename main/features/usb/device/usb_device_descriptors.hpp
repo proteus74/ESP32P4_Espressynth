@@ -1,6 +1,8 @@
 #pragma once
 
+#if CONFIG_USB_DEV_ENABLE_UAC2
 #include "usb_device_audio.hpp"
+#endif
 #include "usb_device_interfaces.hpp"
 #include "tusb.h"
 #include "device/usbd.h"
