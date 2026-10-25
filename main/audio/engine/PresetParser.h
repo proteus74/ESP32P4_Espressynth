@@ -247,6 +247,7 @@ struct WidgetParams
     float glideTime = 0.0f;
     float midiInPitchBendRangeCents = 200.0f;
     bool midiInPitchBendQuantizeCents = false;
+    float midiInProgram = 0.0f;
     uint32_t midiInKeyMask[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     int16_t midiFilterNote = -1;
     // midi-split

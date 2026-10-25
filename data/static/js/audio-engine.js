@@ -3233,7 +3233,6 @@ export class AudioEngine {
       }
       case "master-volume":
       case "const":
-      case "midi-program":
       case "up-down-button": {
         const constant = ctx.createConstantSource();
         constant.offset.value = params.value ?? 0;
@@ -6304,7 +6303,6 @@ export class AudioEngine {
       }
       case "master-volume":
       case "const":
-      case "midi-program":
       case "up-down-button":
         if (paramName === "value") applyRamp(entry.constant.offset);
         break;
@@ -6708,7 +6706,6 @@ export class AudioEngine {
 
   _resolveOutputFromEntry(entry, port) {
     if (!entry) return null;
-    if (entry.type === "midi-program" && port === "value") return entry.constant;
     if (entry.type === "oscillator" && port === "value") return entry.outGain;
     if (entry.type === "fm-oscillator" && port === "value") return entry.outGain;
     if (entry.type === "hammond" && port === "value") return entry.outGain;

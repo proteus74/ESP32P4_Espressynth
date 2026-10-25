@@ -300,7 +300,7 @@ document.getElementById("menuNew").addEventListener("click", (e) => {
 document.getElementById("menuNewWithTemplate").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
-  handleNewPreset({ template: NEW_PRESET_TEMPLATE });
+  handleNewPreset({ template: "default" });
 });
 
 document.getElementById("menuSave").addEventListener("click", (e) => {
@@ -1141,7 +1141,6 @@ document.getElementById("saveAsSave").addEventListener("click", async () => {
   closeSaveAsModal();
   if (ok) {
     currentPresetName = name;
-    unsavedTemplate = false;
     await refreshPresetMenu();
     showToast("Preset saved");
   } else {
@@ -1358,20 +1357,16 @@ const WIDGET_TYPES = {
       { id: "glideTime", label: "Glide Time" },
     ],
     outputs: [
-      { id: "midi", label: "MIDI" },
       { id: "pitchCv", label: "Pitch" },
-      { id: "aftertouch", label: "Aftertouch" },
-      { id: "pitchBend", label: "Pitch Bend" },
-      { id: "note", label: "Note (0–127)" },
-      { id: "velocity", label: "Velocity" },
       { id: "gate", label: "Gate" },
+      { id: "velocity", label: "Velocity" },
+      { id: "pitchBend", label: "Pitch Bend" },
+      { id: "aftertouch", label: "Aftertouch" },
+      { id: "midi", label: "MIDI" },
+      { id: "note", label: "MIDI-Note" },
+      // Last Program Change (0-127) on this Midi-In's channel, kept in the "program" param.
+      { id: "program", label: "MIDI-ProgChange" },
     ],
-  },
-  "midi-program": {
-    label: "Program Change",
-    icon: "🎹",
-    inputs: [],
-    outputs: [{ id: "value", label: "Program (0–127)" }],
   },
   "midi-filter": {
     label: "MIDI-Filter",
@@ -1629,8 +1624,8 @@ const WIDGET_TYPES = {
     icon: "🎛️",
     inputs: [
       { id: "pitchCv", label: "Pitch" },
-      { id: "velocity", label: "Velocity" },
       { id: "gate", label: "Gate" },
+      { id: "velocity", label: "Velocity" },
       { id: "tune", label: "Tune" },
       { id: "gain", label: "Gain" },
     ],
@@ -1647,6 +1642,7 @@ const WIDGET_TYPES = {
       { id: "fmIn", label: "FM In" },
       { id: "fmIndex", label: "FM Depth" },
       { id: "pitchCv", label: "Pitch" },
+      { id: "gate", label: "Gate" },
       { id: "tune", label: "Tune" },
       // DX7-style frequency ratio on top of Tune (ignored while Tune is patched).
       { id: "ratioCoarse", label: "Ratio Coarse" },
@@ -1655,7 +1651,6 @@ const WIDGET_TYPES = {
       { id: "detune", label: "Detune" },
       { id: "amplitude", label: "Amplitude" },
       { id: "waveform", label: "Waveform" },
-      { id: "gate", label: "Gate" },
       { id: "gain", label: "Gain" },
       { id: "feedback", label: "Feedback (Self)" },
       // Square-only (see updateFmOscillatorDutyCycleVisual). 0-10V CV,
@@ -1715,9 +1710,9 @@ const WIDGET_TYPES = {
     label: "Sampler",
     icon: "🎚",
     inputs: [
-      { id: "amplitude", label: "Amplitude" },
       { id: "pitchCv", label: "Pitch (1V/Oct)" },
       { id: "gate", label: "Gate" },
+      { id: "amplitude", label: "Amplitude" },
       { id: "gain", label: "Gain" },
     ],
     outputs: [
@@ -1968,10 +1963,10 @@ const WIDGET_TYPES = {
     // (see renderStepArpPorts() below for the sixteen "stepN" rows,
     // drawn as a dense knob row rather than the usual vertical port list).
     inputs: [
+      { id: "pitch", label: "Pitch" },
+      { id: "gate", label: "Gate" },
       { id: "clock", label: "Trigger" },
       { id: "rate", label: "BPM" },
-      { id: "gate", label: "Gate" },
-      { id: "pitch", label: "Pitch" },
       { id: "direction", label: "Direction" },
       { id: "pulseTime", label: "Gate-Out-Time" },
       { id: "pattern", label: "Pattern" },
@@ -2271,13 +2266,13 @@ const WIDGET_TYPES = {
 
 
 const WIDGET_CATEGORIES = [
-  { label: "Midi", types: ["midi-in", "midi-filter", "midi-program"] },
+  { label: "Midi", types: ["midi-in", "midi-filter"] },
   { label: "Generator", types: ["fm-oscillator", "fm8", "wave-player", "sampler", "hammond", "soundfont-player", "mda-piano"] },
   { label: "Modulator", types: ["adsr", "dx-envelope", "lfo", "wavetable", "detune", "clock", "step-arpeggiator", "drum-sequencer", "monoflop", "sample-hold", "burst-generator"] },
   { label: "Filter", types: ["filter", "curtis-filter", "comb-filter", "esp-eq", "graphic-eq"] },
   { label: "Control", types: ["knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "const", "master-volume"] },
   { label: "Math", types: ["adder", "divide", "frequency-divider", "counter", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not"] },
-  { label: "Effects", types: ["bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light"] },
+  { label: "Effects", types: ["reverb-light", "chorus", "delay", "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan"] },
   { label: "Mixing/Output", types: ["gain", "mixer", "linked-input", "linked-output", "linked-input-4", "linked-output-4", "linked-input-8", "linked-output-8"] },
   { label: "External Audio", types: ["audio-out", "usb-out", "es8311-out", "wm8960-out", "ns4168-out", "mic-in", "wm8960-in"] },
   { label: "Misc", types: ["annotation", "debug", "voltmeter", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum"] },
@@ -2698,8 +2693,9 @@ const GENERATOR_PAGE_TYPES = [
 ];
 const FX_PAGE_TYPES = [
   "master-volume",
-  "midi-in", "adsr",
-  "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "chorus", "delay", "reverb-light", "audio-out",
+  "midi-in", "adsr", "dx-envelope", "const",
+  "adder", "divide", "frequency-divider", "multiplier", "abs", "value-mapper", "logic-and", "logic-or", "logic-xor", "logic-not",
+  "bitcrusher", "wave-folder", "overdrive", "envelope-follower", "pan", "audio-out",
   "usb-out", "es8311-out", "wm8960-out", "ns4168-out",
 ];
 
@@ -2709,7 +2705,7 @@ const FX_PAGE_TYPES = [
 
 
 
-const DUAL_PAGE_TYPES = ["midi-program", "midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in", "wm8960-in"];
+const DUAL_PAGE_TYPES = ["midi-filter", "annotation", "knob", "button", "up-down-button", "switch", "multiplexer", "output-switch", "output-multiplexer", "debug", "voltmeter", "lfo", "wavetable", "vu-meter", "vu-meter-horizontal", "oscilloscope", "spectrum", "gain", "filter", "curtis-filter", "comb-filter", "mixer", "esp-eq", "graphic-eq", ...LINKED_INPUT_TYPES, ...LINKED_OUTPUT_TYPES, "counter", "monoflop", "sample-hold", "burst-generator", "cv-in", "cv-out", "digital-in", "digital-out", "rgb-led", "mic-in", "wm8960-in", "chorus", "delay", "reverb-light"];
 
 
 
@@ -3704,7 +3700,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "midi-in") {
-    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0, pitchBendRangeCents: 200, pitchBendQuantizeCents: false, keyMask: MIDI_KEY_MASK_ALL });
+    midiInStates.set(id, { channel: null, voices: 1, overflowMode: "steal-oldest", glide: false, glideTime: 0, pitchBendRangeCents: 200, pitchBendQuantizeCents: false, keyMask: MIDI_KEY_MASK_ALL, program: 0 });
     midiVoiceSlotStates.set(id, {
       slots: [{ note: null, heldSince: 0, held: false }],
       holdCounter: 0,
@@ -3720,30 +3716,10 @@ function createWidget(type, label, x, y, forcedId) {
     voiceSlotsLabel.className = "midi-in-voice-slots hidden";
     voiceSlotsLabel.dataset.role = "midi-in-voice-slots";
     body.appendChild(voiceSlotsLabel);
-    el.appendChild(body);
-  }
-
-  if (type === "midi-program") {
-    midiProgramStates.set(id, { channel: 0, value: 0 });
-    audioEngine.createNode(id, type, { value: 0 });
-    const body = document.createElement("div");
-    body.className = "widget-instance-body midi-filter-body";
-    const label = document.createElement("label");
-    label.textContent = "Kanal";
-    const select = document.createElement("select");
-    select.dataset.role = "midi-program-channel";
-    for (let channel = 0; channel < 16; channel += 1) select.add(new Option(String(channel + 1), String(channel)));
-    select.addEventListener("change", () => {
-      pushHistorySnapshot();
-      midiProgramStates.get(id).channel = Number(select.value);
-      sendLiveParamUpdate(id, { channel: Number(select.value) });
-      markDirty();
-    });
-    label.appendChild(select);
-    const readout = document.createElement("output");
-    readout.dataset.role = "midi-program-value";
-    readout.textContent = "0";
-    body.append(label, readout);
+    const keyRangesLabel = document.createElement("span");
+    keyRangesLabel.className = "midi-in-key-ranges hidden";
+    keyRangesLabel.dataset.role = "midi-in-key-ranges";
+    body.appendChild(keyRangesLabel);
     el.appendChild(body);
   }
 
@@ -5237,7 +5213,7 @@ function createWidget(type, label, x, y, forcedId) {
       activeLayer: 0,
       layers: [createKnobLayer()],
       orientation: "vertical",
-      outputSide: "bottom",
+      outputSide: "top",
     });
     audioEngine.createNode(id, "knob", { value: 0 });
 
@@ -7063,7 +7039,6 @@ function removeWidget(id, force = false) {
   midiVoiceSlotStates.delete(id);
   midiSplitStates.delete(id);
   midiFilterStates.delete(id);
-  midiProgramStates.delete(id);
   multiplierStates.delete(id);
   adderStates.delete(id);
   divideStates.delete(id);
@@ -7159,76 +7134,6 @@ function clearCanvas() {
   const ids = Array.from(canvasContent.querySelectorAll(".widget-instance")).map((el) => el.id);
   ids.forEach((id) => removeWidget(id, true));
   drawConnections();
-}
-
-function loadInitTemplate() {
-  
-  
-  
-  
-  
-  resetAdditionalGeneratorPages();
-  pages.generator.title = "Sound Generation";
-  pageTab("generator").textContent = pages.generator.title;
-  pages.generator.toMasterUi = { x: 40, y: 40 };
-  switchPage("generator");
-  clearCanvas();
-  const oscEl = createWidget("fm-oscillator", "Oscillator", 100, 100);
-  ensureSingletonLinkWidget("generator");
-  const outputLinkEl = pages.generator.canvasContentEl.querySelector(
-    '[data-widget-type="audio-output-link"]'
-  );
-  ["in1", "in2"].forEach((portId) => {
-    connectionCounter += 1;
-    connections.push({
-      id: `conn-${connectionCounter}`,
-      from: { widgetId: oscEl.id, portId: "value" },
-      to: { widgetId: outputLinkEl.id, portId },
-      color: getConnectionColorForOutput(oscEl.id, "value"),
-    });
-    audioEngine.connect(oscEl.id, "value", outputLinkEl.id, portId);
-  });
-  drawConnections();
-
-  switchPage("fx");
-  clearCanvas();
-  ensureSingletonLinkWidget("fx");
-  const inputLinkEl = pages.fx.canvasContentEl.querySelector('[data-widget-type="audio-input-link"]');
-
-  
-  
-  const outDefs = [
-    { type: "audio-out", label: "JS Audio-Out" },
-    { type: "usb-out", label: "USB-Out" },
-  ];
-  if (globalThis.__es8311Enabled !== false) outDefs.push({ type: "es8311-out", label: "ES8311-Out" });
-  if (globalThis.__wm8960Enabled) outDefs.push({ type: "wm8960-out", label: "WM8960-Out" });
-  if (globalThis.__ns4168Enabled) outDefs.push({ type: "ns4168-out", label: "NS4168-Out" });
-  outDefs.forEach((def, index) => {
-    def.x = 60 + index * 260;
-    def.y = 100;
-  });
-  outDefs.forEach((def) => {
-    const outEl = createWidget(def.type, def.label, def.x, def.y);
-    [
-      { portId: "out1", channel: "left" },
-      { portId: "out2", channel: "right" },
-    ].forEach(({ portId, channel }) => {
-      connectionCounter += 1;
-      connections.push({
-        id: `conn-${connectionCounter}`,
-        from: { widgetId: inputLinkEl.id, portId },
-        to: { widgetId: outEl.id, portId: channel },
-        color: getConnectionColorForOutput(inputLinkEl.id, portId),
-      });
-      audioEngine.connect(inputLinkEl.id, portId, outEl.id, channel);
-    });
-  });
-  drawConnections();
-
-  switchPage("generator");
-  savePresetNow(); 
-  showToast("Default template loaded");
 }
 
 function startWidgetRename(labelSpan) {
@@ -7337,13 +7242,19 @@ function layoutPortsGrid(portsEl) {
     : paddingTop + outputRowStart * rowHeight;
   const outputCenterOffset = isAudioInputLink ? Math.max(0, (rowHeight - 14) / 2) : 0;
   const outputRowCount = outputRowStart + outRows.length + (isPan ? 1 : 0);
-  portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowCount)}px`;
+  // Midi-In: half a row between the CV outputs and the MIDI data outputs (MIDI, Note,
+  // Program), plus room below the last output so it does not touch the widget edge.
+  const midiDataStart = isMidiIn ? outRows.findIndex((row) => row.dataset.portId === "midi") : -1;
+  const midiDataGap = midiDataStart > 0 ? rowHeight / 2 : 0;
+  const bottomSpace = isMidiIn ? paddingTop + midiDataGap + rowHeight / 2 : 0;
+  portsEl.style.minHeight = `${rowHeight * Math.max(inRows.length, outputRowCount) + bottomSpace}px`;
   outRows.forEach((row, i) => {
     row.style.position = "absolute";
     // Pan has a slider on its second input row. Keep its second output
     // label below that row instead of painting it over the slider/value.
     const outputIndex = isPan && i === 1 ? 2 : i;
-    row.style.top = `${outputTop + outputCenterOffset + outputIndex * rowHeight}px`;
+    const gap = midiDataStart > 0 && i >= midiDataStart ? midiDataGap : 0;
+    row.style.top = `${outputTop + outputCenterOffset + outputIndex * rowHeight + gap}px`;
     row.style.right = "0";
   });
 }
@@ -7437,7 +7348,7 @@ function knobValueParamName(knobIndex, layerIndex = 0) {
 // Vertical sliders sit side by side, so their jacks go on the top or bottom edge;
 // horizontal sliders are stacked, so theirs go on the left or right edge.
 const KNOB_OUTPUT_SIDES = { vertical: ["top", "bottom"], horizontal: ["left", "right"] };
-const KNOB_DEFAULT_OUTPUT_SIDE = { vertical: "bottom", horizontal: "right" };
+const KNOB_DEFAULT_OUTPUT_SIDE = { vertical: "top", horizontal: "right" };
 
 function knobValidOutputSide(orientation, side) {
   return KNOB_OUTPUT_SIDES[orientation]?.includes(side) ? side : KNOB_DEFAULT_OUTPUT_SIDE[orientation];
@@ -10135,18 +10046,36 @@ function midiKeyAllowed(state, note) {
   if (typeof hex !== "string" || hex === MIDI_KEY_MASK_ALL || !Number.isInteger(note) || note < 0 || note > 127) return true;
   return midiKeyMaskToArray(hex)[note] === 1;
 }
-const midiFilterStates = new Map();
-const midiProgramStates = new Map();
 
-function updateMidiProgramValue(id, value) {
-  const state = midiProgramStates.get(id);
-  if (!state) return;
-  state.value = clamp(Math.round(Number(value) || 0), 0, 127);
-  const readout = document.getElementById(id)?.querySelector('[data-role="midi-program-value"]');
-  if (readout) readout.textContent = String(state.value);
-  audioEngine.setParam(id, "value", state.value, 0);
-  propagate(id, "value", state.value);
+function midiNoteName(note) {
+  return `${WAVE_PLAYER_NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
 }
+
+// Selected keys as text, e.g. "C3–C5, F#6" ("" = every key, "none" = no key).
+function midiKeyRangesText(bits) {
+  const ranges = [];
+  let start = null;
+  for (let n = 0; n <= 128; n += 1) {
+    const on = n <= 127 && bits[n] === 1;
+    if (on && start === null) start = n;
+    if (!on && start !== null) {
+      ranges.push(start === n - 1 ? midiNoteName(start) : `${midiNoteName(start)}–${midiNoteName(n - 1)}`);
+      start = null;
+    }
+  }
+  if (ranges.length === 1 && ranges[0] === "C-1–G9") return "";
+  return ranges.length === 0 ? "none" : ranges.join(", ");
+}
+
+function updateMidiInKeyRangesLabel(widgetId) {
+  const label = document.getElementById(widgetId)?.querySelector('[data-role="midi-in-key-ranges"]');
+  const state = midiInStates.get(widgetId);
+  if (!label || !state) return;
+  const text = midiKeyRangesText(midiKeyMaskToArray(state.keyMask));
+  label.textContent = text ? `Keys: ${text}` : "";
+  label.classList.toggle("hidden", text === "");
+}
+const midiFilterStates = new Map();
 
 
 
@@ -10254,6 +10183,7 @@ function updateMidiInControls(widgetId) {
     if (row) row.classList.toggle("disabled", !mono);
   });
   updateMidiInVoiceSlotsLabel(widgetId);
+  updateMidiInKeyRangesLabel(widgetId);
 }
 
 function setMidiInVoices(widgetId, voices) {
@@ -10309,7 +10239,8 @@ function renderMidiInKeyEditor() {
     const on = n <= 127 && midiInKeyEdit[n] === 1;
     if (on && start === null) start = n;
     if (!on && start !== null) {
-      zones.push({ from: start, to: n - 1, color: "#f87171" });
+      // Muted grey, not a signal colour: selected keys are the normal state, not an error.
+      zones.push({ from: start, to: n - 1, color: "#94a3b8" });
       start = null;
     }
   }
@@ -10327,7 +10258,8 @@ function renderMidiInKeyEditor() {
   }));
   let count = 0;
   for (let n = 0; n <= 127; n += 1) if (midiInKeyEdit[n] === 1) count += 1;
-  midiInKeyCount.textContent = `${count} of 128 keys`;
+  const ranges = midiKeyRangesText(midiInKeyEdit);
+  midiInKeyCount.textContent = `${count} of 128 keys${ranges ? ` (${ranges})` : ""}`;
 }
 
 // Shows incoming notes on the key picker while the dialog is open (same as the Midi-Split editor).
@@ -10388,6 +10320,7 @@ document.getElementById("midiInSettingsSave").addEventListener("click", () => {
     state.pitchBendRangeCents = Number.isFinite(volts) ? clamp(volts, 0, 5) * 1200 : 200;
     state.pitchBendQuantizeCents = midiInPitchBendQuantizeInput.checked === true;
     state.keyMask = midiKeyMaskToHex(midiInKeyEdit);
+    updateMidiInKeyRangesLabel(pendingMidiInId);
     sendLiveParamUpdate(pendingMidiInId, {
       pitchBendRangeCents: state.pitchBendRangeCents,
       pitchBendQuantizeCents: state.pitchBendQuantizeCents,
@@ -11702,7 +11635,7 @@ function refreshControlGraph() {
   const sources = [];
   const push = (widgetId, portId, value) => sources.push({ widgetId, portId, value });
   constStates.forEach((state, id) => push(id, "value", state.value));
-  midiProgramStates.forEach((state, id) => push(id, "value", state.value));
+  midiInStates.forEach((state, id) => push(id, "program", state.program));
   document.querySelectorAll('[data-widget-type="master-volume"]').forEach(el => push(el.id, "value", masterVolume * CV_MAX_VOLTS));
   knobStates.forEach((state, id) => {
     const layerIndex = state.activeLayer;
@@ -19774,6 +19707,10 @@ function openWidgetPicker(x, y, clientX, clientY) {
   pendingWidgetPos = { x, y };
   widgetPickerList.innerHTML = "";
   const allowed = pages[currentPageName].allowedTypes;
+  // Every page lists the same nodes in the same places; ones not allowed on this page are
+  // greyed out instead of left out, so the layout never shifts between pages.
+  const listed = new Set([...GENERATOR_PAGE_TYPES, ...FX_PAGE_TYPES, ...DUAL_PAGE_TYPES]);
+  const otherPageTitle = pages[currentPageName].kind === "generator" ? pages.fx.title : "Sound Generation";
 
   // Fixed columns instead of CSS multi-column: the first categories (MIDI, Generator,
   // Modulator) head columns 1..n side by side, every later one goes under the currently
@@ -19789,7 +19726,7 @@ function openWidgetPicker(x, y, clientX, clientY) {
   let placed = 0;
 
   WIDGET_CATEGORIES.forEach((cat) => {
-    const typesHere = cat.types.filter((t) => allowed.includes(t));
+    const typesHere = cat.types.filter((t) => listed.has(t));
     if (typesHere.length === 0) return;
     const stack = placed < columnCount ? stacks[placed] : stacks.reduce((a, b) => (b.rows < a.rows ? b : a));
     placed += 1;
@@ -19833,12 +19770,13 @@ function openWidgetPicker(x, y, clientX, clientY) {
       });
       item.appendChild(helpBtn);
 
+      const wrongPage = !allowed.includes(type);
       const outputAlreadyPlaced = OUTPUT_SINGLETON_TYPES.includes(type) &&
         pages.fx.canvasContentEl.querySelector(`.widget-instance[data-widget-type="${type}"]`);
-      if (outputAlreadyPlaced) {
+      if (wrongPage || outputAlreadyPlaced) {
         item.classList.add("disabled");
         item.setAttribute("aria-disabled", "true");
-        item.title = `${def.label} is already placed`;
+        item.title = wrongPage ? `${def.label} is only available on the ${otherPageTitle} page` : `${def.label} is already placed`;
       } else {
         item.addEventListener("click", () => {
           pushHistorySnapshot();
@@ -22998,8 +22936,10 @@ function routeRawMidi(sourceId, portId, data, path = new Set(), delivered = new 
 function routeMidiToWidgets(data) {
   if (data.type !== "midi") return;
   if (data.midiType === "program_change" && Number.isInteger(data.program) && data.program >= 0 && data.program <= 127) {
-    withDeviceSyncMuted(() => midiProgramStates.forEach((state, id) => {
-      if (data.channel === state.channel) updateMidiProgramValue(id, data.program);
+    withDeviceSyncMuted(() => midiInStates.forEach((state, id) => {
+      if (state.channel !== null && data.channel !== state.channel) return;
+      state.program = data.program;
+      propagate(id, "program", state.program);
     }));
   }
   if (data.midiType === "note_on" && data.velocity === 0) data = { ...data, midiType: "note_off" };
@@ -23079,18 +23019,6 @@ const WIDGET_ENGINES = {
       refreshFm8Summary(id);
     },
   },
-  "midi-program": {
-    getParams: (id) => ({ ...midiProgramStates.get(id) }),
-    applyParams: (id, params) => {
-      const state = midiProgramStates.get(id);
-      if (!state || !params) return;
-      const channel = Number(params.channel);
-      state.channel = Number.isInteger(channel) && channel >= 0 && channel < 16 ? channel : 0;
-      const select = document.getElementById(id)?.querySelector('[data-role="midi-program-channel"]');
-      if (select) select.value = String(state.channel);
-      updateMidiProgramValue(id, params.value);
-    },
-  },
   annotation: {
     getParams: (id) => getAnnotationParams(id),
     applyParams: (id, params) => applyAnnotationParams(id, params),
@@ -23135,6 +23063,7 @@ const WIDGET_ENGINES = {
       const bendRange = Number(state.pitchBendRangeCents ?? 200);
       state.pitchBendRangeCents = Number.isFinite(bendRange) ? clamp(bendRange, 0, 6000) : 200;
       state.pitchBendQuantizeCents = state.pitchBendQuantizeCents === true;
+      state.program = clamp(Math.round(Number(state.program) || 0), 0, 127);
       if (typeof state.keyMask !== "string" || !/^[0-9a-f]{32}$/i.test(state.keyMask)) state.keyMask = MIDI_KEY_MASK_ALL;
       resizeVoiceSlots(id, state.voices);
       updateMidiInControls(id);
@@ -24641,16 +24570,13 @@ async function saveToServer(name) {
   }
 }
 
-// True while the "New with template" draft is open: it lives in the browser until Save As.
-let unsavedTemplate = false;
-
 async function savePresetNow() {
 
 
 
 
 
-  if (restoringPreset || unsavedTemplate) return;
+  if (restoringPreset) return;
   // A cable-driven change (e.g. a CV into MIDI In's "voices") must not rewrite the preset on
   // the device over and over - see deliverToWidget().
   if (deviceSyncMuteDepth > 0) return;
@@ -24719,159 +24645,10 @@ async function handleExplicitSave() {
   }
 }
 
-const NEW_PRESET_TEMPLATE = {
-  "schemaVersion": 4,
-  "masterClock": { "bpm": 120 },
-  "title": "",
-  "description": "",
-  "longDescription": "",
-  "author": "",
-  "uiTabOrder": ["generator", "fx"],
-  "uiPages": [
-    {
-      "id": "generator",
-      "title": "Sound Generation",
-      "toMasterUi": { "x": -160, "y": -300 }
-    }
-  ],
-  "pages": {
-    "generator": {
-      "widgets": [
-        {
-          "id": "widget-4",
-          "type": "midi-in",
-          "label": "Midi-In",
-          "ui": { "x": -1440, "y": -400, "pageId": "generator" },
-          "params": {
-            "channel": null,
-            "voices": 4,
-            "overflowMode": "steal-oldest",
-            "glide": false,
-            "glideTime": 0,
-            "pitchBendRangeCents": 200,
-            "pitchBendQuantizeCents": false,
-            "keyMask": "ffffffffffffffffffffffffffffffff"
-          }
-        },
-        {
-          "id": "widget-12",
-          "type": "fm-oscillator",
-          "label": "Oscillator",
-          "ui": { "x": -660, "y": -380, "pageId": "generator" },
-          "params": {
-            "waveType": "sine",
-            "amplitude": 1,
-            "tune": 5,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-13",
-          "type": "adsr",
-          "label": "ADSR",
-          "ui": { "x": -1040, "y": -180, "pageId": "generator" },
-          "params": {
-            "attack": 0.001,
-            "decay": 2.237624729269802,
-            "sustain": 0.7421052631578947,
-            "release": 0.8851485148514847,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
-            "livePhase": "idle",
-            "liveLevel": 0,
-            "liveSegmentStartedAt": 151833.89999999106,
-            "liveSegmentStartLevel": 0.9654353875496001,
-            "liveGate": false,
-            "liveVoiceIndex": 0,
-            "graphCollapsed": false
-          }
-        },
-        {
-          "id": "widget-1",
-          "type": "audio-output-link",
-          "label": "To Master",
-          "ui": { "x": -160, "y": -300 },
-          "params": { "labels": ["", "", "", "", "", "", "", ""] }
-        }
-      ],
-      "connections": [
-        { "id": "conn-24", "from": { "widgetId": "widget-4", "portId": "pitchCv" }, "to": { "widgetId": "widget-12", "portId": "pitchCv" }, "color": "#a3e635" },
-        { "id": "conn-25", "from": { "widgetId": "widget-4", "portId": "gate" }, "to": { "widgetId": "widget-13", "portId": "gate" }, "color": "#4ade80" },
-        { "id": "conn-26", "from": { "widgetId": "widget-13", "portId": "out" }, "to": { "widgetId": "widget-12", "portId": "amplitude" }, "color": "#2dd4bf" },
-        { "id": "conn-27", "from": { "widgetId": "widget-12", "portId": "value" }, "to": { "widgetId": "widget-1", "portId": "in1" }, "color": "#22d3ee" }
-      ]
-    },
-    "fx": {
-      "widgets": [
-        {
-          "id": "widget-2",
-          "type": "audio-input-link",
-          "label": "Audio Outputs",
-          "ui": { "x": -1500, "y": -420, "pageId": "fx" },
-          "params": {
-            "gains": [10, 10, 10, 10, 10, 10, 10, 10],
-            "labels": ["", "", "", "", "", "", "", ""]
-          }
-        },
-        {
-          "id": "widget-6",
-          "type": "es8311-out",
-          "label": "ES8311-Out",
-          "ui": { "x": -800, "y": -240, "pageId": "fx" },
-          "params": { "muted": false, "gain": 10 }
-        },
-        {
-          "id": "widget-7",
-          "type": "audio-out",
-          "label": "JS Audio-Out",
-          "ui": { "x": -800, "y": -60, "pageId": "fx" },
-          "params": { "muted": false, "gain": 10 }
-        },
-        {
-          "id": "widget-8",
-          "type": "wm8960-out",
-          "label": "WM8960-Out",
-          "ui": { "x": -800, "y": -420, "pageId": "fx" },
-          "params": { "muted": false, "gain": 10 }
-        },
-        {
-          "id": "widget-11",
-          "type": "usb-out",
-          "label": "USB-Out",
-          "ui": { "x": -800, "y": 120, "pageId": "fx" },
-          "params": { "muted": false, "gain": 10 }
-        }
-      ],
-      "connections": [
-        { "id": "conn-20", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-11", "portId": "left" }, "color": "#f87171" },
-        { "id": "conn-21", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-11", "portId": "right" }, "color": "#f87171" },
-        { "id": "conn-38", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-8", "portId": "left" }, "color": "#f87171" },
-        { "id": "conn-39", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-8", "portId": "right" }, "color": "#f87171" },
-        { "id": "conn-42", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-6", "portId": "left" }, "color": "#f87171" },
-        { "id": "conn-43", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-6", "portId": "right" }, "color": "#f87171" },
-        { "id": "conn-44", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-7", "portId": "left" }, "color": "#f87171" },
-        { "id": "conn-45", "from": { "widgetId": "widget-2", "portId": "out1" }, "to": { "widgetId": "widget-7", "portId": "right" }, "color": "#f87171" }
-      ]
-    }
-  },
-  "firmwareVersion": "0.33"
-};
 
-// options.template: a preset object to show as the new, unsaved preset instead of the built-in init layout.
-async function handleNewPreset({ template = null } = {}) {
+
+// options.template: base name of the preset JSON in data/static/presets/ the new preset starts from.
+async function handleNewPreset({ template = "empty" } = {}) {
   const generatorWidgetCount = generatorPageNames().reduce(
     (count, name) => count + pages[name].canvasContentEl.querySelectorAll('.widget-instance:not([data-widget-type="audio-output-link"])').length,
     0
@@ -24884,16 +24661,22 @@ async function handleNewPreset({ template = null } = {}) {
   
   
   
-  currentPresetName = null;
-  unsavedTemplate = false;
-  presetDescription = { title: "", description: "", longDescription: "", author: "" };
-  if (template) {
-    unsavedTemplate = true;
-    await applyPresetData(template, { fitToView: true });
-    showToast("Template loaded - use Save As to keep it");
-  } else {
-    loadInitTemplate();
+  let data;
+  try {
+    const res = await fetch(`/static/presets/${template}.json`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    appendLog(`Template "${template}" could not be loaded: ${err.message}`);
+    showToast("Template could not be loaded");
+    return;
   }
+  currentPresetName = null;
+  presetDescription = { title: "", description: "", longDescription: "", author: "" };
+  await applyPresetData(data, { fitToView: true });
+  // Unnamed slot (current.json): the device builds its graph from it, so it plays right away.
+  await savePresetNow();
+  showToast(template === "empty" ? "New empty preset" : "Template loaded");
   refreshPresetMenu();
 }
 
@@ -25454,7 +25237,6 @@ async function loadPresetOnStartup() {
     const headerName = res.headers.get("X-Preset-Name") || "";
     const data = await res.json();
     currentPresetName = headerName || null;
-    unsavedTemplate = false;
     await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {
@@ -25484,7 +25266,6 @@ async function loadPresetByName(name, { activate = true } = {}) {
     const data = await res.json();
     if (generation !== presetLoadGeneration) return;
     currentPresetName = headerName || null;
-    unsavedTemplate = false;
     await applyPresetData(data, { fitToView: true });
     await refreshPresetMenu();
   } catch (err) {

@@ -733,7 +733,6 @@ inline int audioOutIndex(NodeType type, const char *portName)
         // block needed.
         return -1;
     case NodeType::Const:
-    case NodeType::MidiProgram:
         // Const exposes only its scalar "value" through ControlRoute.
         return -1;
     case NodeType::Button:
@@ -1105,7 +1104,7 @@ inline bool isGlobalOnly(NodeType type)
 {
     return type == NodeType::EspEq || type == NodeType::GraphicEq || type == NodeType::SoundFontPlayer || type == NodeType::MdaPiano || type == NodeType::Delay ||
            type == NodeType::ReverbLight || type == NodeType::Bitcrusher || type == NodeType::WaveFolder || type == NodeType::Overdrive ||
-           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower || type == NodeType::MicIn || type == NodeType::Wm8960In || type == NodeType::MidiProgram;
+           type == NodeType::DrumSequencer || type == NodeType::EnvelopeFollower || type == NodeType::MicIn || type == NodeType::Wm8960In;
 }
 
 // True if input port `portIdx` on `type` must never be fed by a genuinely

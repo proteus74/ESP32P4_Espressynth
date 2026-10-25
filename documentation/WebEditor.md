@@ -83,12 +83,14 @@ Double-click a node to open its settings. Settings hold values that are not patc
 
 | Entry | What it does |
 | --- | --- |
-| New | Starts an empty patch with one oscillator wired to the outputs |
-| New with template | Loads the default template (MIDI-In → ADSR → Oscillator) as an unsaved draft. The draft is only written to the device when you save it under a new name with Save As |
+| New | Starts an empty patch: only the "To Master" link on Sound Generation and the "Audio Outputs" link on FX & Masteroutput |
+| New with default template | Starts a new patch from the default template (MIDI-In → ADSR → Oscillator), plays on the device right away. Keep it with Save As |
 | Save / Save As | Stores the preset on the device. Save asks for a name if the patch has none yet |
 | Export / Import | Downloads the preset as JSON, or loads a JSON file from your computer |
 | File Explorer | Browses the device's flash and SD card |
 | Settings | Device name, MIDI controls, network, Bluetooth and backup |
+
+Both start presets are plain preset files in `data/static/presets/` (`empty.json`, `default.json`); replace them to change what New loads.
 
 ## View menu
 

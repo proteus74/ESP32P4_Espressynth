@@ -137,8 +137,6 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
     case NodeType::Const:
         nodes::constant::render(inst, frames);
         break;
-    case NodeType::MidiProgram:
-        break; // Event-driven scalar output, delivered through ControlRoute.
     case NodeType::Knob:
         nodes::knob::render(inst, frames);
         break;

@@ -98,6 +98,46 @@ struct HammondState
     uint8_t modulationStride = 4;
 };
 
+// One drawbar for one block, frequency constant within the block: a complex
+// phasor rotated by the per-sample increment, weighted by gainAt(i) and ADDED
+// into out[]. Replaces sineLookup() per drawbar-sample (two table loads plus
+// index/fraction arithmetic) by four multiplies and no memory traffic beyond
+// out[] itself; drawbar-outer so phasor, rotation and gain stay in registers
+// instead of being re-fetched through activeDrawbar[]/phase[]/dbBuf[] per
+// sample. Start angle and rotation come from the LUT;
+// float error over one block stays below 1e-4 (angle and magnitude) and the
+// integer phase the caller keeps advancing re-seeds the phasor next block,
+// so nothing accumulates. Same sample alignment as before: out[i] holds
+// sin(phase + (i + 1) * increment), the phase accumulator advances first.
+// sineLookup plus the lerp's second-order term: linear interpolation sits
+// below sine's arc by sin(x)/2 * frac * (1 - frac) * h^2 (h = table step), so
+// scaling the lerp back up leaves ~1e-9 instead of ~3e-7. Only for the per-
+// block rotation coefficients, whose error compounds over the block (~4x
+// lower block error than plain sineLookup, measured in simulation).
+inline float rotationCoefficient(uint32_t angle)
+{
+    constexpr float kStep = 2.0f * kDspPi / static_cast<float>(synth::kSineLutSize);
+    const float frac = static_cast<float>(angle & ((1u << dsp::kSineLutFracBits) - 1)) * dsp::kSineLutFracScale;
+    return sineLookup(angle) * (1.0f + 0.5f * frac * (1.0f - frac) * (kStep * kStep));
+}
+
+template <typename GainAt>
+IRAM_ATTR inline void accumulateDrawbar(float *out, size_t frames, uint32_t phase, uint32_t increment, GainAt gainAt)
+{
+    constexpr uint32_t kQuarterTurn = 0x40000000u;
+    float im = sineLookup(phase);
+    float re = sineLookup(phase + kQuarterTurn);
+    const float s = rotationCoefficient(increment);
+    const float c = rotationCoefficient(increment + kQuarterTurn);
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float nextRe = re * c - im * s;
+        im = re * s + im * c;
+        re = nextRe;
+        out[i] += im * gainAt(i);
+    }
+}
+
 // IRAM_ATTR: same reason as Oscillator's render() (see DspPrimitives.h's sineLookup()
 // comment). Measured on CrowPanel 5": from flash, a 5-voice Hammond block took ~1.0 ms
 // median but up to ~2.9 ms whenever display/Wi-Fi traffic evicted it from the shared L2
@@ -176,46 +216,32 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float baseAmp = (controlPortConnected(inst, kAmplitudePort) ? s.amplitude : 0.0f) +
                          (amplitudeConstant ? cv::vcaGain(constantAmplitude, false) : 0.0f);
 
-    // Two branches mirroring Oscillator's own audio-rate-vs-static split
-    // (OscillatorNode.h) - and for the exact same reason: cv::hzFromPitchCv()
-    // is LUT+interpolation (cheap once), but wasteful recomputed 128x/block
-    // when pitch/tune are NOT actually being modulated at audio rate, which
-    // is the common case. Getting this wrong here is nine times worse than
-    // getting it wrong in Oscillator, since every recompute feeds all nine
-    // independent phase accumulators below.
+    // Frequency modulated at audio rate (pitch/tune cable or MIDI glide): the
+    // nine phase steps change per modulationStride samples, so this stays the
+    // sample-outer integer-phase loop. Rare for an organ - the usual case
+    // (pitch from Midi-In, tune static) takes the constant-frequency path
+    // below, which also covers an audio-rate amplitude (ADSR) since that is a
+    // per-sample multiply after the drawbar sum, not a per-drawbar cost.
     const bool frequencyModulated = pitchNeedsAudioRate || tuneNeedsAudioRate;
-    if (frequencyModulated || amplitudeNeedsAudioRate)
+    if (frequencyModulated)
     {
         const size_t modulationStride = static_cast<size_t>(clampf(static_cast<float>(s.modulationStride), 1.0f, 16.0f));
         size_t nextModulationSample = 0;
         float amp = baseAmp;
         uint32_t phaseIncrement[kDrawbarCount] = {};
-        if (!frequencyModulated)
-        {
-            const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
-            const float tuneVolts = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
-            const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
-            for (int k = 0; k < kDrawbarCount; ++k)
-            {
-                phaseIncrement[k] = phaseStep(hz, s.ratio[k]);
-            }
-        }
         for (size_t i = 0; i < frames; ++i)
         {
             if (i == nextModulationSample)
             {
                 nextModulationSample += modulationStride;
-                if (frequencyModulated)
+                const float pitchCv = pitchNeedsAudioRate ? portSample(inst, kPitchCvPort, i)
+                                     : (pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts));
+                const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, kTunePort, i)
+                                       : (tuneAudioFed ? constantTuneVolts : s.tuneVolts);
+                const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
+                for (int k = 0; k < kDrawbarCount; ++k)
                 {
-                    const float pitchCv = pitchNeedsAudioRate ? portSample(inst, kPitchCvPort, i)
-                                         : (pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts));
-                    const float tuneVolts = tuneNeedsAudioRate ? portSample(inst, kTunePort, i)
-                                           : (tuneAudioFed ? constantTuneVolts : s.tuneVolts);
-                    const float hz = cv::hzFromPitchCv(pitchCv + (tuneVolts - kCenterVolts));
-                    for (int k = 0; k < kDrawbarCount; ++k)
-                    {
-                        phaseIncrement[k] = phaseStep(hz, s.ratio[k]);
-                    }
+                    phaseIncrement[k] = phaseStep(hz, s.ratio[k]);
                 }
                 amp = baseAmp +
                       (amplitudeNeedsAudioRate ? cv::vcaGain(portSample(inst, kAmplitudePort, i), false) : 0.0f);
@@ -230,12 +256,6 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
                 s.phase[k] += phaseIncrement[k];
             }
 
-            // Only the ACTIVE drawbars pay for sineLookup + gain/smoothing -
-            // same activeDrawbar[]/activeDrawbarCount restriction the static
-            // (non-modulated) path below already used; a typical registration
-            // (e.g. classic 888000000) only has 3-4 of the nine drawbars
-            // active at all (plan section 5: "im modulierten Pfad ...
-            // aktive Drawbars stärker nutzen").
             float sum = 0.0f;
             for (uint8_t activeIndex = 0; activeIndex < activeDrawbarCount; ++activeIndex)
             {
@@ -264,7 +284,6 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const float pitchCv = pitchAudioFed ? constantPitchCv : (pitchControlFed ? portSample(inst, kPitchCvPort, 0) : kCenterVolts);
     const float tuneVoltsConst = tuneAudioFed ? constantTuneVolts : s.tuneVolts;
     const float hz = cv::hzFromPitchCv(pitchCv + (tuneVoltsConst - kCenterVolts));
-    const float amp = baseAmp;
     uint32_t phaseIncrement[kDrawbarCount];
     for (int k = 0; k < kDrawbarCount; ++k)
     {
@@ -272,7 +291,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     }
     // A silent amplitude block still advances tonewheels and manual smoothers.
     // Do not freeze their state or skip a pitch-modulated block.
-    if (amp == 0.0f)
+    if (!amplitudeNeedsAudioRate && baseAmp == 0.0f)
     {
         for (int k = 0; k < kDrawbarCount; ++k)
         {
@@ -287,36 +306,59 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
         memset(inst.outL, 0, frames * sizeof(float));
         return;
     }
-    for (size_t i = 0; i < frames; ++i)
+
+    // Drawbar sum first (drawbar-outer, see accumulateDrawbar), then one pass
+    // for amplitude, gain and normalization.
+    memset(inst.outL, 0, frames * sizeof(float));
+    for (uint8_t activeIndex = 0; activeIndex < activeDrawbarCount; ++activeIndex)
     {
-        float sum = 0.0f;
-        for (uint8_t activeIndex = 0; activeIndex < activeDrawbarCount; ++activeIndex)
+        const int k = activeDrawbar[activeIndex];
+        if (dbBuf[k] != nullptr)
         {
-            const int k = activeDrawbar[activeIndex];
-            s.phase[k] += phaseIncrement[k];
-
-            if (dbBuf[k] != nullptr)
-            {
-                sum += sineLookup(s.phase[k]) * cv::vcaGain(dbBuf[k][i], false);
-            }
-            else
-            {
-                const float drawbarGain = dbSmoothing[k] ? s.drawbarSmooth[k].process(dbTarget[k]) : dbTarget[k];
-                sum += sineLookup(s.phase[k]) * drawbarGain;
-            }
+            // Live cable: CV arrives per sample, like Oscillator's wired
+            // "gain" - never skipped, regardless of level.
+            const float *cable = dbBuf[k];
+            accumulateDrawbar(inst.outL, frames, s.phase[k], phaseIncrement[k],
+                              [cable](size_t i) { return cv::vcaGain(cable[i], false); });
         }
-
-        const float gainMul =
-            gainFed ? cv::vcaGain(portSample(inst, kGainPort, i), false)
-                    : (gainSmoothing ? s.gainSmooth.process(gainTarget) : gainTarget);
-        inst.outL[i] = sum * kDrawbarNorm * amp * gainMul;
+        else if (dbSmoothing[k])
+        {
+            OnePoleLowpass &smooth = s.drawbarSmooth[k];
+            const float target = dbTarget[k];
+            accumulateDrawbar(inst.outL, frames, s.phase[k], phaseIncrement[k],
+                              [&smooth, target](size_t) { return smooth.process(target); });
+        }
+        else
+        {
+            const float drawbarGain = dbTarget[k];
+            accumulateDrawbar(inst.outL, frames, s.phase[k], phaseIncrement[k],
+                              [drawbarGain](size_t) { return drawbarGain; });
+        }
     }
     for (int k = 0; k < kDrawbarCount; ++k)
     {
-        if (!dbActive[k])
+        s.phase[k] += phaseIncrement[k] * static_cast<uint32_t>(frames);
+    }
+
+    const float norm = kDrawbarNorm * baseAmp;
+    if (!amplitudeNeedsAudioRate && !gainFed && !gainSmoothing)
+    {
+        const float scale = norm * gainTarget;
+        for (size_t i = 0; i < frames; ++i)
         {
-            s.phase[k] += phaseIncrement[k] * static_cast<uint32_t>(frames);
+            inst.outL[i] *= scale;
         }
+        return;
+    }
+    const float *ampPort = amplitudeNeedsAudioRate ? inst.inPorts[kAmplitudePort] : nullptr;
+    const float *gainPort = gainFed ? inst.inPorts[kGainPort] : nullptr;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        const float amp = ampPort != nullptr ? kDrawbarNorm * (baseAmp + cv::vcaGain(ampPort[i], false)) : norm;
+        const float gainMul =
+            gainPort != nullptr ? cv::vcaGain(gainPort[i], false)
+                                : (gainSmoothing ? s.gainSmooth.process(gainTarget) : gainTarget);
+        inst.outL[i] *= amp * gainMul;
     }
 }
 

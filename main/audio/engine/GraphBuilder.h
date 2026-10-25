@@ -38,7 +38,6 @@
 #include "nodes/SampleHoldNode.h"
 #include "nodes/MonoflopNode.h"
 #include "nodes/ConstNode.h"
-#include "nodes/MidiProgramNode.h"
 #include "features/io/i2c_bus_manager.hpp"
 #include "nodes/CurtisFilterNode.h"
 #include "nodes/CombFilterNode.h"
@@ -777,9 +776,6 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::Const:
         nodes::constant::build(inst, p);
         break;
-    case NodeType::MidiProgram:
-        nodes::midiprogram::build(inst, p);
-        break;
     case NodeType::Knob:
         nodes::knob::build(inst, p);
         break;
@@ -1352,6 +1348,8 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 kind = ControlRoute::Kind::MidiAftertouch;
             else if (strcmp(cd.fromPort, "pitchBend") == 0)
                 kind = ControlRoute::Kind::MidiPitchBend;
+            else if (strcmp(cd.fromPort, "program") == 0 && fromType == NodeType::MidiIn)
+                kind = ControlRoute::Kind::MidiProgram;
             else if (strcmp(cd.fromPort, "midi") == 0 &&
                      (toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano || toType == NodeType::MidiFilter) &&
                      strcmp(cd.toPort, "midi") == 0)
@@ -1521,15 +1519,14 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         // Const's scalar Value output is a control route. It deliberately has
         // no audio-rate output port; targets receive the numeric value in
         // their named parameter and, when applicable, controlValue buffer.
-        if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume || fromType == NodeType::MidiProgram) &&
+        if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume) &&
             (strcmp(cd.fromPort, "value") == 0 || strcmp(cd.fromPort, "audio") == 0) &&
             g->controlRouteCount < synth::kMaxConnections)
         {
             ControlRoute &route = g->controlRoutes[g->controlRouteCount++];
             route.sourceWidget = static_cast<uint16_t>(fromIdx);
             route.targetWidget = static_cast<uint16_t>(toIdx);
-            route.kind = fromType == NodeType::MasterVolume ? ControlRoute::Kind::MasterVolume :
-                fromType == NodeType::MidiProgram ? ControlRoute::Kind::MidiProgram : ControlRoute::Kind::Const;
+            route.kind = fromType == NodeType::MasterVolume ? ControlRoute::Kind::MasterVolume : ControlRoute::Kind::Const;
             snprintf(route.paramName, sizeof(route.paramName), "%s", cd.toPort);
             if (toPort >= 0)
             {
@@ -1617,7 +1614,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         }
         else if (route.kind == ControlRoute::Kind::MidiProgram)
         {
-            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].midiProgram.value;
+            initial = g->instances[g->widgets[route.sourceWidget].instanceBase].midiIn.program;
         }
         else if (route.kind == ControlRoute::Kind::MasterVolume)
         {

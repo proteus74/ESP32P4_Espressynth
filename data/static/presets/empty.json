@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 4,
+  "masterClock": {
+    "bpm": 120
+  },
+  "title": "",
+  "description": "",
+  "longDescription": "",
+  "author": "",
+  "uiTabOrder": [
+    "generator",
+    "fx"
+  ],
+  "uiPages": [
+    {
+      "id": "generator",
+      "title": "Sound Generation",
+      "toMasterUi": {
+        "x": -260,
+        "y": -260
+      }
+    }
+  ],
+  "pages": {
+    "generator": {
+      "widgets": [
+        {
+          "id": "widget-73",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": {
+            "x": -260,
+            "y": -260
+          },
+          "params": {
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        }
+      ],
+      "connections": []
+    },
+    "fx": {
+      "widgets": [
+        {
+          "id": "widget-74",
+          "type": "audio-input-link",
+          "label": "Audio Outputs",
+          "ui": {
+            "x": -260,
+            "y": -220,
+            "pageId": "fx"
+          },
+          "params": {
+            "gains": [
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10
+            ],
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        }
+      ],
+      "connections": []
+    }
+  },
+  "firmwareVersion": "0.33"
+}

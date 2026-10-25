@@ -34,7 +34,6 @@ export const NODE_ICONS = {
   "midi-in": { color: "#8b5cf6", svg: svg(ring(50, 50, 38) + dot(28, 50) + dot(72, 50) + dot(34, 32) + dot(66, 32) + dot(50, 25) + path("M42,86 L58,86")) },
   "midi-split": { color: "#a855f7", svg: svg(path("M8,50 L40,50 L88,22 M40,50 L88,78 M74,16 L88,22 L82,36 M82,64 L88,78 L74,84")) },
   "midi-filter": { color: "#6366f1", svg: svg(path("M12,16 L88,16 L58,52 L58,86 L42,76 L42,52 Z")) },
-  "midi-program": { color: "#ec4899", svg: svg(path("M36,26 L88,26 M36,50 L88,50 M36,74 L88,74") + path("M10,38 L22,50 L10,62 Z", 'fill="currentColor"')) },
 
   // ---- Generator ----
   "fm-oscillator": { color: "#06b6d4", svg: svg(path("M6,50 Q28,8 50,50 T94,50", 'stroke-width="9"')) },

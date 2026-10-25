@@ -160,7 +160,7 @@ struct ControlRoute
         Button,
         UpDownButton,
         MasterVolume,
-        MidiProgram,
+        MidiProgram, // MidiIn's "program" output: last Program Change (0xC), raw 0-127
     };
 
     uint16_t sourceWidget = 0; // midi-in, const, knob, or button widget index
@@ -1421,11 +1421,11 @@ inline void Graph::handleMidiEvent(const UsbMidiEvent &event)
     {
         for (uint16_t w = 0; w < widgetCount; ++w)
         {
-            if (widgets[w].type != NodeType::MidiProgram) continue;
-            auto &program = instances[widgets[w].instanceBase].midiProgram;
-            if (program.channel != (event.status & 0x0F)) continue;
-            program.value = event.data1;
-            pushControlRouteValue(*this, w, ControlRoute::Kind::MidiProgram, program.value);
+            if (widgets[w].type != NodeType::MidiIn) continue;
+            MidiInState &m = instances[widgets[w].instanceBase].midiIn;
+            if (m.channel >= 0 && m.channel != (event.status & 0x0F)) continue;
+            m.program = event.data1;
+            pushControlRouteValue(*this, w, ControlRoute::Kind::MidiProgram, m.program);
         }
     }
 
@@ -2641,11 +2641,6 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
     {
         pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::Const,
                                instances[slot.instanceBase].constant.value);
-    }
-    else if (slot.type == NodeType::MidiProgram)
-    {
-        pushControlRouteValue(*this, static_cast<uint16_t>(widgetIdx), ControlRoute::Kind::MidiProgram,
-                              instances[slot.instanceBase].midiProgram.value);
     }
     else if ((slot.type == NodeType::Switch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectIn2"))) ||
              (slot.type == NodeType::OutputSwitch && cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(paramsObj, "selectOut2"))))

@@ -215,6 +215,7 @@ button:hover {
   font-weight: normal;
   border-radius: 0;
   text-align: left;
+  white-space: nowrap;
   padding: 0.5rem 1rem;
 }
 
@@ -1535,7 +1536,7 @@ body.show-node-cpu .widget-cpu-badge {
   align-items: center;
   gap: 0.3rem;
   color: #cbd5e1;
-  font-size: 0.7rem;
+  font-size: 0.78rem;
 }
 
 .drum-sequencer-port-in {
@@ -2389,7 +2390,9 @@ body.show-node-cpu .widget-cpu-badge {
 
 .midi-in-body {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
   padding: 0.4rem 0.7rem;
 }
 
@@ -2406,6 +2409,18 @@ body.show-node-cpu .widget-cpu-badge {
 }
 
 .midi-in-voice-slots.hidden {
+  display: none;
+}
+
+/* Selected key ranges ("Keys: C3–C5"), shown only when not every key is on. */
+.midi-in-key-ranges {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.midi-in-key-ranges.hidden {
   display: none;
 }
 
@@ -5193,7 +5208,9 @@ body.show-oscilloscopes .oscilloscope-only-body {
 
 /* Midi-In key filter (settings dialog) */
 #midiInSettingsOverlay .modal {
-  width: min(1000px, calc(100vw - 24px));
+  width: 80vw;
+  max-width: none;
+  max-height: calc(100dvh - 24px);
 }
 
 /* Channel / overflow / pitch bend range / quantize side by side */
@@ -5224,7 +5241,11 @@ body.show-oscilloscopes .oscilloscope-only-body {
 #midiInKeyboardContainer .piano-keyboard {
   width: 100%;
   min-width: 0;
-  height: 84px;
+  height: 130px;
+}
+
+#midiInKeyboardContainer .piano-key-label {
+  font-size: 0.75rem;
 }
 
 .piano-keyboard-container {

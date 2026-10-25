@@ -268,7 +268,6 @@ struct NodeInstance
         MidiInState midiIn;
         MidiSplitState midiSplit;
         ConstState constant;
-        MidiProgramState midiProgram;
         SwitchState switchState;
         WavePlayerState wavePlayer;
         SamplerState sampler;
@@ -432,9 +431,6 @@ struct NodeInstance
             break;
         case NodeType::Const:
             new (&constant) ConstState();
-            break;
-        case NodeType::MidiProgram:
-            new (&midiProgram) MidiProgramState();
             break;
         case NodeType::Switch:
             new (&switchState) SwitchState();

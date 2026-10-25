@@ -47,19 +47,19 @@ struct NodeInstance {
  Controls *knob=nullptr,*button=nullptr;
  struct UpDown {float currentOutput(){return 0;}} *upDownButton=nullptr;
  struct {float value=0;} constant;
- struct {float value=0;} midiProgram;
+ struct {float program=0;} midiIn;
  float gain=0;
 };
 inline bool setFloatFieldByName(NodeInstance &inst,NodeType,const char *name,float value){if(strcmp(name,"gain")==0)inst.gain=value;return true;}
 ${declaration(graph,"struct ControlRoute")};
-struct WidgetSlot {NodeType type=NodeType::Unknown;uint16_t instanceBase=0,instanceCount=1;};
+struct WidgetSlot {NodeType type=NodeType::Unknown;uint16_t instanceBase=0,instanceCount=1,routeStart=0,routeCount=0;};
 struct Graph {uint16_t widgetCount=2,controlRouteCount=0;WidgetSlot widgets[2];NodeInstance instances[3];ControlRoute controlRoutes[8];};
 ${declaration(graph,"inline void pushControlRouteValue(")}
 ${declaration(graph,"inline void updateMasterVolumeControlRoutes(")}
 void connect(Graph *g){int fromIdx=0,toIdx=1,toPort=0;auto fromType=NodeType::MasterVolume;
  struct {const char *fromPort,*toPort;} cd{"value","gain"};
- for(int once=0;once<1;++once){${declaration(builder,"if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume ||")}}
-}
+ for(int once=0;once<1;++once){${declaration(builder,"if ((fromType == NodeType::Const || fromType == NodeType::MasterVolume)")}}
+ g->widgets[fromIdx].routeCount=g->controlRouteCount;}
 void seed(Graph *g){${declaration(builder,"    for (uint16_t r = 0; r < g->controlRouteCount; ++r)",seedStart)}}
 int64_t esp_timer_get_time(){return 1000000;}
 std::atomic<int64_t> s_masterVolumeDirtyUs{0};

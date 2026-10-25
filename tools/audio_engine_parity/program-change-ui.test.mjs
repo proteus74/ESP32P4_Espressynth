@@ -29,7 +29,7 @@ await page.route("http://program-change.test/**", async route => {
 window.__programTest = { createWidget, serializePreset, applyPresetData, removeWidget,
  routeMidiToWidgets, routeMidiToButtons, routeMidiToUpDownButtons, openButtonSettings,
  startButtonMidiLearn, openUpDownButtonSettings, closeButtonSettings, closeUpDownButtonSettings,
- buttonStates, upDownButtonStates, midiProgramStates, WIDGET_CATEGORIES, DUAL_PAGE_TYPES,
+ buttonStates, upDownButtonStates, midiInStates, WIDGET_CATEGORIES, DUAL_PAGE_TYPES,
  getParams(id) { return getWidgetParams(document.getElementById(id).dataset.widgetType, id); },
  applyParams(id, params) { applyWidgetParams(document.getElementById(id).dataset.widgetType, id, params); },
  connect(fromId, fromPort, toId, toPort) { connections.push({ id: 'test-' + connections.length,
@@ -43,11 +43,11 @@ try {
   await page.waitForFunction(() => window.__programTest && !document.getElementById("audioStartBtn")?.disabled);
   const result = await page.evaluate(async () => {
     const t = window.__programTest;
-    const program = t.createWidget("midi-program", "Program Change", 10, 10).id;
+    const program = t.createWidget("midi-in", "Midi-In", 10, 10).id;
     const debug = t.createWidget("debug", "Number", 400, 10).id;
     const button = t.createWidget("button", "Button", 10, 240).id;
     const upDown = t.createWidget("up-down-button", "Up/Down", 400, 240).id;
-    t.connect(program, "value", debug, "in");
+    t.connect(program, "program", debug, "in");
     const send = (number, channel = 2, midiType = "program_change") => {
       const event = { type: "midi", midiType, program: number, channel, control: number, value: 127 };
       t.routeMidiToWidgets(event); t.routeMidiToButtons(event); t.routeMidiToUpDownButtons(event);
@@ -75,39 +75,35 @@ try {
     }
     const preset = t.serializePreset(); await t.applyPresetData(preset);
     const restored = [t.getParams(program), t.getParams(button).bindings[0], t.getParams(upDown)];
-    const ports = [...document.getElementById(program).querySelectorAll(".port-dot")].map(dot => [dot.dataset.portId, dot.dataset.portDir]);
-    document.getElementById(program).querySelector('[data-role="midi-program-channel"]').value = "15";
-    document.getElementById(program).querySelector('[data-role="midi-program-channel"]').dispatchEvent(new Event("change"));
-    send(127, 15);
-    const channelEdited = t.getParams(program);
-    const engine = window.audioEngine;
-    const context = new OfflineAudioContext(1, 256, 48000);
-    const entry = engine._buildNode(context, "midi-program", { value: 73 });
-    engine._resolveOutputFromEntry(entry, "value").connect(context.destination);
-    const samples = (await context.startRendering()).getChannelData(0);
-    const digitalValue = samples[128];
+    const ports = [...document.getElementById(program).querySelectorAll('.port-dot[data-port-dir="out"]')].map(dot => dot.dataset.portId);
+    t.applyParams(program, { channel: 15 });
+    send(42, 2); send(42, 15);
+    const channelEdited = (({ channel, program }) => ({ channel, program }))(t.getParams(program));
+    t.applyParams(program, { channel: null });
+    send(9, 4);
+    const omniProgram = t.getParams(program).program;
     t.applyParams(upDown, { midiTypeUp: "cc", ccUp: 10, channelUp: 2 });
     send(10, 2, "control_change"); const legacyCc = t.upDownButtonStates.get(upDown).currentValue;
     t.removeWidget(program);
-    return { values, binding, buttonValues, upDownValues, restored, ports, channelEdited, digitalValue, legacyCc,
-      removed: !t.midiProgramStates.has(program), messages: window.__wsMessages,
-      listed: t.WIDGET_CATEGORIES.some(c => c.types.includes("midi-program")) && t.DUAL_PAGE_TYPES.includes("midi-program") };
+    return { values, binding, buttonValues, upDownValues, restored, ports, channelEdited, omniProgram, legacyCc,
+      removed: !t.midiInStates.has(program), messages: window.__wsMessages,
+      unlisted: !t.WIDGET_CATEGORIES.some(c => c.types.includes("midi-program")) && !t.DUAL_PAGE_TYPES.includes("midi-program") };
   });
   assert.deepEqual(result.values, [0, 0, 0, 73, 127, 127]);
   assert.deepEqual(result.binding, { cc: 5, channel: 2, midiType: "program", switchMode: false });
   assert.deepEqual(result.buttonValues, [true, true, true, true, false, true]);
   assert.deepEqual(result.upDownValues, [1, 2, 2, 2, 2, 1, 0, 0]);
   assert.equal(result.restored[0].channel, 2);
+  assert.equal(result.restored[0].program, 127);
   assert.deepEqual(result.restored[1], result.binding);
   assert.equal(result.restored[2].midiTypeUp, "program");
   assert.equal(result.restored[2].midiTypeDown, "program");
-  assert.deepEqual(result.ports, [["value", "out"]]);
-  assert.deepEqual(result.channelEdited, { channel: 15, value: 127 });
-  assert.equal(result.digitalValue, 73);
+  assert.deepEqual(result.ports, ["pitchCv", "gate", "velocity", "pitchBend", "aftertouch", "midi", "note", "program"]);
+  assert.deepEqual(result.channelEdited, { channel: 15, program: 42 });
+  assert.equal(result.omniProgram, 9);
   assert.equal(result.legacyCc, 1);
-  assert.ok(result.removed && result.listed);
+  assert.ok(result.removed && result.unlisted);
   assert.ok(result.messages.some(m => m.params?.midiTypeUp === "program"));
-  assert.ok(result.messages.some(m => m.params?.channel === 15));
   assert.deepEqual(errors, []);
-  console.log("PASS Program Change: button/up-down learn, exact event/type/channel matching, repeated events, CC compatibility, raw 0-127 output, digital audio, preset round-trip, channel UI, removal");
+  console.log("PASS Program Change: Midi-In program output (channel/omni matching, raw 0-127, port order), button/up-down learn, repeated events, CC compatibility, preset round-trip, old widget gone");
 } finally { await browser.close(); }

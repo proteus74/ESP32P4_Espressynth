@@ -11,11 +11,12 @@ so on.</p>
 </ul>
 <h2>Outputs</h2>
 <ul>
-<li><span class="port-label">MIDI</span> — the raw MIDI stream, for feeding into other MIDI-aware widgets like Midi-Split.</li>
 <li><span class="port-label">Pitch</span> — the played note as a pitch CV. Patch this into an oscillator's Pitch input to play it.</li>
-<li><span class="port-label">Aftertouch</span> — how hard you're pressing a held key, as CV.</li>
-<li><span class="port-label">Pitch Bend</span> — your pitch-bend wheel position, as bipolar CV centered at 0 V. In Settings, enter the voltage for one side (0–5 V): 1 V gives −1 to +1 V, 3 V gives −3 to +3 V. Patch directly into an oscillator's Tune input to bend all voices; 1 V equals one octave. Existing presets retain their bend range.</li>
-<li><span class="port-label">Note (0–127)</span> — the raw MIDI note number, handy for driving a Value Mapper or sequencer logic.</li>
-<li><span class="port-label">Velocity</span> — how hard the key was struck, as CV. Patch into an amplifier or filter for expressive playing.</li>
 <li><span class="port-label">Gate</span> — goes high while a key is held and low when released. Feed this into an ADSR or envelope to shape each note.</li>
+<li><span class="port-label">Velocity</span> — how hard the key was struck, as CV. Patch into an amplifier or filter for expressive playing.</li>
+<li><span class="port-label">Pitch Bend</span> — your pitch-bend wheel position, as bipolar CV centered at 0 V. In Settings, enter the voltage for one side (0–5 V): 1 V gives −1 to +1 V, 3 V gives −3 to +3 V. Patch directly into an oscillator's Tune input to bend all voices; 1 V equals one octave. Existing presets retain their bend range.</li>
+<li><span class="port-label">Aftertouch</span> — how hard you're pressing a held key, as CV.</li>
+<li><span class="port-label">MIDI</span> — the raw MIDI stream, for feeding into other MIDI-aware widgets like Midi-Split.</li>
+<li><span class="port-label">MIDI-Note</span> — the raw MIDI note number (0–127), handy for driving a Value Mapper or sequencer logic.</li>
+<li><span class="port-label">MIDI-ProgChange</span> — the last Program Change number (0–127) received on this Midi-In's channel. After loading a preset it starts at the value saved in the preset. Patch it into a Value Mapper, Input-Switch or Multiplexer to switch sounds from your keyboard's program buttons.</li>
 </ul>

@@ -82,7 +82,6 @@ enum class NodeType : uint8_t
     MasterVolume,
     Ns4168Out,
     MicIn,
-    MidiProgram,
     Fm8,
     Sampler,
     Wm8960In,
@@ -247,8 +246,6 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Spectrum;
     if (strcmp(typeStr, "midi-in") == 0)
         return NodeType::MidiIn;
-    if (strcmp(typeStr, "midi-program") == 0)
-        return NodeType::MidiProgram;
     if (strcmp(typeStr, "midi-filter") == 0)
         return NodeType::MidiFilter;
     if (strcmp(typeStr, "midi-split") == 0)

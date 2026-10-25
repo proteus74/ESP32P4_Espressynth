@@ -641,6 +641,9 @@ struct MidiInState
     // voltage that means an exact number of cents, matching pitchCv's own
     // discrete-note steps, rather than a smooth in-between value.
     bool pitchBendQuantizeCents = false;
+    // Last Program Change (0-127) received on this Midi-In's channel; drives the "program"
+    // output. Persisted as the "program" param so a graph rebuild does not reset it to 0.
+    float program = 0.0f;
     // Keys this Midi-In reacts to (bit n of the 128-bit mask = MIDI note n). Default: all keys.
     // Only note-ons are filtered; a note-off always passes so nothing can get stuck.
     uint32_t keyMask[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
@@ -658,12 +661,6 @@ struct MidiInState
 
 struct ConstState
 {
-    float value = 0.0f;
-};
-
-struct MidiProgramState
-{
-    int8_t channel = 0;
     float value = 0.0f;
 };
 
