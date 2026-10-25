@@ -4833,7 +4833,7 @@ function createWidget(type, label, x, y, forcedId) {
     lfoStates.set(id, {
       waveType: "sine",
       rate: 2,
-      maxRate: LFO_MAX_RATE_HZ,
+      maxRate: LFO_DEFAULT_MAX_RATE_HZ,
       gain: CV_MAX_VOLTS,
       phase: 0,
       delay: 0,
@@ -5239,7 +5239,7 @@ function createWidget(type, label, x, y, forcedId) {
       layerCount: 1,
       activeLayer: 0,
       layers: [createButtonLayer()],
-      outputSide: "bottom",
+      outputSide: "top",
     });
     audioEngine.createNode(id, "button", { value: 0 });
 
@@ -9339,7 +9339,7 @@ document.getElementById("buttonSettingsSave").addEventListener("click", () => {
   const state = buttonStates.get(pendingButtonId);
   if (state) {
     syncButtonSettingsGrid(pendingButtonId);
-    state.outputSide = ["top", "bottom"].includes(buttonOutputSideInput.value) ? buttonOutputSideInput.value : "bottom";
+    state.outputSide = ["top", "bottom"].includes(buttonOutputSideInput.value) ? buttonOutputSideInput.value : "top";
     state.layers.forEach((layer, layerIndex) => {
       layer.controls.slice(0, state.count).forEach((control, buttonIndex) => {
         const binding = state.layers[0].controls[buttonIndex];
@@ -13584,6 +13584,7 @@ function restartClockTimer(widgetId) {
 const lfoStates = new Map();
 const LFO_TICK_MS = 30;
 const LFO_MAX_RATE_HZ = 500;
+const LFO_DEFAULT_MAX_RATE_HZ = 10; // "Max. Rate at 10 V" of a new LFO / a preset without maxRate
 const lfoSettingsOverlay = document.getElementById("lfoSettingsOverlay");
 const lfoMaxRateInput = document.getElementById("lfoMaxRateInput");
 let pendingLfoId = null;
@@ -21147,7 +21148,7 @@ function propagate(widgetId, portId, value, voiceIndex) {
       let targetValue = value;
       if (portId === "pitchBend" && c.to.portId === "tune" &&
           ["midi-in", "midi-filter"].includes(document.getElementById(widgetId)?.dataset.widgetType) &&
-          ["oscillator", "fm-oscillator", "hammond"].includes(document.getElementById(c.to.widgetId)?.dataset.widgetType)) {
+          ["oscillator", "fm-oscillator", "hammond", "fm8"].includes(document.getElementById(c.to.widgetId)?.dataset.widgetType)) {
         // Pitch Bend is bipolar; Tune sliders use 5 V as their neutral position.
         targetValue = Number(value) + CV_MAX_VOLTS / 2;
       }
@@ -23258,7 +23259,7 @@ const WIDGET_ENGINES = {
       const firstButtons = Array.isArray(entries[0]?.buttons) ? entries[0].buttons : [];
       state.count = clamp(Number(params.buttonCount) || firstButtons.length || 1, 1, BUTTON_MAX_COUNT);
       state.activeLayer = clamp(Math.round(Number(params.activeLayer) || 0), 0, state.layerCount - 1);
-      state.outputSide = ["top", "bottom"].includes(params.outputSide) ? params.outputSide : "bottom";
+      state.outputSide = ["top", "bottom"].includes(params.outputSide) ? params.outputSide : "top";
       state.layers = Array.from({ length: state.layerCount }, () => createButtonLayer());
       state.layers.forEach((layer, layerIndex) => {
         const entry = entries[layerIndex] || {};
@@ -23601,7 +23602,7 @@ const WIDGET_ENGINES = {
       state.wavetables = decodeBank(params.wavetables) || state.wavetables;
       audioEngine.setParam(id, "morph", state.morph);
       if (state.wavetables) audioEngine.setParam(id, "wavetables", state.wavetables);
-      state.maxRate = clamp(params.maxRate ?? LFO_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
+      state.maxRate = clamp(params.maxRate ?? LFO_DEFAULT_MAX_RATE_HZ, 0, LFO_MAX_RATE_HZ);
       state.rate = clamp(params.rate ?? 2, 0, state.maxRate);
       state.gain = clamp(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
       state.phase = clamp(params.phase ?? 0, -180, 180);

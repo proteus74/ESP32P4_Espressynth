@@ -1637,8 +1637,11 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
         {
             NodeInstance &target = g->instances[targetWidget.instanceBase + v];
             float targetValue = initial;
+            // Same target list as pushControlRouteValue's bendToTune (Graph.h): a type missing
+            // here starts at 0 V tune (silent / wrong octave) until the first bend message.
             if (route.kind == ControlRoute::Kind::MidiPitchBend && strcmp(route.paramName, "tune") == 0 &&
-                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator || target.type == NodeType::Hammond))
+                (target.type == NodeType::Oscillator || target.type == NodeType::FmOscillator ||
+                 target.type == NodeType::Hammond || target.type == NodeType::Fm8))
             {
                 targetValue += cv::kMaxVolts / 2.0f;
             }

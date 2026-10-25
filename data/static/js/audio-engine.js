@@ -3124,7 +3124,7 @@ export class AudioEngine {
         const amplitude = clampRange(Number(params.gain ?? CV_MAX_VOLTS), 0, CV_MAX_VOLTS);
         const halfSwing = amplitude / 2;
         const center = params.zeroPointFixed ? params.zeroPoint ?? 5 : halfSwing;
-        const maxRate = clampRange(Number(params.maxRate ?? 50) || 0, 0, LFO_MAX_RATE_HZ);
+        const maxRate = clampRange(Number(params.maxRate ?? (type === "wavetable" ? 50 : 10)) || 0, 0, LFO_MAX_RATE_HZ);
         const rate = clampRange(Number(params.rate ?? 2) || 0, 0, maxRate);
         const phase = params.phase ?? 0;
         const waveType = params.waveType || "sine";

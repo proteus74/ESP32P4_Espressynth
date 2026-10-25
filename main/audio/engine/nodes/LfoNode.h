@@ -415,7 +415,7 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.wavetableMorph = presetparser::getFloat(p, "morph", 0.0f);
     out.wavetableBank = ::wavetable::parse(p ? cJSON_GetObjectItemCaseSensitive(p, "wavetables") : nullptr,
                                            out.waveType == WaveType::Wavetable);
-    out.lfoMaxRate = clampRate(presetparser::getFloat(p, "maxRate", 50.0f));
+    out.lfoMaxRate = clampRate(presetparser::getFloat(p, "maxRate", 10.0f));
     out.lfoRate = clampRate(presetparser::getFloat(p, "rate", 2.0f), out.lfoMaxRate);
     out.lfoGain = clampVolts(presetparser::getFloat(p, "gain", 10.0f));
     out.lfoPhaseDeg = presetparser::getFloat(p, "phase", 0.0f);
