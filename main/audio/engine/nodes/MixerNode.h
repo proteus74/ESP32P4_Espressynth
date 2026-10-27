@@ -31,6 +31,9 @@ inline void render(NodeInstance &inst, size_t frames)
     float gain[8];
     uint8_t activeCount = 0;
     float constSum = 0.0f;
+    // Wired inputs that carry block-constant 0 (e.g. an idle voice) are
+    // dropped like zero-gain ones - their contribution is 0 either way.
+    float constValue = 0.0f;
     for (int p = 0; p < inst.audioInPortCount; ++p)
     {
         if (s.inputGain[p] == 0.0f)
@@ -42,11 +45,24 @@ inline void render(NodeInstance &inst, size_t frames)
             constSum += inst.controlValue[p] * s.inputGain[p];
             continue;
         }
+        if (audioPortConstantForBlock(inst, p, frames, constValue) && constValue == 0.0f)
+        {
+            continue;
+        }
         buf[activeCount] = inst.inPorts[p];
         gain[activeCount] = s.inputGain[p];
         ++activeCount;
     }
     const float outputGain = s.outputGain;
+    if (activeCount == 0)
+    {
+        const float value = constSum * outputGain;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            inst.outL[i] = value;
+        }
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         float sum = constSum;

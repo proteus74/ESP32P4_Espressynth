@@ -208,6 +208,7 @@ struct LinkState
     uint8_t activeBusCount = 8;
     // Audio Outputs' per-bus level controls. Raw 0-10V CV; 10V is unity.
     float gainCv[synth::kLinkBusCount] = {10, 10, 10, 10, 10, 10, 10, 10};
+    uint8_t zeroBusMask = 0; // bus outputs already holding a silent block (see LinkNodes.h)
 };
 
 // One midi-split zone: an inclusive note range [fromNote, toNote] plus its
@@ -362,13 +363,6 @@ struct EnvelopeFollowerState
     float releaseCv = 5.0f;
     float preGainCv = 5.0f;
     float envelope = 0.0f;
-    // Settings-dialog field (main.js's envelopeFollowerCoeffStrideSelect),
-    // same idea/range as FilterState::coeffStride: when attack/release/
-    // preGain is genuinely audio-rate-fed, the (expf()-based) attack/
-    // release coefficients only get recomputed every coeffStride-th sample
-    // instead of every sample - envelope tracking itself (the cheap part)
-    // still runs every sample regardless. Default 4.
-    uint8_t coeffStride = 4;
     // Cached derived values (see FilterState::coeffsDirty/audioCoeffsInitialized).
     float coeffAttack = 0.0f;
     float coeffRelease = 0.0f;
@@ -570,6 +564,8 @@ struct DrumSequencerState
     uint32_t pendingPulseSamples[synth::kDrumSequencerMaxTracks] = {};
     uint8_t retriggerGapRemaining[synth::kDrumSequencerMaxTracks] = {};
     float *outPorts[synth::kDrumSequencerMaxTracks * 2 - 2] = {};
+    uint32_t connectedOutMask = 0;  // bit per output port with an outgoing edge, set by GraphBuilder
+    bool idleOutputsWritten = false; // stopped: outputs already hold their constant idle values
 };
 
 // ChorusState is defined (state + render/build/destroy/setParam logic

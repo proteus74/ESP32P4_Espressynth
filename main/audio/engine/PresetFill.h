@@ -365,6 +365,10 @@ inline bool parsePreset(const char *json, size_t len, PresetDoc &out)
         bpm->valuedouble <= std::numeric_limits<float>::max())
         out.bpm = static_cast<float>(bpm->valuedouble);
 
+    cJSON *controlStride = cJSON_GetObjectItemCaseSensitive(root, "controlStride");
+    if (cJSON_IsNumber(controlStride))
+        out.controlStride = synth::clampControlStride(controlStride->valueint);
+
     cJSON *pages = cJSON_GetObjectItemCaseSensitive(root, "pages");
     if (cJSON_IsObject(pages))
     {

@@ -33,7 +33,31 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         float *output = outputPortBuffer(inst, static_cast<uint8_t>(bus));
         const float *source = inst.inPorts[bus];
-        const float sourceScalar = inst.controlValue[bus];
+        float sourceScalar = inst.controlValue[bus];
+        // A wired bus that only carries silence this block (idle voices) is
+        // handled like an unwired one: no per-sample copy or gain multiply.
+        float constantValue = 0.0f;
+        if (source != nullptr && noderender::audioPortConstantForBlock(inst, bus, frames, constantValue) &&
+            constantValue == 0.0f)
+        {
+            source = nullptr;
+            sourceScalar = 0.0f;
+        }
+
+        // Silent bus (unwired, or wired but carrying only zeros) - 0 * gain
+        // is 0 for either link type. The output buffer is only rewritten when
+        // the bus was not already silent last block; nothing else writes it.
+        const uint8_t busBit = static_cast<uint8_t>(1u << bus);
+        if (source == nullptr && sourceScalar == 0.0f)
+        {
+            if ((inst.link->zeroBusMask & busBit) == 0)
+            {
+                memset(output, 0, frames * sizeof(float));
+                inst.link->zeroBusMask |= busBit;
+            }
+            continue;
+        }
+        inst.link->zeroBusMask &= static_cast<uint8_t>(~busBit);
 
         if (inst.type != NodeType::AudioInputLink)
         {
@@ -42,10 +66,6 @@ inline void render(NodeInstance &inst, size_t frames)
             {
                 memcpy(output, source, frames * sizeof(float));
             }
-            else if (sourceScalar == 0.0f)
-            {
-                memset(output, 0, frames * sizeof(float));
-            }
             else
             {
                 for (size_t i = 0; i < frames; ++i)
@@ -53,18 +73,6 @@ inline void render(NodeInstance &inst, size_t frames)
                     output[i] = sourceScalar;
                 }
             }
-            continue;
-        }
-
-        // Unconditionally silent this whole block (no incoming edge and no
-        // nonzero default) - skip the gain stage entirely, since 0 * gain
-        // is still 0 for any bus that nothing actually uses (plan section
-        // 3, P2: "Nur verwendete Link-Busse anlegen und transportieren" -
-        // the render-side half; the builder still creates all eight bus
-        // edges regardless of use, see that section).
-        if (source == nullptr && sourceScalar == 0.0f)
-        {
-            memset(output, 0, frames * sizeof(float));
             continue;
         }
 

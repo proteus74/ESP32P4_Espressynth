@@ -3653,14 +3653,6 @@ function createWidget(type, label, x, y, forcedId) {
     });
   }
 
-  if (type === "envelope-follower") {
-    el.addEventListener("dblclick", (e) => {
-      if (e.target.closest("button, input")) return;
-      e.stopPropagation();
-      openEnvelopeFollowerSettings(id);
-    });
-  }
-
   if (type === "detune") {
     el.addEventListener("dblclick", (e) => {
       if (e.target.closest("button")) return;
@@ -4080,7 +4072,6 @@ function createWidget(type, label, x, y, forcedId) {
       gain: CV_MAX_VOLTS,
       drawbars: [...HAMMOND_DEFAULT_DRAWBARS],
       ratios: [...HAMMOND_DEFAULT_RATIOS],
-      modulationStride: 4,
     };
     hammondStates.set(id, hammondState);
     audioEngine.createNode(id, "hammond", {
@@ -4090,7 +4081,6 @@ function createWidget(type, label, x, y, forcedId) {
       tuneVolts: hammondState.tuneVolts,
       drawbars: [...hammondState.drawbars],
       ratios: [...hammondState.ratios],
-      modulationStride: hammondState.modulationStride,
     });
 
     const body = document.createElement("div");
@@ -4409,7 +4399,6 @@ function createWidget(type, label, x, y, forcedId) {
 
 
 
-      coeffStride: 4,
       global: false,
     };
     filterStates.set(id, { ...filterDefaults });
@@ -4748,7 +4737,7 @@ function createWidget(type, label, x, y, forcedId) {
   }
 
   if (type === "envelope-follower") {
-    const state = { attack: CV_MAX_VOLTS / 2, release: CV_MAX_VOLTS / 2, preGain: CV_MAX_VOLTS / 2, coeffStride: 4 };
+    const state = { attack: CV_MAX_VOLTS / 2, release: CV_MAX_VOLTS / 2, preGain: CV_MAX_VOLTS / 2 };
     envelopeFollowerStates.set(id, state);
     audioEngine.createNode(id, type, { ...state });
   }
@@ -13183,6 +13172,27 @@ function setMasterClockBpm(bpm) {
   restartAllClockTimers();
 }
 
+// Preset-wide processing mode (ControlStride.h on the firmware side): how
+// often cable-modulated parameters (filter coefficients, envelope follower,
+// Hammond pitch) are recomputed. 1 = Quality ... 16 = Performance.
+const DEFAULT_CONTROL_STRIDE = 4;
+const CONTROL_STRIDES = [1, 2, 4, 8, 16];
+let controlStride = DEFAULT_CONTROL_STRIDE;
+const controlStrideSelect = document.getElementById("controlStrideSelect");
+
+function setControlStride(stride) {
+  const value = Number(stride);
+  controlStride = CONTROL_STRIDES.includes(value) ? value : DEFAULT_CONTROL_STRIDE;
+  controlStrideSelect.value = String(controlStride);
+  audioEngine.setControlStride(controlStride);
+}
+
+controlStrideSelect.addEventListener("change", () => {
+  setControlStride(controlStrideSelect.value);
+  sendLiveParamUpdate("@controlStride", { stride: controlStride });
+  savePresetNow();
+});
+
 // Mirrors the periodic "masterClock" WS broadcast (synth_web_api.hpp's
 // broadcast_status_tick()) - keeps this tab (and every other open tab) in
 // sync with the firmware's authoritative state, including a Learn/Save done
@@ -15878,7 +15888,6 @@ const filterCutoffCurveSelect = document.getElementById("filterCutoffCurveSelect
 const filterResonanceMinInput = document.getElementById("filterResonanceMinInput");
 const filterResonanceMaxInput = document.getElementById("filterResonanceMaxInput");
 const filterResonanceCurveSelect = document.getElementById("filterResonanceCurveSelect");
-const filterCoeffStrideSelect = document.getElementById("filterCoeffStrideSelect");
 let pendingFilterId = null;
 
 function openFilterSettings(widgetId) {
@@ -15891,7 +15900,6 @@ function openFilterSettings(widgetId) {
   filterResonanceMinInput.value = state.resonanceMinQ;
   filterResonanceMaxInput.value = state.resonanceMaxQ;
   filterResonanceCurveSelect.value = state.resonanceCurve;
-  filterCoeffStrideSelect.value = String(state.coeffStride ?? 4);
   filterSettingsOverlay.classList.remove("hidden");
 }
 
@@ -15921,8 +15929,6 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
     
     
     
-    const coeffStride = parseInt(filterCoeffStrideSelect.value, 10);
-    state.coeffStride = Number.isNaN(coeffStride) ? 4 : clamp(coeffStride, 1, 16);
 
     audioEngine.setParam(pendingFilterId, "cutoffMinHz", state.cutoffMinHz);
     audioEngine.setParam(pendingFilterId, "cutoffMaxHz", state.cutoffMaxHz);
@@ -15930,7 +15936,6 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
     audioEngine.setParam(pendingFilterId, "resonanceMinQ", state.resonanceMinQ);
     audioEngine.setParam(pendingFilterId, "resonanceMaxQ", state.resonanceMaxQ);
     audioEngine.setParam(pendingFilterId, "resonanceCurve", state.resonanceCurve);
-    audioEngine.setParam(pendingFilterId, "coeffStride", state.coeffStride);
     updateFilterVisual(pendingFilterId);
     sendLiveParamUpdate(pendingFilterId, {
       cutoffMinHz: state.cutoffMinHz,
@@ -15939,7 +15944,6 @@ document.getElementById("filterSettingsSave").addEventListener("click", () => {
       resonanceMinQ: state.resonanceMinQ,
       resonanceMaxQ: state.resonanceMaxQ,
       resonanceCurve: state.resonanceCurve,
-      coeffStride: state.coeffStride,
     });
   }
   closeFilterSettings();
@@ -16319,37 +16323,6 @@ function setEnvelopeFollowerParam(widgetId, portId, value) {
   updateEnvelopeFollowerVisual(widgetId);
   sendLiveParamUpdateThrottled(widgetId, { [portId]: state[portId] });
 }
-
-const envelopeFollowerSettingsOverlay = document.getElementById("envelopeFollowerSettingsOverlay");
-const envelopeFollowerCoeffStrideSelect = document.getElementById("envelopeFollowerCoeffStrideSelect");
-let pendingEnvelopeFollowerId = null;
-
-function openEnvelopeFollowerSettings(widgetId) {
-  const state = envelopeFollowerStates.get(widgetId);
-  if (!state) return;
-  pendingEnvelopeFollowerId = widgetId;
-  envelopeFollowerCoeffStrideSelect.value = String(state.coeffStride ?? 4);
-  envelopeFollowerSettingsOverlay.classList.remove("hidden");
-}
-
-function closeEnvelopeFollowerSettings() {
-  envelopeFollowerSettingsOverlay.classList.add("hidden");
-  pendingEnvelopeFollowerId = null;
-}
-
-document.getElementById("envelopeFollowerSettingsCancel").addEventListener("click", closeEnvelopeFollowerSettings);
-
-document.getElementById("envelopeFollowerSettingsSave").addEventListener("click", () => {
-  if (!pendingEnvelopeFollowerId) return;
-  const state = envelopeFollowerStates.get(pendingEnvelopeFollowerId);
-  if (state) {
-    const coeffStride = parseInt(envelopeFollowerCoeffStrideSelect.value, 10);
-    state.coeffStride = Number.isNaN(coeffStride) ? 4 : clamp(coeffStride, 1, 16);
-    audioEngine.setParam(pendingEnvelopeFollowerId, "coeffStride", state.coeffStride);
-    sendLiveParamUpdate(pendingEnvelopeFollowerId, { coeffStride: state.coeffStride });
-  }
-  closeEnvelopeFollowerSettings();
-});
 
 const burstGeneratorStates = new Map();
 const BURST_GENERATOR_SLIDER_PORTS = ["count", "time", "decay"];
@@ -18548,14 +18521,12 @@ function updateHammondVisual(widgetId) {
 // above) + a "Default" button restoring the classic Hammond footages.
 const hammondSettingsOverlay = document.getElementById("hammondSettingsOverlay");
 const hammondRatioFieldsEl = document.getElementById("hammondRatioFields");
-const hammondModulationStrideSelect = document.getElementById("hammondModulationStrideSelect");
 let pendingHammondId = null;
 
 function openHammondSettings(widgetId) {
   const state = hammondStates.get(widgetId);
   if (!state) return;
   pendingHammondId = widgetId;
-  hammondModulationStrideSelect.value = String(state.modulationStride ?? 4);
   hammondRatioFieldsEl.innerHTML = "";
   HAMMOND_FOOTAGES.forEach((label, k) => {
     const field = document.createElement("label");
@@ -18599,10 +18570,6 @@ document.getElementById("hammondSettingsSave").addEventListener("click", () => {
   if (!pendingHammondId) return;
   const state = hammondStates.get(pendingHammondId);
   if (state) {
-    const modulationStride = parseInt(hammondModulationStrideSelect.value, 10);
-    state.modulationStride = [1, 2, 4, 8, 16].includes(modulationStride) ? modulationStride : 4;
-    audioEngine.setParam(pendingHammondId, "modulationStride", state.modulationStride);
-    sendLiveParamUpdateThrottled(pendingHammondId, { modulationStride: state.modulationStride });
     for (let k = 0; k < 9; k += 1) {
       const input = document.getElementById(`hammondRatioInput${k + 1}`);
       const num = input ? parseFloat(input.value) : NaN;
@@ -22969,7 +22936,6 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   state.resonanceMinQ = params.resonanceMinQ ?? 0.1;
   state.resonanceMaxQ = params.resonanceMaxQ ?? 20;
   state.resonanceCurve = params.resonanceCurve === "linear" ? "linear" : "log";
-  state.coeffStride = clamp(Math.round(params.coeffStride ?? 4), 1, 16);
   const requestedSlope = legacy ? legacy.slope : Number(params.slope);
   state.slope = FILTER_SLOPE_BUTTONS.some((entry) => entry.id === requestedSlope)
     ? requestedSlope
@@ -22983,7 +22949,6 @@ function applyFilterWidgetParams(id, params, curtis = false) {
   audioEngine.setParam(id, "resonanceMinQ", state.resonanceMinQ);
   audioEngine.setParam(id, "resonanceMaxQ", state.resonanceMaxQ);
   audioEngine.setParam(id, "resonanceCurve", state.resonanceCurve);
-  audioEngine.setParam(id, "coeffStride", state.coeffStride);
   audioEngine.setParam(id, "cutoff", state.cutoff);
   audioEngine.setParam(id, "resonance", state.resonance);
   audioEngine.setParam(id, "global", state.global);
@@ -23771,7 +23736,6 @@ const WIDGET_ENGINES = {
         gain: state.gain,
         drawbars: [...state.drawbars],
         ratios: [...state.ratios],
-        modulationStride: state.modulationStride,
       };
     },
     applyParams: (id, params) => {
@@ -23790,11 +23754,8 @@ const WIDGET_ENGINES = {
         Array.isArray(params.ratios) && params.ratios.length === 9
           ? params.ratios.map((v) => clamp(Number(v) || 0.01, 0.01, 32))
           : [...HAMMOND_DEFAULT_RATIOS];
-      const modulationStride = Math.round(params.modulationStride ?? 4);
-      state.modulationStride = [1, 2, 4, 8, 16].includes(modulationStride) ? modulationStride : 4;
       audioEngine.setParam(id, "amplitude", 0, 0);
       audioEngine.setParam(id, "gain", state.gain);
-      audioEngine.setParam(id, "modulationStride", state.modulationStride);
       state.drawbars.forEach((v, i) => audioEngine.setParam(id, `drawbar${i + 1}`, v));
       state.ratios.forEach((v, i) => audioEngine.setParam(id, `ratio${i + 1}`, v));
       recomputeHammondFreq(id, undefined);
@@ -24397,10 +24358,7 @@ const WIDGET_ENGINES = {
       state.attack = clamp(Number(params.attack ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
       state.release = clamp(Number(params.release ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
       state.preGain = clamp(Number(params.preGain ?? CV_MAX_VOLTS / 2) || 0, 0, CV_MAX_VOLTS);
-      const coeffStride = parseInt(params.coeffStride, 10);
-      state.coeffStride = Number.isNaN(coeffStride) ? 4 : clamp(coeffStride, 1, 16);
       ENVELOPE_FOLLOWER_SLIDER_PORTS.forEach((portId) => audioEngine.setParam(id, portId, state[portId]));
-      audioEngine.setParam(id, "coeffStride", state.coeffStride);
       updateEnvelopeFollowerVisual(id);
     },
   },
@@ -24523,6 +24481,7 @@ function serializePreset() {
   return {
     schemaVersion: SCHEMA_VERSION,
     masterClock: { bpm: masterClockBpm },
+    controlStride,
     title: presetDescription.title,
     description: presetDescription.description,
     longDescription: presetDescription.longDescription,
@@ -25010,6 +24969,7 @@ async function applyPresetData(data, { fitToView = false } = {}) {
   if (typeof data.masterClock?.bpm === "number" && Number.isFinite(data.masterClock.bpm) && data.masterClock.bpm >= 0) {
     setMasterClockBpm(data.masterClock.bpm);
   }
+  setControlStride(data.controlStride ?? DEFAULT_CONTROL_STRIDE);
 
   
   

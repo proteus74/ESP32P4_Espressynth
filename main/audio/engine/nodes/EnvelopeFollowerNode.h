@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 
+#include "../ControlStride.h"
 #include "../CvConventions.h"
 #include "../NodeInstance.h"
 #include "../PresetParser.h"
@@ -27,7 +28,7 @@ inline float coeffFromMs(float ms, float sampleRate)
 
 // Recomputes coeffAttack/coeffRelease/preGain from the three CV values -
 // two expf() calls plus the log-curve cv::cvToRange() math, exactly the
-// cost FilterState::coeffStride amortizes for cutoff/resonance (see
+// cost the control stride (ControlStride.h) amortizes for cutoff/resonance (see
 // render()'s audio-fed branch below).
 inline void recomputeCoeffs(EnvelopeFollowerState &s, float attackCv, float releaseCv, float preGainCv,
                              float sampleRate)
@@ -62,9 +63,9 @@ inline void render(NodeInstance &inst, size_t frames)
     if (anyParamAudioFed)
     {
         // Same pattern as Filter's cutoffAudioFed/resonanceAudioFed branch
-        // (FilterNode.h): coefficients recompute every coeffStride-th
+        // (FilterNode.h): coefficients recompute every control-stride-th
         // sample, the actual envelope smoothing still runs every sample.
-        const size_t stride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
+        const size_t stride = synth::controlStride();
         size_t nextCoeffSample = 0;
         for (size_t i = 0; i < frames; ++i)
         {
@@ -97,7 +98,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.envelopeFollower.attackCv = p.envelopeFollowerAttack;
     inst.envelopeFollower.releaseCv = p.envelopeFollowerRelease;
     inst.envelopeFollower.preGainCv = p.envelopeFollowerPreGain;
-    inst.envelopeFollower.coeffStride = p.envelopeFollowerCoeffStride;
     inst.envelopeFollower.coeffsDirty = true;
 }
 
@@ -109,8 +109,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
     if (strcmp(name, "attack") == 0) { s.attackCv = value; s.coeffsDirty = true; }
     else if (strcmp(name, "release") == 0) { s.releaseCv = value; s.coeffsDirty = true; }
     else if (strcmp(name, "preGain") == 0) { s.preGainCv = value; s.coeffsDirty = true; }
-    else if (strcmp(name, "coeffStride") == 0)
-        s.coeffStride = static_cast<uint8_t>(noderender::clampf(value, 1.0f, 16.0f));
     else return false;
     return true;
 }
@@ -120,8 +118,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.envelopeFollowerAttack = presetparser::getFloat(p, "attack", 5.0f);
     out.envelopeFollowerRelease = presetparser::getFloat(p, "release", 5.0f);
     out.envelopeFollowerPreGain = presetparser::getFloat(p, "preGain", 5.0f);
-    const int stride = presetparser::getInt(p, "coeffStride", 4);
-    out.envelopeFollowerCoeffStride = static_cast<uint8_t>(stride < 1 ? 1 : (stride > 16 ? 16 : stride));
 }
 
 } // namespace nodes::envelopefollower

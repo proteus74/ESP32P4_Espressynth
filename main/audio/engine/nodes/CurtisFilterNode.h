@@ -7,6 +7,7 @@
 
 #include "esp_heap_caps.h"
 
+#include "../ControlStride.h"
 #include "../CvConventions.h"
 #include "../DspPrimitives.h"
 #include "../NodeInstance.h"
@@ -41,7 +42,6 @@ struct CurtisFilterState
     float resonanceMinQ = 0.1f;
     float resonanceMaxQ = 20.0f;
     bool resonanceLog = true;
-    uint8_t coeffStride = 4;
     bool global = false;
     float cutoffLog2Ratio = 0.0f;
     float resonanceLog2Ratio = 0.0f;
@@ -220,7 +220,7 @@ inline void render(NodeInstance &inst, size_t frames)
     const NodeInstance &source = (globalActive && inst.primary != nullptr) ? *inst.primary : inst;
     const bool cutoffAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 3)) != 0;
     const bool resonanceAudioFed = (source.audioConnectedPortMask & static_cast<uint8_t>(1u << 4)) != 0;
-    const size_t stride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
+    const size_t stride = synth::controlStride();
     const int poles = poleCount(s.slopeDb);
 
     if (!cutoffAudioFed && !resonanceAudioFed && s.coeffsDirty)
@@ -278,7 +278,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.resonanceMinQ = p.resonanceMinQ;
     s.resonanceMaxQ = p.resonanceMaxQ;
     s.resonanceLog = p.resonanceLog;
-    s.coeffStride = p.coeffStride;
     s.global = p.filterGlobal;
     s.refreshLog2Ratios();
     s.coeffsDirty = true;
@@ -310,8 +309,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         s.resonanceMinQ = value;
     else if (strcmp(name, "resonanceMaxQ") == 0)
         s.resonanceMaxQ = value;
-    else if (strcmp(name, "coeffStride") == 0)
-        s.coeffStride = static_cast<uint8_t>(clampf(value, 1.0f, 16.0f));
     else if (strcmp(name, "slope") == 0)
         s.slopeDb = static_cast<uint8_t>(poleCount(static_cast<uint8_t>(clampf(value, 6.0f, 36.0f))) * 6);
     else if (strcmp(name, "global") == 0)
@@ -346,8 +343,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.resonanceMinQ = presetparser::getFloat(p, "resonanceMinQ", 0.1f);
     out.resonanceMaxQ = presetparser::getFloat(p, "resonanceMaxQ", 20.0f);
     out.resonanceLog = strcmp(presetparser::getString(p, "resonanceCurve", "log"), "log") == 0;
-    const int stride = presetparser::getInt(p, "coeffStride", 4);
-    out.coeffStride = static_cast<uint8_t>(stride < 1 ? 1 : (stride > 16 ? 16 : stride));
     out.filterGlobal = presetparser::getBool(p, "global", false);
 }
 

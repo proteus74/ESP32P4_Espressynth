@@ -285,6 +285,7 @@ public:
     WidgetSlot widgets[synth::kMaxWidgets];
     uint16_t widgetCount = 0;
     float presetBpm = -1.0f;
+    uint8_t presetControlStride = synth::kDefaultControlStride;
 
     // EMA-smoothed per-widget CPU load. Profiling rotates over one widget per
     // block so timer reads do not scale with graph size. Generation advances

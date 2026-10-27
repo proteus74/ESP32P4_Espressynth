@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 
+#include "ControlStride.h"
 #include "Fm8Patch.h"
 #include "NodeTypes.h"
 #include "SynthConfig.h"
@@ -102,10 +103,6 @@ struct WidgetParams
     bool cutoffLog = true;
     float resonanceCv = 5.0f, resonanceMinQ = 0.1f, resonanceMaxQ = 20.0f;
     bool resonanceLog = true;
-    // How often (in samples) the biquad coefficients get recomputed under a
-    // genuine audio-rate cutoff/resonance edge - 1-16, default 4 (see
-    // FilterState::coeffStride in NodeState.h).
-    uint8_t coeffStride = 4;
     // 12 or 24 dB per octave - 24 cascades a second identical biquad stage
     // (see FilterState::slopeDb).
     uint8_t filterSlopeDb = 12;
@@ -154,7 +151,6 @@ struct WidgetParams
     // envelope-follower - attack/release/preGain, raw 0-10V CV values (see
     // EnvelopeFollowerNode.h's cv::cvToRange log-curve mapping).
     float envelopeFollowerAttack = 5.0f, envelopeFollowerRelease = 5.0f, envelopeFollowerPreGain = 5.0f;
-    uint8_t envelopeFollowerCoeffStride = 4;
     // burst-generator - mode/count/time/decay, raw 0-10V CV values (see
     // BurstGeneratorNode.h's cv::cvToRange mapping). mode <5V = burst,
     // >=5V = trigger delay.
@@ -371,7 +367,6 @@ struct WidgetParams
     // tuneVolts/amplitude/gain above are reused, same convention as Oscillator.
     float hammondDrawbar[9] = {10, 10, 10, 0, 0, 0, 0, 0, 0};
     float hammondRatio[9] = {0.5f, 1.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 8.0f};
-    uint8_t hammondModulationStride = 4;
     // step-arpeggiator - sixteen per-step pitch-CV knob values (0-10V,
     // C4/5V default - see CvConventions.h), only used while the matching
     // "stepN" port has no DSP edge (see nodes/StepArpeggiatorNode.h).
@@ -456,6 +451,7 @@ struct ConnectionDesc
 struct PresetDoc
 {
     float bpm = -1.0f; // Missing tempo in legacy presets preserves the running clock.
+    uint8_t controlStride = synth::kDefaultControlStride; // see ControlStride.h
     WidgetDesc widgets[synth::kMaxWidgets];
     uint16_t widgetCount = 0;
     ConnectionDesc connections[synth::kMaxConnections];

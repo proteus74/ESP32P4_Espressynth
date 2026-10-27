@@ -880,6 +880,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
 
     Graph *g = Graph::allocate();
     g->presetBpm = doc.bpm;
+    g->presetControlStride = doc.controlStride;
     const size_t internalFreeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t internalLargestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     uint16_t outputPsramFallbacks = 0;
@@ -1928,6 +1929,17 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
     delete[] queue;
     delete[] adjacency;
     delete[] inDegree;
+
+    // Lets DrumSequencerNode.h's render() skip outputs no edge reads.
+    for (uint16_t e = 0; e < g->edgeCount; ++e)
+    {
+        const Edge &edge = g->edges[e];
+        NodeInstance &src = g->instances[edge.fromInstance];
+        if (src.type == NodeType::DrumSequencer && src.drumSequencer != nullptr)
+        {
+            src.drumSequencer->connectedOutMask |= 1u << edge.fromPort;
+        }
+    }
 
     // Counts ports actually turned into a view below - logged alongside the
     // existing build diagnostics so this can be checked against real

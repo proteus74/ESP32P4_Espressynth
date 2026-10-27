@@ -124,6 +124,10 @@ inline void register_command(const esp_console_cmd_t& cmd) {
 #if defined(CONFIG_BOARD_CROWPANEL_5INCH)
     #include "cli/commands/cmd_backlight.hpp"
 #endif
+#if defined(CONFIG_APP_ENABLE_LVGL)
+    #include "cli/commands/cmd_lvgl.hpp"
+#endif
+
 #if defined(CONFIG_APP_ENABLE_I2C)
     #include "cli/commands/cmd_i2c_scan.hpp"
 #endif
@@ -204,6 +208,9 @@ inline esp_err_t init() {
 #endif
 #if defined(CONFIG_BOARD_CROWPANEL_5INCH)
     Commands::register_backlight();
+#endif
+#if defined(CONFIG_APP_ENABLE_LVGL)
+    Commands::register_lvgl();
 #endif
 #if defined(CONFIG_APP_ENABLE_I2C)
     Commands::register_i2c_scan();

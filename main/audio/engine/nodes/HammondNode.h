@@ -7,6 +7,7 @@
 
 #include "esp_heap_caps.h"
 
+#include "../ControlStride.h"
 #include "../CvConventions.h"
 #include "../DspPrimitives.h"
 #include "../NodeInstance.h"
@@ -97,9 +98,6 @@ struct HammondState
     // Default = classic 888000000 registration.
     float drawbarCv[kDrawbarCount] = {10.0f, 10.0f, 10.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     OnePoleLowpass drawbarSmooth[kDrawbarCount];
-    // Audio-rate pitch/tune/amplitude inputs are sampled every Nth frame.
-    // 1 = sample-accurate; 2/4/8/16 trade modulation resolution for CPU.
-    uint8_t modulationStride = 4;
 };
 
 // One drawbar for one block, frequency constant within the block: a complex
@@ -127,7 +125,7 @@ inline float rotationCoefficient(uint32_t angle)
 
 // Same contract as accumulateDrawbar below, for a run of samples [from, to) within which the
 // increment is constant but changes between runs (the audio-rate pitch/tune path, one run per
-// modulationStride samples): integer phase + sineLookup per sample, since re-seeding a phasor
+// control-stride samples, see ControlStride.h): integer phase + sineLookup per sample, since re-seeding a phasor
 // every few samples would cost as much as the lookups it saves. Still drawbar-outer, so phase,
 // increment and gain stay in registers.
 template <typename GainAt>
@@ -178,7 +176,7 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // plan section 2 explicitly calls out that Hammond lacked this. A held
     // note through e.g. a Frequency Divider still produces one repeated CV
     // value all block; recomputing nine hz*ratio phase steps from it every
-    // sample (or even every modulationStride-th sample) is pure waste when
+    // sample (or even every control-stride-th sample) is pure waste when
     // it never actually changes.
     float constantPitchCv = kCenterVolts;
     const bool pitchAudioConstant = pitchAudioFed && audioPortConstantForBlock(inst, kPitchCvPort, frames, constantPitchCv);
@@ -267,10 +265,10 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     const bool frequencyModulated = pitchNeedsAudioRate || tuneNeedsAudioRate;
     if (frequencyModulated)
     {
-        // Pitch/tune cable or MIDI glide: pitch is sampled every modulationStride frames and
+        // Pitch/tune cable or MIDI glide: pitch is sampled every control-stride frames and
         // the nine increments hold for that run. Drawbar sum first (drawbar-outer per run),
         // amplitude/gain in the shared pass below - same shape as the constant path.
-        const size_t modulationStride = static_cast<size_t>(clampf(static_cast<float>(s.modulationStride), 1.0f, 16.0f));
+        const size_t modulationStride = synth::controlStride();
         memset(inst.outL, 0, frames * sizeof(float));
         for (size_t runStart = 0; runStart < frames; runStart += modulationStride)
         {
@@ -366,7 +364,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     s.tuneVolts = p.tuneVolts;
     s.amplitude = p.amplitude;
     s.gainCv = p.gain;
-    s.modulationStride = p.hammondModulationStride;
     // Same cutoff/reason as Oscillator's and Gain's gainSmooth - see NodeState.h.
     s.gainSmooth.setCutoff(300.0f, static_cast<float>(synth::kSampleRate));
     for (int k = 0; k < kDrawbarCount; ++k)
@@ -463,12 +460,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.hammond->gainCv = value;
         return true;
     }
-    if (strcmp(name, "modulationStride") == 0)
-    {
-        const int clamped = static_cast<int>(value) < 1 ? 1 : (static_cast<int>(value) > 16 ? 16 : static_cast<int>(value));
-        inst.hammond->modulationStride = static_cast<uint8_t>(clamped);
-        return true;
-    }
     return false;
 }
 
@@ -501,9 +492,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     {
         out.hammondRatio[d] = ratios[d];
     }
-    const int modulationStride = presetparser::getInt(p, "modulationStride", 4);
-    out.hammondModulationStride =
-        static_cast<uint8_t>(modulationStride < 1 ? 1 : (modulationStride > 16 ? 16 : modulationStride));
 }
 
 } // namespace nodes::hammond

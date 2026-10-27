@@ -63,6 +63,18 @@ inline void render(NodeInstance &inst, size_t frames)
     {
         s.muteSmoothed = targetMute;
     }
+    // Silent input with a released limiter and a settled mute ramp: every
+    // sample of the loop below would be 0 and change no state, so skip it.
+    float inL = 0.0f;
+    float inR = 0.0f;
+    if (muteConverged && s.limiter.idle() &&
+        audioPortConstantForBlock(inst, 0, frames, inL) && inL == 0.0f &&
+        audioPortConstantForBlock(inst, 1, frames, inR) && inR == 0.0f)
+    {
+        memset(inst.outL, 0, frames * sizeof(float));
+        memset(inst.outR, 0, frames * sizeof(float));
+        return;
+    }
     for (size_t i = 0; i < frames; ++i)
     {
         // portSample() arrives in the +/-5V audio domain (cv::kAudioPeakVolts)

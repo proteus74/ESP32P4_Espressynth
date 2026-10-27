@@ -2147,6 +2147,13 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                         synth::saveMasterClockToFs();
                     }
                     handled_locally = true;
+                } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@controlStride") == 0 &&
+                           cJSON_IsObject(params)) {
+                    // Preset-wide Quality/Performance mode (ControlStride.h). Applied live
+                    // here; persisted with the preset's own save like the BPM.
+                    cJSON *stride = cJSON_GetObjectItemCaseSensitive(params, "stride");
+                    if (cJSON_IsNumber(stride)) synth::controlStride() = synth::clampControlStride(stride->valueint);
+                    handled_locally = true;
                 } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@deviceSettings") == 0 &&
                            cJSON_IsObject(params)) {
                     // Device name, preset-nav/master-volume Learn bindings (DeviceSettings.h) - same

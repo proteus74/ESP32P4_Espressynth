@@ -6,6 +6,7 @@
 
 #include "esp_heap_caps.h"
 
+#include "../ControlStride.h"
 #include "../CvConventions.h"
 #include "../DspPrimitives.h"
 #include "../NodeInstance.h"
@@ -65,13 +66,6 @@ struct FilterState
         resonanceLog2Ratio = log2f(resonanceMaxQ / resonanceLo);
     }
 
-    // How often (in samples) the biquad coefficients are recomputed under a
-    // real audio-rate cutoff/resonance edge (see render() below) - 1 =
-    // sample-accurate (most CPU), up to 16 = coarser, but cheaper
-    // modulation. Settings-dialog field (main.js's filterCoeffStrideSelect),
-    // default 4. No effect on coeffsDirty's block-rate path (there it is
-    // only recomputed on actual change anyway, no per-sample reference).
-    uint8_t coeffStride = 4;
     // Last cutoff/resonance CV actually used to compute the current biquad
     // coefficients under a genuine audio-rate edge (see render() below) -
     // lets a stride tick skip setLowpass/Highpass/Bandpass entirely when the
@@ -160,7 +154,7 @@ inline void applyCoeffs(FilterState &s, FilterKind kind, float cutoffCv, float r
         return;
     // Every section is configured identically: compute once on the first,
     // copy to the rest (sinCosW0 + two divisions per section otherwise, up
-    // to 44100/coeffStride times per second per voice under audio-rate
+    // to 44100/control stride times per second per voice under audio-rate
     // cutoff modulation).
     if (isShelfKind(kind))
     {
@@ -348,14 +342,14 @@ inline void render(NodeInstance &inst, size_t frames)
     }
     // "cutoff"/"resonance" (Port-Index 2/3): a genuine DSP edge
     // (audioConnectedPortMask) recomputes the biquad coefficients every
-    // s.coeffStride-th sample below (1-16, Settings-Dialog-Feld, Default 4
-    // - see FilterState::coeffStride) - close to audio-rate filter FM/sweep
-    // at coeffStride=1, affordable at any setting since
+    // synth::controlStride()-th sample below (preset-wide Quality/Performance
+    // mode, see ControlStride.h) - close to audio-rate filter FM/sweep
+    // at stride 1, affordable at any setting since
     // Biquad::setLowpass/Highpass/Bandpass (DspPrimitives.h) uses the
     // shared sine LUT instead of sinf/cosf. biquad.process() itself (the
     // actual filtering) still runs every single sample regardless - only
     // the coefficient recompute rate is reduced. 128 (kBlockSize) is evenly
-    // divisible by every coeffStride in [1,16] except 3/5/6/7/9/.../15 -
+    // divisible by every control stride in [1,16] except 3/5/6/7/9/.../15 -
     // for those the recompute phase just drifts slightly across block
     // boundaries, still correct, no audible difference. clampf() guards
     // against a stray 0 from a not-yet-migrated/corrupt preset field
@@ -364,7 +358,7 @@ inline void render(NodeInstance &inst, size_t frames)
     // never toggled at runtime), so a widget is either always in this
     // per-sample path or never. Not wired (only manual/knob-driven *Cv
     // scalar): falls back to the existing coeffsDirty lazy path (only
-    // recompute on actual change, unchanged behavior, coeffStride has no
+    // recompute on actual change, unchanged behavior, the control stride has no
     // effect there).
     // "global" (Port-Index 5, control-only) - same pattern as Gain's
     // "global": only takes effect when cutoff/resonance is genuinely
@@ -397,10 +391,10 @@ inline void render(NodeInstance &inst, size_t frames)
     const ChainShape chain = chainShape(s, kind);
     if (cutoffAudioFed || resonanceAudioFed)
     {
-        // Coefficients are constant inside each coeffStride-long chunk, so
+        // Coefficients are constant inside each control-stride-long chunk, so
         // the cascade runs per chunk in block form - same update points and
         // same per-sample math as the previous sample loop.
-        const size_t coeffStride = static_cast<size_t>(clampf(static_cast<float>(s.coeffStride), 1.0f, 16.0f));
+        const size_t coeffStride = synth::controlStride();
         for (size_t i = 0; i < frames; i += coeffStride)
         {
             const float cutoffCv = cutoffAudioFed ? src.inPorts[3][i] : s.cutoffCv;
@@ -439,7 +433,6 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     inst.filter->resonanceMinQ = p.resonanceMinQ;
     inst.filter->resonanceMaxQ = p.resonanceMaxQ;
     inst.filter->resonanceLog = p.resonanceLog;
-    inst.filter->coeffStride = p.coeffStride;
     inst.filter->slopeDb = p.filterSlopeDb;
     inst.filter->global = p.filterGlobal;
     inst.filter->refreshLog2Ratios();
@@ -516,12 +509,6 @@ inline bool setParam(NodeInstance &inst, const char *name, float value)
         inst.filter->audioCoeffsInitialized = false;
         return true;
     }
-    if (strcmp(name, "coeffStride") == 0)
-    {
-        const int clamped = static_cast<int>(value) < 1 ? 1 : (static_cast<int>(value) > 16 ? 16 : static_cast<int>(value));
-        inst.filter->coeffStride = static_cast<uint8_t>(clamped);
-        return true;
-    }
     // "cutoffCurve"/"resonanceCurve" are strings ("linear"/"log"), same
     // pattern as Gain's "curve" - see Graph.cpp's applyLiveParams.
     return false;
@@ -543,10 +530,6 @@ inline void parsePreset(cJSON *p, WidgetParams &out)
     out.resonanceMinQ = presetparser::getFloat(p, "resonanceMinQ", 0.1f);
     out.resonanceMaxQ = presetparser::getFloat(p, "resonanceMaxQ", 20.0f);
     out.resonanceLog = strcmp(presetparser::getString(p, "resonanceCurve", "log"), "log") == 0;
-    {
-        const int coeffStride = presetparser::getInt(p, "coeffStride", 4);
-        out.coeffStride = static_cast<uint8_t>(coeffStride < 1 ? 1 : (coeffStride > 16 ? 16 : coeffStride));
-    }
     {
         const int poles = presetparser::getInt(p, "slope", 12) / 6;
         out.filterSlopeDb = static_cast<uint8_t>((poles < 1 ? 1 : (poles > cv::kFilterMaxPoles ? cv::kFilterMaxPoles : poles)) * 6);

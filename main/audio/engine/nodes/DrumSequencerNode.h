@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -152,6 +153,19 @@ inline void triggerStep(DrumSequencerState &s, uint16_t totalSteps)
     }
 }
 
+// Mirrors portSample(): a wired gate is checked sample by sample, an unwired
+// one is the single control value.
+inline bool gateLowForBlock(const NodeInstance &inst, size_t frames)
+{
+    const float *gate = inst.inPorts[kGatePort];
+    if (gate == nullptr) return inst.controlValue[kGatePort] < cv::kGateThresholdVolts;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        if (gate[i] >= cv::kGateThresholdVolts) return false;
+    }
+    return true;
+}
+
 inline void render(NodeInstance &inst, size_t frames)
 {
     using namespace noderender;
@@ -199,6 +213,39 @@ inline void render(NodeInstance &inst, size_t frames)
     // 16-step pattern is one 4/4 bar. 120 BPM must trigger 8 steps/sec.
     const float periodSec = bpm > 0.0f ? 15.0f / bpm : 0.0f;
     const float dtSec = 1.0f / static_cast<float>(synth::kSampleRate);
+
+    // Output buffers resolved once per block instead of per sample; outputs
+    // without an outgoing edge stay nullptr and are never written.
+    float *trigger[synth::kDrumSequencerMaxTracks] = {};
+    float *velocity[synth::kDrumSequencerMaxTracks] = {};
+    for (uint8_t track = 0; track < s.trackCount; ++track)
+    {
+        const uint8_t triggerPort = static_cast<uint8_t>(track * 2);
+        if ((s.connectedOutMask & (1u << triggerPort)) != 0) trigger[track] = outputPortBuffer(inst, triggerPort);
+        if ((s.connectedOutMask & (2u << triggerPort)) != 0)
+            velocity[track] = outputPortBuffer(inst, static_cast<uint8_t>(triggerPort + 1));
+    }
+
+    // Stopped fast path: with the gate low for the whole block no step can
+    // fire and no pulse is pending (a falling gate clears them), so every
+    // output is constant. Write it once, then leave the buffers untouched
+    // until the sequencer runs again. The internal clock phase needs no
+    // update - the next rising gate resets it anyway.
+    if (!s.gatePrev && gateLowForBlock(inst, frames))
+    {
+        if (!s.idleOutputsWritten)
+        {
+            for (uint8_t track = 0; track < s.trackCount; ++track)
+            {
+                if (trigger[track] != nullptr) std::fill_n(trigger[track], frames, cv::kGateOffVolts);
+                if (velocity[track] != nullptr) std::fill_n(velocity[track], frames, s.heldVelocity[track]);
+            }
+            s.idleOutputsWritten = true;
+        }
+        s.clockPrev = clockWired && portSample(inst, kClockPort, frames - 1) >= cv::kGateThresholdVolts;
+        return;
+    }
+    s.idleOutputsWritten = false;
 
     for (size_t i = 0; i < frames; ++i)
     {
@@ -264,12 +311,10 @@ inline void render(NodeInstance &inst, size_t frames)
 
         for (uint8_t track = 0; track < s.trackCount; ++track)
         {
-            float *trigger = outputPortBuffer(inst, static_cast<uint8_t>(track * 2));
-            float *velocity = outputPortBuffer(inst, static_cast<uint8_t>(track * 2 + 1));
-            if (trigger != nullptr)
-                trigger[i] = s.pulseSamplesRemaining[track] > 0 ? cv::kGateOnVolts : cv::kGateOffVolts;
-            if (velocity != nullptr)
-                velocity[i] = s.heldVelocity[track];
+            if (trigger[track] != nullptr)
+                trigger[track][i] = s.pulseSamplesRemaining[track] > 0 ? cv::kGateOnVolts : cv::kGateOffVolts;
+            if (velocity[track] != nullptr)
+                velocity[track][i] = s.heldVelocity[track];
             if (s.pulseSamplesRemaining[track] > 0) --s.pulseSamplesRemaining[track];
         }
     }
@@ -307,6 +352,7 @@ inline void build(NodeInstance &inst, const WidgetParams &p)
     memset(s.pulseSamplesRemaining, 0, sizeof(s.pulseSamplesRemaining));
     memset(s.pendingPulseSamples, 0, sizeof(s.pendingPulseSamples));
     memset(s.retriggerGapRemaining, 0, sizeof(s.retriggerGapRemaining));
+    s.idleOutputsWritten = false;
 }
 
 inline void destroy(NodeInstance &inst)

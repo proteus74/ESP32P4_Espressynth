@@ -34,6 +34,20 @@ inline void render(NodeInstance &inst, size_t frames)
     const bool timeFed = portFed(inst, 3);
     const bool decayFed = portFed(inst, 4);
 
+    // Idle: nothing pending, no pulse running and a trigger input that holds
+    // one value all block without a rising edge - the output stays 0.
+    float trigger = 0.0f;
+    if (s.pendingCount == 0 && s.outSamplesLeft == 0 && audioPortConstantForBlock(inst, 0, frames, trigger))
+    {
+        const bool triggerAbove = trigger >= cv::kGateThresholdVolts;
+        if (!triggerAbove || s.prevTriggerAbove)
+        {
+            s.prevTriggerAbove = triggerAbove;
+            memset(inst.outL, 0, frames * sizeof(float));
+            return;
+        }
+    }
+
     for (size_t i = 0; i < frames; ++i)
     {
         const bool delayMode = (modeFed ? portSample(inst, 1, i) : s.modeCv) >= cv::kGateThresholdVolts;

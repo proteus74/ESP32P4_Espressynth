@@ -777,6 +777,11 @@ function cvToRange(volts, minVal, maxVal, curve) {
 // ============================================================================
 const FILTER_MAX_POLES = 6; // cv::kFilterMaxPoles, 6 dB per pole
 
+// Preset-wide control stride (ControlStride.h): cable-modulated filter
+// coefficients are recomputed every controlStride-th sample. Set via
+// AudioEngine.setControlStride().
+let controlStride = 4;
+
 function flushDenorm(x) {
   return x > -1e-15 && x < 1e-15 ? 0 : x;
 }
@@ -923,7 +928,7 @@ function createFilterDsp(entry, sampleRate) {
       const onePole = filterUsesOnePole(kind, entry.slope);
       const highpass = kind === "highpass";
       const audioFed = cutoffFed || resonanceFed;
-      const stride = clampRange(Math.trunc(entry.coeffStride) || 4, 1, 16);
+      const stride = controlStride;
       if (!audioFed && entry.coeffsDirty) {
         this.applyCoeffs(kind, entry.cutoff, entry.resonance);
         entry.coeffsDirty = false;
@@ -1041,7 +1046,7 @@ function createCurtisFilterDsp(entry, sampleRate) {
       }
       const poles = filterPolesFromSlope(entry.slope);
       const audioFed = cutoffFed || resonanceFed;
-      const stride = clampRange(Math.trunc(entry.coeffStride) || 4, 1, 16);
+      const stride = controlStride;
       if (!audioFed && entry.coeffsDirty) this.updateCoefficients(entry.cutoff, entry.resonance, poles);
       const shelfGain = isShelfFilterType(kind) ? 10 ** (shelfGainDbFromCv(entry.resonance) / 20) - 1 : 0;
       for (let i = 0; i < output.length; i += 1) {
@@ -1419,6 +1424,10 @@ function lfoWaveValueAtPhase(waveType, phaseDeg) {
 }
 
 export class AudioEngine {
+  setControlStride(stride) {
+    controlStride = clampRange(Math.trunc(Number(stride)) || 4, 1, 16);
+  }
+
   constructor() {
     this.ctx = null;
     this.nodes = new Map();
@@ -3529,7 +3538,6 @@ export class AudioEngine {
           resonanceMaxQ: params.resonanceMaxQ ?? 20,
           resonanceCurve: params.resonanceCurve ?? "log",
           slope: filterPolesFromSlope(legacySlope ?? params.slope ?? (isCurtis ? 24 : 12)) * 6,
-          coeffStride: clampRange(Math.trunc(Number(params.coeffStride ?? 4)) || 4, 1, 16),
           coeffsDirty: true,
           cutoffCvActive: false,
           resonanceCvActive: false,
@@ -6031,9 +6039,6 @@ export class AudioEngine {
           entry.slope = filterPolesFromSlope(num) * 6;
           entry.dsp.resetUpperStages();
           entry.dsp.audioCoeffsInitialized = false;
-        } else if (paramName === "coeffStride") {
-          entry.coeffStride = clampRange(Math.trunc(num) || 1, 1, 16);
-          break;
         } else {
           break;
         }

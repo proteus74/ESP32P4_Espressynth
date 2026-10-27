@@ -102,7 +102,8 @@ button:hover {
   font-size: 0.9rem;
 }
 
-.preset-inline select {
+.preset-inline select,
+.control-stride-select {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--card-border);
@@ -3786,7 +3787,8 @@ body.show-oscilloscopes .oscilloscope-only-body {
 }
 
 .widget-instance[data-widget-type="audio-input-link"] .port-row-in > .port-label {
-  flex: 0 1 128px;
+  flex: 0 1 auto;
+  max-width: 128px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3798,12 +3800,6 @@ body.show-oscilloscopes .oscilloscope-only-body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.widget-instance[data-widget-type="audio-input-link"] .port-slider {
-  flex: 1 1 auto;
-  min-width: 64px;
-  width: auto;
 }
 
 .widget-instance[data-widget-type="audio-input-link"] .port-value {

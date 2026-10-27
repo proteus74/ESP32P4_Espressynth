@@ -471,8 +471,9 @@ export async function runAll() {
       "oscilloscope", "spectrum", "sampler"];
     await render(0.2, (e) => {
       types.forEach((t) => e.createNode(`n-${t}`, t, {}));
+      e.setControlStride(16);
       for (const [id, params] of [["n-fm-oscillator", ["fmIndex", "feedback", "superSawDetune", "superSawMix", "dutyCycle", "waveType"]],
-        ["n-filter", ["cutoff", "resonance", "slope", "filterType", "coeffStride"]],
+        ["n-filter", ["cutoff", "resonance", "slope", "filterType"]],
         ["n-reverb-light", ["roomSize", "damping", "wetLevelDb", "dryLevelDb", "bypass"]]]) {
         params.forEach((p) => e.setParam(id, p, p === "waveType" ? "supersaw" : p === "filterType" ? "notch" : 3));
       }

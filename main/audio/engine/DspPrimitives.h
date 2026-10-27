@@ -1090,6 +1090,9 @@ public:
         r *= smoothedGain_;
     }
 
+    // Fully released: process() on silence is a no-op, so a caller may skip it.
+    bool idle() const { return smoothedGain_ == 1.0f; }
+
 private:
     float smoothedGain_ = 1.0f;
     float attackCoeff_ = 0.0f;

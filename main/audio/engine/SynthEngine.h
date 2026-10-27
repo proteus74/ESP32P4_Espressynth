@@ -599,6 +599,8 @@ private:
         midiFeedbackWidget_ = 0;
         if (liveGraph_ != nullptr && liveGraph_->presetBpm >= 0.0f)
             synth::masterClock().bpm = liveGraph_->presetBpm;
+        if (liveGraph_ != nullptr)
+            synth::controlStride() = liveGraph_->presetControlStride;
         synth::masterClock().midiFeedback = UINT32_MAX;
     }
 

@@ -807,11 +807,13 @@ IRAM_ATTR inline void render(NodeInstance &inst, size_t frames)
     // External FM does NOT need to be excluded: fmIn only perturbs the READ
     // phase offset each sample, never phase_ itself (see PhaseOsc's
     // comment), so it has no bearing on what advancePhaseOnly must do here.
-    // Noise/PinkNoise are excluded via phaseModulatable (no phase_ to
-    // advance meaningfully for them, see plan section 2 point 7).
-    if (phaseModulatable && !feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f)
+    // Noise/PinkNoise take the same path but skip the phase advance (no
+    // phase_ to advance meaningfully for them, see plan section 2 point 7);
+    // pausing their generator while silent is inaudible.
+    if (!feedbackActive && ampConstantForBlock && ampConstantValue == 0.0f)
     {
-        s.phaseGen.advancePhaseOnly(phaseIncrementInt, frames, isLinearWave(wave));
+        if (phaseModulatable)
+            s.phaseGen.advancePhaseOnly(phaseIncrementInt, frames, isLinearWave(wave));
         if (!gainFed && !gainConverged)
         {
             for (size_t i = 0; i < frames; ++i)
