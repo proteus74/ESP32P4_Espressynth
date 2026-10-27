@@ -389,11 +389,15 @@ void update_runtime_labels()
     set_label_fmt(objects.lbl_bpm, "%.2f BPM", static_cast<double>(synth.master_clock_bpm));
     lv_bar_set_value(objects.bar_master_volume, static_cast<int32_t>(synth.master_volume * 100.0f + 0.5f), LV_ANIM_OFF);
 
-    // Refresh CPU labels and bars together, averaging Core 0 over the elapsed interval.
+    // Refresh CPU labels and bars together, averaging Core 0 over the elapsed interval. Every
+    // redraw here measurably delays the audio render on core 1 (one Audio-Overrun per redraw at
+    // 500 ms, likely LVGL evicting engine code from the shared L2 cache), so sample once per
+    // second and redraw a core only when its value moved by at least kCpuDeadbandPercent.
+    constexpr int kCpuDeadbandPercent = 3;
     static int64_t previous_sample_us = 0;
     static uint32_t previous_idle_runtime = 0;
     const int64_t now_us = esp_timer_get_time();
-    if (previous_sample_us != 0 && now_us - previous_sample_us < 500000) return;
+    if (previous_sample_us != 0 && now_us - previous_sample_us < 1000000) return;
     const uint32_t idle_runtime = ulTaskGetIdleRunTimeCounterForCore(App::MAIN_CORE);
     float core0 = 0.0f;
     if (previous_sample_us != 0) {
@@ -405,14 +409,24 @@ void update_runtime_labels()
     previous_sample_us = now_us;
     previous_idle_runtime = idle_runtime;
 
-    set_label_fmt(objects.lbl_core0_util, "%u %%", static_cast<unsigned>(core0 + 0.5f));
-    set_label_fmt(objects.lbl_core1_util, "%u %%", static_cast<unsigned>(synth.audio_core_load + 0.5f));
-    lv_bar_set_value(objects.bar_core0_util, static_cast<int32_t>(core0 + 0.5f), LV_ANIM_OFF);
-    lv_bar_set_value(objects.bar_core1_util, static_cast<int32_t>(synth.audio_core_load + 0.5f), LV_ANIM_OFF);
+    static int shown_core0 = -100;
+    static int shown_core1 = -100;
+    const int core0_percent = static_cast<int>(core0 + 0.5f);
+    const int core1_percent = static_cast<int>(synth.audio_core_load + 0.5f);
+    if (core0_percent - shown_core0 >= kCpuDeadbandPercent || shown_core0 - core0_percent >= kCpuDeadbandPercent) {
+        shown_core0 = core0_percent;
+        set_label_fmt(objects.lbl_core0_util, "%d %%", core0_percent);
+        lv_bar_set_value(objects.bar_core0_util, core0_percent, LV_ANIM_OFF);
+    }
+    if (core1_percent - shown_core1 >= kCpuDeadbandPercent || shown_core1 - core1_percent >= kCpuDeadbandPercent) {
+        shown_core1 = core1_percent;
+        set_label_fmt(objects.lbl_core1_util, "%d %%", core1_percent);
+        lv_bar_set_value(objects.bar_core1_util, core1_percent, LV_ANIM_OFF);
+    }
 
-    // Heap statistics and network details only need sampling twice per second.
+    // Heap statistics and network details: every 5 s is plenty (same redraw cost as above).
     static int64_t previous_info_us = 0;
-    if (previous_info_us != 0 && now_us - previous_info_us < 500000) return;
+    if (previous_info_us != 0 && now_us - previous_info_us < 5000000) return;
     previous_info_us = now_us;
 
     // LVGL pool usage for /api/diagnostics/memory - must run on the LVGL task (we are).
