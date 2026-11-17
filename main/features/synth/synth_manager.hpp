@@ -16,6 +16,7 @@
 #include "LiveParamMsg.h"
 #include "PresetChangedMsg.h"
 #include "PresetPaths.h"
+#include "SafeStart.h"
 #include "SynthEngine.h"
 #include "UsbMidiEvent.h"
 #include "features/filesystem/littlefs_manager.hpp"
@@ -102,6 +103,17 @@ inline bool request_preset_name(const char *name) {
     PresetChangedMsg msg{};
     presetpaths::pathForName(name, msg.path, sizeof(msg.path));
     presetpaths::writeLastMarker(name);
+    s_engine.beginPresetLoad();
+    if (xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS) return true;
+    s_engine.cancelPresetLoad();
+    return false;
+}
+
+/** @brief Reloads the scratch slot of a safe start (SafeStart.h) without ending the safe start. */
+inline bool request_scratch_preset() {
+    if (s_presetChangedQueue == nullptr) return false;
+    PresetChangedMsg msg{};
+    snprintf(msg.path, sizeof(msg.path), "%s", safestart::scratchPath());
     s_engine.beginPresetLoad();
     if (xQueueOverwrite(s_presetChangedQueue, &msg) == pdPASS) return true;
     s_engine.cancelPresetLoad();
@@ -749,7 +761,8 @@ inline esp_err_t init() {
                    esI2sTxHandle);
 
     ESP_LOGI(TAG, "Synth engine started (preset: %s)",
-             initialPresetName[0] != '\0' ? initialPresetName : "current.json");
+             safestart::active() ? "none, safe start"
+             : initialPresetName[0] != '\0' ? initialPresetName : "current.json");
     return ESP_OK;
 #endif
 }

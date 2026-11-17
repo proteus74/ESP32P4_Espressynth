@@ -495,6 +495,23 @@ This reduces the chance of audio dropouts or USB timing issues interfering with 
 
 The project uses a dedicated `www` LittleFS partition for static web files, rather than mixing those with the main application filesystem. This makes asset updates easier and avoids rebuilding the full app just to change a web page.
 
+### Safe start: the device stays reachable
+
+A preset that leaves the network no memory, or crashes the firmware while loading, would lock you
+out: without the network no other preset can be selected. A safe start loads no preset at all. No
+preset file, not the unnamed slot and not the "last preset" marker is changed; what you build in the
+editor meanwhile goes to a scratch slot that is thrown away. Selecting any preset ends it.
+
+The device makes a safe start when
+
+- the Wi-Fi co-processor could not be reached with the boot preset loaded (it restarts once by itself),
+- two starts in a row did not finish (crash, watchdog, power cut during start),
+- a finger rests on the touch screen while the device starts.
+
+The editor shows which preset was skipped and why; the preset list on the display shows "Safe start".
+If the network is unavailable even without a preset, the device remembers that and loads presets
+normally instead of restarting on every boot. Code: `main/features/synth/SafeStart.h`.
+
 ### Modular enable/disable system
 
 Most major capabilities are off by default unless configured in `Kconfig`. This allows the same base project to evolve into different product variants without a large amount of code duplication.

@@ -6,6 +6,7 @@ import { getPresetName, getMaxBank } from "./sf2-engine.js";
 import { createDefaultBank, decodeBank, encodeBank, sampleBank } from "./wavetable-core.js?v=20260926-knob-2";
 import { openWavetableEditor, drawWavetablePreview } from "./wavetable-editor.js?v=20260926-knob-2";
 import { openSamplerEditor } from "./sampler-editor.js?v=20261021-sampler-3";
+import { createMcpHost } from "./mcp-tools.js?v=20261117-mcp-3";
 import { nodeIconHtml, uiIconHtml } from "./node-icons.js?v=20261023-wifi-settings-1";
 import { defaultFm8Keys, handleFm8Midi, isFm8BindingKey, openFm8Dialog, renderFm8Summary } from "./fm8.js?v=20261015-fm8-21";
 
@@ -130,6 +131,22 @@ function startBatteryIndicator() {
   setInterval(update, 15000);
 }
 
+// The device came up without its preset (firmware: SafeStart.h). Stays until clicked away.
+function showSafeStartNotice({ reason, skipped }) {
+  const reasons = {
+    network: "the network did not start with it",
+    "boot attempts": "the device did not finish starting twice in a row",
+    touch: "the screen was touched during start",
+  };
+  const notice = document.createElement("div");
+  notice.style.cssText = "position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:100000;max-width:min(640px,90vw);" +
+    "padding:10px 16px;border-radius:10px;background:#b45309;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer";
+  notice.textContent = `Safe start: ${skipped ? `preset "${skipped}"` : "the unsaved preset"} was not loaded because ` +
+    `${reasons[reason] || reason}. Nothing was changed - load a preset from the File menu. (Click to hide)`;
+  notice.addEventListener("click", () => notice.remove());
+  document.body.appendChild(notice);
+}
+
 // Hide hardware output widgets whose chip this firmware doesn't drive (flags from /api/version).
 // Older firmware has no "es8311"/"ns4168" flags: es8311 then defaults to present, ns4168 to absent.
 async function applyOutputAvailability() {
@@ -148,6 +165,7 @@ async function applyOutputAvailability() {
     pdmMic = data.pdmMic === true;
     wm8960In = data.wm8960In === true;
     battery = data.battery === true;
+    if (data.safeStart) showSafeStartNotice(data.safeStart);
   } catch (err) {
     // keep defaults
   }
@@ -341,6 +359,18 @@ document.getElementById("menuSaveAs").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
   handleSaveAs();
+});
+
+document.getElementById("menuRenamePreset").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  handleRenamePreset();
+});
+
+document.getElementById("menuDeletePreset").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuItems.forEach((m) => m.classList.remove("open"));
+  handleDeletePreset();
 });
 
 document.getElementById("menuExport").addEventListener("click", (e) => {
@@ -735,6 +765,7 @@ async function openSettings() {
     const data = await res.json();
     deviceNameInput.value = data.name || "";
     applyGlobalMidiDeviceSettings(data);
+    applyMcpSettings(data);
   } catch (err) {
     appendLog(`Could not load device settings: ${err.message}`);
   }
@@ -772,6 +803,37 @@ async function openSettings() {
   }
   deviceNameInput.focus();
 }
+
+// Settings > MCP: switch and token for the device's /mcp proxy (mcp-tools.js). Needs a reload of
+// the settings after a change because the device makes the token itself.
+const mcpEnabledSetting = document.getElementById("mcpEnabledSetting");
+const mcpDetails = document.getElementById("mcpDetails");
+const mcpCommand = document.getElementById("mcpCommand");
+
+function applyMcpSettings(data) {
+  const on = data.mcpEnabled === true;
+  mcpEnabledSetting.checked = on;
+  mcpDetails.hidden = !on || !data.mcpToken;
+  mcpCommand.value = on && data.mcpToken
+    ? `claude mcp add --transport http espressynth http://${window.location.host}/mcp --header "Authorization: Bearer ${data.mcpToken}"`
+    : "";
+}
+
+async function updateMcpSettings(params) {
+  wsSend({ type: "paramUpdate", widgetId: "@deviceSettings", params });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  try {
+    applyMcpSettings(await (await fetch("/api/settings/device")).json());
+  } catch (err) {
+    appendLog(`Could not load device settings: ${err.message}`);
+  }
+}
+
+mcpEnabledSetting.addEventListener("change", () => updateMcpSettings({ mcpEnabled: mcpEnabledSetting.checked }));
+document.getElementById("mcpNewToken").addEventListener("click", () => {
+  if (confirm("Make a new token? Assistants that use the old one lose access.")) updateMcpSettings({ mcpEnabled: true, mcpRegenerate: true });
+});
+mcpCommand.addEventListener("focus", () => mcpCommand.select());
 
 const loadSamplesSetting = document.getElementById("loadSamplesSetting");
 
@@ -21087,6 +21149,70 @@ function removeConnectionsForPort(widgetId, portId, direction) {
 // alone can't fully rule out. Force-cleanup any stale drag before starting a new one.
 let activeConnectionDragCleanup = null;
 
+// Wires an output port to an input port (the same steps whether a cable is dragged by hand or
+// created by an MCP tool). Returns { ok, id } or { ok: false, error }.
+function createConnection(fromWidgetId, fromPortId, toWidgetId, toPortId) {
+  if (fromWidgetId === toWidgetId) {
+    return { ok: false, error: "Connection rejected: output and input belong to the same widget." };
+  }
+
+  if (connectionExists(fromWidgetId, fromPortId, toWidgetId, toPortId)) {
+    return { ok: false, error: "Connection rejected: this connection already exists." };
+  }
+
+  pushHistorySnapshot();
+  connectionCounter += 1;
+  const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
+  const targetType = document.getElementById(toWidgetId)?.dataset.widgetType;
+  const toKind = isLinkedInputType(targetType)
+    ? fromKind
+    : getPortKind(toWidgetId, toPortId, "in");
+
+  if (isLinkedInputType(targetType) && getPortKind(toWidgetId, toPortId, "in") !== toKind) {
+    connections.filter(
+      (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
+    ).forEach(disconnectIfAudio);
+    connections = connections.filter(
+      (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
+    );
+  }
+
+  if (toKind !== "audio") {
+    connections.filter(
+      (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
+    ).forEach(disconnectIfAudio);
+    connections = connections.filter(
+      (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
+    );
+  }
+  const connection = {
+    id: `conn-${connectionCounter}`,
+    from: { widgetId: fromWidgetId, portId: fromPortId },
+    to: { widgetId: toWidgetId, portId: toPortId },
+    color: getConnectionColorForOutput(fromWidgetId, fromPortId),
+  };
+  connections.push(connection);
+  if (isLinkedInputType(targetType)) autoNameLinkedInput(toWidgetId, fromWidgetId, fromPortId, toPortId);
+
+  // toKind alone, not fromKind too: a control-only source (Knob, Const,
+  // ...) can still own a real WebAudio node (see audio-engine.js's
+  // _resolveOutputFromEntry) and needs wiring into an audio-shaped
+  // destination like a Multiplexer/Mixer "inN" - otherwise a Debug/
+  // Voltmeter reading that destination's output stays stuck at 0
+  // (tickDebugVoltmeterAudioSources samples the real WebAudio graph, not
+  // the discrete propagate() path). Harmless when the source has no such
+  // node: audioEngine.connect()'s _resolveScaledOutput resolves to null
+  // and the connect is silently skipped, same as before.
+  if (connectionTouchesLinkedIO(connection)) refreshLinkedIO();
+  else connectIfAudio(connection);
+
+  refreshControlGraph();
+  refreshVoiceGroups();
+  drawConnections();
+  savePresetNow();
+  return { ok: true, id: connection.id };
+}
+
 function startConnectionDrag(e, fromDot) {
   e.preventDefault();
   e.stopPropagation();
@@ -21114,71 +21240,8 @@ function startConnectionDrag(e, fromDot) {
 
     const target = findNearestInPortDot(ev.clientX, ev.clientY);
     if (target) {
-      const fromWidgetId = fromDot.dataset.widgetId;
-      const fromPortId = fromDot.dataset.portId;
-      const toWidgetId = target.dataset.widgetId;
-      const toPortId = target.dataset.portId;
-
-      if (fromWidgetId === toWidgetId) {
-        appendLog("Connection rejected: output and input belong to the same widget.");
-        return;
-      }
-
-      if (connectionExists(fromWidgetId, fromPortId, toWidgetId, toPortId)) {
-        appendLog("Connection rejected: this connection already exists.");
-        return;
-      }
-
-      pushHistorySnapshot();
-      connectionCounter += 1;
-      const fromKind = getPortKind(fromWidgetId, fromPortId, "out");
-      const targetType = document.getElementById(toWidgetId)?.dataset.widgetType;
-      const toKind = isLinkedInputType(targetType)
-        ? fromKind
-        : getPortKind(toWidgetId, toPortId, "in");
-
-      if (isLinkedInputType(targetType) && getPortKind(toWidgetId, toPortId, "in") !== toKind) {
-        connections.filter(
-          (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
-        ).forEach(disconnectIfAudio);
-        connections = connections.filter(
-          (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
-        );
-      }
-
-      if (toKind !== "audio") {
-        connections.filter(
-          (c) => c.to.widgetId === toWidgetId && c.to.portId === toPortId
-        ).forEach(disconnectIfAudio);
-        connections = connections.filter(
-          (c) => !(c.to.widgetId === toWidgetId && c.to.portId === toPortId)
-        );
-      }
-      const connection = {
-        id: `conn-${connectionCounter}`,
-        from: { widgetId: fromWidgetId, portId: fromPortId },
-        to: { widgetId: toWidgetId, portId: toPortId },
-        color: getConnectionColorForOutput(fromWidgetId, fromPortId),
-      };
-      connections.push(connection);
-      if (isLinkedInputType(targetType)) autoNameLinkedInput(toWidgetId, fromWidgetId, fromPortId, toPortId);
-
-      // toKind alone, not fromKind too: a control-only source (Knob, Const,
-      // ...) can still own a real WebAudio node (see audio-engine.js's
-      // _resolveOutputFromEntry) and needs wiring into an audio-shaped
-      // destination like a Multiplexer/Mixer "inN" - otherwise a Debug/
-      // Voltmeter reading that destination's output stays stuck at 0
-      // (tickDebugVoltmeterAudioSources samples the real WebAudio graph, not
-      // the discrete propagate() path). Harmless when the source has no such
-      // node: audioEngine.connect()'s _resolveScaledOutput resolves to null
-      // and the connect is silently skipped, same as before.
-      if (connectionTouchesLinkedIO(connection)) refreshLinkedIO();
-      else connectIfAudio(connection);
-
-      refreshControlGraph();
-      refreshVoiceGroups();
-      drawConnections();
-      savePresetNow();
+      const result = createConnection(fromDot.dataset.widgetId, fromDot.dataset.portId, target.dataset.widgetId, target.dataset.portId);
+      if (!result.ok) appendLog(result.error);
     }
   }
   activeConnectionDragCleanup = () => onUp({ clientX: -1, clientY: -1 });
@@ -24701,6 +24764,80 @@ async function refreshPresetMenu() {
   presetSelect.value = currentPresetName || "";
 }
 
+// File > Rename Preset: gives the loaded preset another name on the device. Unsaved changes are
+// written under the old name first, then the file moves; the device reloads it under the new name.
+async function renamePresetByName(oldName, newName) {
+  if ((await fetchPresetList()).includes(newName)) return { ok: false, error: `A preset named "${newName}" already exists` };
+  await flushParamAutosave();
+  try {
+    const res = await fetch(`/api/preset/rename?name=${encodeURIComponent(oldName)}&to=${encodeURIComponent(newName)}`, { method: "POST" });
+    if (!res.ok) throw new Error(res.status === 409 ? "name already in use" : `HTTP ${res.status}`);
+  } catch (err) {
+    appendLog(`Preset "${oldName}" could not be renamed: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+  if (currentPresetName === oldName) currentPresetName = newName;
+  pendingPresetName = null;
+  await refreshPresetMenu();
+  appendLog(`Preset "${oldName}" renamed to "${newName}".`);
+  return { ok: true };
+}
+
+function presetNameProblem(name) {
+  if (!name || /[\\/:*?"<>|\x00-\x1f]/.test(name) || name.startsWith(".") || name.includes("..") || name.length > 60) {
+    return "That name is not allowed";
+  }
+  return "";
+}
+
+async function handleRenamePreset() {
+  if (currentPresetName === null) {
+    showToast("Save the preset first, then rename it");
+    return;
+  }
+  const oldName = currentPresetName;
+  const input = prompt(`Rename preset "${oldName}" to:`, oldName);
+  if (input === null) return;
+  const newName = input.trim();
+  if (!newName || newName === oldName) return;
+  const problem = presetNameProblem(newName);
+  if (problem) {
+    showToast(problem);
+    return;
+  }
+  const result = await renamePresetByName(oldName, newName);
+  showToast(result.ok ? `Renamed to "${newName}"` : result.error);
+}
+
+// File > Delete Preset: removes the loaded preset from the device after a confirmation. The editor
+// then shows a new empty preset (the device switches to its unnamed slot the same way).
+async function deletePresetByName(name) {
+  clearTimeout(paramAutosaveTimer); // a pending autosave must not write the preset back
+  paramAutosaveTimer = null;
+  try {
+    const res = await fetch(`/api/preset/delete?name=${encodeURIComponent(name)}`, { method: "POST" });
+    if (!res.ok) throw new Error(res.status === 404 ? "no such preset" : `HTTP ${res.status}`);
+  } catch (err) {
+    appendLog(`Preset "${name}" could not be deleted: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+  appendLog(`Preset "${name}" deleted.`);
+  if (currentPresetName === name) await loadPresetByName("", { activate: false });
+  else await refreshPresetMenu();
+  return { ok: true };
+}
+
+async function handleDeletePreset() {
+  if (currentPresetName === null) {
+    showToast("Nothing to delete - this preset was never saved");
+    return;
+  }
+  const name = currentPresetName;
+  if (!confirm(`Delete preset "${name}"? It is removed from the device and cannot be restored.`)) return;
+  const result = await deletePresetByName(name);
+  showToast(result.ok ? `Preset "${name}" deleted` : "Preset could not be deleted");
+}
+
 async function handleExplicitSave() {
   if (currentPresetName === null) {
     handleSaveAs();
@@ -24717,14 +24854,14 @@ async function handleExplicitSave() {
 
 
 // options.template: base name of the preset JSON in data/static/presets/ the new preset starts from.
-async function handleNewPreset({ template = "empty" } = {}) {
+async function handleNewPreset({ template = "empty", skipConfirm = false } = {}) {
   const generatorWidgetCount = generatorPageNames().reduce(
     (count, name) => count + pages[name].canvasContentEl.querySelectorAll('.widget-instance:not([data-widget-type="audio-output-link"])').length,
     0
   );
   const hasWidgets = generatorWidgetCount > 0 ||
     pages.fx.canvasContentEl.querySelectorAll(".widget-instance").length > 1;
-  if (currentPresetName === null && hasWidgets) {
+  if (currentPresetName === null && hasWidgets && !skipConfirm) {
     if (!confirm("Discard unsaved preset?")) return;
   }
   
@@ -25779,7 +25916,10 @@ function connectWs() {
       flashMidiActivity();
     } else if (data.type === "midi-error") {
       appendLog(`MIDI error: ${data.error}`);
+    } else if (data.type === "mcpRequest" || data.type === "mcpReady") {
+      mcpHost?.onMessage(data);
     } else if (data.type === "cpuLoad") {
+      lastCpuLoad = data;
       updateCpuLoadDisplay(data.core0, data.core1, data.underruns);
       updateMemStatsDisplay(data.psFreeKb, data.psTotalKb, data.sysFreeKb, data.sysTotalKb);
     } else if (data.type === "nodeCpu") {
@@ -25805,6 +25945,7 @@ function connectWs() {
 
   socket.addEventListener("open", () => {
     if (currentSocket !== socket) return;
+    mcpHost?.hello();
     lastWsMessageAt = 0;
     wsLastGoodAt = Date.now();
     clearTimeout(connectionLostUiTimer);
@@ -26079,3 +26220,141 @@ async function loadMidiDevices() {
 }
 
 loadMidiDevices();
+
+
+// ---------------------------------------------------------------------------------------------
+// MCP: lets a language model build and play patches through the device's /mcp proxy (see
+// mcp-tools.js). The tools run the same editor functions a person's mouse would.
+// ---------------------------------------------------------------------------------------------
+var lastCpuLoad = null;
+
+function mcpWidgetPageName(el) {
+  return Object.keys(pages).find((name) => pages[name].canvasContentEl.contains(el)) || "generator";
+}
+
+function mcpWidgetInfo(id) {
+  const el = document.getElementById(id);
+  if (!el || !el.classList.contains("widget-instance")) return null;
+  const ports = [];
+  const seen = new Set();
+  el.querySelectorAll(".port-dot").forEach((dot) => {
+    const key = `${dot.dataset.portDir}:${dot.dataset.portId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const label = dot.closest(".port-row")?.querySelector(".port-label")?.textContent?.trim() || "";
+    ports.push({ id: dot.dataset.portId, dir: dot.dataset.portDir, label });
+  });
+  return {
+    id,
+    type: el.dataset.widgetType,
+    label: el.querySelector(".widget-instance-label")?.textContent || el.dataset.widgetType,
+    page: mcpWidgetPageName(el),
+    x: parseInt(el.style.left, 10) || 0,
+    y: parseInt(el.style.top, 10) || 0,
+    ports,
+  };
+}
+
+function mcpAllWidgetIds() {
+  const ids = [];
+  Object.keys(pages).forEach((name) => {
+    pages[name].canvasContentEl.querySelectorAll(".widget-instance").forEach((el) => {
+      if (!ids.includes(el.id)) ids.push(el.id);
+    });
+  });
+  return ids;
+}
+
+var mcpHost = createMcpHost({
+  wsSend,
+  widgetTypes: () => WIDGET_TYPES,
+  widgetCategories: () => WIDGET_CATEGORIES,
+  currentPresetName: () => currentPresetName,
+  presetNameProblem,
+  widgetInfo: mcpWidgetInfo,
+  getParams: (id) => getWidgetParams(document.getElementById(id)?.dataset.widgetType, id),
+  applyParams: (id, params) => {
+    applyWidgetParams(document.getElementById(id).dataset.widgetType, id, params);
+    refreshControlGraph();
+  },
+  commit: () => { drawConnections(); savePresetNow(); },
+  graph: () => ({
+    preset: currentPresetName,
+    pages: Object.keys(pages).map((name) => ({ id: name, title: pages[name].title, kind: pages[name].kind })),
+    widgets: mcpAllWidgetIds().map(mcpWidgetInfo),
+    connections: connections.map((c) => ({ id: c.id, from: { widget: c.from.widgetId, port: c.from.portId }, to: { widget: c.to.widgetId, port: c.to.portId } })),
+  }),
+  status: () => ({
+    preset: currentPresetName,
+    widgets: mcpAllWidgetIds().length,
+    cables: connections.length,
+    autosave: paramAutosaveEnabled,
+    device: lastCpuLoad,
+  }),
+  newPreset: (template) => handleNewPreset({ template, skipConfirm: true }),
+  addWidget: (type, page, x, y, label) => {
+    const candidates = Object.keys(pages).filter((name) => (pages[name].allowedTypes || []).includes(type));
+    if (candidates.length === 0) throw new Error(`The widget type "${type}" cannot be placed on any page.`);
+    const pageName = page || (candidates.includes("generator") ? "generator" : candidates[0]);
+    if (!pages[pageName]) throw new Error(`Unknown page "${pageName}". Pages: ${Object.keys(pages).join(", ")}.`);
+    if (!candidates.includes(pageName)) throw new Error(`"${type}" is not available on page "${pageName}" - use ${candidates.join(" or ")}.`);
+    if (OUTPUT_SINGLETON_TYPES.includes(type) && pages.fx.canvasContentEl.querySelector(`.widget-instance[data-widget-type="${type}"]`)) {
+      throw new Error(`There is already a ${WIDGET_TYPES[type].label}; only one is allowed.`);
+    }
+    switchPage(pageName);
+    const count = pages[pageName].canvasContentEl.querySelectorAll(".widget-instance").length;
+    const px = Number.isFinite(x) ? x : 120 + (count % 4) * 440;
+    const py = Number.isFinite(y) ? y : 100 + Math.floor(count / 4) * 380;
+    pushHistorySnapshot();
+    const el = createWidget(type, label || WIDGET_TYPES[type].label, snap(px), snap(py));
+    return el.id;
+  },
+  removeWidget: (id) => {
+    if (!document.getElementById(id) || LINK_WIDGET_TYPES.includes(document.getElementById(id).dataset.widgetType)) return false;
+    pushHistorySnapshot();
+    removeWidget(id);
+    return true;
+  },
+  moveWidget: (id, x, y) => {
+    const el = document.getElementById(id);
+    el.style.left = `${snap(x)}px`;
+    el.style.top = `${snap(y)}px`;
+  },
+  connect: (fromWidget, fromPort, toWidget, toPort) => {
+    const result = createConnection(fromWidget, fromPort, toWidget, toPort);
+    if (result.ok) drawConnections();
+    return result;
+  },
+  disconnect: (connectionId) => {
+    const conn = connections.find((c) => c.id === connectionId);
+    if (!conn) return false;
+    pushHistorySnapshot();
+    disconnectIfAudio(conn);
+    connections = connections.filter((c) => c !== conn);
+    refreshControlGraph();
+    refreshVoiceGroups();
+    drawConnections();
+    savePresetNow();
+    return true;
+  },
+  sendNote: (on, note, velocity, channel) => wsSend({ type: "midiTest", midiType: on ? "note_on" : "note_off", channel, note, velocity }),
+  listPresets: () => fetchPresetList(),
+  loadPreset: (name) => loadPresetByName(name, { activate: true }),
+  saveAs: async (name) => {
+    const ok = await saveToServer(name);
+    if (ok) {
+      currentPresetName = name;
+      await refreshPresetMenu();
+    }
+    return ok;
+  },
+  renamePreset: (oldName, newName) => renamePresetByName(oldName, newName),
+  deletePreset: (name) => deletePresetByName(name),
+});
+
+// The tab offers itself as the MCP executor whenever it is shown (the newest one wins on the device).
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") mcpHost.hello();
+});
+// The socket can already be open by now (its "open" handler ran before mcpHost existed).
+mcpHost.hello();

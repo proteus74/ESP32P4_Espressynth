@@ -6623,3 +6623,38 @@ input[type="range"].port-slider + .port-value {
   border: 1px solid #111;
   border-radius: 2px;
 }
+
+/* Info dialog header: brand and title on the left, Jolabi logo in the top right corner */
+.info-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+.info-brand {
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.2em;
+  color: var(--accent, #38bdf8);
+  margin-bottom: 0.3rem;
+}
+.info-head h3 {
+  margin: 0;
+}
+.info-logo {
+  display: block;
+  width: 130px;
+  height: auto;
+  flex: none;
+}
+
+/* Settings: MCP section */
+.mcp-command {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.78rem;
+  resize: none;
+  margin: 0.3rem 0 0.6rem;
+}

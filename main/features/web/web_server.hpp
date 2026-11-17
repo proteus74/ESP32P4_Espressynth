@@ -203,7 +203,7 @@ inline esp_err_t begin() {
     // match (see sdkconfig.defaults) - httpd's own socket count is capped by that ceiling.
     // Harmless overhead when the synth feature is disabled - just a few more socket slots.
     config.max_open_sockets = 12;
-    config.max_uri_handlers = 40; // ws, preset get/post/list, wavetable, samples/soundfonts, files
+    config.max_uri_handlers = 48; // ws, preset get/post/list, wavetable, samples/soundfonts, files
                                   // list/upload/delete/rename, midi devices, version, memory
                                   // diagnostics, static "/*"
     config.stack_size = 8192; // measured uploads/reloads leave >4 KiB free; default (4096) is too tight for the file-explorer handlers'

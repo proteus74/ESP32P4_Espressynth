@@ -115,6 +115,7 @@ static uint8_t* s_lvgl_frame_buffer = nullptr;
 static uint8_t s_next_frame_buffer = 1;
 #endif
 static esp_lcd_touch_handle_t s_touch_handle = nullptr;
+static std::atomic<bool> s_touch_down{false}; // last polled state, see touch_pressed()
 #if APP_BOOT_SPLASH
 static std::atomic<bool> s_splash_frame_pending{false};
 static std::atomic<TickType_t> s_splash_visible_since{0};
@@ -464,6 +465,7 @@ void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     if (s_touch_handle == nullptr) {
         return;
     }
+    s_touch_down.store(false, std::memory_order_relaxed);
 
     uint16_t x = 0;
     uint16_t y = 0;
@@ -474,6 +476,7 @@ void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
+        s_touch_down.store(true, std::memory_order_relaxed);
         static int last_logged_x = -1;
         static int last_logged_y = -1;
         if (last_logged_x != x || last_logged_y != y) {
@@ -990,6 +993,11 @@ void show_splash_screen(lv_display_t* display) {
  *        Bringing up the ESP-Hosted SDIO link can knock the scan-out out of sync without any
  *        redraw following that would trigger the per-flush resync.
  */
+/** @brief True while a finger rests on the touch screen (state of the last LVGL poll). */
+inline bool touch_pressed() {
+    return s_touch_down.load(std::memory_order_relaxed);
+}
+
 inline void resync_display() {
     if (s_panel != nullptr) crow_lcd_rgb_panel_restart(s_panel);
 }

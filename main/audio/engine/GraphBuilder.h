@@ -120,7 +120,12 @@ constexpr char kGraphBuilderTag[] = "GraphBuilder";
 // Internal RAM that a graph build must leave free for everything else (LittleFS, httpd, WiFi
 // buffers, LVGL draw strips...). Below this, per-instance data goes to PSRAM instead of
 // shrinking the voice count: polyphonic patches (6-operator FM x 8 voices) need ~170 KB.
-constexpr size_t kInternalReserveBytes = 48 * 1024;
+// 48 KB was too little: a large patch ("In The Air", 76 instances) left 47 KB internal and
+// 17 KB DMA-capable. ESP-Hosted needs a DMA buffer for every frame to the C6, so Wi-Fi/BLE
+// failed at boot ("tx_bytes failed", looks like a dead co-processor) and a browser's parallel
+// connections stalled (httpd send timeouts). Allocations outside this check take another
+// ~40 KB, so 144 KB here leaves ~100 KB internal / ~64 KB DMA with that patch (measured).
+constexpr size_t kInternalReserveBytes = 144 * 1024;
 
 inline bool internalRamLow(size_t aboutToAllocate)
 {

@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "lwip/ip4_addr.h"
 #include "cJSON.h"
+#include "features/synth/SafeStart.h"
 #include "esp_heap_caps.h"
 
 #include <algorithm>
@@ -430,7 +431,8 @@ extern "C" bool eez_list_presets(EezPresetList *list) {
 #if defined(CONFIG_APP_ENABLE_SYNTH)
     list->count = 1;
     EezPresetEntry *current = &list->entries[0];
-    snprintf(current->display_name, sizeof(current->display_name), "Current");
+    // During a safe start nothing is loaded; picking this entry loads the unnamed slot as usual.
+    snprintf(current->display_name, sizeof(current->display_name), safestart::active() ? "Safe start" : "Current");
     read_preset_metadata(presetpaths::unnamedPath(), current);
 
     DIR *dir = opendir(presetpaths::kDir);
@@ -601,6 +603,19 @@ extern "C" void eez_synth_step_preset(int direction) {
 }
 
 extern "C" void app_main(void) {
+    // cJSON documents go to PSRAM. malloc() serves anything below 16 KB from internal RAM first
+    // (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL), so parsing a large preset - thousands of small nodes,
+    // while the previous graph still exists - drained the internal heap to a few bytes. Drivers
+    // that need internal/DMA memory (ESP-Hosted SDIO, Wi-Fi) then failed: the network stalled on
+    // every preset reload, e.g. after each structural edit from the editor or MCP.
+    static cJSON_Hooks psramHooks = {
+        [](size_t size) -> void * {
+            return heap_caps_malloc_prefer(size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+        },
+        [](void *ptr) { heap_caps_free(ptr); },
+    };
+    cJSON_InitHooks(&psramHooks);
+
     App::register_callbacks();
     App::init();
     App::start_background_tasks();

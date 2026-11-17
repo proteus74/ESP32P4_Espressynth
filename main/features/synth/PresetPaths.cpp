@@ -1,4 +1,5 @@
 #include "PresetPaths.h"
+#include "SafeStart.h"
 
 #include <cstdio>
 #include <cstring>
@@ -76,6 +77,7 @@ bool readLastMarker(char *outName, size_t outSize)
 
 void writeLastMarker(const char *name)
 {
+    safestart::leave(); // a deliberate preset selection ends a safe start
     FILE *f = fopen(kMarkerPath, "wb");
     if (f == nullptr)
     {
@@ -91,7 +93,13 @@ void writeLastMarker(const char *name)
 void resolveActivePath(char *outPath, size_t outPathSize, char *outName, size_t outNameSize)
 {
     char marker[kMaxNameLen] = {};
-    if (readLastMarker(marker, sizeof(marker)))
+    if (safestart::active())
+    {
+        // Nothing is loaded and nothing is overwritten: an empty scratch slot is active.
+        snprintf(outPath, outPathSize, "%s", safestart::scratchPath());
+        outName[0] = '\0';
+    }
+    else if (readLastMarker(marker, sizeof(marker)))
     {
         pathForName(marker, outPath, outPathSize);
         snprintf(outName, outNameSize, "%s", marker);

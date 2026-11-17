@@ -32,6 +32,10 @@ struct DeviceSettingsState
     // "Autosave" in the web UI: parameter changes (browser, MIDI CC, touch screen) are saved
     // into the current preset on their own - see ParamJournal.hpp and main.js markDirty().
     bool paramAutosave = false;
+    // MCP access (see mcp_post_handler in synth_web_api.hpp): off by default; a request needs the
+    // token as "Authorization: Bearer <token>". The token is made on first use.
+    bool mcpEnabled = false;
+    char mcpToken[33] = "";
     // Runtime-only edge-detection state (NOT persisted) - true while the
     // learned CC is currently held above the press threshold, so a preset
     // step fires once on the rising edge instead of once per MIDI message.
@@ -70,7 +74,7 @@ inline void loadDeviceSettingsFromFs()
     {
         return;
     }
-    char buf[384];
+    char buf[512];
     const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
@@ -91,6 +95,10 @@ inline void loadDeviceSettingsFromFs()
     cJSON *volumeChannel = cJSON_GetObjectItemCaseSensitive(root, "volumeChannel");
     cJSON *paramAutosave = cJSON_GetObjectItemCaseSensitive(root, "paramAutosave");
     if (cJSON_IsBool(paramAutosave)) ds.paramAutosave = cJSON_IsTrue(paramAutosave);
+    cJSON *mcpEnabled = cJSON_GetObjectItemCaseSensitive(root, "mcpEnabled");
+    cJSON *mcpToken = cJSON_GetObjectItemCaseSensitive(root, "mcpToken");
+    if (cJSON_IsBool(mcpEnabled)) ds.mcpEnabled = cJSON_IsTrue(mcpEnabled);
+    if (cJSON_IsString(mcpToken) && strlen(mcpToken->valuestring) == 32) snprintf(ds.mcpToken, sizeof(ds.mcpToken), "%s", mcpToken->valuestring);
     if (cJSON_IsString(name)) snprintf(ds.name, sizeof(ds.name), "%s", name->valuestring);
     if (cJSON_IsNumber(prevCc)) ds.prevCc = prevCc->valueint;
     if (cJSON_IsNumber(prevChannel)) ds.prevChannel = prevChannel->valueint;
@@ -109,10 +117,11 @@ inline int formatDeviceSettingsJson(char *buf, size_t bufSize)
     const auto &ds = deviceSettings();
     return snprintf(buf, bufSize,
                      "{\"name\":\"%s\",\"prevCc\":%d,\"prevChannel\":%d,\"nextCc\":%d,\"nextChannel\":%d,"
-                     "\"volume\":%.3f,\"volumeCc\":%d,\"volumeChannel\":%d,\"paramAutosave\":%s}",
+                     "\"volume\":%.3f,\"volumeCc\":%d,\"volumeChannel\":%d,\"paramAutosave\":%s,"
+                     "\"mcpEnabled\":%s,\"mcpToken\":\"%s\"}",
                      ds.name, ds.prevCc, ds.prevChannel, ds.nextCc, ds.nextChannel,
                      static_cast<double>(ds.volume), ds.volumeCc, ds.volumeChannel,
-                     ds.paramAutosave ? "true" : "false");
+                     ds.paramAutosave ? "true" : "false", ds.mcpEnabled ? "true" : "false", ds.mcpToken);
 }
 
 // Persists the current deviceSettings() state - called only from the
@@ -121,7 +130,7 @@ inline int formatDeviceSettingsJson(char *buf, size_t bufSize)
 // per-message MIDI path.
 inline void saveDeviceSettingsToFs()
 {
-    char json[384];
+    char json[512];
     const int n = formatDeviceSettingsJson(json, sizeof(json));
     if (n <= 0 || static_cast<size_t>(n) >= sizeof(json))
     {

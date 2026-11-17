@@ -7,6 +7,7 @@
 #include <new>
 
 #include <dirent.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -17,6 +18,7 @@
 #include "esp_http_server.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -27,6 +29,7 @@
 #include "MemoryDiagnostics.h"
 #include "PresetChangedMsg.h"
 #include "PresetPaths.h"
+#include "SafeStart.h"
 #include "PresetWriteCache.hpp"
 #include "SamplePaths.h"
 #include "UsbMidiEvent.h"
@@ -115,6 +118,19 @@ QueueHandle_t midi_fifo() {
     return handle;
 }
 
+// True when the socket takes data within "wait_ms". A browser tab that stopped reading (frozen,
+// hung, link gone without a reset) fills the TCP send buffer; a blocking send to it would then
+// hold the single httpd task for the whole send timeout (5 s) - per frame, stalling every other
+// request. Such a client is closed instead; a live editor reconnects by itself.
+bool ws_writable(int fd, int wait_ms) {
+    fd_set writable;
+    FD_ZERO(&writable);
+    FD_SET(fd, &writable);
+    timeval timeout = {};
+    timeout.tv_usec = wait_ms * 1000;
+    return select(fd + 1, nullptr, &writable, nullptr, &timeout) > 0;
+}
+
 void broadcast_work(void *arg) {
     BroadcastWork *work = static_cast<BroadcastWork *>(arg);
     httpd_handle_t server = Feature::Web::handle();
@@ -128,7 +144,7 @@ void broadcast_work(void *arg) {
         for (size_t i = 0; i < fd_count; ++i) {
             const int fd = client_fds[i];
             if (httpd_ws_get_fd_info(server, fd) == HTTPD_WS_CLIENT_WEBSOCKET &&
-                httpd_ws_send_frame_async(server, fd, &frame) != ESP_OK) {
+                (!ws_writable(fd, 50) || httpd_ws_send_frame_async(server, fd, &frame) != ESP_OK)) {
                 // Browser reloads and link loss can invalidate a socket between enumeration
                 // and send. Stop broadcasting to it.
                 httpd_sess_trigger_close(server, fd);
@@ -1035,6 +1051,397 @@ esp_err_t preset_select_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- MCP proxy: POST /mcp, POST /api/mcp/reply -------------------------------------------------
+// The device answers no MCP request itself. A request is handed to the web editor that registered
+// as executor over its WebSocket ("mcpHello"), and the editor's answer comes back as a plain POST
+// (/api/mcp/reply - no 8 KiB WebSocket frame limit). esp_http_server runs handlers one after the
+// other, so /mcp becomes an async request: its handler returns at once and a short-lived task waits
+// for the editor and sends the response.
+namespace mcp {
+constexpr size_t kMaxPending = 4;
+constexpr size_t kMaxRequestBytes = 64 * 1024;
+constexpr size_t kMaxReplyBytes = 256 * 1024;
+constexpr uint32_t kTimeoutMs = 30000;
+
+struct Pending {
+    bool used = false;
+    uint32_t id = 0;
+    httpd_req_t *request = nullptr;
+    char *idJson = nullptr; // the JSON-RPC id of the request, for error answers
+    SemaphoreHandle_t done = nullptr;
+    char *reply = nullptr;
+    size_t replyLen = 0;
+};
+
+std::atomic<int> executor_fd{-1};
+char session[33] = ""; // secret the executor must send with its replies
+Pending pending[kMaxPending];
+uint32_t next_id = 0;
+SemaphoreHandle_t table_lock = nullptr;
+
+bool init_lock() {
+    if (table_lock == nullptr) table_lock = xSemaphoreCreateMutex();
+    return table_lock != nullptr;
+}
+
+void random_hex(char *out, size_t hex_chars) {
+    uint8_t bytes[16];
+    esp_fill_random(bytes, sizeof(bytes));
+    for (size_t i = 0; i < hex_chars / 2 && i < sizeof(bytes); ++i) snprintf(out + i * 2, 3, "%02x", bytes[i]);
+    out[hex_chars] = 0;
+}
+
+// Makes the token the first time MCP is switched on (or when asked to).
+void ensure_token(bool regenerate) {
+    auto &ds = synth::deviceSettings();
+    if (regenerate || strlen(ds.mcpToken) != 32) random_hex(ds.mcpToken, 32);
+}
+
+bool token_ok(httpd_req_t *req) {
+    const auto &ds = synth::deviceSettings();
+    if (strlen(ds.mcpToken) != 32) return false;
+    char header[96] = {};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", header, sizeof(header)) != ESP_OK) return false;
+    if (strncmp(header, "Bearer ", 7) != 0 || strlen(header + 7) != 32) return false;
+    uint8_t diff = 0; // compares all characters, no early exit
+    for (size_t i = 0; i < 32; ++i) diff |= static_cast<uint8_t>(header[7 + i] ^ ds.mcpToken[i]);
+    return diff == 0;
+}
+
+// JSON-RPC error answer ("idJson" is the request's id as JSON text, nullptr = null).
+esp_err_t send_error(httpd_req_t *req, const char *idJson, int code, const char *message) {
+    char body[320];
+    snprintf(body, sizeof(body), "{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":%d,\"message\":\"%s\"}}",
+             idJson != nullptr ? idJson : "null", code, message);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, body);
+}
+
+char *read_body(httpd_req_t *req, size_t maxBytes, size_t &len) {
+    len = 0;
+    if (req->content_len == 0 || req->content_len > maxBytes) return nullptr;
+    char *body = static_cast<char *>(heap_caps_malloc(req->content_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (body == nullptr) return nullptr;
+    size_t received = 0;
+    while (received < req->content_len) {
+        const int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (ret <= 0) {
+            heap_caps_free(body);
+            return nullptr;
+        }
+        received += static_cast<size_t>(ret);
+    }
+    body[received] = 0;
+    len = received;
+    return body;
+}
+
+bool executor_present(httpd_handle_t server) {
+    const int fd = executor_fd.load();
+    return fd >= 0 && httpd_ws_get_fd_info(server, fd) == HTTPD_WS_CLIENT_WEBSOCKET;
+}
+
+// The editor's WebSocket sits idle while the MCP client opens connections of its own; with
+// lru_purge_enable httpd would close that "oldest" socket once the socket slots run out.
+void keep_executor_alive(httpd_handle_t server) {
+    const int fd = executor_fd.load();
+    if (fd >= 0) httpd_sess_update_lru_counter(server, fd);
+}
+
+// Sends {"type":"mcpRequest","id":N,"rpc":<raw JSON-RPC text>} to the executor. False when nobody listens.
+// Runs in the httpd task like every other WebSocket send, so frames never interleave.
+bool forward_to_executor(httpd_handle_t server, uint32_t id, const char *rpc, size_t rpcLen) {
+    if (!executor_present(server)) return false;
+    const int fd = executor_fd.load();
+    if (!ws_writable(fd, 200)) { // the tab stopped reading: drop it, the editor reconnects
+        httpd_sess_trigger_close(server, fd);
+        executor_fd.store(-1);
+        return false;
+    }
+    keep_executor_alive(server);
+    const size_t total = rpcLen + 64;
+    char *text = static_cast<char *>(heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (text == nullptr) return false;
+    const int head = snprintf(text, total, "{\"type\":\"mcpRequest\",\"id\":%u,\"rpc\":", static_cast<unsigned>(id));
+    memcpy(text + head, rpc, rpcLen);
+    text[head + rpcLen] = '}';
+    httpd_ws_frame_t frame = {};
+    frame.type = HTTPD_WS_TYPE_TEXT;
+    frame.payload = reinterpret_cast<uint8_t *>(text);
+    frame.len = static_cast<size_t>(head) + rpcLen + 1;
+    const bool sent = httpd_ws_send_frame_async(server, fd, &frame) == ESP_OK;
+    heap_caps_free(text);
+    if (!sent) { // a partly sent frame leaves the stream unusable
+        httpd_sess_trigger_close(server, fd);
+        executor_fd.store(-1);
+    }
+    return sent;
+}
+
+void release_slot(Pending &slot) {
+    if (slot.idJson != nullptr) cJSON_free(slot.idJson);
+    if (slot.reply != nullptr) heap_caps_free(slot.reply);
+    if (slot.done != nullptr) vSemaphoreDelete(slot.done);
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    slot = Pending{};
+    xSemaphoreGive(table_lock);
+}
+
+// Waits for the editor's answer and finishes the HTTP response of an async /mcp request.
+void wait_task(void *arg) {
+    Pending &slot = *static_cast<Pending *>(arg);
+    const bool answered = xSemaphoreTake(slot.done, pdMS_TO_TICKS(kTimeoutMs)) == pdTRUE;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    char *reply = answered ? slot.reply : nullptr;
+    const size_t replyLen = slot.replyLen;
+    slot.id = 0; // late replies find no slot any more
+    xSemaphoreGive(table_lock);
+    httpd_req_t *request = slot.request;
+    if (reply != nullptr) {
+        httpd_resp_set_type(request, "application/json");
+        httpd_resp_send(request, reply, static_cast<ssize_t>(replyLen));
+    } else {
+        send_error(request, slot.idJson, -32000,
+                   "The editor did not answer in time. Check that the editor tab is open and not blocked by a dialog.");
+    }
+    httpd_req_async_handler_complete(request);
+    release_slot(slot);
+    vTaskDelete(nullptr);
+}
+} // namespace mcp
+
+esp_err_t mcp_post_handler(httpd_req_t *req) {
+    auto &ds = synth::deviceSettings();
+    if (!ds.mcpEnabled) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "MCP is switched off in the device settings");
+        return ESP_FAIL;
+    }
+    if (!mcp::token_ok(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Bearer");
+        httpd_resp_sendstr(req, "missing or wrong token");
+        return ESP_OK;
+    }
+    size_t len = 0;
+    char *body = mcp::read_body(req, mcp::kMaxRequestBytes, len);
+    if (body == nullptr) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid request size");
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_ParseWithLength(body, len);
+    if (root == nullptr || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        heap_caps_free(body);
+        return mcp::send_error(req, nullptr, -32700, "Parse error: send one JSON-RPC object");
+    }
+    const cJSON *id_item = cJSON_GetObjectItemCaseSensitive(root, "id");
+    char *id_json = id_item != nullptr ? cJSON_PrintUnformatted(id_item) : nullptr;
+    cJSON_Delete(root);
+    httpd_handle_t server = req->handle;
+    mcp::init_lock();
+
+    if (id_json == nullptr) { // notification: no answer expected, the editor needs none
+        heap_caps_free(body);
+        httpd_resp_set_status(req, "202 Accepted");
+        httpd_resp_send(req, nullptr, 0);
+        return ESP_OK;
+    }
+
+    // Free slot + request id.
+    mcp::Pending *slot = nullptr;
+    xSemaphoreTake(mcp::table_lock, portMAX_DELAY);
+    for (auto &candidate : mcp::pending) {
+        if (!candidate.used) {
+            candidate = mcp::Pending{};
+            candidate.used = true;
+            candidate.id = ++mcp::next_id == 0 ? ++mcp::next_id : mcp::next_id;
+            slot = &candidate;
+            break;
+        }
+    }
+    xSemaphoreGive(mcp::table_lock);
+    if (slot == nullptr) {
+        heap_caps_free(body);
+        const esp_err_t result = mcp::send_error(req, id_json, -32001, "Too many requests at once, try again");
+        cJSON_free(id_json);
+        return result;
+    }
+    slot->idJson = id_json;
+    slot->done = xSemaphoreCreateBinary();
+
+    const bool forwarded = mcp::forward_to_executor(server, slot->id, body, len);
+    heap_caps_free(body);
+    if (!forwarded) {
+        const esp_err_t result = mcp::send_error(req, id_json, -32000,
+            "Editor not open. Open the Espressynth web editor in a browser (the address of this device), then try again.");
+        mcp::release_slot(*slot);
+        return result;
+    }
+
+    httpd_req_t *async_req = nullptr;
+    if (httpd_req_async_handler_begin(req, &async_req) != ESP_OK) {
+        mcp::release_slot(*slot);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "async handling unavailable");
+        return ESP_FAIL;
+    }
+    slot->request = async_req;
+    if (xTaskCreate(&mcp::wait_task, "mcp_wait", 6144, slot, 5, nullptr) != pdPASS) {
+        mcp::send_error(async_req, id_json, -32002, "Out of memory");
+        httpd_req_async_handler_complete(async_req);
+        mcp::release_slot(*slot);
+    }
+    return ESP_OK;
+}
+
+// GET /mcp would open a server-sent-events stream; this proxy does not offer one.
+esp_err_t mcp_get_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, "405 Method Not Allowed");
+    httpd_resp_set_hdr(req, "Allow", "POST");
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
+// POST /api/mcp/reply?id=N&s=<session>: the editor's answer to an "mcpRequest".
+esp_err_t mcp_reply_handler(httpd_req_t *req) {
+    char id_text[16] = {};
+    char session_text[40] = {};
+    if (!extract_query_param(req, "id", id_text, sizeof(id_text)) ||
+        !extract_query_param(req, "s", session_text, sizeof(session_text)) ||
+        strlen(mcp::session) != 32 || strcmp(session_text, mcp::session) != 0) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "not the registered editor");
+        return ESP_FAIL;
+    }
+    const uint32_t id = static_cast<uint32_t>(strtoul(id_text, nullptr, 10));
+    size_t len = 0;
+    char *body = mcp::read_body(req, mcp::kMaxReplyBytes, len);
+    if (body == nullptr) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid reply size");
+        return ESP_FAIL;
+    }
+    mcp::init_lock();
+    bool delivered = false;
+    xSemaphoreTake(mcp::table_lock, portMAX_DELAY);
+    for (auto &slot : mcp::pending) {
+        if (slot.used && slot.id == id && slot.id != 0 && slot.reply == nullptr) {
+            slot.reply = body;
+            slot.replyLen = len;
+            xSemaphoreGive(slot.done);
+            delivered = true;
+            break;
+        }
+    }
+    xSemaphoreGive(mcp::table_lock);
+    if (!delivered) {
+        heap_caps_free(body);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no request waits for this answer");
+        return ESP_FAIL;
+    }
+    mcp::keep_executor_alive(req->handle);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// POST /api/preset/delete?name=<name>: removes a named preset from the device - its file, a write
+// still parked in the preset cache and its journal sidecar. When it is the active preset the
+// device falls back to the unnamed slot (like "New"), which also tells every browser and the
+// touch display (they follow the preset change and refresh their preset lists).
+esp_err_t preset_delete_handler(httpd_req_t *req) {
+    char raw_name[presetpaths::kMaxNameLen] = {};
+    if (!extract_preset_name_param(req, raw_name, sizeof(raw_name)) || raw_name[0] == '\0' ||
+        !presetpaths::isSafeName(raw_name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset name");
+        return ESP_FAIL;
+    }
+
+    char preset_path[kMaxPathLen] = {};
+    presetpaths::pathForName(raw_name, preset_path, sizeof(preset_path));
+    struct stat preset_stat = {};
+    if (stat(preset_path, &preset_stat) != 0 || S_ISDIR(preset_stat.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "preset not found");
+        return ESP_FAIL;
+    }
+
+    char active_path[kMaxPathLen] = {};
+    char active_name[presetpaths::kMaxNameLen] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    const bool wasActive = strcmp(active_name, raw_name) == 0;
+
+    presetcache::discard(preset_path); // a parked write must not bring the file back
+    if (unlink(preset_path) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not delete preset");
+        return ESP_FAIL;
+    }
+    paramjournal::forget(preset_path);
+    if (wasActive) {
+        Feature::Synth::request_current_preset(); // also resets the "last active" marker
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, wasActive ? "{\"deleted\":true,\"wasActive\":true}" : "{\"deleted\":true,\"wasActive\":false}");
+    return ESP_OK;
+}
+
+// POST /api/preset/rename?name=<old>&to=<new>: renames a named preset on the device (file and
+// journal sidecar). The loaded preset is reloaded under its new name, which every browser and the
+// touch display follow like any preset change.
+esp_err_t preset_rename_handler(httpd_req_t *req) {
+    char old_name[presetpaths::kMaxNameLen] = {};
+    char new_name[presetpaths::kMaxNameLen] = {};
+    if (!extract_query_param(req, "name", old_name, sizeof(old_name)) ||
+        !extract_query_param(req, "to", new_name, sizeof(new_name)) ||
+        old_name[0] == 0 || new_name[0] == 0 || !presetpaths::isSafeName(old_name) ||
+        !presetpaths::isSafeName(new_name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset name");
+        return ESP_FAIL;
+    }
+    if (strcmp(old_name, new_name) == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "same name");
+        return ESP_FAIL;
+    }
+
+    char old_path[kMaxPathLen] = {};
+    char new_path[kMaxPathLen] = {};
+    presetpaths::pathForName(old_name, old_path, sizeof(old_path));
+    presetpaths::pathForName(new_name, new_path, sizeof(new_path));
+    struct stat st = {};
+    if (stat(old_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "preset not found");
+        return ESP_FAIL;
+    }
+    if (stat(new_path, &st) == 0) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "a preset with that name already exists");
+        return ESP_OK;
+    }
+
+    char active_path[kMaxPathLen] = {};
+    char active_name[presetpaths::kMaxNameLen] = {};
+    presetpaths::resolveActivePath(active_path, sizeof(active_path), active_name, sizeof(active_name));
+    const bool wasActive = strcmp(active_name, old_name) == 0;
+
+    paramjournal::saveNow(); // journaled knob values go to the sidecar first
+    presetcache::flushAll(); // parked writes must be on flash before the files move
+    if (rename(old_path, new_path) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not rename preset");
+        return ESP_FAIL;
+    }
+    char old_live[kMaxPathLen + 8] = {};
+    char new_live[kMaxPathLen + 8] = {};
+    snprintf(old_live, sizeof(old_live), "%s.live", old_path);
+    snprintf(new_live, sizeof(new_live), "%s.live", new_path);
+    if (stat(old_live, &st) == 0) rename(old_live, new_live);
+    paramjournal::forget(old_path); // in-memory journal state of the old name; the sidecar already moved
+    if (wasActive) {
+        Feature::Synth::request_preset_name(new_name); // reload under the new name, sets the "last active" marker
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, wasActive ? "{\"renamed\":true,\"wasActive\":true}" : "{\"renamed\":true,\"wasActive\":false}");
+    return ESP_OK;
+}
+
 esp_err_t preset_post_handler(httpd_req_t *req) {
     if (req->content_len == 0 || req->content_len > kMaxPresetBodyLen) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid preset size");
@@ -1059,11 +1466,15 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    // During a safe start an unnamed save goes to the scratch slot: the user's unnamed preset
+    // was not loaded and must not be overwritten by whatever the editor shows instead.
+    const bool to_scratch = !has_name_param && safestart::active();
     char target_path[kMaxPathLen];
     if (has_name_param) {
         presetpaths::pathForName(raw_name, target_path, sizeof(target_path));
     } else {
-        snprintf(target_path, sizeof(target_path), "%s", presetpaths::unnamedPath());
+        snprintf(target_path, sizeof(target_path), "%s",
+                 to_scratch ? safestart::scratchPath() : presetpaths::unnamedPath());
     }
 
     // Ignore mkdir failure: directory is created by Feature::Synth::init() on first boot, this
@@ -1101,6 +1512,7 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     const bool queued = strcmp(reload_param, "0") == 0
                             ? true
                             : (has_name_param ? Feature::Synth::request_preset_name(raw_name)
+                               : to_scratch   ? Feature::Synth::request_scratch_preset()
                                               : Feature::Synth::request_current_preset());
     if (!queued) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "preset reload unavailable");
@@ -1668,7 +2080,7 @@ esp_err_t masterclock_handler(httpd_req_t *req) {
 // paramUpdate branch in the /ws handler below, not a POST here.
 esp_err_t device_settings_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
-    char json[400];
+    char json[640];
     int n = synth::formatDeviceSettingsJson(json, sizeof(json));
     if (n <= 1 || static_cast<size_t>(n) >= sizeof(json)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
@@ -1862,10 +2274,18 @@ esp_err_t battery_handler(httpd_req_t *req) {
 esp_err_t version_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     const esp_app_desc_t *desc = esp_app_get_description();
-    char json[448];
+    // Safe start (SafeStart.h): the editor tells the user why the device came up without a preset.
+    char safe_start[220] = "null";
+    if (safestart::active()) {
+        char skipped_escaped[presetpaths::kMaxNameLen * 2] = {};
+        json_escape_to_buf(safestart::skippedName(), skipped_escaped, sizeof(skipped_escaped));
+        snprintf(safe_start, sizeof(safe_start), "{\"reason\":\"%s\",\"skipped\":\"%s\"}", safestart::reason(),
+                 skipped_escaped);
+    }
+    char json[700];
     snprintf(json, sizeof(json),
              "{\"version\":\"%s\",\"es8311\":%s,\"ns4168\":%s,\"pdmMic\":%s,\"battery\":%s,\"wm8960\":%s,\"wm8960In\":%s,\"ads1115\":%s,\"gp8413\":%s,\"gpioInput\":%s,"
-             "\"gpioOutputs\":%s,\"gitVersion\":\"%s\"}",
+             "\"gpioOutputs\":%s,\"gitVersion\":\"%s\",\"safeStart\":%s}",
              FIRMWARE_VERSION,
 #if defined(CONFIG_ONBOARD_AUDIO_ES8311)
              "true",
@@ -1917,7 +2337,7 @@ esp_err_t version_handler(httpd_req_t *req) {
 #else
              "false",
 #endif
-             desc->version);
+             desc->version, safe_start);
     httpd_resp_sendstr(req, json);
     return ESP_OK;
 }
@@ -2110,6 +2530,20 @@ esp_err_t websocket_handler(httpd_req_t *req) {
         cJSON *root = cJSON_Parse(reinterpret_cast<char *>(payload));
         if (root != nullptr) {
             cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+            if (cJSON_IsString(type) && strcmp(type->valuestring, "mcpHello") == 0) {
+                // The editor offers itself as the one that carries out MCP requests.
+                mcp::executor_fd.store(httpd_req_to_sockfd(req));
+                mcp::random_hex(mcp::session, 32);
+                char ready[120];
+                snprintf(ready, sizeof(ready), "{\"type\":\"mcpReady\",\"enabled\":%s,\"session\":\"%s\"}",
+                         synth::deviceSettings().mcpEnabled ? "true" : "false", mcp::session);
+                httpd_ws_frame_t ready_frame = {};
+                ready_frame.type = HTTPD_WS_TYPE_TEXT;
+                ready_frame.payload = reinterpret_cast<uint8_t *>(ready);
+                ready_frame.len = strlen(ready);
+                httpd_ws_send_frame(req, &ready_frame);
+                handled_locally = true;
+            }
             if (cJSON_IsString(type) && strcmp(type->valuestring, "midiTest") == 0) {
                 cJSON *midi_type = cJSON_GetObjectItemCaseSensitive(root, "midiType");
                 cJSON *channel = cJSON_GetObjectItemCaseSensitive(root, "channel");
@@ -2206,6 +2640,10 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     // "Autosave" toggle next to the preset selector (ParamJournal.hpp).
                     cJSON *paramAutosave = cJSON_GetObjectItemCaseSensitive(params, "paramAutosave");
                     if (cJSON_IsBool(paramAutosave)) ds.paramAutosave = cJSON_IsTrue(paramAutosave);
+                    // MCP access (mcp_post_handler): switch + token; the token is made when first needed.
+                    cJSON *mcpEnabled = cJSON_GetObjectItemCaseSensitive(params, "mcpEnabled");
+                    if (cJSON_IsBool(mcpEnabled)) ds.mcpEnabled = cJSON_IsTrue(mcpEnabled);
+                    if (ds.mcpEnabled) mcp::ensure_token(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "mcpRegenerate")));
                     // "live": header VOL slider while dragging - RAM only, saved on release.
                     if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "live"))) {
                         request_device_settings_save(); // written in the next output pause
@@ -2336,6 +2774,31 @@ inline void register_web_routes() {
         .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
         .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &preset_select_uri);
+
+    static const httpd_uri_t preset_delete_uri = {
+        .uri = "/api/preset/delete", .method = HTTP_POST, .handler = &preset_delete_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_delete_uri);
+
+    static const httpd_uri_t preset_rename_uri = {
+        .uri = "/api/preset/rename", .method = HTTP_POST, .handler = &preset_rename_handler,
+        .user_ctx = nullptr, .is_websocket = false, .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_rename_uri);
+
+    static const httpd_uri_t mcp_post_uri = {
+        .uri = "/mcp", .method = HTTP_POST, .handler = &mcp_post_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &mcp_post_uri);
+    static const httpd_uri_t mcp_get_uri = {
+        .uri = "/mcp", .method = HTTP_GET, .handler = &mcp_get_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &mcp_get_uri);
+    static const httpd_uri_t mcp_reply_uri = {
+        .uri = "/api/mcp/reply", .method = HTTP_POST, .handler = &mcp_reply_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &mcp_reply_uri);
 
     static const httpd_uri_t presets_list_uri = {
         .uri = "/api/presets", .method = HTTP_GET, .handler = &presets_list_handler, .user_ctx = nullptr,

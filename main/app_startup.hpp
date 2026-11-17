@@ -7,6 +7,8 @@
 #include "features/io/i2c_device_scan.hpp"
 #include "features/io/i2c_bus_manager.hpp"
 #include "esp_log.h"
+#include "features/synth/PresetPaths.h"
+#include "features/synth/SafeStart.h"
 
 #if defined(CONFIG_APP_ENABLE_WIFI) || defined(CONFIG_APP_ENABLE_ETHERNET)
     #include "esp_event.h"
@@ -144,6 +146,7 @@ inline void network_init_task(void*) {
     const esp_err_t hosted_init_err = static_cast<esp_err_t>(esp_hosted_init());
     if (hosted_init_err != ESP_OK) {
         ESP_LOGW("MainApp", "ESP-Hosted initialization failed: %s", esp_err_to_name(hosted_init_err));
+        safestart::markNetwork(false);
         vTaskDelete(nullptr);
         return;
     }
@@ -173,6 +176,8 @@ inline void network_init_task(void*) {
     if (wifi_err != ESP_OK) {
         ESP_LOGW("MainApp", "Wi-Fi unavailable: %s", esp_err_to_name(wifi_err));
     }
+    // The co-processor did not answer: with a preset loaded this restarts once into a safe start.
+    safestart::markNetwork(wifi_err == ESP_OK);
 #endif
 #if defined(CONFIG_APP_ENABLE_LVGL) && defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
     Feature::LVGL::resync_display();
@@ -269,6 +274,20 @@ inline void init() {
     const esp_err_t event_loop_err = esp_event_loop_create_default();
     if (event_loop_err != ESP_OK && event_loop_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "esp_event_loop_create_default() failed: %s", esp_err_to_name(event_loop_err));
+    }
+#endif
+
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    {
+        // Before the network task and the synth engine: both report to it (SafeStart.h).
+        char boot_preset[presetpaths::kMaxNameLen] = {};
+        presetpaths::readLastMarker(boot_preset, sizeof(boot_preset));
+#if defined(CONFIG_APP_ENABLE_LVGL)
+        const bool touch_held = Feature::LVGL::touch_pressed();
+#else
+        const bool touch_held = false;
+#endif
+        safestart::begin(touch_held, boot_preset);
     }
 #endif
 

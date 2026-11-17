@@ -24,6 +24,7 @@ set(COMPONENT_SRCS
     "features/display/touch/esp_lcd_jd9365.c"
     "features/display/touch/esp_lcd_jd9165.c"
     "features/synth/PresetPaths.cpp"
+    "features/synth/SafeStart.cpp"
     "features/synth/SamplePaths.cpp"
     "features/synth/MemoryDiagnostics.cpp"
     "features/io/i2c_device_registry.cpp"

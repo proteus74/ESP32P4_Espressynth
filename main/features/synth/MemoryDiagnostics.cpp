@@ -1,4 +1,5 @@
 #include "MemoryDiagnostics.h"
+#include "SafeStart.h"
 
 #include "esp_heap_caps.h"
 
@@ -95,6 +96,7 @@ void captureReloadPhase(uint32_t generation, ReloadPhase phase)
 
 void finishReload(uint32_t generation, bool success)
 {
+    safestart::markPresetLoaded(); // the firmware survived a preset load (only the first one counts)
     const ReloadPhase phase = success ? ReloadPhase::Complete : ReloadPhase::Failed;
     captureReloadPhase(generation, phase);
     portENTER_CRITICAL(&gMux);

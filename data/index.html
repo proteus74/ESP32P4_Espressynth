@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261116-tabscroll-5">
+<link rel="stylesheet" href="/static/css/style.css?v=20261117-infologo-2">
 </head>
 <body>
 
@@ -18,6 +18,8 @@
       <button id="menuNewWithTemplate">New with default template</button>
       <button id="menuSave">Save</button>
       <button id="menuSaveAs">Save As</button>
+      <button id="menuRenamePreset">Rename Preset</button>
+      <button id="menuDeletePreset">Delete Preset</button>
       <button id="menuExport">Export</button>
       <button id="menuImport">Import</button>
       <button id="menuFileExplorer">File Explorer</button>
@@ -264,6 +266,20 @@
       </fieldset>
 
       <fieldset class="settings-section settings-section-full">
+        <legend>MCP (AI assistants)</legend>
+        <label class="modal-field modal-field-checkbox">
+          <input type="checkbox" id="mcpEnabledSetting" aria-describedby="mcpHint">
+          <span>Allow MCP access</span>
+        </label>
+        <p id="mcpHint" class="modal-field-hint">Lets an AI assistant (Claude Code, Claude Desktop, ...) build and play patches through this editor: keep an editor tab open. Anyone who knows the token can control the device, so keep it private.</p>
+        <div id="mcpDetails" hidden>
+          <p class="modal-field-hint">Add it to Claude Code with this command:</p>
+          <textarea id="mcpCommand" class="mcp-command" readonly rows="3" spellcheck="false"></textarea>
+          <button type="button" id="mcpNewToken" class="btn-secondary">New token</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="settings-section settings-section-full">
         <legend>Backup &amp; Restore</legend>
         <div class="modal-actions modal-inline-actions">
           <button type="button" id="settingsBackupBtn" class="btn-secondary">Create System Backup</button>
@@ -484,7 +500,13 @@
 
 <div id="infoOverlay" class="modal-overlay hidden">
   <div class="modal">
-    <h3>Info</h3>
+    <div class="info-head">
+      <div>
+        <div class="info-brand">ESPRESSYNTH</div>
+        <h3>Info</h3>
+      </div>
+      <img class="info-logo" src="/static/img/jolabi-logo.png" alt="Jolabi synth" width="130" height="52">
+    </div>
     <label class="modal-field">
       <span>Version</span>
       <span id="infoVersionValue">–</span>
@@ -1454,6 +1476,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261116-devsettings-9"></script>
+<script type="module" src="/static/js/main.js?v=20261117-safe-1"></script>
 </body>
 </html>
