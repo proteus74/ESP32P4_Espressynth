@@ -1,0 +1,1010 @@
+{
+  "schemaVersion": 4,
+  "masterClock": {
+    "bpm": 120
+  },
+  "controlStride": 4,
+  "title": "",
+  "description": "",
+  "longDescription": "",
+  "author": "",
+  "uiTabOrder": [
+    "generator",
+    "fx"
+  ],
+  "uiPages": [
+    {
+      "id": "generator",
+      "title": "Sound Generation",
+      "toMasterUi": {
+        "x": 1280,
+        "y": 120
+      }
+    }
+  ],
+  "pages": {
+    "generator": {
+      "widgets": [
+        {
+          "id": "widget-90",
+          "type": "midi-in",
+          "label": "Midi-In",
+          "ui": {
+            "x": -820,
+            "y": 120,
+            "pageId": "generator"
+          },
+          "params": {
+            "channel": null,
+            "voices": 8,
+            "overflowMode": "steal-oldest",
+            "glide": false,
+            "glideTime": 0,
+            "pitchBendRangeCents": 200,
+            "pitchBendQuantizeCents": false,
+            "keyMask": "ffffffffffffffffffffffffffffffff",
+            "program": 0
+          }
+        },
+        {
+          "id": "widget-91",
+          "type": "fm-oscillator",
+          "label": "Op1 Carrier",
+          "ui": {
+            "x": 480,
+            "y": -620,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 10,
+            "fmIndex": 5.5,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-92",
+          "type": "dx-envelope",
+          "label": "Env Carrier",
+          "ui": {
+            "x": -340,
+            "y": -1080,
+            "pageId": "generator"
+          },
+          "params": {
+            "level1": 10,
+            "level2": 3.7,
+            "level3": 0,
+            "level4": 0,
+            "time1": 0.003,
+            "time2": 2.1,
+            "time3": 5.3,
+            "time4": 0.25,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 8,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 4,
+            "liveSegmentStartedAt": 1270243.400000006,
+            "liveSegmentStartLevel": 9.355,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-93",
+          "type": "fm-oscillator",
+          "label": "Op2 Mod",
+          "ui": {
+            "x": 0,
+            "y": -620,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 10,
+            "fmIndex": 0,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-94",
+          "type": "fm-oscillator",
+          "label": "Op3 Carrier",
+          "ui": {
+            "x": 480,
+            "y": 0,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5.45,
+            "gain": 10,
+            "fmIndex": 0.37,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-95",
+          "type": "fm-oscillator",
+          "label": "Op4 Mod x14",
+          "ui": {
+            "x": 0,
+            "y": 0,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 4.516129032258065,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 10,
+            "fmIndex": 0,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-96",
+          "type": "fm-oscillator",
+          "label": "Op5 Carrier",
+          "ui": {
+            "x": 480,
+            "y": 620,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 4,
+            "gain": 10,
+            "fmIndex": 2.3,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-97",
+          "type": "fm-oscillator",
+          "label": "Op6 Mod FB",
+          "ui": {
+            "x": 0,
+            "y": 620,
+            "pageId": "generator"
+          },
+          "params": {
+            "waveType": "sine",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 6,
+            "gain": 10,
+            "fmIndex": 0,
+            "feedback": 0.81,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-98",
+          "type": "dx-envelope",
+          "label": "Env Op2",
+          "ui": {
+            "x": -340,
+            "y": -560,
+            "pageId": "generator"
+          },
+          "params": {
+            "level1": 10,
+            "level2": 7.1,
+            "level3": 0,
+            "level4": 0,
+            "time1": 0.003,
+            "time2": 0.25,
+            "time3": 5.3,
+            "time4": 0.25,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 8,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 4,
+            "liveSegmentStartedAt": 1270243.5,
+            "liveSegmentStartLevel": 7.507159999930858,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-99",
+          "type": "dx-envelope",
+          "label": "Env Op4",
+          "ui": {
+            "x": -340,
+            "y": 60,
+            "pageId": "generator"
+          },
+          "params": {
+            "level1": 10,
+            "level2": 1.26,
+            "level3": 0,
+            "level4": 0,
+            "time1": 0.003,
+            "time2": 0.14,
+            "time3": 0.9,
+            "time4": 0.02,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 4,
+            "liveSegmentStartedAt": 1270243.599999994,
+            "liveSegmentStartLevel": 1.155,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-100",
+          "type": "dx-envelope",
+          "label": "Env Op6",
+          "ui": {
+            "x": -320,
+            "y": 680,
+            "pageId": "generator"
+          },
+          "params": {
+            "level1": 10,
+            "level2": 7.1,
+            "level3": 0,
+            "level4": 0,
+            "time1": 0.003,
+            "time2": 0.25,
+            "time3": 5.3,
+            "time4": 0.25,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 8,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 4,
+            "liveSegmentStartedAt": 1270243.699999988,
+            "liveSegmentStartLevel": 7.506,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-101",
+          "type": "mixer",
+          "label": "Mixer",
+          "ui": {
+            "x": 960,
+            "y": 120,
+            "pageId": "generator"
+          },
+          "params": {
+            "inputCount": 3,
+            "gains": [
+              0.4,
+              0.4,
+              0.4,
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "id": "widget-104",
+          "type": "dx-envelope",
+          "label": "Env Tine Carrier",
+          "ui": {
+            "x": -340,
+            "y": 1180,
+            "pageId": "generator"
+          },
+          "params": {
+            "level1": 10,
+            "level2": 3.5,
+            "level3": 0,
+            "level4": 0,
+            "time1": 0.003,
+            "time2": 1.1,
+            "time3": 2.7,
+            "time4": 0.05,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 4,
+            "liveSegmentStartedAt": 1270243.699999988,
+            "liveSegmentStartLevel": 8.730136363601144,
+            "liveGate": false,
+            "liveVoiceIndex": 0,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-73",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": {
+            "x": 1280,
+            "y": 120
+          },
+          "params": {
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        }
+      ],
+      "connections": [
+        {
+          "id": "conn-177",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-91",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-178",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-93",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-179",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-94",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-180",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-95",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-181",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-96",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-182",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-97",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-183",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-92",
+            "portId": "gate"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-184",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-98",
+            "portId": "gate"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-185",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-99",
+            "portId": "gate"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-186",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-100",
+            "portId": "gate"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-187",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-92",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-188",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-98",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-189",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-99",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-190",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-100",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-191",
+          "from": {
+            "widgetId": "widget-92",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-91",
+            "portId": "amplitude"
+          },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-192",
+          "from": {
+            "widgetId": "widget-92",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-94",
+            "portId": "amplitude"
+          },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-193",
+          "from": {
+            "widgetId": "widget-92",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-96",
+            "portId": "amplitude"
+          },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-194",
+          "from": {
+            "widgetId": "widget-98",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-93",
+            "portId": "amplitude"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-195",
+          "from": {
+            "widgetId": "widget-99",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-95",
+            "portId": "amplitude"
+          },
+          "color": "#22d3ee"
+        },
+        {
+          "id": "conn-196",
+          "from": {
+            "widgetId": "widget-100",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-97",
+            "portId": "amplitude"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-197",
+          "from": {
+            "widgetId": "widget-93",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-91",
+            "portId": "fmIn"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-198",
+          "from": {
+            "widgetId": "widget-95",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-94",
+            "portId": "fmIn"
+          },
+          "color": "#f472b6"
+        },
+        {
+          "id": "conn-199",
+          "from": {
+            "widgetId": "widget-97",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-96",
+            "portId": "fmIn"
+          },
+          "color": "#e5e7eb"
+        },
+        {
+          "id": "conn-200",
+          "from": {
+            "widgetId": "widget-91",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-101",
+            "portId": "in1"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-201",
+          "from": {
+            "widgetId": "widget-94",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-101",
+            "portId": "in2"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-202",
+          "from": {
+            "widgetId": "widget-96",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-101",
+            "portId": "in3"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-203",
+          "from": {
+            "widgetId": "widget-101",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-73",
+            "portId": "in1"
+          },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-207",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-104",
+            "portId": "gate"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-208",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-104",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-209",
+          "from": {
+            "widgetId": "widget-104",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-94",
+            "portId": "amplitude"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-210",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-92",
+            "portId": "rateScale"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-211",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-98",
+            "portId": "rateScale"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-212",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-99",
+            "portId": "rateScale"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-213",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-100",
+            "portId": "rateScale"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-214",
+          "from": {
+            "widgetId": "widget-90",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-104",
+            "portId": "rateScale"
+          },
+          "color": "#f87171"
+        }
+      ]
+    },
+    "fx": {
+      "widgets": [
+        {
+          "id": "widget-74",
+          "type": "audio-input-link",
+          "label": "Audio Outputs",
+          "ui": {
+            "x": -800,
+            "y": 0,
+            "pageId": "fx"
+          },
+          "params": {
+            "gains": [
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10
+            ],
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        },
+        {
+          "id": "widget-102",
+          "type": "chorus",
+          "label": "Chorus",
+          "ui": {
+            "x": -420,
+            "y": 0,
+            "pageId": "fx"
+          },
+          "params": {
+            "rate": 1.1,
+            "depth": 0.0006,
+            "offset": 0.02,
+            "bypass": true
+          }
+        },
+        {
+          "id": "widget-103",
+          "type": "ns4168-out",
+          "label": "NS4168-Out",
+          "ui": {
+            "x": 620,
+            "y": -60,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
+        },
+        {
+          "id": "widget-105",
+          "type": "reverb-light",
+          "label": "Reverb",
+          "ui": {
+            "x": 60,
+            "y": 0,
+            "pageId": "fx"
+          },
+          "params": {
+            "roomSize": 0.5,
+            "roomSizeVolts": 5,
+            "roomSizeMin": 0,
+            "roomSizeMax": 1,
+            "roomSizeCurve": "linear",
+            "damping": 0.5,
+            "dampingVolts": 5,
+            "dampingMin": 0,
+            "dampingMax": 1,
+            "dampingCurve": "linear",
+            "wetLevelDb": -6,
+            "wetLevelVolts": 9.375,
+            "wetLevelMin": -96,
+            "wetLevelMax": 0,
+            "wetLevelCurve": "linear",
+            "dryLevelDb": 0,
+            "dryLevelVolts": 10,
+            "dryLevelMin": -96,
+            "dryLevelMax": 0,
+            "dryLevelCurve": "linear",
+            "bypass": false
+          }
+        }
+      ],
+      "connections": [
+        {
+          "id": "conn-204",
+          "from": {
+            "widgetId": "widget-74",
+            "portId": "out1"
+          },
+          "to": {
+            "widgetId": "widget-102",
+            "portId": "in"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-215",
+          "from": {
+            "widgetId": "widget-102",
+            "portId": "left"
+          },
+          "to": {
+            "widgetId": "widget-105",
+            "portId": "inL"
+          },
+          "color": "#22d3ee"
+        },
+        {
+          "id": "conn-216",
+          "from": {
+            "widgetId": "widget-102",
+            "portId": "right"
+          },
+          "to": {
+            "widgetId": "widget-105",
+            "portId": "inR"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-217",
+          "from": {
+            "widgetId": "widget-105",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-103",
+            "portId": "left"
+          },
+          "color": "#f472b6"
+        },
+        {
+          "id": "conn-218",
+          "from": {
+            "widgetId": "widget-105",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-103",
+            "portId": "right"
+          },
+          "color": "#e5e7eb"
+        }
+      ]
+    }
+  },
+  "firmwareVersion": "0.35"
+}

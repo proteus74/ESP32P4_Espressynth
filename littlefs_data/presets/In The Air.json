@@ -1,14 +1,16 @@
 {
   "schemaVersion": 4,
   "masterClock": {
-    "bpm": 120
+    "bpm": 77.48
   },
+  "controlStride": 1,
   "title": "TR-808 Drum Machine",
   "description": "Synthesized 808-style drum kit, one page per voice",
   "longDescription": "The Drum Machine page runs an 8-track, 16-step pattern from the master clock. Each track sends its trigger through a Link In to its own voice page (Bass Drum, Snare, Closed/Open Hi-Hat, Clap, Low/High Tom, Cowbell). Every voice is built only from oscillators, noise, envelopes and filters and plays on its own To Master bus (1-8). The fx page mixes the eight buses to all audio outputs; use the Audio Outputs sliders or the Drum Mix gains to balance the kit. Set the Run const to 0 to stop the sequencer.",
   "author": "",
   "uiTabOrder": [
     "generator",
+    "cowbell",
     "bassdrum",
     "snare",
     "closed-hat",
@@ -16,7 +18,6 @@
     "clap",
     "low-tom",
     "high-tom",
-    "cowbell",
     "fx"
   ],
   "uiPages": [
@@ -24,8 +25,8 @@
       "id": "generator",
       "title": "Drum Machine",
       "toMasterUi": {
-        "x": -200,
-        "y": -300
+        "x": -240,
+        "y": -340
       }
     },
     {
@@ -48,16 +49,16 @@
       "id": "closed-hat",
       "title": "Closed Hi-Hat",
       "toMasterUi": {
-        "x": -100,
-        "y": -300
+        "x": 20,
+        "y": 20
       }
     },
     {
       "id": "open-hat",
       "title": "Open Hi-Hat",
       "toMasterUi": {
-        "x": -100,
-        "y": -300
+        "x": 40,
+        "y": -20
       }
     },
     {
@@ -86,10 +87,10 @@
     },
     {
       "id": "cowbell",
-      "title": "Cowbell",
+      "title": "Prophet 5",
       "toMasterUi": {
-        "x": -100,
-        "y": -300
+        "x": 1140,
+        "y": -420
       }
     }
   ],
@@ -97,46 +98,12 @@
     "generator": {
       "widgets": [
         {
-          "id": "widget-1",
-          "type": "audio-output-link",
-          "label": "To Master",
-          "ui": {
-            "x": -200,
-            "y": -300
-          },
-          "params": {
-            "labels": [
-              "BD",
-              "SD",
-              "CH",
-              "OH",
-              "CP",
-              "LT",
-              "HT",
-              "CB"
-            ]
-          }
-        },
-        {
-          "id": "widget-2",
-          "type": "const",
-          "label": "Run",
-          "ui": {
-            "x": -1700,
-            "y": -400,
-            "pageId": "generator"
-          },
-          "params": {
-            "value": 10
-          }
-        },
-        {
           "id": "widget-3",
           "type": "drum-sequencer",
           "label": "TR Pattern",
           "ui": {
-            "x": -1400,
-            "y": -500,
+            "x": -1540,
+            "y": -520,
             "pageId": "generator"
           },
           "params": {
@@ -162,94 +129,7 @@
                   -11,
                   -11,
                   -11,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  10,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
-                  -11,
+                  -10.9,
                   -11,
                   -11,
                   10,
@@ -264,10 +144,97 @@
                   -11,
                   -11,
                   -11,
+                  8.4,
+                  2.3,
+                  8.4,
+                  1.8,
+                  7.9,
+                  1.5,
+                  8.7,
+                  2,
+                  7.8,
+                  1.7,
+                  8.2,
+                  2.1,
+                  7.4,
+                  2.3,
+                  7.9,
+                  2.4,
+                  -10.5,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -10.8,
+                  -11,
+                  10,
+                  -11,
+                  -11,
                   -11,
                   -11,
                   -11,
                   10,
+                  -11,
+                  -11,
+                  10,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  7.8,
+                  -11,
+                  -11,
+                  7.4,
+                  -11,
+                  -11,
+                  7.4,
+                  -11,
+                  -11,
+                  -11,
+                  7.6,
+                  -11,
+                  8.6,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
+                  -11,
                   -11,
                   -11,
                   -11,
@@ -282,7 +249,7 @@
               50,
               50,
               30,
-              60,
+              50,
               50,
               50,
               50,
@@ -298,8 +265,8 @@
           "type": "linked-input",
           "label": "BD Trig",
           "ui": {
-            "x": -500,
-            "y": -560,
+            "x": -620,
+            "y": -760,
             "pageId": "generator"
           },
           "params": {
@@ -317,8 +284,8 @@
           "type": "linked-input",
           "label": "SD Trig",
           "ui": {
-            "x": -500,
-            "y": -460,
+            "x": -520,
+            "y": -560,
             "pageId": "generator"
           },
           "params": {
@@ -336,7 +303,7 @@
           "type": "linked-input",
           "label": "CH Trig",
           "ui": {
-            "x": -500,
+            "x": -480,
             "y": -360,
             "pageId": "generator"
           },
@@ -351,58 +318,20 @@
           }
         },
         {
-          "id": "widget-7",
-          "type": "linked-input",
-          "label": "OH Trig",
-          "ui": {
-            "x": -500,
-            "y": -260,
-            "pageId": "generator"
-          },
-          "params": {
-            "linkId": "link-open-hat",
-            "linkName": "Open Hi-Hat Trigger",
-            "linkCount": 1,
-            "labels": [
-              "OH"
-            ],
-            "portSide": "left"
-          }
-        },
-        {
-          "id": "widget-8",
-          "type": "linked-input",
-          "label": "CP Trig",
-          "ui": {
-            "x": -500,
-            "y": -160,
-            "pageId": "generator"
-          },
-          "params": {
-            "linkId": "link-clap",
-            "linkName": "Hand Clap Trigger",
-            "linkCount": 1,
-            "labels": [
-              "CP"
-            ],
-            "portSide": "left"
-          }
-        },
-        {
           "id": "widget-9",
           "type": "linked-input",
           "label": "LT Trig",
           "ui": {
-            "x": -500,
-            "y": -60,
+            "x": -580,
+            "y": -160,
             "pageId": "generator"
           },
           "params": {
             "linkId": "link-low-tom",
-            "linkName": "Low Tom Trigger",
+            "linkName": "Low Conga Trigger",
             "linkCount": 1,
             "labels": [
-              "LT"
+              "LC"
             ],
             "portSide": "left"
           }
@@ -412,37 +341,188 @@
           "type": "linked-input",
           "label": "HT Trig",
           "ui": {
-            "x": -500,
+            "x": -660,
             "y": 40,
             "pageId": "generator"
           },
           "params": {
             "linkId": "link-high-tom",
-            "linkName": "High Tom Trigger",
+            "linkName": "High Bongo Trigger",
             "linkCount": 1,
             "labels": [
-              "HT"
+              "HB"
             ],
             "portSide": "left"
           }
         },
         {
-          "id": "widget-11",
-          "type": "linked-input",
-          "label": "CB Trig",
+          "id": "widget-60",
+          "type": "button",
+          "label": "CC Button",
           "ui": {
-            "x": -500,
+            "x": -1800,
+            "y": -140,
+            "pageId": "generator"
+          },
+          "params": {
+            "buttonCount": 1,
+            "layerCount": 1,
+            "activeLayer": 0,
+            "outputSide": "top",
+            "bindings": [
+              {
+                "cc": 118,
+                "channel": 0,
+                "midiType": "cc",
+                "switchMode": true
+              }
+            ],
+            "layers": [
+              {
+                "name": "",
+                "labels": [
+                  "Start/Stop"
+                ],
+                "buttons": [
+                  {
+                    "value0": 0,
+                    "value127": 10,
+                    "valueList": [],
+                    "listIndex": 0,
+                    "wasAbove": false
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "widget-107",
+          "type": "const",
+          "label": "BPM 95",
+          "ui": {
+            "x": -1800,
+            "y": -520,
+            "pageId": "generator"
+          },
+          "params": {
+            "value": 42
+          }
+        },
+        {
+          "id": "widget-128",
+          "type": "linked-input",
+          "label": "BD Vel",
+          "ui": {
+            "x": -560,
+            "y": -660,
+            "pageId": "generator"
+          },
+          "params": {
+            "linkId": "link-bd-vel",
+            "linkName": "Bass Drum Velocity",
+            "linkCount": 1,
+            "labels": [
+              "BD Vel"
+            ],
+            "portSide": "left"
+          }
+        },
+        {
+          "id": "widget-129",
+          "type": "linked-input",
+          "label": "SD Vel",
+          "ui": {
+            "x": -480,
+            "y": -460,
+            "pageId": "generator"
+          },
+          "params": {
+            "linkId": "link-sd-vel",
+            "linkName": "Snare Velocity",
+            "linkCount": 1,
+            "labels": [
+              "SD Vel"
+            ],
+            "portSide": "left"
+          }
+        },
+        {
+          "id": "widget-130",
+          "type": "linked-input",
+          "label": "HH Vel",
+          "ui": {
+            "x": -520,
+            "y": -260,
+            "pageId": "generator"
+          },
+          "params": {
+            "linkId": "link-hh-vel",
+            "linkName": "Hi-Hat Velocity",
+            "linkCount": 1,
+            "labels": [
+              "HH Vel"
+            ],
+            "portSide": "left"
+          }
+        },
+        {
+          "id": "widget-131",
+          "type": "linked-input",
+          "label": "LC Vel",
+          "ui": {
+            "x": -620,
+            "y": -60,
+            "pageId": "generator"
+          },
+          "params": {
+            "linkId": "link-lc-vel",
+            "linkName": "Low Conga Velocity",
+            "linkCount": 1,
+            "labels": [
+              "LC Vel"
+            ],
+            "portSide": "left"
+          }
+        },
+        {
+          "id": "widget-132",
+          "type": "linked-input",
+          "label": "HB Vel",
+          "ui": {
+            "x": -700,
             "y": 140,
             "pageId": "generator"
           },
           "params": {
-            "linkId": "link-cowbell",
-            "linkName": "Cowbell Trigger",
+            "linkId": "link-hb-vel",
+            "linkName": "High Bongo Velocity",
             "linkCount": 1,
             "labels": [
-              "CB"
+              "HB Vel"
             ],
             "portSide": "left"
+          }
+        },
+        {
+          "id": "widget-1",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": {
+            "x": -240,
+            "y": -340
+          },
+          "params": {
+            "labels": [
+              "BD",
+              "SD",
+              "CH",
+              "OH",
+              "CP",
+              "LT",
+              "HT",
+              "CB"
+            ]
           }
         },
         {
@@ -461,63 +541,76 @@
           }
         },
         {
-          "id": "widget-13",
+          "id": "widget-110",
           "type": "dx-envelope",
-          "label": "Pitch Env",
+          "label": "BD Pitch",
           "ui": {
-            "x": -1150,
-            "y": -480,
+            "x": -1000,
+            "y": -700,
             "pageId": "bassdrum"
           },
           "params": {
-            "level1": 4.291,
+            "level1": 4,
+            "level2": 2.875,
+            "level3": 2.875,
+            "level4": 2.875,
             "time1": 0.001,
-            "time1MaxSeconds": 4,
-            "time1Curve": "linear",
-            "level2": 2.612,
-            "time2": 0.05,
-            "time2MaxSeconds": 4,
-            "time2Curve": "linear",
-            "level3": 2.612,
+            "time2": 0.025,
             "time3": 0.01,
-            "time3MaxSeconds": 4,
-            "time3Curve": "linear",
-            "level4": 2.612,
             "time4": 0.001,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
             "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
             "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-14",
+          "id": "widget-111",
           "type": "adsr",
-          "label": "Amp Env",
+          "label": "BD Amp",
           "ui": {
-            "x": -1150,
-            "y": -60,
+            "x": -1000,
+            "y": 0,
             "pageId": "bassdrum"
           },
           "params": {
             "attack": 0.001,
-            "decay": 0.8,
+            "decay": 0.22,
             "sustain": 0,
-            "release": 0.8,
+            "release": 0.22,
             "attackMaxSeconds": 4,
             "attackCurve": "linear",
             "decayMaxSeconds": 4,
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
             "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-15",
+          "id": "widget-112",
           "type": "fm-oscillator",
-          "label": "Body",
+          "label": "BD Body",
           "ui": {
-            "x": -700,
+            "x": -400,
             "y": -300,
             "pageId": "bassdrum"
           },
@@ -535,6 +628,21 @@
             "superSawDetune": 5,
             "superSawMix": 5,
             "morph": 0
+          }
+        },
+        {
+          "id": "widget-133",
+          "type": "linked-output",
+          "label": "Velocity",
+          "ui": {
+            "x": -1500,
+            "y": 100,
+            "pageId": "bassdrum"
+          },
+          "params": {
+            "sourceLinkId": "link-bd-vel",
+            "linkCount": 1,
+            "portSide": "right"
           }
         },
         {
@@ -553,173 +661,49 @@
           }
         },
         {
-          "id": "widget-17",
-          "type": "adsr",
-          "label": "Tone Env",
+          "id": "widget-113",
+          "type": "dx-envelope",
+          "label": "SD Pitch",
           "ui": {
-            "x": -1150,
-            "y": -480,
+            "x": -1000,
+            "y": -900,
             "pageId": "snare"
           },
           "params": {
-            "attack": 0.001,
-            "decay": 0.12,
-            "sustain": 0,
-            "release": 0.12,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
+            "level1": 4.9,
+            "level2": 4.6,
+            "level3": 4.6,
+            "level4": 4.6,
+            "time1": 0.001,
+            "time2": 0.015,
+            "time3": 0.01,
+            "time4": 0.001,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
+            "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
+            "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-18",
+          "id": "widget-114",
           "type": "adsr",
-          "label": "Noise Env",
+          "label": "SD Tone Env",
           "ui": {
-            "x": -1150,
-            "y": -60,
-            "pageId": "snare"
-          },
-          "params": {
-            "attack": 0.001,
-            "decay": 0.2,
-            "sustain": 0,
-            "release": 0.2,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
-            "graphCollapsed": false
-          }
-        },
-        {
-          "id": "widget-19",
-          "type": "fm-oscillator",
-          "label": "Tone 238 Hz",
-          "ui": {
-            "x": -800,
-            "y": -620,
-            "pageId": "snare"
-          },
-          "params": {
-            "waveType": "sine",
-            "amplitude": 1,
-            "tune": 4.863,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-20",
-          "type": "fm-oscillator",
-          "label": "Tone 476 Hz",
-          "ui": {
-            "x": -800,
-            "y": -330,
-            "pageId": "snare"
-          },
-          "params": {
-            "waveType": "sine",
-            "amplitude": 1,
-            "tune": 5.863,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 5,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-21",
-          "type": "fm-oscillator",
-          "label": "Noise",
-          "ui": {
-            "x": -800,
-            "y": -40,
-            "pageId": "snare"
-          },
-          "params": {
-            "waveType": "noise",
-            "amplitude": 1,
-            "tune": 5.0,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 8,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-22",
-          "type": "filter",
-          "label": "Highpass",
-          "ui": {
-            "x": -450,
-            "y": -40,
-            "pageId": "snare"
-          },
-          "params": {
-            "filterType": "highpass",
-            "slope": 12,
-            "cutoff": 6.25,
-            "cutoffMinHz": 20,
-            "cutoffMaxHz": 20000,
-            "cutoffCurve": "log",
-            "resonance": 3.673,
-            "resonanceMinQ": 0.1,
-            "resonanceMaxQ": 20,
-            "resonanceCurve": "log",
-            "coeffStride": 4,
-            "global": false
-          }
-        },
-        {
-          "id": "widget-23",
-          "type": "linked-output",
-          "label": "Trigger",
-          "ui": {
-            "x": -1500,
+            "x": -1000,
             "y": -300,
-            "pageId": "closed-hat"
-          },
-          "params": {
-            "sourceLinkId": "link-closed-hat",
-            "linkCount": 1,
-            "portSide": "right"
-          }
-        },
-        {
-          "id": "widget-24",
-          "type": "adsr",
-          "label": "Amp Env",
-          "ui": {
-            "x": -1150,
-            "y": -300,
-            "pageId": "closed-hat"
+            "pageId": "snare"
           },
           "params": {
             "attack": 0.001,
@@ -732,310 +716,57 @@
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
             "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-25",
-          "type": "fm-oscillator",
-          "label": "Metal Mod",
-          "ui": {
-            "x": -800,
-            "y": -500,
-            "pageId": "closed-hat"
-          },
-          "params": {
-            "waveType": "square",
-            "amplitude": 1,
-            "tune": 6.612,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-26",
-          "type": "fm-oscillator",
-          "label": "Metal Carrier",
-          "ui": {
-            "x": -800,
-            "y": -150,
-            "pageId": "closed-hat"
-          },
-          "params": {
-            "waveType": "square",
-            "amplitude": 1,
-            "tune": 6.045,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 6,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-27",
-          "type": "filter",
-          "label": "Highpass",
-          "ui": {
-            "x": -450,
-            "y": -300,
-            "pageId": "closed-hat"
-          },
-          "params": {
-            "filterType": "highpass",
-            "slope": 12,
-            "cutoff": 8.48,
-            "cutoffMinHz": 20,
-            "cutoffMaxHz": 20000,
-            "cutoffCurve": "log",
-            "resonance": 4.346,
-            "resonanceMinQ": 0.1,
-            "resonanceMaxQ": 20,
-            "resonanceCurve": "log",
-            "coeffStride": 4,
-            "global": false
-          }
-        },
-        {
-          "id": "widget-28",
-          "type": "linked-output",
-          "label": "Trigger",
-          "ui": {
-            "x": -1500,
-            "y": -300,
-            "pageId": "open-hat"
-          },
-          "params": {
-            "sourceLinkId": "link-open-hat",
-            "linkCount": 1,
-            "portSide": "right"
-          }
-        },
-        {
-          "id": "widget-29",
+          "id": "widget-115",
           "type": "adsr",
-          "label": "Amp Env",
+          "label": "SD Noise Env",
           "ui": {
-            "x": -1150,
-            "y": -300,
-            "pageId": "open-hat"
+            "x": -1000,
+            "y": 300,
+            "pageId": "snare"
           },
           "params": {
             "attack": 0.001,
-            "decay": 0.45,
+            "decay": 0.08,
             "sustain": 0,
-            "release": 0.45,
+            "release": 0.08,
             "attackMaxSeconds": 4,
             "attackCurve": "linear",
             "decayMaxSeconds": 4,
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
             "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-30",
+          "id": "widget-116",
           "type": "fm-oscillator",
-          "label": "Metal Mod",
+          "label": "SD Tone",
           "ui": {
-            "x": -800,
-            "y": -500,
-            "pageId": "open-hat"
+            "x": -400,
+            "y": -700,
+            "pageId": "snare"
           },
           "params": {
-            "waveType": "square",
+            "waveType": "sine",
             "amplitude": 1,
-            "tune": 6.612,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-31",
-          "type": "fm-oscillator",
-          "label": "Metal Carrier",
-          "ui": {
-            "x": -800,
-            "y": -150,
-            "pageId": "open-hat"
-          },
-          "params": {
-            "waveType": "square",
-            "amplitude": 1,
-            "tune": 6.045,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 6,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-32",
-          "type": "filter",
-          "label": "Highpass",
-          "ui": {
-            "x": -450,
-            "y": -300,
-            "pageId": "open-hat"
-          },
-          "params": {
-            "filterType": "highpass",
-            "slope": 12,
-            "cutoff": 8.48,
-            "cutoffMinHz": 20,
-            "cutoffMaxHz": 20000,
-            "cutoffCurve": "log",
-            "resonance": 4.346,
-            "resonanceMinQ": 0.1,
-            "resonanceMaxQ": 20,
-            "resonanceCurve": "log",
-            "coeffStride": 4,
-            "global": false
-          }
-        },
-        {
-          "id": "widget-33",
-          "type": "linked-output",
-          "label": "Trigger",
-          "ui": {
-            "x": -1500,
-            "y": -300,
-            "pageId": "clap"
-          },
-          "params": {
-            "sourceLinkId": "link-clap",
-            "linkCount": 1,
-            "portSide": "right"
-          }
-        },
-        {
-          "id": "widget-34",
-          "type": "burst-generator",
-          "label": "Clap Burst",
-          "ui": {
-            "x": -1150,
-            "y": -560,
-            "pageId": "clap"
-          },
-          "params": {
-            "mode": 0,
-            "count": 4.29,
-            "time": 1.93,
-            "decay": 0
-          }
-        },
-        {
-          "id": "widget-35",
-          "type": "adsr",
-          "label": "Burst Env",
-          "ui": {
-            "x": -850,
-            "y": -560,
-            "pageId": "clap"
-          },
-          "params": {
-            "attack": 0.001,
-            "decay": 0.01,
-            "sustain": 0,
-            "release": 0.01,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
-            "graphCollapsed": false
-          }
-        },
-        {
-          "id": "widget-36",
-          "type": "adsr",
-          "label": "Tail Env",
-          "ui": {
-            "x": -1150,
-            "y": -60,
-            "pageId": "clap"
-          },
-          "params": {
-            "attack": 0.001,
-            "decay": 0.25,
-            "sustain": 0,
-            "release": 0.25,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
-            "graphCollapsed": false
-          }
-        },
-        {
-          "id": "widget-37",
-          "type": "fm-oscillator",
-          "label": "Noise Burst",
-          "ui": {
-            "x": -550,
-            "y": -560,
-            "pageId": "clap"
-          },
-          "params": {
-            "waveType": "noise",
-            "amplitude": 1,
-            "tune": 5.0,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 10,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
-            "morph": 0
-          }
-        },
-        {
-          "id": "widget-38",
-          "type": "fm-oscillator",
-          "label": "Noise Tail",
-          "ui": {
-            "x": -550,
-            "y": -100,
-            "pageId": "clap"
-          },
-          "params": {
-            "waveType": "noise",
-            "amplitude": 1,
-            "tune": 5.0,
+            "tune": 5,
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 5,
@@ -1049,27 +780,173 @@
           }
         },
         {
-          "id": "widget-39",
-          "type": "filter",
-          "label": "Bandpass",
+          "id": "widget-117",
+          "type": "fm-oscillator",
+          "label": "SD Noise",
           "ui": {
-            "x": -200,
-            "y": -330,
-            "pageId": "clap"
+            "x": -400,
+            "y": 200,
+            "pageId": "snare"
+          },
+          "params": {
+            "waveType": "noise",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 5,
+            "fmIndex": 0,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-118",
+          "type": "filter",
+          "label": "SD Bandpass",
+          "ui": {
+            "x": 200,
+            "y": 200,
+            "pageId": "snare"
           },
           "params": {
             "filterType": "bandpass",
-            "slope": 12,
-            "cutoff": 5.801,
+            "cutoff": 7.25,
             "cutoffMinHz": 20,
             "cutoffMaxHz": 20000,
             "cutoffCurve": "log",
-            "resonance": 6.419,
+            "resonance": 4.35,
             "resonanceMinQ": 0.1,
             "resonanceMaxQ": 20,
             "resonanceCurve": "log",
-            "coeffStride": 4,
+            "slope": 12,
             "global": false
+          }
+        },
+        {
+          "id": "widget-134",
+          "type": "linked-output",
+          "label": "Velocity1",
+          "ui": {
+            "x": -1500,
+            "y": 100,
+            "pageId": "snare"
+          },
+          "params": {
+            "sourceLinkId": "link-sd-vel",
+            "linkCount": 1,
+            "portSide": "right"
+          }
+        },
+        {
+          "id": "widget-23",
+          "type": "linked-output",
+          "label": "Trigger",
+          "ui": {
+            "x": -2060,
+            "y": 140,
+            "pageId": "closed-hat"
+          },
+          "params": {
+            "sourceLinkId": "link-closed-hat",
+            "linkCount": 1,
+            "portSide": "right"
+          }
+        },
+        {
+          "id": "widget-119",
+          "type": "adsr",
+          "label": "HH Env",
+          "ui": {
+            "x": -1500,
+            "y": -400,
+            "pageId": "closed-hat"
+          },
+          "params": {
+            "attack": 0.001,
+            "decay": 0.04,
+            "sustain": 0,
+            "release": 0.04,
+            "attackMaxSeconds": 4,
+            "attackCurve": "linear",
+            "decayMaxSeconds": 4,
+            "decayCurve": "linear",
+            "releaseMaxSeconds": 4,
+            "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-120",
+          "type": "fm-oscillator",
+          "label": "HH Noise",
+          "ui": {
+            "x": -900,
+            "y": -400,
+            "pageId": "closed-hat"
+          },
+          "params": {
+            "waveType": "noise",
+            "amplitude": 1,
+            "tune": 5,
+            "ratioCoarse": 0.3225806451612903,
+            "ratioFine": 0,
+            "detune": 5,
+            "gain": 8,
+            "fmIndex": 0,
+            "feedback": 0,
+            "dutyCycle": 5,
+            "superSawDetune": 5,
+            "superSawMix": 5,
+            "morph": 0
+          }
+        },
+        {
+          "id": "widget-121",
+          "type": "filter",
+          "label": "HH Highpass",
+          "ui": {
+            "x": -300,
+            "y": -400,
+            "pageId": "closed-hat"
+          },
+          "params": {
+            "filterType": "highpass",
+            "cutoff": 8.48,
+            "cutoffMinHz": 20,
+            "cutoffMaxHz": 20000,
+            "cutoffCurve": "log",
+            "resonance": 4.35,
+            "resonanceMinQ": 0.1,
+            "resonanceMaxQ": 20,
+            "resonanceCurve": "log",
+            "slope": 12,
+            "global": false
+          }
+        },
+        {
+          "id": "widget-135",
+          "type": "linked-output",
+          "label": "Velocity2",
+          "ui": {
+            "x": -2060,
+            "y": -140,
+            "pageId": "closed-hat"
+          },
+          "params": {
+            "sourceLinkId": "link-hh-vel",
+            "linkCount": 1,
+            "portSide": "right"
           }
         },
         {
@@ -1088,63 +965,76 @@
           }
         },
         {
-          "id": "widget-41",
+          "id": "widget-122",
           "type": "dx-envelope",
-          "label": "Pitch Env",
+          "label": "LC Pitch",
           "ui": {
-            "x": -1150,
-            "y": -480,
+            "x": -1000,
+            "y": -700,
             "pageId": "low-tom"
           },
           "params": {
-            "level1": 3.991,
+            "level1": 4.8,
+            "level2": 4.54,
+            "level3": 4.54,
+            "level4": 4.54,
             "time1": 0.001,
-            "time1MaxSeconds": 4,
-            "time1Curve": "linear",
-            "level2": 3.612,
-            "time2": 0.08,
-            "time2MaxSeconds": 4,
-            "time2Curve": "linear",
-            "level3": 3.612,
+            "time2": 0.02,
             "time3": 0.01,
-            "time3MaxSeconds": 4,
-            "time3Curve": "linear",
-            "level4": 3.612,
             "time4": 0.001,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
             "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
             "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-42",
+          "id": "widget-123",
           "type": "adsr",
-          "label": "Amp Env",
+          "label": "LC Amp",
           "ui": {
-            "x": -1150,
-            "y": -60,
+            "x": -1000,
+            "y": 0,
             "pageId": "low-tom"
           },
           "params": {
             "attack": 0.001,
-            "decay": 0.4,
+            "decay": 0.16,
             "sustain": 0,
-            "release": 0.4,
+            "release": 0.16,
             "attackMaxSeconds": 4,
             "attackCurve": "linear",
             "decayMaxSeconds": 4,
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
             "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-43",
+          "id": "widget-124",
           "type": "fm-oscillator",
-          "label": "Body",
+          "label": "LC Body",
           "ui": {
-            "x": -700,
+            "x": -400,
             "y": -300,
             "pageId": "low-tom"
           },
@@ -1155,13 +1045,28 @@
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 5,
-            "gain": 10,
+            "gain": 8,
             "fmIndex": 0,
             "feedback": 0,
             "dutyCycle": 5,
             "superSawDetune": 5,
             "superSawMix": 5,
             "morph": 0
+          }
+        },
+        {
+          "id": "widget-136",
+          "type": "linked-output",
+          "label": "Velocity3",
+          "ui": {
+            "x": -1500,
+            "y": 100,
+            "pageId": "low-tom"
+          },
+          "params": {
+            "sourceLinkId": "link-lc-vel",
+            "linkCount": 1,
+            "portSide": "right"
           }
         },
         {
@@ -1180,63 +1085,76 @@
           }
         },
         {
-          "id": "widget-45",
+          "id": "widget-125",
           "type": "dx-envelope",
-          "label": "Pitch Env",
+          "label": "HB Pitch",
           "ui": {
-            "x": -1150,
-            "y": -480,
+            "x": -1000,
+            "y": -700,
             "pageId": "high-tom"
           },
           "params": {
-            "level1": 4.814,
+            "level1": 6.25,
+            "level2": 5.99,
+            "level3": 5.99,
+            "level4": 5.99,
             "time1": 0.001,
-            "time1MaxSeconds": 4,
-            "time1Curve": "linear",
-            "level2": 4.46,
-            "time2": 0.06,
-            "time2MaxSeconds": 4,
-            "time2Curve": "linear",
-            "level3": 4.46,
+            "time2": 0.015,
             "time3": 0.01,
-            "time3MaxSeconds": 4,
-            "time3Curve": "linear",
-            "level4": 4.46,
             "time4": 0.001,
+            "time1MaxSeconds": 4,
+            "time2MaxSeconds": 4,
+            "time3MaxSeconds": 4,
             "time4MaxSeconds": 4,
+            "time1Curve": "linear",
+            "time2Curve": "linear",
+            "time3Curve": "linear",
             "time4Curve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-46",
+          "id": "widget-126",
           "type": "adsr",
-          "label": "Amp Env",
+          "label": "HB Amp",
           "ui": {
-            "x": -1150,
-            "y": -60,
+            "x": -1000,
+            "y": 0,
             "pageId": "high-tom"
           },
           "params": {
             "attack": 0.001,
-            "decay": 0.3,
+            "decay": 0.09,
             "sustain": 0,
-            "release": 0.3,
+            "release": 0.09,
             "attackMaxSeconds": 4,
             "attackCurve": "linear",
             "decayMaxSeconds": 4,
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
             "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
         {
-          "id": "widget-47",
+          "id": "widget-127",
           "type": "fm-oscillator",
-          "label": "Body",
+          "label": "HB Body",
           "ui": {
-            "x": -700,
+            "x": -400,
             "y": -300,
             "pageId": "high-tom"
           },
@@ -1247,7 +1165,7 @@
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 5,
-            "gain": 10,
+            "gain": 8,
             "fmIndex": 0,
             "feedback": 0,
             "dutyCycle": 5,
@@ -1257,131 +1175,179 @@
           }
         },
         {
-          "id": "widget-48",
+          "id": "widget-137",
           "type": "linked-output",
-          "label": "Trigger",
+          "label": "Velocity4",
           "ui": {
             "x": -1500,
-            "y": -300,
-            "pageId": "cowbell"
+            "y": 100,
+            "pageId": "high-tom"
           },
           "params": {
-            "sourceLinkId": "link-cowbell",
+            "sourceLinkId": "link-hb-vel",
             "linkCount": 1,
             "portSide": "right"
           }
         },
         {
-          "id": "widget-49",
-          "type": "adsr",
-          "label": "Amp Env",
+          "id": "widget-139",
+          "type": "midi-in",
+          "label": "Prophet Midi-In",
           "ui": {
-            "x": -1150,
+            "x": -1800,
             "y": -300,
             "pageId": "cowbell"
           },
           "params": {
-            "attack": 0.001,
-            "decay": 0.25,
-            "sustain": 0,
-            "release": 0.25,
-            "attackMaxSeconds": 4,
-            "attackCurve": "linear",
-            "decayMaxSeconds": 4,
-            "decayCurve": "linear",
-            "releaseMaxSeconds": 4,
-            "releaseCurve": "linear",
-            "graphCollapsed": false
+            "channel": null,
+            "voices": 5,
+            "overflowMode": "steal-oldest",
+            "glide": false,
+            "glideTime": 0,
+            "pitchBendRangeCents": 200,
+            "pitchBendQuantizeCents": false,
+            "keyMask": "ffffffffffffffffffffffffffffffff",
+            "program": 0
           }
         },
         {
-          "id": "widget-50",
+          "id": "widget-141",
           "type": "fm-oscillator",
-          "label": "Square 540 Hz",
+          "label": "OSC A",
           "ui": {
-            "x": -800,
+            "x": -500,
             "y": -500,
             "pageId": "cowbell"
           },
           "params": {
             "waveType": "square",
             "amplitude": 1,
-            "tune": 6.045,
+            "tune": 5,
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 5,
-            "gain": 5,
+            "gain": 10,
             "fmIndex": 0,
             "feedback": 0,
-            "dutyCycle": 5,
+            "dutyCycle": 4.9637,
             "superSawDetune": 5,
             "superSawMix": 5,
             "morph": 0
           }
         },
         {
-          "id": "widget-51",
-          "type": "fm-oscillator",
-          "label": "Square 800 Hz",
+          "id": "widget-142",
+          "type": "adsr",
+          "label": "Amp Env",
           "ui": {
-            "x": -800,
-            "y": -150,
+            "x": -1100,
+            "y": 0,
             "pageId": "cowbell"
           },
           "params": {
-            "waveType": "square",
-            "amplitude": 1,
-            "tune": 6.612,
-            "ratioCoarse": 0.3225806451612903,
-            "ratioFine": 0,
-            "detune": 5,
-            "gain": 5,
-            "fmIndex": 0,
-            "feedback": 0,
-            "dutyCycle": 5,
-            "superSawDetune": 5,
-            "superSawMix": 5,
+            "attack": 0.08,
+            "decay": 0.6,
+            "sustain": 0.7,
+            "release": 1.3684563011466964,
+            "attackMaxSeconds": 4,
+            "attackCurve": "linear",
+            "decayMaxSeconds": 4,
+            "decayCurve": "linear",
+            "releaseMaxSeconds": 4,
+            "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-144",
+          "type": "const",
+          "label": "Cutoff Offset",
+          "ui": {
+            "x": -1100,
+            "y": 600,
+            "pageId": "cowbell"
+          },
+          "params": {
+            "value": 1.5
+          }
+        },
+        {
+          "id": "widget-145",
+          "type": "adder",
+          "label": "Key Track",
+          "ui": {
+            "x": -500,
+            "y": 500,
+            "pageId": "cowbell"
+          },
+          "params": {
+            "inputCount": 2,
+            "values": [
+              5.166666666666667,
+              1.5,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "id": "widget-149",
+          "type": "lfo",
+          "label": "OSC B (LF) PWM",
+          "ui": {
+            "x": -1100,
+            "y": -900,
+            "pageId": "cowbell"
+          },
+          "params": {
+            "waveType": "triangle",
+            "rate": 0.68,
+            "maxRate": 10,
+            "gain": 4.12,
+            "phase": 0,
+            "delay": 0,
+            "zeroPointFixed": true,
+            "zeroPoint": 5,
+            "oneShot": false,
+            "global": false,
             "morph": 0
           }
         },
         {
-          "id": "widget-52",
-          "type": "filter",
-          "label": "Bandpass",
+          "id": "widget-150",
+          "type": "curtis-filter",
+          "label": "CEM3320 Lowpass",
           "ui": {
-            "x": -450,
-            "y": -300,
+            "x": 700,
+            "y": 300,
             "pageId": "cowbell"
           },
           "params": {
-            "filterType": "bandpass",
-            "slope": 12,
-            "cutoff": 5.34,
+            "filterType": "lowpass",
+            "cutoff": 6.666666666666667,
             "cutoffMinHz": 20,
             "cutoffMaxHz": 20000,
             "cutoffCurve": "log",
-            "resonance": 6.962,
+            "resonance": 6.7,
             "resonanceMinQ": 0.1,
             "resonanceMaxQ": 20,
             "resonanceCurve": "log",
-            "coeffStride": 4,
+            "slope": 24,
             "global": false
           }
         }
       ],
       "connections": [
-        {
-          "id": "conn-1",
-          "from": {
-            "widgetId": "widget-2",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-3",
-            "portId": "gate"
-          },
-          "color": "#4ade80"
-        },
         {
           "id": "conn-2",
           "from": {
@@ -1419,30 +1385,6 @@
           "color": "#4ade80"
         },
         {
-          "id": "conn-5",
-          "from": {
-            "widgetId": "widget-3",
-            "portId": "trigger4"
-          },
-          "to": {
-            "widgetId": "widget-7",
-            "portId": "in"
-          },
-          "color": "#4ade80"
-        },
-        {
-          "id": "conn-6",
-          "from": {
-            "widgetId": "widget-3",
-            "portId": "trigger5"
-          },
-          "to": {
-            "widgetId": "widget-8",
-            "portId": "in"
-          },
-          "color": "#4ade80"
-        },
-        {
           "id": "conn-7",
           "from": {
             "widgetId": "widget-3",
@@ -1467,285 +1409,261 @@
           "color": "#4ade80"
         },
         {
-          "id": "conn-9",
+          "id": "conn-83",
           "from": {
+            "widgetId": "widget-60",
+            "portId": "value1"
+          },
+          "to": {
             "widgetId": "widget-3",
-            "portId": "trigger8"
+            "portId": "gate"
           },
-          "to": {
-            "widgetId": "widget-11",
-            "portId": "in"
-          },
-          "color": "#4ade80"
+          "color": "#f87171"
         },
         {
-          "id": "conn-10",
+          "id": "conn-219",
+          "from": {
+            "widgetId": "widget-107",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-3",
+            "portId": "rate"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-222",
           "from": {
             "widgetId": "widget-12",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-13",
+            "widgetId": "widget-110",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#fbbf24"
         },
         {
-          "id": "conn-11",
+          "id": "conn-223",
           "from": {
             "widgetId": "widget-12",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-14",
+            "widgetId": "widget-111",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#fbbf24"
         },
         {
-          "id": "conn-12",
+          "id": "conn-224",
           "from": {
             "widgetId": "widget-12",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-15",
+            "widgetId": "widget-112",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#fbbf24"
         },
         {
-          "id": "conn-13",
+          "id": "conn-225",
           "from": {
-            "widgetId": "widget-13",
+            "widgetId": "widget-110",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-15",
+            "widgetId": "widget-112",
             "portId": "pitchCv"
           },
           "color": "#a3e635"
         },
         {
-          "id": "conn-14",
+          "id": "conn-226",
           "from": {
-            "widgetId": "widget-14",
+            "widgetId": "widget-111",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-15",
+            "widgetId": "widget-112",
             "portId": "amplitude"
           },
-          "color": "#2dd4bf"
+          "color": "#4ade80"
         },
         {
-          "id": "conn-15",
+          "id": "conn-227",
           "from": {
-            "widgetId": "widget-15",
+            "widgetId": "widget-112",
             "portId": "value"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in1"
           },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-228",
+          "from": {
+            "widgetId": "widget-16",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-113",
+            "portId": "gate"
+          },
           "color": "#22d3ee"
         },
         {
-          "id": "conn-16",
+          "id": "conn-229",
           "from": {
             "widgetId": "widget-16",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-17",
+            "widgetId": "widget-114",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#22d3ee"
         },
         {
-          "id": "conn-17",
+          "id": "conn-230",
           "from": {
             "widgetId": "widget-16",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-18",
+            "widgetId": "widget-115",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#22d3ee"
         },
         {
-          "id": "conn-18",
+          "id": "conn-231",
           "from": {
             "widgetId": "widget-16",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-19",
+            "widgetId": "widget-116",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#22d3ee"
         },
         {
-          "id": "conn-19",
+          "id": "conn-232",
           "from": {
-            "widgetId": "widget-16",
+            "widgetId": "widget-113",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-20",
-            "portId": "gate"
+            "widgetId": "widget-116",
+            "portId": "pitchCv"
           },
-          "color": "#4ade80"
+          "color": "#818cf8"
         },
         {
-          "id": "conn-20",
+          "id": "conn-233",
           "from": {
-            "widgetId": "widget-17",
+            "widgetId": "widget-114",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-19",
+            "widgetId": "widget-116",
             "portId": "amplitude"
           },
-          "color": "#2dd4bf"
+          "color": "#c084fc"
         },
         {
-          "id": "conn-21",
+          "id": "conn-234",
           "from": {
-            "widgetId": "widget-17",
+            "widgetId": "widget-115",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-20",
+            "widgetId": "widget-117",
             "portId": "amplitude"
           },
-          "color": "#2dd4bf"
+          "color": "#f472b6"
         },
         {
-          "id": "conn-22",
+          "id": "conn-235",
           "from": {
-            "widgetId": "widget-18",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-21",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-23",
-          "from": {
-            "widgetId": "widget-21",
+            "widgetId": "widget-117",
             "portId": "value"
           },
           "to": {
-            "widgetId": "widget-22",
+            "widgetId": "widget-118",
             "portId": "in"
           },
-          "color": "#22d3ee"
+          "color": "#e5e7eb"
         },
         {
-          "id": "conn-24",
+          "id": "conn-236",
           "from": {
-            "widgetId": "widget-19",
+            "widgetId": "widget-116",
             "portId": "value"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in2"
           },
-          "color": "#22d3ee"
+          "color": "#f87171"
         },
         {
-          "id": "conn-25",
+          "id": "conn-237",
           "from": {
-            "widgetId": "widget-20",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-1",
-            "portId": "in2"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-26",
-          "from": {
-            "widgetId": "widget-22",
+            "widgetId": "widget-118",
             "portId": "out"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in2"
           },
-          "color": "#22d3ee"
+          "color": "#fbbf24"
         },
         {
-          "id": "conn-27",
+          "id": "conn-238",
           "from": {
             "widgetId": "widget-23",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-24",
+            "widgetId": "widget-119",
             "portId": "gate"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-239",
+          "from": {
+            "widgetId": "widget-119",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-120",
+            "portId": "amplitude"
           },
           "color": "#4ade80"
         },
         {
-          "id": "conn-28",
+          "id": "conn-240",
           "from": {
-            "widgetId": "widget-24",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-25",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-29",
-          "from": {
-            "widgetId": "widget-24",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-26",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-30",
-          "from": {
-            "widgetId": "widget-25",
+            "widgetId": "widget-120",
             "portId": "value"
           },
           "to": {
-            "widgetId": "widget-26",
-            "portId": "fmIn"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-31",
-          "from": {
-            "widgetId": "widget-26",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-27",
+            "widgetId": "widget-121",
             "portId": "in"
           },
-          "color": "#22d3ee"
+          "color": "#2dd4bf"
         },
         {
-          "id": "conn-32",
+          "id": "conn-241",
           "from": {
-            "widgetId": "widget-27",
+            "widgetId": "widget-121",
             "portId": "out"
           },
           "to": {
@@ -1755,388 +1673,388 @@
           "color": "#22d3ee"
         },
         {
-          "id": "conn-33",
-          "from": {
-            "widgetId": "widget-28",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-29",
-            "portId": "gate"
-          },
-          "color": "#4ade80"
-        },
-        {
-          "id": "conn-34",
-          "from": {
-            "widgetId": "widget-29",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-30",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-35",
-          "from": {
-            "widgetId": "widget-29",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-31",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-36",
-          "from": {
-            "widgetId": "widget-30",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-31",
-            "portId": "fmIn"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-37",
-          "from": {
-            "widgetId": "widget-31",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-32",
-            "portId": "in"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-38",
-          "from": {
-            "widgetId": "widget-32",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-1",
-            "portId": "in4"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-39",
-          "from": {
-            "widgetId": "widget-33",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-34",
-            "portId": "in"
-          },
-          "color": "#4ade80"
-        },
-        {
-          "id": "conn-40",
-          "from": {
-            "widgetId": "widget-33",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-36",
-            "portId": "gate"
-          },
-          "color": "#4ade80"
-        },
-        {
-          "id": "conn-41",
-          "from": {
-            "widgetId": "widget-34",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-35",
-            "portId": "gate"
-          },
-          "color": "#4ade80"
-        },
-        {
-          "id": "conn-42",
-          "from": {
-            "widgetId": "widget-35",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-37",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-43",
-          "from": {
-            "widgetId": "widget-36",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-38",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-44",
-          "from": {
-            "widgetId": "widget-37",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-39",
-            "portId": "in"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-45",
-          "from": {
-            "widgetId": "widget-38",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-39",
-            "portId": "in"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-46",
-          "from": {
-            "widgetId": "widget-39",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-1",
-            "portId": "in5"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-47",
+          "id": "conn-242",
           "from": {
             "widgetId": "widget-40",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-41",
+            "widgetId": "widget-122",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#818cf8"
         },
         {
-          "id": "conn-48",
+          "id": "conn-243",
           "from": {
             "widgetId": "widget-40",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-42",
+            "widgetId": "widget-123",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#818cf8"
         },
         {
-          "id": "conn-49",
+          "id": "conn-244",
           "from": {
             "widgetId": "widget-40",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-43",
+            "widgetId": "widget-124",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#818cf8"
         },
         {
-          "id": "conn-50",
+          "id": "conn-245",
           "from": {
-            "widgetId": "widget-41",
+            "widgetId": "widget-122",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-43",
+            "widgetId": "widget-124",
             "portId": "pitchCv"
           },
-          "color": "#a3e635"
+          "color": "#c084fc"
         },
         {
-          "id": "conn-51",
+          "id": "conn-246",
           "from": {
-            "widgetId": "widget-42",
+            "widgetId": "widget-123",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-43",
+            "widgetId": "widget-124",
             "portId": "amplitude"
           },
-          "color": "#2dd4bf"
+          "color": "#f472b6"
         },
         {
-          "id": "conn-52",
+          "id": "conn-247",
           "from": {
-            "widgetId": "widget-43",
+            "widgetId": "widget-124",
             "portId": "value"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in6"
           },
-          "color": "#22d3ee"
+          "color": "#e5e7eb"
         },
         {
-          "id": "conn-53",
+          "id": "conn-248",
           "from": {
             "widgetId": "widget-44",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-45",
+            "widgetId": "widget-125",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#f87171"
         },
         {
-          "id": "conn-54",
+          "id": "conn-249",
           "from": {
             "widgetId": "widget-44",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-46",
+            "widgetId": "widget-126",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#f87171"
         },
         {
-          "id": "conn-55",
+          "id": "conn-250",
           "from": {
             "widgetId": "widget-44",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-47",
+            "widgetId": "widget-127",
             "portId": "gate"
           },
-          "color": "#4ade80"
+          "color": "#f87171"
         },
         {
-          "id": "conn-56",
+          "id": "conn-251",
           "from": {
-            "widgetId": "widget-45",
+            "widgetId": "widget-125",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-47",
+            "widgetId": "widget-127",
             "portId": "pitchCv"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-252",
+          "from": {
+            "widgetId": "widget-126",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-127",
+            "portId": "amplitude"
           },
           "color": "#a3e635"
         },
         {
-          "id": "conn-57",
+          "id": "conn-253",
           "from": {
-            "widgetId": "widget-46",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-47",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-58",
-          "from": {
-            "widgetId": "widget-47",
+            "widgetId": "widget-127",
             "portId": "value"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in7"
           },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-254",
+          "from": {
+            "widgetId": "widget-3",
+            "portId": "velocity1"
+          },
+          "to": {
+            "widgetId": "widget-128",
+            "portId": "in"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-255",
+          "from": {
+            "widgetId": "widget-3",
+            "portId": "velocity2"
+          },
+          "to": {
+            "widgetId": "widget-129",
+            "portId": "in"
+          },
           "color": "#22d3ee"
         },
         {
-          "id": "conn-59",
+          "id": "conn-256",
           "from": {
-            "widgetId": "widget-48",
+            "widgetId": "widget-3",
+            "portId": "velocity3"
+          },
+          "to": {
+            "widgetId": "widget-130",
+            "portId": "in"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-257",
+          "from": {
+            "widgetId": "widget-3",
+            "portId": "velocity6"
+          },
+          "to": {
+            "widgetId": "widget-131",
+            "portId": "in"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-258",
+          "from": {
+            "widgetId": "widget-3",
+            "portId": "velocity7"
+          },
+          "to": {
+            "widgetId": "widget-132",
+            "portId": "in"
+          },
+          "color": "#f472b6"
+        },
+        {
+          "id": "conn-259",
+          "from": {
+            "widgetId": "widget-133",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-49",
-            "portId": "gate"
+            "widgetId": "widget-111",
+            "portId": "velocity"
+          },
+          "color": "#e5e7eb"
+        },
+        {
+          "id": "conn-260",
+          "from": {
+            "widgetId": "widget-134",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-114",
+            "portId": "velocity"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-261",
+          "from": {
+            "widgetId": "widget-134",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-115",
+            "portId": "velocity"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-262",
+          "from": {
+            "widgetId": "widget-135",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-119",
+            "portId": "velocity"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-263",
+          "from": {
+            "widgetId": "widget-136",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-123",
+            "portId": "velocity"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-264",
+          "from": {
+            "widgetId": "widget-137",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-126",
+            "portId": "velocity"
           },
           "color": "#4ade80"
         },
         {
-          "id": "conn-60",
+          "id": "conn-270",
           "from": {
-            "widgetId": "widget-49",
+            "widgetId": "widget-139",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-141",
+            "portId": "pitchCv"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-271",
+          "from": {
+            "widgetId": "widget-139",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-145",
+            "portId": "in1"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-272",
+          "from": {
+            "widgetId": "widget-139",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-142",
+            "portId": "gate"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-276",
+          "from": {
+            "widgetId": "widget-142",
             "portId": "out"
           },
           "to": {
-            "widgetId": "widget-50",
+            "widgetId": "widget-141",
             "portId": "amplitude"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-279",
+          "from": {
+            "widgetId": "widget-144",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-145",
+            "portId": "in2"
+          },
+          "color": "#4ade80"
+        },
+        {
+          "id": "conn-289",
+          "from": {
+            "widgetId": "widget-149",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-141",
+            "portId": "dutyCycle"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-290",
+          "from": {
+            "widgetId": "widget-141",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-150",
+            "portId": "in"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-291",
+          "from": {
+            "widgetId": "widget-145",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-150",
+            "portId": "cutoff"
           },
           "color": "#2dd4bf"
         },
         {
-          "id": "conn-61",
+          "id": "conn-292",
           "from": {
-            "widgetId": "widget-49",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-51",
-            "portId": "amplitude"
-          },
-          "color": "#2dd4bf"
-        },
-        {
-          "id": "conn-62",
-          "from": {
-            "widgetId": "widget-50",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-52",
-            "portId": "in"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-63",
-          "from": {
-            "widgetId": "widget-51",
-            "portId": "value"
-          },
-          "to": {
-            "widgetId": "widget-52",
-            "portId": "in"
-          },
-          "color": "#22d3ee"
-        },
-        {
-          "id": "conn-64",
-          "from": {
-            "widgetId": "widget-52",
+            "widgetId": "widget-150",
             "portId": "out"
           },
           "to": {
             "widgetId": "widget-1",
             "portId": "in8"
           },
-          "color": "#22d3ee"
+          "color": "#a3e635"
         }
       ]
     },
@@ -2147,8 +2065,8 @@
           "type": "audio-input-link",
           "label": "Audio Outputs",
           "ui": {
-            "x": -1500,
-            "y": -420,
+            "x": -2460,
+            "y": -580,
             "pageId": "fx"
           },
           "params": {
@@ -2179,36 +2097,22 @@
           "type": "mixer",
           "label": "Drum Mix",
           "ui": {
-            "x": -1100,
-            "y": -420,
+            "x": -1780,
+            "y": -700,
             "pageId": "fx"
           },
           "params": {
             "inputCount": 8,
             "gains": [
-              1.0,
+              1,
               0.8,
               0.5,
               0.5,
               0.7,
               0.8,
               0.8,
-              0.5
+              1.46
             ]
-          }
-        },
-        {
-          "id": "widget-55",
-          "type": "wm8960-out",
-          "label": "WM8960-Out",
-          "ui": {
-            "x": -700,
-            "y": -600,
-            "pageId": "fx"
-          },
-          "params": {
-            "muted": false,
-            "gain": 10
           }
         },
         {
@@ -2216,8 +2120,8 @@
           "type": "ns4168-out",
           "label": "NS4168-Out",
           "ui": {
-            "x": -700,
-            "y": -420,
+            "x": -940,
+            "y": -640,
             "pageId": "fx"
           },
           "params": {
@@ -2226,45 +2130,85 @@
           }
         },
         {
-          "id": "widget-57",
-          "type": "es8311-out",
-          "label": "ES8311-Out",
+          "id": "widget-138",
+          "type": "reverb-light",
+          "label": "Reverb",
           "ui": {
-            "x": -700,
-            "y": -240,
+            "x": -1420,
+            "y": -600,
             "pageId": "fx"
           },
           "params": {
-            "muted": false,
-            "gain": 10
+            "roomSize": 0.092,
+            "roomSizeVolts": 0.92,
+            "roomSizeMin": 0,
+            "roomSizeMax": 1,
+            "roomSizeCurve": "linear",
+            "damping": 0.33799999999999997,
+            "dampingVolts": 3.38,
+            "dampingMin": 0,
+            "dampingMax": 1,
+            "dampingCurve": "linear",
+            "wetLevelDb": -6,
+            "wetLevelVolts": 9.375,
+            "wetLevelMin": -96,
+            "wetLevelMax": 0,
+            "wetLevelCurve": "linear",
+            "dryLevelDb": 0,
+            "dryLevelVolts": 10,
+            "dryLevelMin": -96,
+            "dryLevelMax": 0,
+            "dryLevelCurve": "linear",
+            "bypass": false
           }
         },
         {
-          "id": "widget-58",
-          "type": "audio-out",
-          "label": "JS Audio-Out",
+          "id": "widget-147",
+          "type": "chorus",
+          "label": "Prophet Chorus",
           "ui": {
-            "x": -700,
-            "y": -60,
+            "x": -1600,
+            "y": 300,
             "pageId": "fx"
           },
           "params": {
-            "muted": false,
-            "gain": 10
+            "rate": 0.29,
+            "depth": 0.001,
+            "offset": 0.02,
+            "bypass": false
           }
         },
         {
-          "id": "widget-59",
-          "type": "usb-out",
-          "label": "USB-Out",
+          "id": "widget-148",
+          "type": "reverb-light",
+          "label": "Prophet Reverb",
           "ui": {
-            "x": -700,
-            "y": 120,
+            "x": -1100,
+            "y": 300,
             "pageId": "fx"
           },
           "params": {
-            "muted": false,
-            "gain": 10
+            "roomSize": 0.85,
+            "roomSizeVolts": 8.5,
+            "roomSizeMin": 0,
+            "roomSizeMax": 1,
+            "roomSizeCurve": "linear",
+            "damping": 0.5,
+            "dampingVolts": 5,
+            "dampingMin": 0,
+            "dampingMax": 1,
+            "dampingCurve": "linear",
+            "wetLevelDb": -6,
+            "wetLevelVolts": 9.375,
+            "wetLevelMin": -96,
+            "wetLevelMax": 0,
+            "wetLevelCurve": "linear",
+            "dryLevelDb": 0,
+            "dryLevelVolts": 10,
+            "dryLevelMin": -96,
+            "dryLevelMax": 0,
+            "dryLevelCurve": "linear",
+            "bypass": false
           }
         }
       ],
@@ -2354,138 +2298,115 @@
           "color": "#f87171"
         },
         {
-          "id": "conn-72",
+          "id": "conn-265",
+          "from": {
+            "widgetId": "widget-54",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-138",
+            "portId": "inL"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-266",
+          "from": {
+            "widgetId": "widget-54",
+            "portId": "out"
+          },
+          "to": {
+            "widgetId": "widget-138",
+            "portId": "inR"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-267",
+          "from": {
+            "widgetId": "widget-138",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-56",
+            "portId": "left"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-268",
+          "from": {
+            "widgetId": "widget-138",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-56",
+            "portId": "right"
+          },
+          "color": "#22d3ee"
+        },
+        {
+          "id": "conn-283",
+          "from": {
+            "widgetId": "widget-147",
+            "portId": "left"
+          },
+          "to": {
+            "widgetId": "widget-148",
+            "portId": "inL"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-284",
+          "from": {
+            "widgetId": "widget-147",
+            "portId": "right"
+          },
+          "to": {
+            "widgetId": "widget-148",
+            "portId": "inR"
+          },
+          "color": "#f472b6"
+        },
+        {
+          "id": "conn-285",
+          "from": {
+            "widgetId": "widget-148",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-56",
+            "portId": "left"
+          },
+          "color": "#e5e7eb"
+        },
+        {
+          "id": "conn-286",
+          "from": {
+            "widgetId": "widget-148",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-56",
+            "portId": "right"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-288",
           "from": {
             "widgetId": "widget-53",
             "portId": "out8"
           },
           "to": {
-            "widgetId": "widget-54",
-            "portId": "in8"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-73",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-55",
-            "portId": "left"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-74",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-55",
-            "portId": "right"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-75",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-56",
-            "portId": "left"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-76",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-56",
-            "portId": "right"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-77",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-57",
-            "portId": "left"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-78",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-57",
-            "portId": "right"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-79",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-58",
-            "portId": "left"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-80",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-58",
-            "portId": "right"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-81",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-59",
-            "portId": "left"
-          },
-          "color": "#f87171"
-        },
-        {
-          "id": "conn-82",
-          "from": {
-            "widgetId": "widget-54",
-            "portId": "out"
-          },
-          "to": {
-            "widgetId": "widget-59",
-            "portId": "right"
+            "widgetId": "widget-147",
+            "portId": "in"
           },
           "color": "#f87171"
         }
       ]
     }
-  }
+  },
+  "firmwareVersion": "0.35"
 }

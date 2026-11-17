@@ -1,0 +1,512 @@
+{
+  "schemaVersion": 4,
+  "masterClock": {
+    "bpm": 120
+  },
+  "controlStride": 4,
+  "title": "",
+  "description": "",
+  "longDescription": "",
+  "author": "",
+  "uiTabOrder": [
+    "generator",
+    "fx"
+  ],
+  "uiPages": [
+    {
+      "id": "generator",
+      "title": "Sound Generation",
+      "toMasterUi": {
+        "x": -1180,
+        "y": -360
+      }
+    }
+  ],
+  "pages": {
+    "generator": {
+      "widgets": [
+        {
+          "id": "widget-4",
+          "type": "midi-in",
+          "label": "Midi-In",
+          "ui": {
+            "x": -2000,
+            "y": -420,
+            "pageId": "generator"
+          },
+          "params": {
+            "channel": null,
+            "voices": 12,
+            "overflowMode": "steal-oldest",
+            "glide": false,
+            "glideTime": 0.063,
+            "pitchBendRangeCents": 200.0004,
+            "pitchBendQuantizeCents": false,
+            "keyMask": "ffffffffffffffffffffffffffffffff",
+            "program": 0
+          }
+        },
+        {
+          "id": "widget-47",
+          "type": "fm8",
+          "label": "FM8",
+          "ui": {
+            "x": -1640,
+            "y": -380,
+            "pageId": "generator"
+          },
+          "params": {
+            "ops": 63,
+            "tune": 5,
+            "gain": 10,
+            "d105": 96,
+            "d106": 25,
+            "d107": 25,
+            "d108": 67,
+            "d109": 99,
+            "d110": 75,
+            "d111": 0,
+            "d112": 0,
+            "d113": 0,
+            "d114": 0,
+            "d115": 0,
+            "d116": 0,
+            "d117": 0,
+            "d118": 3,
+            "d119": 0,
+            "d120": 2,
+            "d121": 99,
+            "d122": 0,
+            "d123": 1,
+            "d124": 0,
+            "d125": 10,
+            "d84": 95,
+            "d85": 50,
+            "d86": 35,
+            "d87": 78,
+            "d88": 99,
+            "d89": 75,
+            "d90": 0,
+            "d91": 0,
+            "d92": 0,
+            "d93": 0,
+            "d94": 0,
+            "d95": 0,
+            "d96": 0,
+            "d97": 3,
+            "d98": 0,
+            "d99": 7,
+            "d100": 58,
+            "d101": 0,
+            "d102": 14,
+            "d103": 0,
+            "d104": 7,
+            "d63": 95,
+            "d64": 20,
+            "d65": 20,
+            "d66": 50,
+            "d67": 99,
+            "d68": 95,
+            "d69": 0,
+            "d70": 0,
+            "d71": 0,
+            "d72": 0,
+            "d73": 0,
+            "d74": 0,
+            "d75": 0,
+            "d76": 3,
+            "d77": 0,
+            "d78": 2,
+            "d79": 99,
+            "d80": 0,
+            "d81": 1,
+            "d82": 0,
+            "d83": 7,
+            "d42": 95,
+            "d43": 29,
+            "d44": 20,
+            "d45": 50,
+            "d46": 99,
+            "d47": 95,
+            "d48": 0,
+            "d49": 0,
+            "d50": 0,
+            "d51": 0,
+            "d52": 0,
+            "d53": 0,
+            "d54": 0,
+            "d55": 3,
+            "d56": 0,
+            "d57": 6,
+            "d58": 89,
+            "d59": 0,
+            "d60": 1,
+            "d61": 0,
+            "d62": 7,
+            "d21": 95,
+            "d22": 20,
+            "d23": 20,
+            "d24": 50,
+            "d25": 99,
+            "d26": 95,
+            "d27": 0,
+            "d28": 0,
+            "d29": 0,
+            "d30": 0,
+            "d31": 0,
+            "d32": 0,
+            "d33": 0,
+            "d34": 3,
+            "d35": 0,
+            "d36": 0,
+            "d37": 99,
+            "d38": 0,
+            "d39": 1,
+            "d40": 0,
+            "d41": 0,
+            "d0": 95,
+            "d1": 29,
+            "d2": 20,
+            "d3": 50,
+            "d4": 99,
+            "d5": 95,
+            "d6": 0,
+            "d7": 0,
+            "d8": 41,
+            "d9": 0,
+            "d10": 19,
+            "d11": 0,
+            "d12": 0,
+            "d13": 3,
+            "d14": 0,
+            "d15": 6,
+            "d16": 79,
+            "d17": 0,
+            "d18": 1,
+            "d19": 0,
+            "d20": 14,
+            "d126": 94,
+            "d127": 67,
+            "d128": 95,
+            "d129": 60,
+            "d130": 50,
+            "d131": 50,
+            "d132": 50,
+            "d133": 50,
+            "d134": 4,
+            "d135": 6,
+            "d136": 0,
+            "d137": 34,
+            "d138": 33,
+            "d139": 0,
+            "d140": 0,
+            "d141": 0,
+            "d142": 4,
+            "d143": 3,
+            "d144": 24,
+            "d145": 69,
+            "d146": 46,
+            "d147": 80,
+            "d148": 73,
+            "d149": 65,
+            "d150": 78,
+            "d151": 79,
+            "d152": 32,
+            "d153": 49,
+            "d154": 32,
+            "d156": 99,
+            "d157": 0,
+            "fm8Origin": "FM8/factory/rom1a.syx#10",
+            "fm8Modified": 0
+          }
+        },
+        {
+          "id": "widget-64",
+          "type": "oscilloscope",
+          "label": "Oscilloscope",
+          "ui": {
+            "x": -1180,
+            "y": -100,
+            "pageId": "generator"
+          },
+          "params": {
+            "width": 300,
+            "height": 140,
+            "triggerChannel": "in1",
+            "triggerLevel": 0.2,
+            "timebase": "long"
+          }
+        },
+        {
+          "id": "widget-1",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": {
+            "x": -1180,
+            "y": -360
+          },
+          "params": {
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        }
+      ],
+      "connections": [
+        {
+          "id": "conn-98",
+          "from": {
+            "widgetId": "widget-4",
+            "portId": "pitchCv"
+          },
+          "to": {
+            "widgetId": "widget-47",
+            "portId": "pitchCv"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-99",
+          "from": {
+            "widgetId": "widget-4",
+            "portId": "velocity"
+          },
+          "to": {
+            "widgetId": "widget-47",
+            "portId": "velocity"
+          },
+          "color": "#22d3ee"
+        },
+        {
+          "id": "conn-101",
+          "from": {
+            "widgetId": "widget-47",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-1",
+            "portId": "in1"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-156",
+          "from": {
+            "widgetId": "widget-4",
+            "portId": "gate"
+          },
+          "to": {
+            "widgetId": "widget-47",
+            "portId": "gate"
+          },
+          "color": "#a3e635"
+        },
+        {
+          "id": "conn-161",
+          "from": {
+            "widgetId": "widget-47",
+            "portId": "value"
+          },
+          "to": {
+            "widgetId": "widget-64",
+            "portId": "in1"
+          },
+          "color": "#fbbf24"
+        }
+      ]
+    },
+    "fx": {
+      "widgets": [
+        {
+          "id": "widget-2",
+          "type": "audio-input-link",
+          "label": "Audio Outputs",
+          "ui": {
+            "x": -900,
+            "y": -200,
+            "pageId": "fx"
+          },
+          "params": {
+            "gains": [
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10,
+              10
+            ],
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        },
+        {
+          "id": "widget-5",
+          "type": "ns4168-out",
+          "label": "NS4168-Out",
+          "ui": {
+            "x": 440,
+            "y": -240,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
+        },
+        {
+          "id": "widget-6",
+          "type": "reverb-light",
+          "label": "Reverb",
+          "ui": {
+            "x": -60,
+            "y": -200,
+            "pageId": "fx"
+          },
+          "params": {
+            "roomSize": 0.5,
+            "roomSizeVolts": 5,
+            "roomSizeMin": 0,
+            "roomSizeMax": 1,
+            "roomSizeCurve": "linear",
+            "damping": 0.5,
+            "dampingVolts": 5,
+            "dampingMin": 0,
+            "dampingMax": 1,
+            "dampingCurve": "linear",
+            "wetLevelDb": -6,
+            "wetLevelVolts": 9.375,
+            "wetLevelMin": -96,
+            "wetLevelMax": 0,
+            "wetLevelCurve": "linear",
+            "dryLevelDb": 0,
+            "dryLevelVolts": 10,
+            "dryLevelMin": -96,
+            "dryLevelMax": 0,
+            "dryLevelCurve": "linear",
+            "bypass": false
+          }
+        },
+        {
+          "id": "widget-86",
+          "type": "delay",
+          "label": "Delay",
+          "ui": {
+            "x": -560,
+            "y": -200,
+            "pageId": "fx"
+          },
+          "params": {
+            "delayTimeMs": 300,
+            "timeVolts": 1.5,
+            "timeMin": 0,
+            "timeMax": 2000,
+            "timeCurve": "linear",
+            "feedback": 0.3,
+            "feedbackVolts": 3.1578947368421053,
+            "feedbackMin": 0,
+            "feedbackMax": 0.95,
+            "feedbackCurve": "linear",
+            "mix": 0.35,
+            "mixVolts": 3.5,
+            "mixMin": 0,
+            "mixMax": 1,
+            "mixCurve": "linear",
+            "bypass": true
+          }
+        }
+      ],
+      "connections": [
+        {
+          "id": "conn-9",
+          "from": {
+            "widgetId": "widget-6",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-5",
+            "portId": "left"
+          },
+          "color": "#818cf8"
+        },
+        {
+          "id": "conn-10",
+          "from": {
+            "widgetId": "widget-6",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-5",
+            "portId": "right"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-157",
+          "from": {
+            "widgetId": "widget-2",
+            "portId": "out1"
+          },
+          "to": {
+            "widgetId": "widget-86",
+            "portId": "inL"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-158",
+          "from": {
+            "widgetId": "widget-86",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-6",
+            "portId": "inL"
+          },
+          "color": "#fbbf24"
+        },
+        {
+          "id": "conn-159",
+          "from": {
+            "widgetId": "widget-2",
+            "portId": "out1"
+          },
+          "to": {
+            "widgetId": "widget-86",
+            "portId": "inR"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-160",
+          "from": {
+            "widgetId": "widget-86",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-6",
+            "portId": "inR"
+          },
+          "color": "#a3e635"
+        }
+      ]
+    }
+  },
+  "firmwareVersion": "0.35"
+}
