@@ -1,576 +1,218 @@
-# ESP32-P4 Template
+# Espressynth
 
-This project is a modular, feature-rich ESP32-P4 application template built around the ESP-IDF framework. It is designed as a practical foundation for boards such as the JC8012P4A1, JC1060P470C 7-inch display board, the Waveshare ESP32-P4 Wi-Fi 6 development kit, and custom ESP32-P4 hardware.
+A modular synthesizer that runs on the ESP32-P4. You build a patch in a browser: place nodes, draw cables between them, and the ESP32-P4 renders the resulting audio graph in real time. Sound comes out of the board's codec, over USB audio, or through a CV/gate interface. A touch display on the board gives you hands-on control.
 
-The codebase is intentionally organized around feature modules instead of a single monolithic app. It combines Wi-Fi, Ethernet, Bluetooth, USB host/device functionality, audio codecs, LVGL display handling, filesystems, web serving, and a command-line interface into one reusable architecture.
-
-This repository is especially useful when you want to prototype an ESP32-P4 product or a feature-rich embedded UI system without starting from scratch every time.
-
-## Web patch editor
-
-The firmware serves a browser-based modular editor. You build a synth by placing nodes and patching cables, and the ESP32-P4 runs the resulting audio graph in real time.
+Built with ESP-IDF 6.1 · [Apache License 2.0](LICENSE)
 
 ![Sound Generation page with a supersaw pad patch](documentation/images/patch-example.png)
 
 *Sound Generation page: MIDI-In drives a supersaw oscillator, an LFO modulates its detune, a filter envelope sweeps the low-pass filter, and an amp envelope opens the VCA before the signal goes to the master bus.*
 
+## Highlights
+
+- **Browser patch editor**, served by the device itself. Nothing to install; open the board's IP address in Chrome or Edge.
+- **About 80 node types**: oscillators, an FM8 (DX7-compatible) engine, sample and SoundFont players, envelopes, sequencers, filters, effects, math and logic, meters and I/O. See [Nodes](#nodes).
+- **Low latency**: about 11 ms from MIDI note-on to sound with the default settings (calculated, no underruns measured). See [Audio and latency](#audio-and-latency).
+- **Polyphony** through the Midi-In node, with MIDI key filtering.
+- **MIDI in** from USB devices (host), BLE MIDI, and a computer over USB (device mode).
+- **Audio out** through ES8311, WM8960 and NS4168 codecs or USB Audio Class 2.0, plus **CV and gate** through external modules.
+- **Build patches with an AI assistant** over [MCP](documentation/MCP.md): "build me a bass, then play a scale".
+- **Safe start**: a bad preset or a lost network cannot lock you out of the device.
+- **Browser preview**: the editor also renders the patch in the browser with a port of the firmware's engine.
+
+## Supported boards
+
+| Board | Display | Audio on board | Notes |
+| --- | --- | --- | --- |
+| JC8012P4A1 | 10.1" 1280x800 MIPI DSI, touch | ES8311 | ESP32-C6 co-processor |
+| JC1060P470C | 7" 1024x600 MIPI DSI, touch | ES8311 | ESP32-C6 co-processor, Ethernet |
+| Waveshare ESP32-P4-WIFI6-DEV-KIT | none | ES8311 | ESP32-P4 v1.x, Ethernet; WM8960 Audio HAT supported ([wiring](documentation/Boards/Waveshare_ESP32-P4-WIFI6_mit_WM8960_HAT.md)) |
+| Elecrow CrowPanel Advanced 5" | 5" 800x480 parallel RGB, touch | NS4168 amp, PDM mic | ESP32-P4 v1.x |
+| Custom ESP32-P4 board | configurable | configurable | all pins set in menuconfig |
+
+Board data sheets and schematics are in [documentation/Boards](documentation/Boards). On the CrowPanel the speaker-output ferrites need to be removed for clean sound.
+
+Add-on hardware is not tied to a board. Enable and wire it in menuconfig on whichever board it is attached to:
+
+- WM8960 codec HAT, NS4168 amp or PDM microphone
+- DFRobot ADS1115 (CV in, 0-10 V) and GP8413 (CV out, 2 channels, 15 bit)
+- WS2812 LEDs and GPIO in/out nodes
+- SD card
+
+## Getting started
+
+### Option A: flash a ready-made image
+
+Release images for every board (merged bootloader, firmware, co-processor firmware, web editor and seed data) can be flashed from the browser with ESP Web Tools: [jolabi.de, Espressynth flashen](https://jolabi.de/de/projekte/espressynth/flashen). With `esptool`:
+
+```powershell
+python -m esptool --chip esp32p4 -p <COM-Port> write-flash 0x0 EspressiveSynths-<board>.bin
+```
+
+### Option B: build from source
+
+Install ESP-IDF 6.1, open its environment, then:
+
+```powershell
+idf.py menuconfig      # Espressynth -> Board Configuration -> Target Board
+idf.py build
+idf.py -p <COM-Port> flash
+idf.py monitor
+```
+
+`python tools/deploy.py` builds the same merged image as in option A for the board chosen in menuconfig (`build/EspressiveSynths-<board>.bin`). `python tools/deploy.py --all` builds release images for all boards except Custom.
+
+On boards with an ESP32-C6 co-processor, the C6 firmware is built from `coprocessor_fw` and pushed from the P4 over the ESP-Hosted link. See [Co-processor firmware](#co-processor-firmware).
+
+### First start
+
+1. Without stored Wi-Fi credentials (or if the network is not reachable) the board opens an access point named **ESPRESSYNTH by Jolabi** with a captive portal (the name comes from `WIFI_CAPTIVE_PORTAL_SSID`). Join it; a gateway page such as `http://192.168.4.1/` opens.
+2. Enter your home network under **File > Settings**. The access point switches off once the board is connected.
+3. Find the board's IP address in your router, the serial monitor, or the `wifi` CLI command, and open `http://<ip>/`.
+4. The default template is a playable voice. Plug in a MIDI keyboard and play.
+
+The step-by-step guide is on the project website ([documentation/Website](documentation/Website)).
+
+## The web editor
+
 ![FX & Masteroutput page with delay, reverb and hardware outputs](documentation/images/fx-chain.png)
 
-*FX & Masteroutput page: the voice buses run through delay and reverb into the hardware outputs (WM8960, ES8311, USB audio) and the in-browser preview.*
+*FX & Masteroutput page: the voice buses run through delay and reverb into the hardware outputs and the in-browser preview.*
+
+Each preset has at least two pages. **Sound Generation** holds the per-voice graph and ends in a *To Master* node with 8 audio buses. **FX & Masteroutput** is the shared master section that carries those buses through the effect chain to the outputs. The status bar shows master volume, BPM, the active MIDI device, free memory, load per core and audio underruns.
 
 ![Add Node picker](documentation/images/add-node.png)
 
-*Right-click on empty canvas to open the node picker. It lists 60+ node types in groups such as MIDI, generators, modulators, filters, effects, math and control.*
+*Right-click on empty canvas to open the node picker.*
 
-The [web editor guide](documentation/WebEditor.md) covers menus, settings and editing shortcuts.
+The [web editor guide](documentation/WebEditor.md) covers menus, canvas controls, settings and the file explorer. Every node also has a help page inside the editor.
 
-## At a glance
+### Nodes
 
-| Category | Summary |
+| Group | Nodes |
 | --- | --- |
-| Platform | ESP32-P4 firmware template built with ESP-IDF |
-| Supported boards | JC8012P4A1, JC1060P470C 7-inch, Waveshare ESP32-P4 Wi-Fi 6 Dev Kit, custom ESP32-P4 |
-| Networking | Wi-Fi, Ethernet, ESP-Hosted co-processor support |
-| USB | USB Host + USB Device via TinyUSB |
-| Audio | ES8311, WM8960, USB Audio Class 2.0 |
-| UI | LVGL display + touch support |
-| Storage | LittleFS, SD card, web assets partition |
-| Debug | Console CLI, system diagnostics, task info |
-| Config | Modular Kconfig-based feature enable/disable |
+| MIDI | Midi-In, Midi-Filter |
+| Generators | Oscillator (with supersaw, FM and feedback), FM8 (DX7 voices, SysEx import, Dexed-style editor), Wave Player, Sampler (with editor), Hammond, SoundFont Player |
+| Modulators | ADSR, DX Envelope, LFO, Wavetable (with editor), DeTune, Clock, Step Arpeggiator, Drum Sequencer, Monoflop, Sample & Hold, Burst Generator |
+| Filters | Filter, Curtis Filter, Comb Filter, ESP-EQ, Graphic EQ |
+| Control | Knob, Button, Up/Down Button, Switch, Multiplexer, Output Switch, Output Multiplexer, Const, Master Volume |
+| Math and logic | Adder, Multiplier, Divide, Frequency Divider, Counter, Abs, Value Mapper, Logic AND/OR/XOR/NOT |
+| Effects | Reverb Light, Chorus, Delay, Bitcrusher, Wave Folder, Overdrive, Envelope Follower, Pan |
+| Mixing and output | Gain, Mixer, Linked Input/Output (1, 4 or 8 channels) |
+| External audio | Audio-Out, USB-Out, ES8311-Out, WM8960-Out, NS4168-Out, Mic-In, WM8960-In |
+| Meters and misc | Annotation, Debug, Voltmeter, VU Meter, Oscilloscope, Spectrum |
+| External hardware | CV-In, CV-Out, Digital-In, Digital-Out, RGB LED |
 
-### Supported boards
+### Build patches with an AI assistant (MCP)
 
-- JC8012P4A1
-- JC1060P470C 7-inch board
-- Waveshare ESP32-P4 Wi-Fi 6 Dev Kit (GPIO map and WM8960 Audio HAT wiring: [documentation/Boards](documentation/Boards/Waveshare_ESP32-P4-WIFI6_mit_WM8960_HAT.md))
-- Custom ESP32-P4 board definition
+The editor can be driven by Claude Code, Claude Desktop or any other MCP client. The assistant adds nodes, draws cables, sets parameters, plays notes and saves presets. MCP is off by default and protected by a token. See [documentation/MCP.md](documentation/MCP.md) for setup and the safety rules.
 
-### Supported features
+## Audio and latency
 
-- Wi-Fi station mode and recovery logic
-- Ethernet support
-- Bluetooth LE via ESP-Hosted + NimBLE
-- USB Host and USB Device via TinyUSB
-- HID keyboard/mouse support
-- MIDI host/device support
-- ES8311 and WM8960 audio codec support
-- USB audio class 2.0
-- LVGL display and touch integration
-- Web UI served from LittleFS
-- SD card support
-- filesystem utilities and CLI debug commands
-- modular Kconfig-based feature selection
+Audio runs at a fixed 44.1 kHz. Output latency is the sum of two stages, both set in menuconfig under **Application Features > Audio Subsystem**:
 
-## Quick start
+| Stage | Setting | Default | Time |
+| --- | --- | --- | --- |
+| I2S DMA ring | `AUDIO_I2S_DMA_DESC_NUM` x `AUDIO_I2S_DMA_FRAME_NUM` | 3 x 128 frames | 8.7 ms |
+| Synth render block | `AUDIO_SYNTH_BLOCK_SIZE` | 128 samples | 2.9 ms |
 
-### 1) Set up ESP-IDF
+That gives roughly 11 ms from a USB-MIDI note-on to sound (calculated). The render task keeps to its time budget per block; the status bar's *Underruns* counter should stay at 0. How the defaults were chosen and measured: [documentation/audio-latency.md](documentation/audio-latency.md). RAM use and PSRAM placement: [documentation/memory.md](documentation/memory.md).
 
-```powershell
-$env:IDF_PATH = 'C:\esp\v6.1-rc1\esp-idf'
-. "$env:IDF_PATH\export.ps1"
-```
+The WM8960 codec also has a small runtime API (`Feature::Audio::WM8960` in `main/features/audio/wm8960_manager.hpp`) for headphone and speaker volume, DAC and ADC trim, line-input gain, mic boost and mic bias. The chip's control interface is write-only, so the getters return the last commanded value.
 
-### 2) Configure the project
+## Reliability
 
-```powershell
-idf.py menuconfig
-```
+- **Safe start.** When the Wi-Fi co-processor cannot be reached with the boot preset, two starts in a row do not finish, or a finger rests on the touch screen at boot, the device starts without any preset and stays reachable. Nothing in your presets is changed. Details in `main/features/synth/SafeStart.h`.
+- **Parameter journal.** Changes made on the device (knobs and buttons on the touch screen, with no browser open) are kept in a journal next to the preset. The editor applies them and writes them into the preset when autosave is on.
+- **Deferred preset writes** (`PresetWriteCache`): saves from the browser are parked in PSRAM and written once the audio output has been silent for a moment, because flash writes cause dropouts while playing. A power loss during an uninterrupted performance loses the pending save.
 
-Select the target board, enable the features you need, and adjust audio, USB, Wi-Fi, display, and networking settings. Everything lives in the single `sdkconfig`; the board selection fills in its fixed pins (see [Configuration model](#configuration-model-one-sdkconfig)).
+## Configuration
 
-### 3) Build the firmware
+There is exactly one configuration: the `sdkconfig` in the project root, edited with `idf.py menuconfig`. Always build with plain `idf.py build`: no `-B` build folders, no alternative `SDKCONFIG` files, no per-board `SDKCONFIG_DEFAULTS`. `sdkconfig.defaults` only seeds a fresh `sdkconfig`.
 
-```powershell
-idf.py build
-```
+The board is picked under **Espressynth > Board Configuration > Target Board**, and the board derives everything its hardware fixes (see `main/Kconfig.projbuild`):
 
-### 4) Flash the ESP32-P4
+- Fixed pins have no input field on the built-in boards, so switching boards cannot leave the previous board's pins behind. Only the Custom board exposes all of them.
+- Hardware a board lacks disappears from the menus (for example Ethernet on boards without a PHY).
+- Fixed panels only offer their own display type and resolution.
+- Features stay switchable on every board: audio, SD card, Wi-Fi/BLE, web server, USB host/device classes, I2C.
+- Pins owned by other components (ESP-Hosted SDIO, console channel) are checked at compile time with `static_assert`, so a wrong leftover value fails the build with a pointer to the menuconfig entry.
 
-```powershell
-idf.py -p COM16 flash
-```
+### Co-processor firmware
 
-Replace `COM16` with your board's serial port.
-
-### 5) Optional: flash the co-processor firmware
-
-The Wi-Fi/BLE co-processor is an ESP32-C6. Build and stage it from the `coprocessor_fw` folder:
+Wi-Fi and BLE run on an ESP32-C6 attached over SDIO (ESP-Hosted). Build its firmware and stage it on the P4:
 
 ```powershell
 cd coprocessor_fw
 idf.py set-target esp32c6
 idf.py build
-coprocessor_fw\build_and_stage.bat COM16
+build_and_stage.bat <COM-Port>
 ```
 
-This writes the co-processor image into the P4's `slave_fw` partition and prepares the host firmware to push it to the C6 at boot or via the OTA update flow.
+The image is written to the P4's `slave_fw` partition. At boot, the P4 compares versions and pushes the image to the C6 if needed. More in [coprocessor_fw/README.md](coprocessor_fw/README.md).
 
----
+## Command line
 
-## What this project does
-
-At a high level, this firmware can:
-
-- run on multiple ESP32-P4 board variants
-- initialize board-specific peripherals and pin mappings
-- drive display panels and touch input with LVGL
-- support USB host and USB device stacks through TinyUSB
-- interface with onboard audio codecs and USB audio devices
-- connect to Wi-Fi networks or Ethernet
-- use an ESP32-C6 hosted co-processor for Wi-Fi/BLE over SDIO
-- expose a built-in CLI over UART, USB Serial/JTAG, or USB CDC
-- serve static web content from LittleFS
-- manage SD cards, storage, and network-aware app startup flows
-- expose a modular structure where features can be enabled or disabled per Kconfig
-
-It is not just a "hello world" project. It is meant to be a real embedded platform template with configurable software blocks and hardware support.
-
----
-
-## Main capabilities
-
-### 1. Board support and hardware abstraction
-
-The project supports multiple target boards through board definitions and compile-time selection:
-
-- JC8012P4A1
-- JC1060P470C 7-inch board
-- Waveshare ESP32-P4 Wi-Fi 6 Dev Kit
-- Elecrow CrowPanel Advanced 5"
-- Custom ESP32-P4 board definition
-
-Board logic is centralized in the `main/boards` directory and selected through `Kconfig.projbuild` (see [Configuration model](#configuration-model-one-sdkconfig)). This keeps board-specific GPIO mappings, display parameters, touch drivers, and peripheral wiring isolated from the application logic.
-
-This is important because ESP32-P4 projects often require different display, touch, audio, and I2C mappings depending on the hardware vendor.
-
-### 2. USB host and USB device support
-
-The firmware uses TinyUSB and supports both directions of USB traffic:
-
-#### USB device mode
-
-Configured for USB device use cases such as:
-
-- CDC serial device
-- MIDI device
-- USB audio class 2.0 (UAC2)
-- HID keyboard, mouse, gamepad
-- MSC / DFU / other optional TinyUSB classes
-
-This is useful for turning the ESP32-P4 into a USB peripheral that a host PC or tablet can enumerate as a keyboard, MIDI interface, audio device, or serial terminal.
-
-#### USB host mode
-
-Configured for USB Host use cases such as:
-
-- keyboard input from USB peripherals
-- mouse input from USB peripherals
-- MIDI input from USB MIDI devices
-- hub-aware USB device detection and enumeration
-
-The app keeps host and device functionality modular, which allows the same firmware to be reused for different product scenarios.
-
-### 3. Audio subsystem
-
-Audio is one of the most important areas of this project.
-
-Supported audio paths include:
-
-- onboard ES8311 audio codec
-- generic WM8960 audio codec
-- USB audio class 2.0 device support
-- fixed 44.1 kHz audio configuration across the project
-
-The app contains explicit logic for:
-
-- I2S bus setup
-- codec initialization
-- microphone gain and output volume configuration
-- pin validation to prevent board/resource conflicts
-- optional audio button handling for WM8960 boards
-
-#### WM8960 runtime control API
-
-Unlike the ES8311 path (wrapped in `esp_codec_dev`), the WM8960 codec (`main/features/audio/wm8960_manager.hpp`) exposes its own small control API directly under `Feature::Audio::WM8960`, so any other part of the app (CLI commands, app logic, ...) can drive it without touching the vendored `jonlidgard/wm8960` library or its raw `wm8960_t` handle:
-
-- `set_headphone_volume_db()` / `get_headphone_volume_db()` and `set_headphone_enabled()`
-- `set_speaker_volume_db()` / `get_speaker_volume_db()` and `set_speaker_enabled()`
-- `set_dac_mute()` and `set_dac_volume_db()` / `get_dac_volume_db()` (digital trim ahead of the DAC)
-- `set_line_input_volume_db()` / `get_line_input_volume_db()` (PGA gain feeding the ADC) and `set_line_input_mute()`
-- `set_mic_boost_gain_db()` / `get_mic_boost_gain_db()` (rounds to the WM8960's fixed 0/13/20/29 dB steps)
-- `set_mic_bias_enabled()`
-- `set_adc_volume_db()` / `get_adc_volume_db()` (digital trim after the ADC)
-- `get_object()` for direct access to the raw handle for anything not covered above (ALC, 3D enhancement, loopback, PLL/clocking, ...) -- left unwrapped since those are tuned to this project's fixed 44.1 kHz setup and easy to misconfigure
-
-The WM8960's control interface is I2C **write-only** (no register readback), so every `get_*()` here returns the last value this API successfully *commanded*, not something read back from the chip -- each is seeded with the same default `init()` applies, so a `get_*()` right after a clean boot already reflects reality.
-
-#### Tuning audio output latency
-
-Total output latency (the time between a sample/note being produced and it reaching the speaker) is the sum of two independent stages, each configurable in `idf.py menuconfig` under **Application Features → Audio Subsystem**:
-
-**1. I2S DMA buffer** -- `AUDIO_I2S_DMA_DESC_NUM` × `AUDIO_I2S_DMA_FRAME_NUM`, shared by both onboard codecs (ES8311/WM8960; the USB UAC2 sound card buffers separately). The I2S peripheral streams audio out of RAM via DMA in a ring of `AUDIO_I2S_DMA_DESC_NUM` fixed-size chunks ("descriptors"), each holding `AUDIO_I2S_DMA_FRAME_NUM` frames (1 frame = 1 sample per channel, both channels at once -- 4 bytes at this project's fixed 16-bit stereo).
-
-```
-total_frames = AUDIO_I2S_DMA_DESC_NUM * AUDIO_I2S_DMA_FRAME_NUM
-latency_ms   = total_frames / 44100 * 1000
-```
-
-Default 3 × 128 = 384 frames ≈ **8.7 ms**. A bigger ring buys more headroom against a writer stall (e.g. a render block that takes longer than its budget while the web UI loads) before it audibly clicks/pops; a smaller ring trades that headroom for lower latency. The ring needs at least 2 descriptors. See [documentation/audio-latency.md](documentation/audio-latency.md) for how the defaults were chosen and measured. `AUDIO_I2S_DMA_FRAME_NUM`'s upper range (960) stays under the I2S driver's hard 4095-byte per-descriptor ceiling (1023 frames at 4 bytes/frame).
-
-**2. Synth engine render block** -- `AUDIO_SYNTH_BLOCK_SIZE` (`synth::kBlockSize` in `SynthConfig.h`, only relevant with the node-graph synth engine enabled). The synth's render task works in fixed-size blocks, not sample-by-sample: each loop iteration walks the whole node graph once to produce this many samples, then writes the block onward (to the codec mix and/or USB speaker mix).
-
-```
-block_time_ms = AUDIO_SYNTH_BLOCK_SIZE / 44100 * 1000
-```
-
-Default 128 samples ≈ **2.9 ms**. This is also the render task's real-time CPU budget per block (see `audioCoreLoadPercent()` / the CLI `top` audio-core load -- ≥100% means a block took longer to render than it takes to play, i.e. underrun risk): a MIDI note-on can only take effect at the start of the *next* block, so it waits on average half a block, up to a full block worst case, before it's heard. Smaller blocks lower that latency but raise overhead (node dispatch, control-rate smoothing, envelope/LFO updates all repeat more often per second of audio); larger blocks are the opposite.
-
-**Total** is roughly the sum of both stages plus the wait for the next block start -- e.g. defaults give ~8.7 ms (I2S) + ~2.9 ms (synth) ≈ 11.6 ms from a rendered sample to sound, ~11 ms on average from a USB-MIDI note-on (calculated, see the document above).
-
-This makes the firmware suitable for audio prototypes such as:
-
-- sound cards
-- USB audio bridges
-- local media playback devices
-- audio input/output test and debug systems
-
-### 4. Wi-Fi, Ethernet, and ESP-Hosted networking
-
-The project supports network connectivity in several ways:
-
-- Wi-Fi STA mode with reconnection logic
-- optional captive portal fallback in AP+STA mode
-- automatic retry logic and reconnect recovery
-- Ethernet support
-- ESP-Hosted architecture for Wi-Fi/BLE over a co-processor
-- co-processor OTA update support
-
-A major part of the design is the use of an ESP32-C6 hosted co-processor over SDIO. This allows the ESP32-P4 to use a separate wireless controller for Wi-Fi and Bluetooth functionality while the main application runs on the P4 core.
-
-### 5. Bluetooth LE support
-
-The project includes BLE support using NimBLE and ESP-Hosted integration. It is set up for use cases including:
-
-- BLE scanning
-- device tracking
-- connected peer management
-- HID host features
-- MIDI host support
-- future BLE-based protocol integrations
-
-This makes the project useful not only for wired USB interfaces but also for wireless HID and MIDI use cases in connected embedded hardware.
-
-### 6. LVGL display and touch UI
-
-The project contains a strong UI and display abstraction layer around LVGL.
-
-This includes:
-
-- MIPI DSI display initialization
-- touch input handling
-- hardware-accelerated or optimized frame flushing paths
-- keyboard and mouse feeding into LVGL input devices
-- board-specific display calibration routines
-
-The display layer is designed so the application can host an actual screen UI without needing to manually rewire everything for each board.
-
-### 7. Filesystem and web server
-
-The project has filesystem support for:
-
-- LittleFS data partition
-- separate web-static partition for served assets
-- static file HTTP server
-
-The web server is designed to serve files out of a dedicated `www` partition, which keeps the UI assets separate from the main application filesystem and makes it easy to rebuild only the web content if desired.
-
-This is useful for:
-
-- configuration pages
-- status dashboards
-- embedded admin interfaces
-- captive portal landing pages
-
-### 8. CLI and debug interface
-
-The code includes an interactive command-line interface based on `esp_console`.
-
-Features include:
-
-- help output
-- memory info
-- uptime and system info
-- chip info
-- top/htop-style task output
-- Wi-Fi commands
-- Ethernet commands
-- ping support
-- audio commands (volume/mute, plus a `tone` test generator that plays through whichever codec/I2S port is active, or over the USB Audio microphone stream)
-- continuous I2C bus scanning (`i2c-scan <port>`, refreshes once a second until a key is pressed) -- alongside a one-shot scan logged at boot right after each I2C bus comes up (`main/boards/board_init.cpp`) -- both for chasing an intermittently-vanishing device on the bus
-- USB commands
-- BLE commands
-- filesystem and disk usage commands
-
-This is a very practical debug layer for embedded development and field test scenarios.
-
----
-
-## Architecture overview
-
-The project is organized around a layered system design:
-
-- `main/boards` — board-specific GPIO, display, touch, and peripheral configuration
-- `main/features` — functional modules (audio, USB, web, Wi-Fi, BLE, filesystem, etc.)
-- `main/cli` — console commands and REPL layer
-- `main/app_startup.hpp` — startup orchestration for the enabled subsystems
-- `main/app_events.hpp` — event glue for keyboard, mouse, MIDI, CDC, and USB audio callbacks
-- `main/main.cpp` — application entry point
-- `main/Kconfig.projbuild` — configuration system for enabling/disabling features
-
-The startup flow is intentionally modular:
-
-- board initialization runs first
-- USB device support can be started early
-- network bring-up is started in a background task
-- filesystem and web services are started based on enabled config flags
-- audio, USB host, and other features are added conditionally
-
-The app also defines a core-affinity strategy through `App::MAIN_CORE` and `App::AUDIO_CORE` to keep time-critical audio and USB data paths on the correct core.
-
----
+A console (`esp_console`) is available over UART, USB Serial/JTAG or USB CDC. Commands include `top`/`htop`, `mem`, `uptime`, `version`, `chipinfo`, `wifi`, `eth`, `ble`, `usb`, `audio` (volume, mute, `tone` test generator), `i2c-scan`, `backlight`, `lvgl`, `df`, `fs`, `ping`, `coprocessor` and `reset`. Type `help` for the full list.
 
 ## Project layout
 
 ```text
-ESP32P4_Template/
-├── CMakeLists.txt
-├── partitions.csv
-├── sdkconfig
-├── sdkconfig.defaults
-├── data/
-├── documentation/
-├── coprocessor_fw/
-├── components/
-├── managed_components/
+ESP32P4_Espressynth/
 ├── main/
-│   ├── app_core.hpp
-│   ├── app_events.hpp
-│   ├── app_startup.hpp
-│   ├── main.cpp
-│   ├── Kconfig.projbuild
-│   ├── tusb_config.h
-│   ├── boards/
-│   ├── cli/
-│   ├── features/
-│   └── idf_component.yml
-└── README.md
+│   ├── audio/engine/    node-graph synth engine (nodes/, ports, graph builder, presets)
+│   ├── boards/          board definitions: pins, panels, peripherals
+│   ├── features/        audio, ble, display, ethernet, filesystem, hosted, io,
+│   │                    sd_card, synth (manager, web API, presets), usb, web, wifi
+│   ├── cli/             console commands
+│   └── Kconfig.projbuild
+├── components/          msfa (DX7 core), tiny_soundfont, crow_rgb_lcd, tinyusb, ...
+├── data/                web editor (index.html, static/js, help pages), flashed to the www partition
+├── littlefs_data/       seed data: presets, FM8 banks, samples, soundfonts
+├── coprocessor_fw/      ESP32-C6 co-processor firmware
+├── eezstudio/           touch UI project (EEZ Studio)
+├── tools/               deploy.py, latency test, audio engine parity tests
+├── documentation/       guides, board data sheets, website
+└── partitions.csv       16 MB flash: factory app, slave_fw, www, littlefs
 ```
 
----
+The firmware is split by feature. Time-critical audio and USB data paths run on `AUDIO_CORE`, everything else (network, HID, display, CLI) on `MAIN_CORE`. The web editor lives in its own `www` partition, so you can update it without rebuilding the firmware.
 
-## Hardware and software focus
+## Tests
 
-This project is clearly aimed at advanced ESP32-P4 hardware and interactive embedded systems. It is better described as a flexible embedded platform template than as a simple example project.
-
-The project is designed for cases such as:
-
-- display-based control panels
-- industrial or kiosk devices
-- audio interfaces and USB gadgets
-- wireless keyboards/mice or BLE device hosts
-- networked embedded devices with a captive portal
-- product prototypes with rapid feature toggling
-
----
-
-## Build and configuration
-
-This project is built with ESP-IDF.
-
-### Typical setup on Windows
-
-From the project root, use the ESP-IDF environment:
+`tools/audio_engine_parity` checks the browser preview engine against the firmware's node formulas. It renders offline in headless Chromium, so it needs no speakers:
 
 ```powershell
-$env:IDF_PATH = 'C:\esp\v6.1-rc1\esp-idf'
-. "$env:IDF_PATH\export.ps1"
+npm install playwright
+node tools/audio_engine_parity/run.mjs
 ```
 
-Then configure the project:
+## Documentation
 
-```powershell
-idf.py menuconfig
-```
+- [Web editor guide](documentation/WebEditor.md)
+- [MCP: build patches with an AI assistant](documentation/MCP.md)
+- [Audio latency](documentation/audio-latency.md)
+- [Memory budget of the audio engine](documentation/memory.md)
+- [Boards and Audio HAT wiring](documentation/Boards)
+- [Build Your Own Synthesizer](documentation/Espressynth-Build-Your-Own-Synthesizer.md): script for the project video
+- [Project website](documentation/Website) (German)
 
-Then build:
+## What's new
 
-```powershell
-idf.py build
-```
+Recent changes (full list in [ChangeLog.MD](ChangeLog.MD), written in German):
 
-Then flash:
+- MCP server: AI assistants can build and play patches through the editor.
+- Parameter journal for knobs and buttons changed on the device.
+- Lower audio latency (about 11 ms note-on to sound) and no boot underruns.
+- New Midi-In node with key filtering, FM8 (DX7) widget with a Dexed-style editor, drum sequencer, multi-pattern step arpeggiator and more modulators.
+- Support for the Elecrow CrowPanel Advanced 5" and a WS2812 RGB LED node.
+- Browser preview brought in line with the firmware, with a parity test suite.
+- Release images and web flashing through `tools/deploy.py`.
+- The MDA Piano node was removed.
+- The project now carries a license (Apache-2.0).
 
-```powershell
-idf.py flash
-```
+## License
 
-You can also monitor the output:
+Espressynth is licensed under the [Apache License 2.0](LICENSE); see also [NOTICE](NOTICE).
 
-```powershell
-idf.py monitor
-```
-
-### Co-processor firmware flashing
-
-This project can use an ESP32-C6 as a Wi-Fi/BLE co-processor over the ESP-Hosted SDIO link. The co-processor firmware is located in the separate project under [coprocessor_fw](coprocessor_fw).
-
-#### 1) Build the co-processor firmware
-
-```powershell
-cd coprocessor_fw
-idf.py set-target esp32c6
-idf.py build
-```
-
-This produces a firmware image such as:
-
-```text
-coprocessor_fw/build/esp32p4_template_coprocessor.bin
-```
-
-#### 2) Stage it on the P4 host flash
-
-This repo is set up so the C6 firmware is not flashed directly to the C6 in the usual way. Instead, the image is written into the ESP32-P4 host's `slave_fw` partition, and the P4 later pushes it to the C6 over the existing ESP-Hosted link.
-
-Use the host serial port of the ESP32-P4:
-
-```powershell
-python -m esptool --chip esp32p4 -p COM16 write_flash --force 0x310000 coprocessor_fw\build\esp32p4_template_coprocessor.bin
-```
-
-The `--force` flag is intentional here: the staged file is a firmware image for the C6, not for the P4, so esptool would otherwise reject it as a chip mismatch. This is expected because the binary is only being stored on the P4 flash as a staged payload.
-
-#### 3) Trigger the actual update on the C6
-
-After the image is staged, reboot the ESP32-P4 or trigger the OTA flow from the app. The project contains a helper script for this:
-
-```powershell
-coprocessor_fw\build_and_stage.bat COM16
-```
-
-The script builds the C6 firmware and writes it to the P4 `slave_fw` partition automatically.
-
-The host-side firmware then checks the C6 firmware version and, if needed, pushes the staged image over the existing SDIO/ESP-Hosted connection, activates it, and restarts the peer if necessary.
-
-> In other words: the P4 acts as the transport and staging host, while the C6 is the actual Wi-Fi/BLE co-processor.
-
-### Configuration model: one `sdkconfig`
-
-The project has exactly one configuration: the `sdkconfig` in the project root, edited with `idf.py menuconfig`. Always build from it with plain `idf.py build` / `idf.py -p <port> flash` - no separate build directories (`-B`), no alternative `SDKCONFIG` files and no per-board `SDKCONFIG_DEFAULTS` combinations. `sdkconfig.defaults` only seeds a freshly created `sdkconfig` with board-independent settings; once the `sdkconfig` exists, menuconfig is authoritative.
-
-The board is selected under **Espressynth → Board Configuration → Target Board**, and the board then derives everything that is fixed by its hardware (`main/Kconfig.projbuild`):
-
-- **Fixed pins have no input field** on the built-in boards: I2C0, the onboard codec/amp (ES8311, NS4168, PDM mic), SDMMC LDO channel, panel pins. Kconfig recomputes them from the board on every run, so switching boards can never leave the previous board's pins behind. Only **Custom ESP32-P4 Board** exposes all of them.
-- **Missing hardware disappears** from the menus, e.g. Ethernet only exists on boards with a PHY (`BOARD_HAS_ETHERNET`), ES8311 only on boards that carry one (`BOARD_HAS_ES8311`), the C6 co-processor switch only on the Custom board.
-- **Fixed panels** (JC8012P4A1, JC1060P470C, CrowPanel 5") only offer their own display type, resolution and UI layout; the Waveshare kit and the Custom board keep them selectable.
-- **Features stay switchable** on every board: audio, SD card, Wi-Fi/BLE, web server, USB host/device classes, I2C speed, I2C1.
-- **Add-on hardware** (WM8960 codec HAT, NS4168 or PDM breakouts, ADS1115/GP8413 CV modules, WS2812, GPIO widgets) is not part of any board: enable and wire it in menuconfig on whatever board it is attached to.
-
-Values owned by other components (ESP-Hosted C6 SDIO pins and reset GPIO, console channel, chip revision, `LCD_RGB_ISR_IRAM_SAFE`) are seeded per board for a fresh `sdkconfig`, but keep their prompt there, so an existing value is not overwritten. The board-critical ones are therefore checked at compile time: `main/boards/board_config.hpp` static_asserts the ESP-Hosted SDIO pins against the board header, and `usb_device_manager.hpp` rejects a USB-Serial/JTAG secondary console in USB Device mode. A wrong leftover value fails the build with the menuconfig path to fix instead of failing on the hardware.
-
----
-
-## Important design notes
-
-### Core assignment strategy
-
-The code intentionally assigns tasks to different cores:
-
-- `MAIN_CORE` is used for general app logic, networking, HID input, display interaction, CLI, and non-audio tasks
-- `AUDIO_CORE` is used for audio-intensive and USB audio flows
-
-This reduces the chance of audio dropouts or USB timing issues interfering with other parts of the application.
-
-### Separate web asset partition
-
-The project uses a dedicated `www` LittleFS partition for static web files, rather than mixing those with the main application filesystem. This makes asset updates easier and avoids rebuilding the full app just to change a web page.
-
-### Safe start: the device stays reachable
-
-A preset that leaves the network no memory, or crashes the firmware while loading, would lock you
-out: without the network no other preset can be selected. A safe start loads no preset at all. No
-preset file, not the unnamed slot and not the "last preset" marker is changed; what you build in the
-editor meanwhile goes to a scratch slot that is thrown away. Selecting any preset ends it.
-
-The device makes a safe start when
-
-- the Wi-Fi co-processor could not be reached with the boot preset loaded (it restarts once by itself),
-- two starts in a row did not finish (crash, watchdog, power cut during start),
-- a finger rests on the touch screen while the device starts.
-
-The editor shows which preset was skipped and why; the preset list on the display shows "Safe start".
-If the network is unavailable even without a preset, the device remembers that and loads presets
-normally instead of restarting on every boot. Code: `main/features/synth/SafeStart.h`.
-
-### Modular enable/disable system
-
-Most major capabilities are off by default unless configured in `Kconfig`. This allows the same base project to evolve into different product variants without a large amount of code duplication.
-
----
-
-## Typical use cases
-
-This firmware is suitable for:
-
-- ESP32-P4 UI prototypes with touch displays
-- USB host keyboard/mouse interfaces
-- USB audio devices or MIDI bridges
-- Wi-Fi-connected control panels
-- BLE HID/MIDI clients or hubs
-- connected equipment with a simple management web UI
-- platform-level starter firmware for an embedded product
-
----
-
-## What makes this repository useful
-
-The main value is that it is not a single-purpose demo. It combines several common embedded patterns into one coherent project skeleton:
-
-- board abstraction
-- modular feature enablement
-- USB host/device stacks
-- audio codec support
-- display + input UI stack
-- network connectivity
-- debug CLI
-- web assets and filesystem support
-
-This makes it a good starting point for advanced ESP32-P4 work and experimentation.
-
----
-
-## Why it is a good template
-
-If you want to build a custom ESP32-P4 device quickly, this repo already contains a lot of the plumbing you usually have to write by hand:
-
-- hardware selection logic
-- GPIO and board config separation
-- display and touch setup
-- USB stack integration
-- codec configuration
-- Wi-Fi and BLE networking
-- command-line access
-- web UI hosting
-- task/core organization
-
-That is exactly the kind of groundwork that speeds up development of a real embedded product.
-
----
-
-## Summary
-
-This project is a comprehensive ESP32-P4 application template and firmware framework for advanced embedded development. It combines board abstraction, USB host/device support, audio processing, network connectivity, BLE, display UI, command-line debugging, and filesystem/web hosting into one coherent system.
-
-It is built to be configurable, extensible, and practical for real-world embedded use instead of being just a minimal example.
-
-If you are building an ESP32-P4 product, panel, sound interface, or developer platform, this repository gives you a strong base to extend and customize.
+Third-party components (msfa, TinySoundFont, LVGL, littlefs, WM8960 driver and others) keep their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). That file also names the source of the bundled DX7 voice banks: they are not covered by Apache-2.0, and all rights remain with Yamaha and the original authors.
