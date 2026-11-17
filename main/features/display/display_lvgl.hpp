@@ -981,6 +981,11 @@ void show_splash_screen(lv_display_t* display) {
 
 } // namespace
 
+/** @brief True while a finger rests on the touch screen (state of the last LVGL poll). */
+inline bool touch_pressed() {
+    return s_touch_down.load(std::memory_order_relaxed);
+}
+
 /**
  * @brief Finish boot splash after all synchronous features have initialized.
  *
@@ -993,11 +998,6 @@ void show_splash_screen(lv_display_t* display) {
  *        Bringing up the ESP-Hosted SDIO link can knock the scan-out out of sync without any
  *        redraw following that would trigger the per-flush resync.
  */
-/** @brief True while a finger rests on the touch screen (state of the last LVGL poll). */
-inline bool touch_pressed() {
-    return s_touch_down.load(std::memory_order_relaxed);
-}
-
 inline void resync_display() {
     if (s_panel != nullptr) crow_lcd_rgb_panel_restart(s_panel);
 }
