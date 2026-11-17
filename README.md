@@ -71,7 +71,7 @@ On boards with an ESP32-C6 co-processor, the C6 firmware is built from `coproces
 3. Find the board's IP address in your router, the serial monitor, or the `wifi` CLI command, and open `http://<ip>/`.
 4. The default template is a playable voice. Plug in a MIDI keyboard and play.
 
-The step-by-step guide is on the project website ([documentation/Website](documentation/Website)).
+The project website, [espressynth.jolabi.de](https://espressynth.jolabi.de/), has a guide with all features and the browser flasher.
 
 ## The web editor
 
@@ -195,7 +195,7 @@ node tools/audio_engine_parity/run.mjs
 - [Memory budget of the audio engine](documentation/memory.md)
 - [Boards and Audio HAT wiring](documentation/Boards)
 - [Build Your Own Synthesizer](documentation/Espressynth-Build-Your-Own-Synthesizer.md): script for the project video
-- [Project website](documentation/Website) (German)
+- [Project website](https://espressynth.jolabi.de/): features, flashing and custom firmware (German and English)
 
 ## What's new
 
