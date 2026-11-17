@@ -599,13 +599,6 @@ inline void deliverNoteControlRoutes(Graph &graph, uint16_t sourceWidget, uint8_
                 }
                 target.soundFontPlayer.gatePrev = noteOn;
             }
-            else if (target.type == NodeType::MdaPiano)
-            {
-                target.mdaPiano.currentNote = note;
-                if (noteOn) target.mdaPiano.pendingNoteOn = true;
-                else nodes::mdapiano::noteOff(target.mdaPiano, note);
-                target.mdaPiano.gatePrev = noteOn;
-            }
             else if (target.type == NodeType::MidiSplit)
             {
                 // Gate is "the event" - MidiSplit's single "midi" input
@@ -1196,8 +1189,6 @@ inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &ev
             deliverRawMidi(graph, route.targetWidget, forwarded, filtered, filterEvents, path);
         else if (target.type == NodeType::SoundFontPlayer)
             soundfont::handleMidi(inst.soundFontPlayer, forwarded);
-        else if (target.type == NodeType::MdaPiano)
-            nodes::mdapiano::handleMidi(inst.mdaPiano, forwarded);
     }
     path[source] = false;
 }
@@ -2012,9 +2003,7 @@ inline void Graph::applyLiveParams(const char *widgetId, cJSON *paramsObj,
         const bool soundFontBool = slot.type == NodeType::SoundFontPlayer &&
             (strcmp(key, "enableCc") == 0 || strcmp(key, "enableModWheel") == 0 ||
              strcmp(key, "enablePitchWheel") == 0);
-        const bool mdaPianoBool = slot.type == NodeType::MdaPiano &&
-            (strcmp(key, "enableModWheel") == 0 || strcmp(key, "enablePitchWheel") == 0);
-        if ((soundFontBool || mdaPianoBool) && cJSON_IsBool(item))
+        if (soundFontBool && cJSON_IsBool(item))
         {
             setFloatFieldByName(instances[slot.instanceBase], slot.type, key, cJSON_IsTrue(item) ? 1.0f : 0.0f);
             continue;
@@ -2760,9 +2749,6 @@ inline void Graph::destroy()
         case NodeType::SoundFontPlayer:
             soundfont::close(inst.soundFontPlayer.synth);
             inst.soundFontPlayer.synth = nullptr;
-            break;
-        case NodeType::MdaPiano:
-            nodes::mdapiano::destroy(inst);
             break;
         case NodeType::Adsr:
             nodes::adsr::destroy(inst);

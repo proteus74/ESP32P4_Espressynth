@@ -54,9 +54,9 @@ try {
       debug[port] = t.createWidget("debug", port, 800, 30 + i * 140).id;
       t.connect(filter, port, debug[port], "in");
     }
-    const piano = t.createWidget("mda-piano", "Piano", 1100, 30).id;
+    const piano = t.createWidget("soundfont-player", "Piano", 1100, 30).id;
     const raw = [];
-    window.audioEngine.handleMdaPianoMidi = (id, data) => raw.push({ id, ...data });
+    window.audioEngine.handleSoundFontMidi = (id, data) => raw.push({ id, ...data });
     t.connect(source, "midi", filter, "midi");
     t.connect(filter, "midi", piano, "midi");
     t.applyWidgetParams(filter, { channel: 2, note: 69 });

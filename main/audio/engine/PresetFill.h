@@ -47,7 +47,6 @@
 #include "nodes/LfoNode.h"
 #include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
-#include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MidiFilterNode.h"
@@ -263,9 +262,6 @@ void fillParams(NodeType type, cJSON *p, WidgetParams &out)
         break;
     case NodeType::SoundFontPlayer:
         soundfont::parsePreset(p, out);
-        break;
-    case NodeType::MdaPiano:
-        nodes::mdapiano::parsePreset(p, out);
         break;
     default:
         break;

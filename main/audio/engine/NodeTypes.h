@@ -72,7 +72,6 @@ enum class NodeType : uint8_t
     CvOut,
     DigitalIn,
     DigitalOut,
-    MdaPiano,
     Wavetable,
     RgbLed,
     CombFilter,
@@ -267,8 +266,6 @@ inline NodeType nodeTypeFromString(const char *typeStr)
         return NodeType::Sampler;
     if (strcmp(typeStr, "soundfont-player") == 0)
         return NodeType::SoundFontPlayer;
-    if (strcmp(typeStr, "mda-piano") == 0)
-        return NodeType::MdaPiano;
     if (strcmp(typeStr, "clock") == 0)
         return NodeType::Clock;
     if (strcmp(typeStr, "burst-generator") == 0)

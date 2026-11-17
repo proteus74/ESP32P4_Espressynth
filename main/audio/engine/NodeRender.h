@@ -50,7 +50,6 @@
 #include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
 #include "nodes/MixerNode.h"
-#include "nodes/MdaPianoNode.h"
 #include "nodes/MultiplexerNode.h"
 #include "nodes/OscillatorNode.h"
 #include "nodes/OutputMultiplexerNode.h"
@@ -376,9 +375,6 @@ IRAM_ATTR inline void processNodeBlock(NodeInstance &inst, size_t frames)
         }
         break;
     }
-    case NodeType::MdaPiano:
-        nodes::mdapiano::render(inst, frames);
-        break;
     case NodeType::VuMeter:
     case NodeType::Oscilloscope:
         break;

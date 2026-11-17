@@ -2662,7 +2662,7 @@ body.show-oscilloscopes .osc-scope-panel {
   border-radius: 0.3rem;
 }
 
-/* MDA Piano has no other body content - only render the body's padding
+/* Scope-only widgets have no other body content - only render the body's padding
    once the scope panel inside it actually shows, else it's an empty
    padded gap under the header. */
 

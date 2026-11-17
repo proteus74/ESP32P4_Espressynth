@@ -53,7 +53,6 @@
 #include "nodes/LfoNode.h"
 #include "nodes/WavetableNode.h"
 #include "nodes/LinkNodes.h"
-#include "nodes/MdaPianoNode.h"
 #include "nodes/MidiInNode.h"
 #include "nodes/MidiSplitNode.h"
 #include "nodes/MidiFilterNode.h"
@@ -799,9 +798,6 @@ inline void applyParams(NodeInstance &inst, NodeType type, const WidgetParams &p
     case NodeType::OutputSwitch:
         nodes::outputswitch::build(inst, p);
         break;
-    case NodeType::MdaPiano:
-        nodes::mdapiano::build(inst, p);
-        break;
     default:
         break;
     }
@@ -1017,8 +1013,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             // shortly after a build). Its per-sample loop already reads the
             // sample data from PSRAM anyway, so PSRAM-backing its port/output
             // buffers too costs no new kind of latency, unlike most types.
-            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::Sampler || w.type == NodeType::SoundFontPlayer ||
-                                      w.type == NodeType::MdaPiano);
+            const bool preferPsram = (w.type == NodeType::WavePlayer || w.type == NodeType::Sampler || w.type == NodeType::SoundFontPlayer);
             inst.outL = allocateBlockBuffer(preferPsram, outputPsramFallbacks);
             if (inst.outL != nullptr) ++blockBufferCount;
             if (hasStereoOutput(w.type))
@@ -1357,7 +1352,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
             else if (strcmp(cd.fromPort, "program") == 0 && fromType == NodeType::MidiIn)
                 kind = ControlRoute::Kind::MidiProgram;
             else if (strcmp(cd.fromPort, "midi") == 0 &&
-                     (toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano || toType == NodeType::MidiFilter) &&
+                     (toType == NodeType::SoundFontPlayer || toType == NodeType::MidiFilter) &&
                      strcmp(cd.toPort, "midi") == 0)
                 kind = ControlRoute::Kind::MidiRaw;
             // MidiSplit's single "midi" input - one wire standing in for what
@@ -1409,7 +1404,7 @@ inline Graph *buildWithVoiceCap(const PresetDoc &doc, uint16_t voiceCountCap, bo
                 route.sourceWidget = static_cast<uint16_t>(fromIdx);
                 route.targetWidget = static_cast<uint16_t>(toIdx);
                 route.kind = strstr(cd.fromPort, "Midi") && strcmp(cd.toPort, "midi") == 0 &&
-                    (toType == NodeType::MidiFilter || toType == NodeType::SoundFontPlayer || toType == NodeType::MdaPiano)
+                    (toType == NodeType::MidiFilter || toType == NodeType::SoundFontPlayer)
                     ? ControlRoute::Kind::MidiRaw : kind;
                 route.side = static_cast<uint8_t>(zoneIdx);
                 if (toPort >= 0)

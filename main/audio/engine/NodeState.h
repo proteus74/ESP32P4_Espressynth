@@ -787,29 +787,3 @@ struct SoundFontPlayerState
     float gainCv = 10.0f;
     OnePoleLowpass gainSmooth;
 };
-
-// Per-widget state for the MDA Piano generator. The engine pointer remains
-// opaque here so NodeState.h does not depend on the GPL DSP component.
-struct MdaPianoState
-{
-    void *engine = nullptr;
-    bool enableModWheel = false;
-    bool enablePitchWheel = false;
-    int currentNote = 60;
-    bool gatePrev = false;
-    bool pendingNoteOn = false;
-    float pendingVelocity = 1.0f;
-    float modWheel = 1.0f;
-    int pitchBend14 = 8192;
-    float voiceTypeCv = 0.0f;
-    float driveCv = 0.0f;
-    float tremWahModeCv = 0.0f;
-    float tremWahDepthCv = 0.0f;
-    float tremWahRateCv = 5.0f;
-    float choPhaModeCv = 0.0f;
-    float choPhaDepthCv = 0.0f;
-    float choPhaSpeedCv = 5.0f;
-    float preGainCv = 10.0f;
-    float gainCv = 10.0f;
-    OnePoleLowpass gainSmooth;
-};

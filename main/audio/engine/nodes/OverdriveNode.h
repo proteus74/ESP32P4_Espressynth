@@ -39,7 +39,7 @@ inline int modeIndex(float modeCv)
     return idx > 3 ? 3 : idx;
 }
 
-// Rational tanh approximation (same as mda_piano's fastTanh): smooth knee,
+// Rational tanh approximation (fastTanh-style): smooth knee,
 // reaches +/-1 with zero slope at |x| = 3.
 inline float softClip(float x)
 {

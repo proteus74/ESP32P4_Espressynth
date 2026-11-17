@@ -44,7 +44,6 @@ export const NODE_ICONS = {
   "wave-player": { color: "#22c55e", svg: svg(path("M12,42 L12,58 M24,28 L24,72 M36,16 L36,84 M48,34 L48,66 M60,22 L60,78 M72,38 L72,62 M84,46 L84,54")) },
   sampler: { color: "#22c55e", svg: svg(path("M10,14 L10,86 M90,14 L90,86") + path("M26,40 L26,60 M38,26 L38,74 M50,18 L50,82 M62,32 L62,68 M74,44 L74,56")) },
   "soundfont-player": { color: "#ec4899", svg: svg(path("M40,76 L40,18 L82,10 L82,66") + dot(30, 76, 11) + dot(72, 66, 11)) },
-  "mda-piano": { color: "#38bdf8", svg: svg(`<rect x="10" y="16" width="80" height="68" rx="6"/>` + path("M30,52 L30,84 M50,52 L50,84 M70,52 L70,84", 'stroke-width="5"') + `<rect x="24" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/><rect x="44" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/><rect x="64" y="16" width="12" height="36" rx="2" fill="currentColor" stroke="none"/>`) },
 
   // ---- Modulator ----
   lfo: { color: "#14b8a6", svg: svg(path("M8,74 C30,74 30,22 50,22 C70,22 70,74 92,74") + dot(50, 22, 9) + path("M8,88 L92,88", `stroke-width="4" ${faint}`)) },

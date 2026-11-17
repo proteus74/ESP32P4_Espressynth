@@ -253,511 +253,6 @@ function hzFromPitchCv(volts) {
   return 440 * 2 ** ((note - 69) / 12);
 }
 
-// ============================================================================
-// MDA Piano preview - JS port of components/mda_piano (mdaEPiano.cpp +
-// reface_cp_chain.h/reface_cp_fx.h/wahwah.h), matching
-// nodes/MdaPianoNode.h's render() 1:1. Firmware is authoritative; this is a
-// browser-only approximation using the same sample pack.
-//
-// Only the "Default" mda-ePiano program is ever selected by this node (no UI
-// exposes program/param switching), so every field update()/fillpatch()
-// would normally recompute from a patch is folded in as the constants below
-// rather than porting the whole program system. Likewise mdaEPiano's own
-// pan/tremolo (lmod/rmod) and overdrive are always zero in this integration
-// (MdaPianoNode.h never sets them nonzero - the audible tremolo/wah is
-// entirely RefaceCpChain's, applied afterward) - omitted here as dead code,
-// not approximated. Sustain (CC64/66) and CC120/123 mirror
-// mdaEPiano::processMidiController().
-// ============================================================================
-const MDA_EPIANO_DEFAULT_PARAM = [0.5, 0.5, 0.5, 0.5, 0.5, 0.65, 0.25, 0.5, 1.0, 0.5, 0.146, 0.0];
-
-function mdaVoiceTypeFromCv(volts) {
-  const v = Math.min(5, Math.floor(clampRange(volts, 0, CV_MAX_VOLTS) * 0.6));
-  return v;
-}
-
-function mdaEffectModeFromCv(volts) {
-  return Math.min(2, Math.floor(clampRange(volts, 0, CV_MAX_VOLTS) * 0.3));
-}
-
-function createMdaEpianoEngine(maxVoices, sampleRate) {
-  const Fs = sampleRate;
-  const iFs = 1 / Fs;
-  const p = MDA_EPIANO_DEFAULT_PARAM;
-  const size = Math.trunc(12.0 * p[2] - 6.0);
-  const treb = 4.0 * p[3] * p[3] - 1.0;
-  const tfrq = 1.0 - Math.exp(-iFs * (p[3] > 0.5 ? 14000.0 : 5000.0));
-  const dlfo = 6.283 * iFs * Math.exp(6.22 * p[5] - 2.61);
-  let velsens = 1.0 + p[6] + p[6];
-  if (p[6] < 0.25) velsens -= 0.75 - 3.0 * p[6];
-  const width = 0.03 * p[7];
-  const poly = Math.min(maxVoices, 1 + Math.trunc((maxVoices - 1) * p[8]));
-  const fine = p[9] - 0.5;
-  const random = 0.077 * p[10];
-  const muff = 160.0;
-  const muffvel = 1.25;
-  const volume = 0.2;
-
-  const voices = Array.from({ length: maxVoices }, () => ({
-    delta: 0, dbase: 0, frac: 0, pos: 0, end: 0, loop: 0,
-    env: 0, dec: 0.99, outl: 0, outr: 0, note: -1,
-  }));
-  const SUSTAIN = 128;
-  let activevoices = 0;
-  let sustain = false;
-  let tl = 0, tr = 0, lfo0 = 0, lfo1 = 1;
-  let bendf = 1;
-  let waves = null;
-  let kgrp = [];
-  let noteonStep = 3;
-
-  function resetVoices() {
-    for (const v of voices) { v.env = 0; v.dec = 0.99; }
-    activevoices = 0;
-    sustain = false;
-    tl = tr = lfo0 = 0;
-    lfo1 = 1;
-  }
-
-  function loadInstrument(instrument) {
-    waves = instrument.pcm;
-    kgrp = instrument.keygroups;
-    noteonStep = instrument.noteonStep;
-    resetVoices();
-  }
-
-  function noteOn(note, velocity) {
-    if (!waves || kgrp.length === 0) return;
-    if (velocity > 0) {
-      let vl;
-      if (activevoices < poly) {
-        vl = activevoices;
-        activevoices += 1;
-      } else {
-        let quietest = 99;
-        vl = 0;
-        for (let v = 0; v < poly; v += 1) {
-          if (voices[v].env < quietest) { quietest = voices[v].env; vl = v; }
-        }
-      }
-      const V = voices[vl];
-      const k0 = (note - 60) * (note - 60);
-      let l = fine + random * ((k0 % 13) - 6.5);
-
-      let k = 0;
-      while (k + noteonStep < kgrp.length && note > kgrp[k].high + size) k += noteonStep;
-      l += note - kgrp[k].root;
-      l = 32000.0 * iFs * Math.exp(0.05776227 * l);
-      V.dbase = Math.trunc(65536.0 * l);
-      V.delta = Math.trunc(V.dbase * bendf);
-      V.frac = 0;
-
-      if (velocity > 48) k += 1;
-      if (velocity > 80) k += 1;
-      V.pos = kgrp[k].pos;
-      V.end = kgrp[k].end - 1;
-      V.loop = kgrp[k].loop;
-
-      V.env = (3.0 + 2.0 * velsens) * (0.0078 * velocity) ** velsens;
-      if (note > 60) V.env *= Math.exp(0.01 * (60 - note));
-
-      const pan = Math.max(12, Math.min(108, note));
-      V.outr = volume + volume * width * (pan - 60);
-      V.outl = volume + volume - V.outr;
-      V.note = note;
-
-      const decNote = Math.max(44, note);
-      V.dec = Math.exp(-iFs * Math.exp(-1.0 + 0.03 * decNote - 2.0 * p[0]));
-    } else {
-      for (let v = 0; v < maxVoices; v += 1) {
-        if (voices[v].note === note) {
-          if (sustain) voices[v].note = SUSTAIN;
-          else voices[v].dec = Math.exp(-iFs * Math.exp(6.0 + 0.01 * note - 5.0 * p[1]));
-        }
-      }
-    }
-  }
-
-  function noteOff(note) {
-    noteOn(note, 0);
-  }
-
-  // Subset of mdaEPiano::processMidiController() wired by MdaPianoNode.h.
-  function controlChange(cc, value) {
-    if (cc === 64 || cc === 66) {
-      sustain = (value & 0x40) !== 0;
-      if (!sustain) noteOn(SUSTAIN, 0);
-    } else if (cc === 120) {
-      resetVoices();
-    } else if (cc === 123) {
-      for (const v of voices) v.env = 0;
-      activevoices = 0;
-    }
-  }
-
-  function setPitchBend(bend14) {
-    const b = Math.max(0, Math.min(16383, bend14));
-    const semis = (b - 8192) * (2.0 / 8192.0);
-    bendf = 2 ** (semis / 12);
-    for (let v = 0; v < activevoices; v += 1) voices[v].delta = Math.trunc(voices[v].dbase * bendf);
-  }
-
-  function process(outL, outR, frames) {
-    if (!waves) {
-      outL.fill(0);
-      outR.fill(0);
-      return;
-    }
-    for (let frame = 0; frame < frames; frame += 1) {
-      let l = 0, r = 0;
-      for (let v = 0; v < activevoices; v += 1) {
-        const V = voices[v];
-        V.frac += V.delta;
-        V.pos += Math.floor(V.frac / 65536);
-        V.frac %= 65536;
-        if (V.pos > V.end) V.pos -= V.loop;
-
-        const s0 = waves[V.pos];
-        const s1 = waves[V.pos + 1] ?? s0;
-        const interpolated = s0 + (V.frac / 65536) * (s1 - s0);
-        const x = V.env * (interpolated / 32768);
-
-        V.env *= V.dec;
-        l += V.outl * x;
-        r += V.outr * x;
-      }
-
-      tl += tfrq * (l - tl);
-      tr += tfrq * (r - tr);
-      r += treb * (r - tr);
-      l += treb * (l - tl);
-
-      lfo0 += dlfo * lfo1;
-      lfo1 -= dlfo * lfo0;
-
-      r *= 0.5;
-      l *= 0.5;
-      outL[frame] = Math.max(-1, Math.min(1, l));
-      outR[frame] = Math.max(-1, Math.min(1, r));
-    }
-    for (let v = 0; v < activevoices; v += 1) {
-      // Copy fields, never the reference: the C++ original's
-      // voice[v] = voice[--activevoices] is a struct copy. Aliasing two slots
-      // onto one object makes the render loop advance it twice per frame
-      // (an octave up) and lets the next noteOn overwrite a sounding voice.
-      if (voices[v].env < 0.0001) Object.assign(voices[v], voices[--activevoices]);
-    }
-  }
-
-  return { noteOn, noteOff, controlChange, setPitchBend, resetVoices, loadInstrument, process };
-}
-
-// One-pole envelope-follower-driven wah, ported from wahwah.h (SvfWahCore +
-// WahWah). setMidFreqNorm() is never called by RefaceCpChain, so the base
-// frequency/sweep-ratio fields just keep wahwah.h's own field-initializer
-// defaults (300 Hz base, log(2400/300) sweep) instead of being ported.
-function createSvfWahCore() {
-  let s1 = 0, s2 = 0, g = 0, k = 0.4, a1 = 0, peakBoost = 1;
-  return {
-    setParams(cutoff, resoNorm, sr) {
-      const c = Math.max(50, Math.min(sr * 0.45, cutoff));
-      const reso = Math.max(0, Math.min(1, resoNorm));
-      const Q = 2.5 + 9.5 * reso;
-      g = Math.tan(Math.PI * c / sr);
-      k = 1 / Q;
-      a1 = 1 / (1 + g * (g + k));
-      peakBoost = 1 + 3 * reso;
-    },
-    process(x) {
-      const hp = (x - (k + g) * s1 - s2) * a1;
-      const bp = g * hp + s1;
-      const lp = g * bp + s2;
-      s1 = g * hp + bp;
-      s2 = g * bp + lp;
-      const out = (lp * 0.3 + bp * k * peakBoost) * 1.4;
-      return Math.tanh(out * 0.7) / 0.7;
-    },
-    reset() { s1 = 0; s2 = 0; },
-  };
-}
-
-function createWahWah(sampleRate) {
-  const coreL = createSvfWahCore();
-  const coreR = createSvfWahCore();
-  const sr = sampleRate;
-  const freqSmoothCoeff = 1 - Math.exp(-8 / (sr * 0.005));
-  const baseFreq = 300;
-  const sweepLogRatio = Math.log(2400 / baseFreq);
-  let midGainNorm = 0.5;
-  let envAmount = 1;
-  let freqSmoothL = 300, freqSmoothR = 300;
-  let counter = 0;
-  return {
-    setMidGainNorm(n) { midGainNorm = Math.max(0, Math.min(1, n)); },
-    setEnvelopeAmount(n) { envAmount = Math.max(0, Math.min(1, n)); },
-    reset() {
-      coreL.reset(); coreR.reset();
-      freqSmoothL = 300; freqSmoothR = 300;
-      counter = 0;
-    },
-    processStereo(io, envL, envR) {
-      if (envAmount <= 0.01) return;
-      const dryL = io.l, dryR = io.r;
-      if ((counter++ & 7) === 0) {
-        const curveL = Math.sqrt(Math.max(0, Math.min(1, envL)));
-        const curveR = Math.sqrt(Math.max(0, Math.min(1, envR)));
-        const sensGain = 0.3 + 2.2 * envAmount;
-        const sweepL = Math.max(0, Math.min(1, curveL * sensGain));
-        const sweepR = Math.max(0, Math.min(1, curveR * sensGain));
-        const targetFreqL = baseFreq * Math.exp(sweepLogRatio * sweepL);
-        const targetFreqR = baseFreq * Math.exp(sweepLogRatio * sweepR);
-        freqSmoothL += freqSmoothCoeff * (targetFreqL - freqSmoothL);
-        freqSmoothR += freqSmoothCoeff * (targetFreqR - freqSmoothR);
-        const resoL = Math.max(0, Math.min(1, midGainNorm + 0.2 * curveL));
-        const resoR = Math.max(0, Math.min(1, midGainNorm + 0.2 * curveR));
-        coreL.setParams(freqSmoothL, resoL, sr);
-        coreR.setParams(freqSmoothR, resoR, sr);
-      }
-      const satL = Math.tanh(io.l * 1.05) / 1.05;
-      const satR = Math.tanh(io.r * 1.05) / 1.05;
-      const wetL = coreL.process(satL);
-      const wetR = coreR.process(satR);
-      const wetMix = 0.55 + 0.4 * envAmount;
-      io.l = dryL * (1 - wetMix) + wetL * wetMix;
-      io.r = dryR * (1 - wetMix) + wetR * wetMix;
-    },
-  };
-}
-
-// Ported from reface_cp_fx.h's CpTremolo/CpChorus/CpPhaser - short enough to
-// keep as plain closures rather than a class per effect.
-function createCpTremolo(sampleRate) {
-  const sr = sampleRate;
-  let phase = 0, depth = 0, rateHz = 0.1, mode = 0;
-  return {
-    setDepth(n) { depth = Math.max(0, Math.min(1, n)); },
-    setRate(n) { rateHz = 0.1 * 10 ** (2 * Math.max(0, Math.min(1, n))); },
-    setMode(m) { mode = m === 1 ? 1 : 0; },
-    process(io) {
-      phase += rateHz / sr;
-      if (phase >= 1) phase -= 1;
-      const lfo = Math.sin(phase * 2 * Math.PI);
-      const a = 0.5 + 0.5 * lfo;
-      const b = 0.5 - 0.5 * lfo;
-      if (mode === 0) {
-        io.l *= Math.max(0, Math.min(1, 1 - depth * a));
-        io.r *= Math.max(0, Math.min(1, 1 - depth * b));
-      } else {
-        const g = Math.max(0, Math.min(1, 1 - depth * a));
-        io.l *= g;
-        io.r *= g;
-      }
-    },
-  };
-}
-
-function createCpChorus(sampleRate) {
-  const sr = sampleRate;
-  const kBuf = 1024;
-  let phaseL = 0, phaseR = 0.25, depthMs = 0, rateHz = 0.1, widx = 0;
-  const bufL = new Float32Array(kBuf);
-  const bufR = new Float32Array(kBuf);
-  function readChan(buf, delaySamp) {
-    let rp = widx - delaySamp;
-    while (rp < 0) rp += kBuf;
-    let i0 = Math.trunc(rp);
-    if (i0 >= kBuf) i0 -= kBuf;
-    const frac = rp - i0;
-    let i1 = i0 + 1;
-    if (i1 >= kBuf) i1 = 0;
-    return buf[i0] + frac * (buf[i1] - buf[i0]);
-  }
-  return {
-    setDepth(n) { depthMs = Math.max(0, Math.min(1, n)) * 4; },
-    setRate(n) { rateHz = 0.1 * 10 ** (1.69897 * Math.max(0, Math.min(1, n))); },
-    process(io) {
-      const inc = rateHz / sr;
-      phaseL += inc; if (phaseL >= 1) phaseL -= 1;
-      phaseR += inc; if (phaseR >= 1) phaseR -= 1;
-      const baseSamp = 0.012 * sr;
-      let modSamp = depthMs * 0.001 * sr;
-      if (baseSamp + modSamp > kBuf - 2) modSamp = kBuf - 2 - baseSamp;
-      const dl = baseSamp + modSamp * Math.sin(phaseL * 2 * Math.PI);
-      const dr = baseSamp + modSamp * Math.sin(phaseR * 2 * Math.PI);
-      const dryL = io.l, dryR = io.r;
-      bufL[widx] = dryL;
-      bufR[widx] = dryR;
-      const wetL = readChan(bufL, dl);
-      const wetR = readChan(bufR, dr);
-      io.l = 0.5 * dryL + 0.5 * wetL;
-      io.r = 0.5 * dryR + 0.5 * wetR;
-      widx = (widx + 1) % kBuf;
-    },
-  };
-}
-
-function createCpPhaser(sampleRate) {
-  const sr = sampleRate;
-  const kStages = 4;
-  const kTwoPi = 2 * Math.PI;
-  let phase = 0, phaseR = 0.25 * kTwoPi;
-  let depthNorm = 0.5, rateHz = 0.1;
-  let aL = 0.9, aR = 0.9, fb = 0.2, cnt = 0;
-  const x1L = new Float32Array(kStages), y1L = new Float32Array(kStages);
-  const x1R = new Float32Array(kStages), y1R = new Float32Array(kStages);
-  let lastL = 0, lastR = 0;
-  return {
-    setDepth(n) { depthNorm = Math.max(0, Math.min(1, n)); },
-    setSpeed(n) { rateHz = 0.1 * 10 ** (Math.max(0, Math.min(1, n)) * 1.698970004336019); },
-    process(io) {
-      const inc = kTwoPi * rateHz / sr;
-      phase += inc; if (phase >= kTwoPi) phase -= kTwoPi;
-      phaseR += inc; if (phaseR >= kTwoPi) phaseR -= kTwoPi;
-      if ((cnt++ & 7) === 0) {
-        const oct = 0.6 + 1.6 * depthNorm;
-        const fcL = 750 * 2 ** (oct * Math.sin(phase));
-        const fcR = 750 * 2 ** (oct * Math.sin(phaseR));
-        const tL = Math.tan(Math.PI * fcL / sr);
-        const tR = Math.tan(Math.PI * fcR / sr);
-        aL = (1 - tL) / (1 + tL);
-        aR = (1 - tR) / (1 + tR);
-        fb = 0.2 + 0.55 * depthNorm;
-      }
-      const inL = io.l + fb * Math.tanh(lastL);
-      const inR = io.r + fb * Math.tanh(lastR);
-      let sigL = inL, sigR = inR;
-      for (let i = 0; i < kStages; i += 1) {
-        const yL = -aL * sigL + x1L[i] + aL * y1L[i];
-        x1L[i] = sigL; y1L[i] = yL; sigL = yL;
-        const yR = -aR * sigR + x1R[i] + aR * y1R[i];
-        x1R[i] = sigR; y1R[i] = yR; sigR = yR;
-      }
-      lastL = sigL;
-      lastR = sigR;
-      io.l = 0.5 * io.l + 0.5 * sigL;
-      io.r = 0.5 * io.r + 0.5 * sigR;
-    },
-  };
-}
-
-// Ported from reface_cp_chain.h - drive -> [1] trem/wah -> [2] chorus/phaser.
-function createRefaceCpChain(sampleRate) {
-  const trem = createCpTremolo(sampleRate);
-  const wah = createWahWah(sampleRate);
-  const chorus = createCpChorus(sampleRate);
-  const phaser = createCpPhaser(sampleRate);
-  const envAtt = Math.exp(-1 / (sampleRate * 0.008));
-  const envRel = Math.exp(-1 / (sampleRate * 0.12));
-  let drive = 0, preGain = 1, twMode = 0, cpMode = 0;
-  let envL = 0, envR = 0;
-  const io = { l: 0, r: 0 };
-  return {
-    setVoiceType(v) {
-      trem.setMode(v === 0 || v === 1 || v === 5 ? 0 : 1); // RDI/RDII/CP=pan, else volume
-    },
-    setDrive(n) { drive = Math.max(0, Math.min(1, n)); },
-    setPreGain(n) { preGain = Math.max(0, Math.min(1, n)); },
-    setTremWahMode(m) { twMode = m; },
-    setTremWahDepth(n) {
-      const d = Math.max(0, Math.min(1, n));
-      trem.setDepth(d);
-      wah.setEnvelopeAmount(d);
-    },
-    setTremWahRate(n) {
-      const r = Math.max(0, Math.min(1, n));
-      trem.setRate(r);
-      wah.setMidGainNorm(r);
-    },
-    setChoPhaMode(m) { cpMode = m; },
-    setChoPhaDepth(n) {
-      const d = Math.max(0, Math.min(1, n));
-      chorus.setDepth(d);
-      phaser.setDepth(d);
-    },
-    setChoPhaSpeed(n) {
-      const s = Math.max(0, Math.min(1, n));
-      chorus.setRate(s);
-      phaser.setSpeed(s);
-    },
-    process(outL, outR, frames) {
-      for (let i = 0; i < frames; i += 1) {
-        io.l = outL[i];
-        io.r = outR[i];
-        if (preGain < 0.9999) { io.l *= preGain; io.r *= preGain; }
-        if (drive > 0.0001) {
-          const pre = 1 + drive * 11;
-          const mk = 0.7 + 0.3 * (1 - drive);
-          io.l = Math.tanh(io.l * pre) * mk;
-          io.r = Math.tanh(io.r * pre) * mk;
-        }
-        if (twMode === 1) {
-          trem.process(io);
-        } else if (twMode === 2) {
-          const aL = Math.abs(io.l);
-          envL = aL > envL ? envAtt * envL + (1 - envAtt) * aL : envRel * envL + (1 - envRel) * aL;
-          const aR = Math.abs(io.r);
-          envR = aR > envR ? envAtt * envR + (1 - envAtt) * aR : envRel * envR + (1 - envRel) * aR;
-          wah.processStereo(io, envL, envR);
-        }
-        if (cpMode === 1) chorus.process(io);
-        else if (cpMode === 2) phaser.process(io);
-        outL[i] = io.l;
-        outR[i] = io.r;
-      }
-    },
-  };
-}
-
-// Parses the "MDAPACK" binary built by tools/build_mda_piano_pack.py (see
-// components/mda_piano/src/MdaPianoBank.cpp for the authoritative format;
-// CRC32 is skipped here - the firmware already validates the file it wrote).
-function parseMdaPianoPack(buffer) {
-  const view = new DataView(buffer);
-  const bytes = new Uint8Array(buffer);
-  const magic = String.fromCharCode(...bytes.slice(0, 7));
-  if (magic !== "MDAPACK") throw new Error("bad MDA piano pack magic");
-  const instrumentCount = view.getUint32(12, true);
-  const HEADER_SIZE = 24;
-  const ENTRY_SIZE = 36;
-  const instruments = [];
-  for (let i = 0; i < instrumentCount; i += 1) {
-    const base = HEADER_SIZE + i * ENTRY_SIZE;
-    const name = String.fromCharCode(...bytes.slice(base, base + 8)).replace(/\0+$/, "");
-    const noteonStep = view.getUint32(base + 12, true);
-    const pcmOffset = view.getUint32(base + 16, true);
-    const pcmSamples = view.getUint32(base + 20, true);
-    const keygroupOffset = view.getUint32(base + 24, true);
-    const keygroupCount = view.getUint32(base + 28, true);
-    const pcm = new Int16Array(buffer.slice(pcmOffset, pcmOffset + pcmSamples * 2));
-    const keygroups = [];
-    for (let k = 0; k < keygroupCount; k += 1) {
-      const kb = keygroupOffset + k * 20;
-      keygroups.push({
-        root: view.getInt32(kb, true),
-        high: view.getInt32(kb + 4, true),
-        pos: view.getInt32(kb + 8, true),
-        end: view.getInt32(kb + 12, true),
-        loop: view.getInt32(kb + 16, true),
-      });
-    }
-    instruments.push({ name, noteonStep, pcm, keygroups });
-  }
-  return instruments;
-}
-
-// Order matches nodes/MdaPianoNode.h's port indices 0-11 exactly.
-const MDA_PIANO_PORTS = [
-  "enableModWheel", "enablePitchWheel", "voiceType", "drive", "tremWahMode",
-  "tremWahDepth", "tremWahRate", "choPhaMode", "choPhaDepth", "choPhaSpeed", "preGain", "gain",
-];
-const MDA_PIANO_PORT_DEFAULTS = [0, 0, 0, 0, 0, 0, 5, 0, 0, 5, 10, 10];
-
-
-
-
-
-
-
 function cvToRange(volts, minVal, maxVal, curve) {
   const v = clampRange(volts / CV_MAX_VOLTS, 0, 1);
   if (curve === "log") {
@@ -1449,9 +944,8 @@ export class AudioEngine {
 
 
 
-    this._mdaPianoBankPromise = null;
     // Browser-only switch (see setSampleLoadingEnabled): while off, sample
-    // players (wave-player, soundfont-player, mda-piano) don't download their
+    // players (wave-player, soundfont-player) don't download their
     // files; the loads are parked here (entry -> loader) until
     // loadDeferredSamples() runs them.
     this._sampleLoadingEnabled = true;
@@ -1722,26 +1216,6 @@ export class AudioEngine {
   
   
   
-  // Fetches+parses samples/mda-piano.pack once (shared by every mda-piano
-  // instance, same cache-Promise pattern as _loadWavePlayerBuffer/getSf2Info
-  // above) via the same generic file-download route the File Explorer/
-  // WavePlayer/SoundFontPlayer previews already use to reach LittleFS.
-  _loadMdaPianoBank() {
-    if (!this._mdaPianoBankPromise) {
-      this._assetLoadTotal += 1;
-      const path = encodeURIComponent("samples/mda-piano.pack");
-      this._mdaPianoBankPromise = fetch(`/api/files/download?volume=flash&path=${path}`)
-        .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`HTTP ${res.status}`))))
-        .then((buf) => parseMdaPianoPack(buf))
-        .catch((err) => {
-          console.error("MDA Piano: failed to load samples/mda-piano.pack:", err);
-          return null;
-        })
-        .finally(() => { this._assetLoadDone += 1; });
-    }
-    return this._mdaPianoBankPromise;
-  }
-
   setSampleLoadingEnabled(enabled) {
     this._sampleLoadingEnabled = enabled !== false;
   }
@@ -1778,14 +1252,6 @@ export class AudioEngine {
     }
     this._deferredSampleLoads.set(entry, load);
     this._notifyDeferredSamples();
-  }
-
-  _loadMdaPianoEntry(entry) {
-    this._requestSampleLoad(entry, () => {
-      this._loadMdaPianoBank().then((instruments) => {
-        entry.instruments = instruments;
-      });
-    });
   }
 
   _loadWavePlayerBuffer(entry) {
@@ -2466,39 +1932,6 @@ export class AudioEngine {
     }
   }
 
-  // Mirrors nodes/MdaPianoNode.h's handleMidi() - note on/off go straight to
-  // the ported engine, mod wheel only updates entry.modWheel (consumed by
-  // the effects-chain trem/wah depth in the "mda-piano" onaudioprocess
-  // above, exactly like the firmware's state.modWheel), pitch bend goes to
-  // the engine's own setPitchBend(), CC64/66/120/123 to the engine's
-  // controlChange() (sustain pedal etc.).
-  handleMdaPianoMidi(id, data) {
-    const wrapper = this.nodes.get(id);
-    const entry = wrapper && wrapper.voiced ? wrapper.instances[0] : wrapper;
-    if (!entry || entry.type !== "mda-piano") return;
-
-    if (data.midiType === "note_on") {
-      if (data.velocity > 0) entry.engine.noteOn(data.note, data.velocity);
-      else entry.engine.noteOff(data.note);
-    } else if (data.midiType === "note_off") {
-      entry.engine.noteOff(data.note);
-    } else if (data.midiType === "control_change") {
-      if (entry.enableModWheel && data.control === 1) {
-        entry.modWheel = (data.value ?? 0) / 127;
-      } else {
-        entry.engine.controlChange(data.control, data.value ?? 0);
-      }
-    } else if (data.midiType === "pitchwheel") {
-      if (entry.enablePitchWheel && data.value !== undefined) {
-        entry.engine.setPitchBend(Math.max(0, Math.min(16383, data.value + 8192)));
-      }
-    }
-  }
-
-  
-  
-  
-  
   _createAnalyser(ctx, fftSize) {
     const analyser = ctx.createAnalyser();
     analyser.fftSize = fftSize;
@@ -4844,99 +4277,6 @@ export class AudioEngine {
         this._loadSf2Entry(entry);
         return entry;
       }
-      case "mda-piano": {
-        // See the "MDA Piano preview" block near the top of this file for
-        // the ported engine/effects-chain. All 12 CV ports are read once per
-        // block (channel [0] only), exactly matching MdaPianoNode.h's own
-        // portSample(inst, port, 0) block-rate reads - only "gain" differs
-        // slightly (read per-sample here for a click-free knob response
-        // instead of the firmware's dedicated one-pole smoother; a minor,
-        // deliberate simplification for a preview-only signal path).
-        const maxVoices = Math.max(4, Math.min(128, Math.round(Number(params.maxVoices) || 32)));
-        const inputMerger = ctx.createChannelMerger(MDA_PIANO_PORTS.length);
-        const seeds = MDA_PIANO_PORTS.map((name, index) => {
-          const raw = params[name];
-          const value = typeof raw === "boolean" ? (raw ? 1 : 0) : Number(raw ?? MDA_PIANO_PORT_DEFAULTS[index]) || 0;
-          const seed = ctx.createConstantSource();
-          seed.offset.value = clampRange(value, 0, CV_MAX_VOLTS);
-          seed.connect(inputMerger, 0, index);
-          seed.start();
-          return seed;
-        });
-        // 2048 (now the same as SCRIPT_PROCESSOR_FRAMES, kept explicit here): this one
-        // renders up to 32 sampled voices plus the effects chain per block,
-        // and a 5.3 ms main-thread deadline drops whole blocks (audible as
-        // clicks). Costs ~43 ms preview latency.
-        const processor = ctx.createScriptProcessor(2048, MDA_PIANO_PORTS.length, 2);
-        inputMerger.connect(processor);
-        const splitter = ctx.createChannelSplitter(2);
-        processor.connect(splitter);
-        const leftOut = ctx.createGain();
-        const rightOut = ctx.createGain();
-        splitter.connect(leftOut, 0, 0);
-        splitter.connect(rightOut, 1, 0);
-
-        const entry = {
-          type,
-          inputMerger,
-          processor,
-          splitter,
-          leftOut,
-          rightOut,
-          seeds,
-          controlConnectionCounts: new Array(MDA_PIANO_PORTS.length).fill(0),
-          controlValues: seeds.map((s) => s.offset.value),
-          maxVoices,
-          engine: createMdaEpianoEngine(maxVoices, ctx.sampleRate),
-          effects: createRefaceCpChain(ctx.sampleRate),
-          instruments: null,
-          currentInstrumentIndex: -1,
-          modWheel: 1,
-        };
-        this._loadMdaPianoEntry(entry);
-
-        processor.onaudioprocess = (event) => {
-          const outL = event.outputBuffer.getChannelData(0);
-          const outR = event.outputBuffer.getChannelData(1);
-          if (!entry.instruments) {
-            outL.fill(0);
-            outR.fill(0);
-            return;
-          }
-          const ch = (i) => event.inputBuffer.getChannelData(i)[0];
-          entry.enableModWheel = ch(0) >= 0.5;
-          entry.enablePitchWheel = ch(1) >= 0.5;
-          const selectedInstrument = mdaVoiceTypeFromCv(ch(2));
-          if (selectedInstrument !== entry.currentInstrumentIndex) {
-            const instrument = entry.instruments[selectedInstrument];
-            if (instrument) {
-              entry.engine.loadInstrument(instrument);
-              entry.currentInstrumentIndex = selectedInstrument;
-            }
-          }
-          entry.effects.setVoiceType(selectedInstrument);
-          entry.effects.setDrive(ch(3) * 0.1);
-          entry.effects.setTremWahMode(mdaEffectModeFromCv(ch(4)));
-          entry.effects.setTremWahDepth(ch(5) * 0.1 * entry.modWheel);
-          entry.effects.setTremWahRate(ch(6) * 0.1);
-          entry.effects.setChoPhaMode(mdaEffectModeFromCv(ch(7)));
-          entry.effects.setChoPhaDepth(ch(8) * 0.1);
-          entry.effects.setChoPhaSpeed(ch(9) * 0.1);
-          entry.effects.setPreGain(ch(10) * 0.1);
-
-          const frames = outL.length;
-          entry.engine.process(outL, outR, frames);
-          entry.effects.process(outL, outR, frames);
-
-          const gainCv = event.inputBuffer.getChannelData(11);
-          for (let i = 0; i < frames; i += 1) {
-            const g = vcaAmountFromCv(gainCv[i], "linear") * AUDIO_PEAK_VOLTS * 5; // MdaPianoNode.h kOutputScale
-            outL[i] *= g;
-            outR[i] *= g;
-          }
-        };
-        return entry;
-      }
       case "mic-in":
       case "wm8960-in": {
         // Browser stand-in for the onboard PDM microphone (nodes/MicInNode.h) and the WM8960
@@ -5577,11 +4917,6 @@ export class AudioEngine {
       if (entry.type === "soundfont-player") {
         this._sf2StopAllVoices(entry);
         if (entry.channelGainNodes) entry.channelGainNodes.forEach((g) => g && g.disconnect());
-        if (entry.splitter) entry.splitter.disconnect();
-        if (entry.leftOut) entry.leftOut.disconnect();
-        if (entry.rightOut) entry.rightOut.disconnect();
-      }
-      if (entry.type === "mda-piano") {
         if (entry.splitter) entry.splitter.disconnect();
         if (entry.leftOut) entry.leftOut.disconnect();
         if (entry.rightOut) entry.rightOut.disconnect();
@@ -6370,20 +5705,10 @@ export class AudioEngine {
         }
         break;
       }
-      case "mda-piano": {
-        const idx = MDA_PIANO_PORTS.indexOf(paramName);
-        if (idx >= 0 && entry.controlConnectionCounts[idx] === 0) {
-          const v = typeof value === "boolean" ? (value ? 1 : 0) : Number(value) || 0;
-          const safe = clampRange(v, 0, CV_MAX_VOLTS);
-          entry.controlValues[idx] = safe;
-          applyRampValue(entry.seeds[idx].offset, safe);
-        }
-        break;
-      }
       case "fm8": {
         if (paramName === "tune" || paramName === "gain") {
           const idx = paramName === "tune" ? 3 : 4;
-          // Only while no cable owns the port (same guard as mda-piano above).
+          // Only while no cable owns the port.
           if (entry.controlConnectionCounts[idx] === 0) {
             applyRampValue(entry.seeds[idx].offset, clampRange(Number(value) || 0, 0, CV_MAX_VOLTS));
           }
@@ -6797,8 +6122,6 @@ export class AudioEngine {
     if ((entry.type === "wave-player" || entry.type === "sampler") && port === "right") return entry.rightOut;
     if (entry.type === "soundfont-player" && port === "left") return entry.leftOut;
     if (entry.type === "soundfont-player" && port === "right") return entry.rightOut;
-    if (entry.type === "mda-piano" && port === "left") return entry.leftOut;
-    if (entry.type === "mda-piano" && port === "right") return entry.rightOut;
     return null;
   }
 
@@ -7062,10 +6385,6 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "adder") {
       this._wireAdderInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
-      return;
-    }
-    if (toEntry && toEntry.type === "mda-piano" && MDA_PIANO_PORTS.includes(toPort)) {
-      this._wireMdaPianoInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), true);
       return;
     }
     if (toEntry && toEntry.type === "multiplier") {
@@ -7359,10 +6678,6 @@ export class AudioEngine {
     }
     if (toEntry && toEntry.type === "adder") {
       this._wireAdderInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
-      return;
-    }
-    if (toEntry && toEntry.type === "mda-piano" && MDA_PIANO_PORTS.includes(toPort)) {
-      this._wireMdaPianoInput(toEntry, toPort, this._resolveScaledOutput(fromEntry, fromPort, gainScale), false);
       return;
     }
     if (toEntry && toEntry.type === "multiplier") {
@@ -7705,28 +7020,6 @@ export class AudioEngine {
       sourceNode.disconnect(entry.inputMerger, 0, index + 1);
       entry.controlConnectionCounts[index] = Math.max(0, count - 1);
       if (count === 1) seed.connect(entry.inputMerger, 0, index + 1);
-    }
-  }
-
-  _wireMdaPianoInput(entry, port, sourceNode, connecting) {
-    if (!sourceNode) return;
-    const idx = MDA_PIANO_PORTS.indexOf(port);
-    if (idx < 0) return;
-    const counts = entry.controlConnectionCounts;
-    const seed = entry.seeds[idx];
-    try {
-      if (connecting) {
-        if (counts[idx]++ === 0) seed.disconnect(entry.inputMerger, 0, idx);
-        sourceNode.connect(entry.inputMerger, 0, idx);
-      } else {
-        sourceNode.disconnect(entry.inputMerger, 0, idx);
-        if (--counts[idx] <= 0) {
-          counts[idx] = 0;
-          seed.connect(entry.inputMerger, 0, idx);
-        }
-      }
-    } catch (err) {
-
     }
   }
 

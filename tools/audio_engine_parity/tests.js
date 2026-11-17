@@ -516,16 +516,15 @@ export async function runAll() {
       engine.createNode("w", "wave-player", { sampleFile: "a.wav" });
       engine.createNode("w0", "wave-player", { sampleFile: "" });
       engine.createNode("sm", "sampler", { sampleFile: "b.wav" });
-      engine.createNode("p", "mda-piano", {});
       engine.createNode("s", "soundfont-player", { path: "soundfonts/x.sf2" });
       if (fetched.length !== 0) throw new Error(`fetched while off: ${fetched}`);
-      if (engine.getDeferredSampleCount() !== 4 || notified !== 4) {
+      if (engine.getDeferredSampleCount() !== 3 || notified !== 3) {
         throw new Error(`deferred ${engine.getDeferredSampleCount()} notified ${notified}`);
       }
       engine.removeNode("s");
-      if (engine.getDeferredSampleCount() !== 3) throw new Error("removed node still deferred");
+      if (engine.getDeferredSampleCount() !== 2) throw new Error("removed node still deferred");
       engine.loadDeferredSamples();
-      if (fetched.length !== 3 || engine.getDeferredSampleCount() !== 0 || notified !== 0) {
+      if (fetched.length !== 2 || engine.getDeferredSampleCount() !== 0 || notified !== 0) {
         throw new Error(`after load: fetched ${fetched.length}, deferred ${engine.getDeferredSampleCount()}`);
       }
       return "ok";

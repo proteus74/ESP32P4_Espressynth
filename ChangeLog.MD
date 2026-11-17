@@ -4,6 +4,7 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 
 ## [Unreleased]
 
+- MDA Piano komplett entfernt (Widget, Engine-Node, Browser-Vorschau, `components/mda_piano`, Sample-Pack `mda-piano.pack`, Hilfeseite).
 - Audio: Der I2S-TX-Kanal von ES8311, WM8960 und NS4168 wird bei eingebauter Synth-Engine erst mit dem ersten Engine-Block eingeschaltet. Damit entfallen die 40–87 "Underruns" beim Booten (der DMA-Ring lief leer, bevor die Engine startete, es ging nur Stille verloren). Auf dem CrowPanel getestet (0 Underruns beim Booten); ES8311/WM8960 kompiliert, nicht auf Hardware.
 - Audio-Latenz: neue Standardwerte DMA-Ring 3 × 128 Frames (vorher 6 × 240) bei Render-Block 128 (vorher in der lokalen `sdkconfig` 512). Note-Ein bis Ton sinkt von ca. 38 ms auf ca. 11 ms (berechnet), der freie interne RAM steigt um ca. 80 KB; auf dem CrowPanel keine DMA-Underruns beim Spielen, auch nicht mit parallelen Web-Downloads. Messung und Begründung: `documentation/audio-latency.md`, Testskript `tools/audio_latency_test.py`.
 - Browser-Vorschau (`audio-engine.js`) an die Firmware angeglichen:
@@ -16,7 +17,7 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
   - Divide, Frequency Divider, Logic OR, Value Mapper, Bitcrusher und Output Switch rechnen wie die Firmware.
   - SoundFont-Filter-Resonanz korrigiert, Gain-Eingang per Kabel möglich.
 - Neuer Paritätstest `tools/audio_engine_parity` (Playwright, offline gerendert).
-- Neue Browser-Einstellung „Load samples in the browser“ (Settings, nur lokal gespeichert): ist sie aus, laden Wave Player, SoundFont Player und MDA Piano beim Seitenaufruf keine Samples – ein blinkender „Load Samples“-Button neben dem Lautsprecher lädt sie bei Bedarf nach.
+- Neue Browser-Einstellung „Load samples in the browser“ (Settings, nur lokal gespeichert): ist sie aus, laden Wave Player und SoundFont Player beim Seitenaufruf keine Samples – ein blinkender „Load Samples“-Button neben dem Lautsprecher lädt sie bei Bedarf nach.
 
 ## [0.31]
 

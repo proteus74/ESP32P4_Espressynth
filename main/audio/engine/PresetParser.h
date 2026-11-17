@@ -348,19 +348,6 @@ struct WidgetParams
     bool soundFontEnableCc = false;
     bool soundFontEnableModWheel = false;
     bool soundFontEnablePitchWheel = false;
-    // mda-piano - all controls use the same 0-10V domain as their ports.
-    int mdaPianoMaxVoices = 32;
-    bool mdaPianoEnableModWheel = false;
-    bool mdaPianoEnablePitchWheel = false;
-    float mdaPianoVoiceType = 0.0f;
-    float mdaPianoDrive = 0.0f;
-    float mdaPianoTremWahMode = 0.0f;
-    float mdaPianoTremWahDepth = 0.0f;
-    float mdaPianoTremWahRate = 5.0f;
-    float mdaPianoChoPhaMode = 0.0f;
-    float mdaPianoChoPhaDepth = 0.0f;
-    float mdaPianoChoPhaSpeed = 5.0f;
-    float mdaPianoPreGain = 10.0f;
     // hammond - drawbar LEVELS (0-10V CV, default 888000000) and their
     // harmonic RATIOS (settings-dialog-only, default the classic Hammond
     // footages). Two independent 9-element arrays - see nodes/HammondNode.h.
