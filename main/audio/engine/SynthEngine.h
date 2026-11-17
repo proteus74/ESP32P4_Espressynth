@@ -29,6 +29,7 @@
 #include "EnvelopeActivity.h"
 #include "MasterClock.h"
 #include "MemoryDiagnostics.h"
+#include "ParamJournal.hpp"
 #include "PresetWriteCache.hpp"
 #include "PresetChangedMsg.h"
 #include "PresetFill.h"
@@ -1063,6 +1064,8 @@ namespace
 {
 constexpr const char *kSynthEngineTag = "synth_engine";
 constexpr UBaseType_t kSynthEngineMidiQueueDepth = 128;
+// Live-param messages applied per render block; the rest waits for the next block (2.9 ms).
+constexpr uint32_t kSynthEngineMaxLiveParamsPerBlock = 8;
 // Knob/MIDI activity for the on-device displays. Latest-wins (pushKnobActivity drops the
 // oldest entry when full) and the LVGL tick drains it every frame, so a few entries are
 // enough; the previous 2 * kMaxConnections = 512 x ~216 B cost ~110 KB PSRAM per sink.
@@ -1125,15 +1128,10 @@ inline void handleMasterClockMidi(const UsbMidiEvent &event)
                           (static_cast<uint32_t>(mc.midiCc) << 8) | raw;
 }
 
-// Parse each queued frame once, then route the resolved fields either to the
-// engine's hardware sinks or to the live graph.
-void applyLiveParamMessage(SynthEngine &engine, Graph &graph, const char *json)
+// Routes an already parsed frame either to the engine's hardware sinks or to the live graph.
+// Runs on the render task: only walks the tree, never parses or frees it (LiveParamMsg.h).
+void applyLiveParamMessage(SynthEngine &engine, Graph &graph, cJSON *root)
 {
-    cJSON *root = cJSON_Parse(json);
-    if (root == nullptr)
-    {
-        return;
-    }
     cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
     cJSON *widgetId = cJSON_GetObjectItemCaseSensitive(root, "widgetId");
     cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
@@ -1159,7 +1157,69 @@ void applyLiveParamMessage(SynthEngine &engine, Graph &graph, const char *json)
             }
         }
     }
-    cJSON_Delete(root);
+}
+
+// Render task: reports one changed Knob/Button control per block to the parameter journal
+// (ParamJournal.hpp), which decides whether and when it is saved. Copies a few fields and
+// posts to a queue.
+inline void publishControlChange(Graph &graph)
+{
+    static_assert(sizeof(WidgetSlot::id) == paramjournal::kWidgetIdLen, "journal widget id size");
+    const Graph::ControlChange change = graph.changedControls[--graph.changedControlCount];
+    if (paramjournal::gQueue == nullptr || change.widget >= graph.widgetCount)
+    {
+        return;
+    }
+    const WidgetSlot &slot = graph.widgets[change.widget];
+    const NodeInstance &inst = graph.instances[slot.instanceBase];
+    paramjournal::ControlChangeMsg msg{};
+    msg.tag = graph.journalTag;
+    msg.index = change.side;
+    memcpy(msg.widgetId, slot.id, sizeof(msg.widgetId));
+    if (slot.type == NodeType::Knob && inst.knob->controls.contains(change.side))
+    {
+        msg.kind = paramjournal::Kind::Knob;
+        msg.a = inst.knob->controls[change.side].raw;
+    }
+    else if (slot.type == NodeType::Button && inst.button->controls.contains(change.side))
+    {
+        const auto &control = inst.button->controls[change.side];
+        msg.kind = paramjournal::Kind::Button;
+        msg.a = static_cast<float>(control.listIndex);
+        msg.b = control.wasAbove ? 1.0f : 0.0f;
+    }
+    else
+    {
+        return; // other control types are only saved by the browser
+    }
+    xQueueSend(paramjournal::gQueue, &msg, 0);
+}
+
+// Loader (or the render task's own boot-time build): re-applies the journaled Knob/Button
+// values to a freshly built, not yet live graph - through the same path a live edit takes.
+inline void applyParamJournal(Graph &graph, const char *presetPath)
+{
+    graph.journalTag = paramjournal::attach(presetPath, synth::deviceSettings().paramAutosave);
+    paramjournal::forEach([&graph](const paramjournal::Entry &e) {
+        cJSON *params = cJSON_CreateObject();
+        if (params == nullptr) return;
+        if (e.kind == paramjournal::Kind::Knob)
+        {
+            cJSON_AddNumberToObject(params, "knobIndex", e.index + 1);
+            cJSON_AddNumberToObject(params, "raw", static_cast<double>(e.a));
+        }
+        else
+        {
+            cJSON_AddNumberToObject(params, "buttonIndex", e.index + 1);
+            cJSON_AddNumberToObject(params, "listIndex", static_cast<double>(e.a));
+            cJSON_AddNumberToObject(params, "wasAbove", static_cast<double>(e.b));
+        }
+        graph.applyLiveParams(e.widgetId, params, nullptr, nullptr);
+        cJSON_Delete(params);
+    });
+    // Restoring saved values is not a control gesture: nothing to log, nothing to journal again.
+    graph.changedControlCount = 0;
+    graph.controlDebugEventCount = 0;
 }
 
 void destroyPresetDoc(PresetDoc *doc)
@@ -1446,6 +1506,7 @@ inline Graph *SynthEngine::buildFromFile(const char *path, uint16_t voiceCeiling
     destroyPresetDoc(doc);
     memorydiag::captureReloadPhase(reloadGeneration, memorydiag::ReloadPhase::PresetDocFreed);
     memorydiag::finishReload(reloadGeneration, newGraph != nullptr);
+    if (newGraph != nullptr) applyParamJournal(*newGraph, path);
     if (newGraph != nullptr) presetLoadProgress_.store(90, std::memory_order_relaxed);
     return newGraph;
 }
@@ -1652,9 +1713,13 @@ inline void SynthEngine::taskLoop()
         LiveParamMsg paramMsg;
         {
             const int64_t liveParamStartUs = esp_timer_get_time();
-            while (liveParamQueue_ != nullptr && xQueueReceive(liveParamQueue_, &paramMsg, 0) == pdTRUE)
+            // Bounded per block: a flood (slider drag) spreads over the next blocks instead of
+            // eating one block's budget.
+            while (liveParamCount < kSynthEngineMaxLiveParamsPerBlock && liveParamQueue_ != nullptr &&
+                   xQueueReceive(liveParamQueue_, &paramMsg, 0) == pdTRUE)
             {
-                applyLiveParamMessage(*this, *liveGraph_, paramMsg.json);
+                applyLiveParamMessage(*this, *liveGraph_, paramMsg.root);
+                liveparam::retire(paramMsg.root);
                 ++liveParamCount;
             }
             applyLiveWavetables(liveGraph_);
@@ -1686,6 +1751,7 @@ inline void SynthEngine::taskLoop()
             if (audible) lastAudibleUs_.store(esp_timer_get_time(), std::memory_order_relaxed);
         }
         synchronizeMidiControls();
+        if (liveGraph_->changedControlCount != 0) publishControlChange(*liveGraph_);
         activeSoundFontVoices_.store(liveGraph_->activeSoundFontVoiceCount(), std::memory_order_relaxed);
         const int64_t renderUs = esp_timer_get_time() - renderStartUs;
         // UI/console feedback for knobs and CCs is lower priority than audio: only
@@ -1913,9 +1979,12 @@ inline void SynthEngine::taskLoop()
             {
                 xQueueReset(midiEventQueue_);
             }
-            if (liveParamQueue_ != nullptr)
+            // Each live-param message owns a parsed JSON tree: hand them back instead of
+            // xQueueReset, which would leak them.
+            LiveParamMsg staleParam;
+            while (liveParamQueue_ != nullptr && xQueueReceive(liveParamQueue_, &staleParam, 0) == pdTRUE)
             {
-                xQueueReset(liveParamQueue_);
+                liveparam::retire(staleParam.root);
             }
             // Same for live wavetable edits - but each message owns a bank
             // reference, so drain-and-release instead of xQueueReset.

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESPRESSYNTH</title>
 <link rel="icon" type="image/png" href="/static/img/FavLogo.png?v=20260910-64px">
-<link rel="stylesheet" href="/static/css/style.css?v=20261025-midi-in-keys-2">
+<link rel="stylesheet" href="/static/css/style.css?v=20261116-tabscroll-5">
 </head>
 <body>
 
@@ -83,6 +83,8 @@
   <div class="preset-inline">
     <span class="preset-label">Preset:</span>
     <select id="presetSelect"></select>
+    <button id="paramAutosaveBtn" type="button" class="param-autosave-btn" aria-pressed="false"
+            title="Autosave: when on, every change (parameters, MIDI CC, touch screen, widget positions) is saved into the current preset automatically. A new preset is left alone until it has been saved once.">Autosave: Off</button>
   </div>
 
   <span class="app-title">ESPRESSYNTH</span>
@@ -138,10 +140,13 @@
 </nav>
 
 <div class="page-tabs">
+  <button class="page-tab-scroll hidden" id="pageTabScrollLeft" type="button" title="Scroll pages left" aria-label="Scroll pages left">&#9664;</button>
   <div class="page-tab-list" id="pageTabList">
     <button class="page-tab active" data-page="generator">Sound Generation</button>
     <button class="page-tab" data-page="fx">FX &amp; Masteroutput</button>
   </div>
+  <button class="page-tab-scroll hidden" id="pageTabScrollRight" type="button" title="Scroll pages right" aria-label="Scroll pages right">&#9654;</button>
+  <button class="page-tab-scroll page-tab-menu-btn hidden" id="pageTabMenuBtn" type="button" title="All pages" aria-label="All pages" aria-haspopup="true">&#9662;</button>
   <div class="mem-stats" id="memStats">
     <div class="preset-load-progress hidden" id="presetLoadProgress">
       <span class="preset-load-progress-label" id="presetLoadProgressLabel">Loading preset…</span>
@@ -164,12 +169,14 @@
     <span class="cpu-load-core">C1</span>
     <div class="cpu-load-bar"><div class="cpu-load-bar-fill" id="cpuLoadCore1Fill"></div></div>
     <span class="cpu-load-value" id="cpuLoadCore1Value">–</span>
-    <span class="cpu-load-core" id="cpuLoadUnderrunsLabel" title="DMA-Ring wirklich leergelaufen seit Start (I2S-Sendequeue-Overflow) - jeder Zaehler-Sprung ist ein tatsaechlich hoerbarer Klick/Knacken">Underruns</span>
+    <span class="cpu-load-core" id="cpuLoadUnderrunsLabel" title="DMA ring actually ran empty since start (I2S send queue overflow) - every step of this counter is an audible click">Underruns</span>
     <span class="cpu-load-value" id="cpuLoadUnderrunsValue">–</span>
     <span class="panic-separator" aria-hidden="true"></span>
     <button id="panicBtn" class="panic-btn" title="Stop MIDI notes and reload current preset">Panic</button>
   </div>
 </div>
+
+<div id="pageTabListMenu" class="page-tab-context-menu page-tab-list-menu hidden"></div>
 
 <div id="pageTabContextMenu" class="page-tab-context-menu hidden">
   <button type="button" data-action="rename">Rename</button>
@@ -700,14 +707,14 @@
     <div class="modal-field">
       <button id="switchLearnBtn" class="btn-secondary">Learn</button>
     </div>
-    <p class="modal-hint">Press-Flanke (CC-Wert &gt;= 64) schaltet um (In 1 &lt;-&gt; In 2), latching.</p>
+    <p class="modal-hint">A press edge (CC value &gt;= 64) toggles (In 1 &lt;-&gt; In 2), latching.</p>
     <div class="modal-field-row">
       <label class="modal-field">
-        <span>In 1 Default (kein Kabel)</span>
+        <span>In 1 Default (no cable)</span>
         <input type="number" id="switchIn1DefaultInput" step="any">
       </label>
       <label class="modal-field">
-        <span>In 2 Default (kein Kabel)</span>
+        <span>In 2 Default (no cable)</span>
         <input type="number" id="switchIn2DefaultInput" step="any">
       </label>
     </div>
@@ -728,7 +735,7 @@
     <div class="modal-field">
       <button id="outputSwitchLearnBtn" class="btn-secondary">Learn</button>
     </div>
-    <p class="modal-hint">Press-Flanke (CC-Wert &gt;= 64) schaltet um (Out 1 &lt;-&gt; Out 2), latching. Der nicht ausgewählte Ausgang hält seinen letzten Wert.</p>
+    <p class="modal-hint">A press edge (CC value &gt;= 64) toggles (Out 1 &lt;-&gt; Out 2), latching. The output that is not selected holds its last value.</p>
     <div class="modal-actions">
       <button id="outputSwitchSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="outputSwitchSettingsSave">Save</button>
@@ -1017,7 +1024,7 @@
     <label>Max. Rate bei 10 V (Hz)
       <input id="lfoMaxRateInput" type="number" min="0" max="500" step="0.01">
     </label>
-    <p class="modal-hint">0–10 V werden linear auf 0–diese Maximalrate abgebildet.</p>
+    <p class="modal-hint">0–10 V map linearly onto 0 to this maximum rate.</p>
     <div class="modal-actions">
       <button id="lfoSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="lfoSettingsSave">Save</button>
@@ -1086,7 +1093,7 @@
       <span>Number of Outputs (2–16)</span>
       <input type="number" id="outputMultiplexerCountInput" min="2" max="16" value="2">
     </label>
-    <p class="modal-hint">Kein Fade - Umschalten ist instantan. Nicht ausgewählte Ausgänge halten ihren letzten Wert.</p>
+    <p class="modal-hint">No fade - switching is instant. Outputs that are not selected hold their last value.</p>
     <div class="modal-actions">
       <button id="outputMultiplexerSettingsCancel" class="btn-secondary">Cancel</button>
       <button id="outputMultiplexerSettingsSave">Save</button>
@@ -1412,7 +1419,7 @@
       <span id="fileExplorerUploadProgressLabel">Uploading…</span>
       <div class="file-explorer-upload-progress-track"><div class="file-explorer-upload-progress-fill" id="fileExplorerUploadProgressFill"></div></div>
     </div>
-    <input type="file" id="fileExplorerUploadInput" class="hidden" multiple>
+    <input type="file" id="fileExplorerUploadInput" multiple hidden>
     <audio id="fileExplorerAudioPreview" class="hidden"></audio>
     <div class="modal-actions">
       <button id="fileExplorerUploadButton" class="btn-secondary">Upload</button>
@@ -1447,6 +1454,6 @@
   <div class="log-window-body" id="logWindowBody"></div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=20261025-lfo-maxrate-1"></script>
+<script type="module" src="/static/js/main.js?v=20261116-devsettings-9"></script>
 </body>
 </html>

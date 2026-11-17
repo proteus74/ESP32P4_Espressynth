@@ -81,3 +81,11 @@ build_verify/
 sdkconfig.defaults.*.local
 .playwright-mcp/*
 
+
+# Local API key for the video narration - never commit
+documentation/openrouterapi.txt
+
+# Project video: the film itself, its sources and recordings, voice samples (documentation/Espressynth-Build-Your-Own-Synthesizer.md)
+documentation/Espressynth-Build-Your-Own-Synthesizer.mp4
+documentation/video-src/
+documentation/voice-samples/

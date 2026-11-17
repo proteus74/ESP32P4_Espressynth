@@ -995,6 +995,18 @@ inline void resync_display() {
 }
 #endif
 
+/**
+ * @brief The frame the panel is showing right now: RGB565, native width x height, row by row.
+ *        nullptr on display outputs that keep no single frame buffer (`lvgl screenshot`).
+ */
+inline const uint8_t* frame_buffer() {
+#if defined(CONFIG_APP_DISPLAY_OUTPUT_RGB)
+    return s_rgb_frame_buffer;
+#else
+    return nullptr;
+#endif
+}
+
 inline void finish_startup_screen() {
 #if APP_BOOT_SPLASH
     constexpr const char* TAG = "FeatureLVGL";

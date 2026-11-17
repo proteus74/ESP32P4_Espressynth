@@ -29,6 +29,9 @@ struct DeviceSettingsState
     float volume = 1.0f;
     int volumeCc = -1;
     int volumeChannel = -1;
+    // "Autosave" in the web UI: parameter changes (browser, MIDI CC, touch screen) are saved
+    // into the current preset on their own - see ParamJournal.hpp and main.js markDirty().
+    bool paramAutosave = false;
     // Runtime-only edge-detection state (NOT persisted) - true while the
     // learned CC is currently held above the press threshold, so a preset
     // step fires once on the rising edge instead of once per MIDI message.
@@ -86,6 +89,8 @@ inline void loadDeviceSettingsFromFs()
     cJSON *volume = cJSON_GetObjectItemCaseSensitive(root, "volume");
     cJSON *volumeCc = cJSON_GetObjectItemCaseSensitive(root, "volumeCc");
     cJSON *volumeChannel = cJSON_GetObjectItemCaseSensitive(root, "volumeChannel");
+    cJSON *paramAutosave = cJSON_GetObjectItemCaseSensitive(root, "paramAutosave");
+    if (cJSON_IsBool(paramAutosave)) ds.paramAutosave = cJSON_IsTrue(paramAutosave);
     if (cJSON_IsString(name)) snprintf(ds.name, sizeof(ds.name), "%s", name->valuestring);
     if (cJSON_IsNumber(prevCc)) ds.prevCc = prevCc->valueint;
     if (cJSON_IsNumber(prevChannel)) ds.prevChannel = prevChannel->valueint;
@@ -104,9 +109,10 @@ inline int formatDeviceSettingsJson(char *buf, size_t bufSize)
     const auto &ds = deviceSettings();
     return snprintf(buf, bufSize,
                      "{\"name\":\"%s\",\"prevCc\":%d,\"prevChannel\":%d,\"nextCc\":%d,\"nextChannel\":%d,"
-                     "\"volume\":%.3f,\"volumeCc\":%d,\"volumeChannel\":%d}",
+                     "\"volume\":%.3f,\"volumeCc\":%d,\"volumeChannel\":%d,\"paramAutosave\":%s}",
                      ds.name, ds.prevCc, ds.prevChannel, ds.nextCc, ds.nextChannel,
-                     static_cast<double>(ds.volume), ds.volumeCc, ds.volumeChannel);
+                     static_cast<double>(ds.volume), ds.volumeCc, ds.volumeChannel,
+                     ds.paramAutosave ? "true" : "false");
 }
 
 // Persists the current deviceSettings() state - called only from the

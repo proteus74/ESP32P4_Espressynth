@@ -2,16 +2,16 @@
 """
 Espressynth deploy script: builds complete merged flash images.
 
-  python deploy.py         board selected in menuconfig, built from the root sdkconfig in build/
+  python tools/deploy.py         board selected in menuconfig, built from the root sdkconfig in build/
                            (exactly what `idf.py build` builds, including local menuconfig settings)
-  python deploy.py --all   every board of the "Target Board" choice in main/Kconfig.projbuild
+  python tools/deploy.py --all   every board of the "Target Board" choice in main/Kconfig.projbuild
                            except the custom board (new boards there are picked up automatically).
                            Each board gets its own build dir build/boards/<board>/ with a generated sdkconfig
                            (sdkconfig.defaults + the board choice). The root sdkconfig is NOT used:
                            release images must not depend on local menuconfig tweaks (or carry the
                            local Wi-Fi credentials).
                            When every board succeeds, the images are also published to the website
-                           (../Espressynth_Website/static/firmware/<board>/: partition binaries plus an
+                           (JoLaBi_Homepage/static/firmware/espressynth/<board>/: partition binaries plus an
                            ESP Web Tools manifest.json, flashable from the browser) and FIRMWARE_VERSION
                            in main/version.h is raised by 0.01 for the next release.
 
@@ -34,13 +34,13 @@ from decimal import Decimal
 from pathlib import Path
 
 # Configuration
-PROJECT_ROOT = Path(__file__).parent.absolute()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 BOARDS_BUILD_DIR = BUILD_DIR / "boards"
 COPROCESSOR_BUILD = PROJECT_ROOT / "coprocessor_fw" / "build"
 KCONFIG = PROJECT_ROOT / "main" / "Kconfig.projbuild"
 VERSION_H = PROJECT_ROOT / "main" / "version.h"
-WEB_FIRMWARE_DIR = PROJECT_ROOT.parent / "Espressynth_Website" / "static" / "firmware"
+WEB_FIRMWARE_DIR = PROJECT_ROOT.parents[2] / "JoLaBi_Homepage" / "static" / "firmware" / "espressynth"
 FLASH_SIZE = 16 * 1024 * 1024  # 16 MB
 
 # Skipped by --all: the custom board only has placeholder pins until configured in menuconfig.
@@ -276,7 +276,7 @@ def main():
     ensure_idf_env()
     args = sys.argv[1:]
     if args not in ([], ["--all"]):
-        print("Usage: python deploy.py [--all]")
+        print("Usage: python tools/deploy.py [--all]")
         sys.exit(1)
     build_all = args == ["--all"]
     boards = read_boards()

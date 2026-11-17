@@ -247,7 +247,8 @@ void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Co
 
         // TODO: mehhh.. this needs some real tuning.
         //uint32_t pt = exp(((float)sensamp) / 262144 * 0.07 + 12.2);
-        uint32_t pt = EXP_FUNC(((float)sensamp) / 262144 * 0.07 + 12.2);
+        // float literals: the double ones forced software double math per operator per block
+        uint32_t pt = EXP_FUNC(((float)sensamp) / 262144 * 0.07f + 12.2f);
         uint32_t ldiff = (uint32_t)(((uint64_t)level) * (((uint64_t)pt << 4)) >> 28);
         level -= ldiff;
       }

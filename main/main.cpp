@@ -305,6 +305,125 @@ extern "C" void eez_network_ip(char *out, size_t out_size) {
 #endif
 }
 
+extern "C" bool eez_autosave_get(void) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    return synth::deviceSettings().paramAutosave;
+#else
+    return false;
+#endif
+}
+
+extern "C" void eez_autosave_set(bool on) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    synth::deviceSettings().paramAutosave = on;
+    Feature::Synth::request_device_settings_save(); // written in the next output pause
+#if defined(CONFIG_APP_ENABLE_WEBSERVER)
+    // Open browsers follow the switch (main.js "deviceSettings").
+    Feature::Synth::broadcast_json(on ? "{\"type\":\"deviceSettings\",\"paramAutosave\":true}"
+                                      : "{\"type\":\"deviceSettings\",\"paramAutosave\":false}");
+#endif
+#else
+    (void)on;
+#endif
+}
+
+extern "C" bool eez_save_parameters(void) {
+#if defined(CONFIG_APP_ENABLE_SYNTH)
+    return paramjournal::saveNow();
+#else
+    return false;
+#endif
+}
+
+extern "C" bool eez_wifi_available(void) {
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    return true;
+#else
+    return false;
+#endif
+}
+
+extern "C" void eez_wifi_configured_ssid(char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) return;
+    out[0] = '\0';
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    snprintf(out, out_size, "%s", Feature::WiFi::configured_ssid());
+#endif
+}
+
+extern "C" void eez_wifi_status(char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) return;
+    out[0] = '\0';
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    wifi_ap_record_t ap{};
+    if (Feature::WiFi::is_connected() && Feature::WiFi::get_ap_info(ap) == ESP_OK) {
+        snprintf(out, out_size, "WiFi: %s (%d dBm)", reinterpret_cast<const char *>(ap.ssid), ap.rssi);
+    } else if (Feature::WiFi::is_captive_portal_active()) {
+        snprintf(out, out_size, "WiFi: setup hotspot active");
+    } else {
+        snprintf(out, out_size, "WiFi: not connected");
+    }
+#endif
+}
+
+extern "C" bool eez_wifi_apply(const char *ssid, const char *password) {
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    if (ssid == nullptr) return false;
+    // The password field is never pre-filled: left empty for the network that is already
+    // configured it means "keep the stored password". Copied first - apply_settings() writes
+    // the very buffer configured_password() points at.
+    const bool keep = (password == nullptr || password[0] == '\0') && ssid[0] != '\0' &&
+                      strcmp(ssid, Feature::WiFi::configured_ssid()) == 0;
+    char password_copy[65] = {};
+    snprintf(password_copy, sizeof(password_copy), "%s",
+             keep ? Feature::WiFi::configured_password() : (password != nullptr ? password : ""));
+    char ssid_copy[33] = {};
+    snprintf(ssid_copy, sizeof(ssid_copy), "%s", ssid);
+    return Feature::WiFi::apply_settings(ssid_copy, password_copy) == ESP_OK;
+#else
+    (void)ssid;
+    (void)password;
+    return false;
+#endif
+}
+
+extern "C" bool eez_wifi_scan_start(void) {
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    return Feature::WiFi::scan_start();
+#else
+    return false;
+#endif
+}
+
+extern "C" int eez_wifi_scan_poll(EezWifiScan *out) {
+#if defined(CONFIG_APP_ENABLE_WIFI)
+    switch (Feature::WiFi::scan_state()) {
+    case Feature::WiFi::ScanState::Running:
+        return 0;
+    case Feature::WiFi::ScanState::Done: {
+        if (out == nullptr) return -1;
+        const int count = Feature::WiFi::async_scan_count < EEZ_WIFI_SCAN_CAPACITY ? Feature::WiFi::async_scan_count
+                                                                                 : EEZ_WIFI_SCAN_CAPACITY;
+        out->count = static_cast<uint16_t>(count);
+        for (int i = 0; i < count; ++i) {
+            const auto &found = Feature::WiFi::async_scan_results[i];
+            static_assert(sizeof(out->networks[i].ssid) == sizeof(found.ssid), "SSID buffers must match");
+            memcpy(out->networks[i].ssid, found.ssid, sizeof(found.ssid));
+            out->networks[i].ssid[sizeof(found.ssid) - 1] = '\0';
+            out->networks[i].rssi = found.rssi;
+            out->networks[i].secured = found.authmode != WIFI_AUTH_OPEN;
+        }
+        return 1;
+    }
+    default:
+        return -1;
+    }
+#else
+    (void)out;
+    return -1;
+#endif
+}
+
 extern "C" bool eez_list_presets(EezPresetList *list) {
     if (list == nullptr) return false;
     memset(list, 0, sizeof(*list));
@@ -438,13 +557,13 @@ extern "C" bool eez_send_control_param(const char *widget_id, bool is_button, ui
     snprintf(body, sizeof(body), "\"widgetId\":\"%s\",\"params\":{\"%s\":%u,\"%s\":%g}}", widget_id,
              is_button ? "buttonIndex" : "knobIndex", static_cast<unsigned>(control_index + 1), key,
              static_cast<double>(value));
-    LiveParamMsg msg{};
-    snprintf(msg.json, sizeof(msg.json), "{\"type\":\"paramUpdate\",%s", body);
-    if (xQueueSend(queue, &msg, 0) != pdTRUE) return false;
+    char json[liveparam::kMaxJsonLen] = {};
+    snprintf(json, sizeof(json), "{\"type\":\"paramUpdate\",%s", body);
+    if (!liveparam::post(queue, cJSON_Parse(json))) return false;
 #if defined(CONFIG_APP_ENABLE_WEBSERVER)
     // Open browsers mirror the touch change (main.js applyDeviceParamUpdate) without echoing it back.
-    snprintf(msg.json, sizeof(msg.json), "{\"type\":\"deviceParamUpdate\",%s", body);
-    Feature::Synth::broadcast_json(msg.json);
+    snprintf(json, sizeof(json), "{\"type\":\"deviceParamUpdate\",%s", body);
+    Feature::Synth::broadcast_json(json);
 #endif
     return true;
 #else

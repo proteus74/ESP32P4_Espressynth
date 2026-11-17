@@ -862,6 +862,7 @@ esp_err_t files_delete_handler(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not delete file");
         return ESP_FAIL;
     }
+    paramjournal::forget(fs_path); // a deleted preset must not leave journaled values behind
     httpd_resp_sendstr(req, "{\"deleted\":true}");
     return ESP_OK;
 }
@@ -1090,8 +1091,17 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     // A brand-new preset must exist on flash right away (preset list, select's stat check).
     if (is_new_file) presetcache::flushAll();
 
-    const bool queued = has_name_param ? Feature::Synth::request_preset_name(raw_name)
-                                       : Feature::Synth::request_current_preset();
+    // The browser's full state replaces whatever the device journaled for this preset.
+    paramjournal::clear(target_path);
+
+    // "reload=0" (the web UI's Autosave autosave): only parameter values changed, and the
+    // running graph already has them - keep it playing. A rebuild drops every held note.
+    char reload_param[4] = {};
+    extract_query_param(req, "reload", reload_param, sizeof(reload_param));
+    const bool queued = strcmp(reload_param, "0") == 0
+                            ? true
+                            : (has_name_param ? Feature::Synth::request_preset_name(raw_name)
+                                              : Feature::Synth::request_current_preset());
     if (!queued) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "preset reload unavailable");
         return ESP_FAIL;
@@ -1100,6 +1110,22 @@ esp_err_t preset_post_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"saved\":true}");
     return ESP_OK;
+}
+
+// GET /api/preset/live: Knob/Button values the device journaled for the current preset while
+// no browser was saving (ParamJournal.hpp), as an array of "paramUpdate"-shaped objects. The
+// browser applies them after loading the preset.
+esp_err_t preset_live_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    size_t len = 0;
+    char *json = paramjournal::toJson(len);
+    if (json == nullptr) {
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+    const esp_err_t ret = httpd_resp_send(req, json, static_cast<ssize_t>(len));
+    heap_caps_free(json);
+    return ret;
 }
 
 // POST /api/wavetable?widget=<Wavetable widget id>, body {"wavetables":[...]} (same
@@ -2144,7 +2170,7 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     // "live": the header BPM slider while dragging - RAM only, no flash write per
                     // step; its release sends the final value without "live" and that one saves.
                     if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "live"))) {
-                        synth::saveMasterClockToFs();
+                        request_master_clock_save(); // written in the next output pause
                     }
                     handled_locally = true;
                 } else if (cJSON_IsString(widget_id) && strcmp(widget_id->valuestring, "@controlStride") == 0 &&
@@ -2177,9 +2203,12 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                     if (cJSON_IsNumber(volumeChannel)) ds.volumeChannel = volumeChannel->valueint >= 0 && volumeChannel->valueint <= 15 ? volumeChannel->valueint : -1;
                     // The UI may set the volume even with a learned CC: last writer (knob or UI) wins.
                     if (cJSON_IsNumber(volume)) ds.volume = synth::clampDeviceVolume(static_cast<float>(volume->valuedouble));
+                    // "Autosave" toggle next to the preset selector (ParamJournal.hpp).
+                    cJSON *paramAutosave = cJSON_GetObjectItemCaseSensitive(params, "paramAutosave");
+                    if (cJSON_IsBool(paramAutosave)) ds.paramAutosave = cJSON_IsTrue(paramAutosave);
                     // "live": header VOL slider while dragging - RAM only, saved on release.
                     if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "live"))) {
-                        synth::saveDeviceSettingsToFs();
+                        request_device_settings_save(); // written in the next output pause
                     }
                     // WS2812 string pin/count - persisted only, applied at the next boot.
                     cJSON *ledPin = cJSON_GetObjectItemCaseSensitive(params, "ledPin");
@@ -2234,7 +2263,7 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                         }
                     }
                     Feature::IO::apply_gpio_settings();
-                    Feature::IO::saveGpioSettingsToFs();
+                    request_gpio_settings_save(); // written in the next output pause
                     handled_locally = true;
                 }
             } else if (cJSON_IsString(type) && strcmp(type->valuestring, "filesInfo") == 0) {
@@ -2251,17 +2280,14 @@ esp_err_t websocket_handler(httpd_req_t *req) {
                 httpd_ws_send_frame(req, &reply);
                 handled_locally = true;
             }
-            cJSON_Delete(root);
-        }
-
-        // Forward browser->device messages (currently only "paramUpdate") to the engine's
-        // render task for parsing/application - kept minimal here so the httpd worker never
-        // touches the live graph.
-        QueueHandle_t param_queue = live_param_queue();
-        if (!handled_locally && param_queue != nullptr && frame.len < sizeof(LiveParamMsg::json)) {
-            LiveParamMsg msg;
-            memcpy(msg.json, payload, frame.len + 1); // includes the NUL appended above
-            xQueueSend(param_queue, &msg, 0);
+            // Forward everything else (currently only "paramUpdate"/"panic") to the engine's
+            // render task as the already parsed tree - the httpd worker never touches the live
+            // graph, and the render task never parses or frees JSON (LiveParamMsg.h).
+            if (!handled_locally && frame.len < liveparam::kMaxJsonLen) {
+                liveparam::post(live_param_queue(), root); // takes ownership of root
+            } else {
+                cJSON_Delete(root);
+            }
         }
     }
     free(payload);
@@ -2299,6 +2325,11 @@ inline void register_web_routes() {
         .uri = "/api/preset", .method = HTTP_POST, .handler = &preset_post_handler, .user_ctx = nullptr,
         .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
     httpd_register_uri_handler(server, &preset_post_uri);
+
+    static const httpd_uri_t preset_live_uri = {
+        .uri = "/api/preset/live", .method = HTTP_GET, .handler = &preset_live_handler, .user_ctx = nullptr,
+        .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+    httpd_register_uri_handler(server, &preset_live_uri);
 
     static const httpd_uri_t preset_select_uri = {
         .uri = "/api/preset/select", .method = HTTP_POST, .handler = &preset_select_handler,

@@ -17,8 +17,10 @@ than the host was built with. After staging a rebuild of the same version, run t
 
 import subprocess
 import sys
+from pathlib import Path
 
-import deploy
+sys.path.insert(0, str(Path(__file__).parent / "tools"))
+import deploy  # tools/deploy.py
 
 
 def stage(app_bin, port):

@@ -61,7 +61,8 @@ inline float shape(int mode, float x)
         // Positive half compresses very gradually, negative half limits at -0.5.
         return x >= 0.0f ? x / (1.0f + x) : 0.5f * softClip(2.0f * x);
     case Fuzz:
-        return x >= 0.0f ? 1.0f - expf(-4.0f * x) : -(1.0f - expf(4.0f * x));
+        // exp(-4|x|) as 2^(-4*log2(e)*|x|) from the shared LUT: no libm call per sample.
+        return x >= 0.0f ? 1.0f - dsp::pow2Lookup(-5.7707802f * x) : -(1.0f - dsp::pow2Lookup(5.7707802f * x));
     default:
         return softClip(x);
     }
@@ -75,7 +76,8 @@ inline bool portFed(const NodeInstance &inst, uint8_t port)
 
 inline float onePoleCoeff(float hz)
 {
-    return 1.0f - expf(-2.0f * 3.14159265f * hz / static_cast<float>(synth::kSampleRate));
+    // exp(-w) as 2^(-w*log2(e)) from the shared LUT - runs per sample while Tone is modulated.
+    return 1.0f - dsp::pow2Lookup(-2.0f * 3.14159265f * 1.4426950f * hz / static_cast<float>(synth::kSampleRate));
 }
 
 inline void render(NodeInstance &inst, size_t frames)
@@ -107,12 +109,12 @@ inline void render(NodeInstance &inst, size_t frames)
         if (driveCv != s.cachedDriveCv)
         {
             s.cachedDriveCv = driveCv;
-            s.driveFactor = cv::cvToRange(driveCv, 1.0f, 100.0f, true); // 0..40 dB
+            s.driveFactor = cv::cvToRangeLogFast(driveCv, 1.0f, 6.6438562f); // 1..100 (0..40 dB), log2(100)
         }
         if (toneCv != s.cachedToneCv)
         {
             s.cachedToneCv = toneCv;
-            s.toneCoeff = onePoleCoeff(cv::cvToRange(toneCv, 500.0f, 12000.0f, true));
+            s.toneCoeff = onePoleCoeff(cv::cvToRangeLogFast(toneCv, 500.0f, 4.5849625f)); // 500..12000 Hz, log2(24)
         }
 
         const float dry = portSample(inst, 0, i);

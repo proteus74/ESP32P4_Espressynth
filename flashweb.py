@@ -20,7 +20,9 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent / "tools"))
 from deploy import BUILD_DIR, PARTITIONS, ensure_build_dir
 
 IDF_PROFILE = r"C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1"

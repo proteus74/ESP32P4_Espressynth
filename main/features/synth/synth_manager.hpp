@@ -70,6 +70,16 @@ inline QueueHandle_t s_presetNavQueue = nullptr;
 // kMasterVolumeSaveDelayUs - one flash write per gesture, not per CC message.
 inline std::atomic<int64_t> s_masterVolumeDirtyUs{0};
 constexpr int64_t kMasterVolumeSaveDelayUs = 2000000;
+// Settings files waiting to be written. A flash write disables the cache and stalls both
+// cores, audible as a dropout - so, like PresetWriteCache, preset_nav_task writes them only
+// once the audio output has been silent for presetcache::kSilentMs. Until then the new values
+// live in RAM only (lost on a power cut during uninterrupted playing).
+inline std::atomic<bool> s_deviceSettingsDirty{false};
+inline std::atomic<bool> s_masterClockDirty{false};
+inline std::atomic<bool> s_gpioSettingsDirty{false};
+inline void request_device_settings_save() { s_deviceSettingsDirty.store(true); }
+inline void request_master_clock_save() { s_masterClockDirty.store(true); }
+inline void request_gpio_settings_save() { s_gpioSettingsDirty.store(true); }
 
 /** @brief The live SynthEngine instance - valid once init() has returned successfully. */
 inline SynthEngine &engine() {
@@ -481,11 +491,20 @@ void preset_nav_task(void *) {
         if (xQueueReceive(s_presetNavQueue, &direction, pdMS_TO_TICKS(500)) == pdTRUE) {
             step_preset(direction);
         }
+        liveparam::freeRetired(); // JSON trees the render task has applied (LiveParamMsg.h)
+        // Knob/Button changes to save with the preset (ParamJournal.hpp)
+        paramjournal::tick(synth::deviceSettings().paramAutosave);
         int64_t dirtyUs = s_masterVolumeDirtyUs.load();
         // compare_exchange: a CC arriving during the check keeps the save pending for its own 2 s.
         if (dirtyUs != 0 && esp_timer_get_time() - dirtyUs >= kMasterVolumeSaveDelayUs &&
             s_masterVolumeDirtyUs.compare_exchange_strong(dirtyUs, 0)) {
-            synth::saveDeviceSettingsToFs();
+            s_deviceSettingsDirty.store(true);
+        }
+        // Flash writes only into an output pause, see s_deviceSettingsDirty.
+        if (s_engine.outputSilentFor(presetcache::kSilentMs)) {
+            if (s_deviceSettingsDirty.exchange(false)) synth::saveDeviceSettingsToFs();
+            if (s_masterClockDirty.exchange(false)) synth::saveMasterClockToFs();
+            if (s_gpioSettingsDirty.exchange(false)) Feature::IO::saveGpioSettingsToFs();
         }
     }
 }
@@ -678,9 +697,9 @@ inline esp_err_t init() {
     ensure_storage_directories();
 
     s_presetChangedQueue = xQueueCreate(1, sizeof(PresetChangedMsg));
-    // Event-rate only (WebSocket live-parameter updates, not sample-rate) - PSRAM-backed to
-    // keep this out of the internal-RAM budget (mirrors upstream JoLa-EspressynthP4).
-    s_liveParamQueue = xQueueCreateWithCaps(32, sizeof(LiveParamMsg), MALLOC_CAP_SPIRAM);
+    // Each entry is one pointer to a parsed JSON tree (LiveParamMsg.h), so both queues are tiny.
+    s_liveParamQueue = xQueueCreate(liveparam::kQueueDepth, sizeof(LiveParamMsg));
+    liveparam::gRetiredQueue = xQueueCreate(liveparam::kQueueDepth * 2, sizeof(cJSON *));
 
     char initialPresetPath[300];
     char initialPresetName[presetpaths::kMaxNameLen];
@@ -724,6 +743,7 @@ inline esp_err_t init() {
 
     // Deferred preset writes (PresetWriteCache.hpp): flash writes wait for an output pause.
     presetcache::init([](uint32_t ms) { return s_engine.outputSilentFor(ms); });
+    paramjournal::init(); // before s_engine.begin(): the first preset build already attaches to it
 
     s_engine.begin(codec, secondaryI2sTxHandle, ns4168I2sTxHandle, s_presetChangedQueue, s_liveParamQueue, initialPresetPath,
                    esI2sTxHandle);

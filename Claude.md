@@ -13,11 +13,11 @@ board-specific `SDKCONFIG_DEFAULTS`. The board is selected in menuconfig (Espres
 Configuration) and derives its fixed pins/capabilities itself (main/Kconfig.projbuild, see README
 "Configuration model"). Additional hardware such as WM8960 is not a board default but a feature in menuconfig.
 
-Only exception: `python deploy.py --all` builds release images for all boards except Custom, each in
+Only exception: `python tools/deploy.py --all` builds release images for all boards except Custom, each in
 `build/boards/<board>/` with a generated sdkconfig (`sdkconfig.defaults` + board choice). Only
-deploy.py does this, never by hand. `python deploy.py` without `--all` builds the board selected in menuconfig from the
+tools/deploy.py does this, never by hand. `python tools/deploy.py` without `--all` builds the board selected in menuconfig from the
 root `sdkconfig` into `build/`. Result in each case: `build/EspressiveSynths-<board>.bin`.
 
-Only if `--all` succeeds for all boards: deploy.py replaces `../Espressynth_Website/static/firmware/`
-(per board partition binaries + ESP Web Tools `manifest.json`, flashable via `/flash` on the website) and
+Only if `--all` succeeds for all boards: deploy.py replaces `../../../JoLaBi_Homepage/static/firmware/espressynth/`
+(per board partition binaries + ESP Web Tools `manifest.json`, flashable via `/de/projekte/espressynth/flashen` on jolabi.de) and
 then increments `FIRMWARE_VERSION` in `main/version.h` by 0.01. Do not increment `main/version.h` by hand.

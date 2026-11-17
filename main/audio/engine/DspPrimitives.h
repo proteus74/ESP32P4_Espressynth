@@ -219,7 +219,9 @@ IRAM_ATTR inline float tanhLookup(float value)
 // cycle before a value ever goes subnormal; used on every long-lived
 // feedback state this engine keeps (Biquad/OnePoleLowpass::process,
 // ReverbLight's comb+allpass writes, see NodeInstance.cpp).
-inline float flushDenorm(float x) { return (x > -1e-15f && x < 1e-15f) ? 0.0f : x; }
+// One ordered compare on |x|: the former range test (x > -t && x < t) compiled to two quiet
+// compares, each wrapped in an frflags/fsflags CSR pair, on every sample.
+inline float flushDenorm(float x) { return fabsf(x) < 1e-15f ? 0.0f : x; }
 } // namespace dsp
 
 namespace

@@ -81,6 +81,32 @@ bool eez_synth_load_preset(const char *name);
 void eez_synth_panic(void);
 void eez_synth_step_preset(int direction);
 
+// Settings page and Save button (800x480 layout). Autosave is DeviceSettings.h's paramAutosave.
+bool eez_autosave_get(void);
+void eez_autosave_set(bool on);
+// Stores the Knob/Button changes made since the last save with the current preset
+// (ParamJournal.hpp). False when nothing had changed.
+bool eez_save_parameters(void);
+
+#define EEZ_WIFI_SCAN_CAPACITY 20
+typedef struct EezWifiNetwork {
+    char ssid[33];
+    int8_t rssi;
+    bool secured;
+} EezWifiNetwork;
+typedef struct EezWifiScan {
+    uint16_t count;
+    EezWifiNetwork networks[EEZ_WIFI_SCAN_CAPACITY];
+} EezWifiScan;
+bool eez_wifi_available(void);                         // firmware built with Wi-Fi
+void eez_wifi_configured_ssid(char *out, size_t out_size);
+void eez_wifi_status(char *out, size_t out_size);      // one line for the status label
+// Saves and applies the station settings; an empty password with the already configured SSID
+// keeps the stored password. The (re)connect runs in the background.
+bool eez_wifi_apply(const char *ssid, const char *password);
+bool eez_wifi_scan_start(void);
+int eez_wifi_scan_poll(EezWifiScan *out);              // 0 = running, 1 = done (out filled), -1 = failed
+
 #ifdef __cplusplus
 }
 #endif

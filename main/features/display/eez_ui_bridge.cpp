@@ -452,9 +452,213 @@ void update_runtime_labels()
     set_label_fmt(objects.lbl_ip_address, "IP: %s", ip_address);
 }
 
+#if defined(CONFIG_APP_UI_LAYOUT_800_480)
+// ---- Settings page + Save button. Only the 800x480 EEZ export has these objects so far. ----
+lv_obj_t *s_settings_status = nullptr; // status line, created here (not part of the EEZ export)
+lv_obj_t *s_scan_box = nullptr;        // open "WiFi networks" popup
+EezWifiScan *s_scan = nullptr;         // PSRAM, allocated with the first scan
+bool s_scan_running = false;
+int64_t s_settings_status_hold_us = 0; // a transient message stays until then
+lv_timer_t *s_save_label_timer = nullptr;
+
+void settings_message(const char *text, int64_t hold_us)
+{
+    set_label_text(s_settings_status, text);
+    s_settings_status_hold_us = esp_timer_get_time() + hold_us;
+}
+
+// The keyboard types into whichever text field was tapped last.
+void action_settings_focus(lv_event_t *e)
+{
+    lv_keyboard_set_textarea(objects.settings_keyboard, static_cast<lv_obj_t *>(lv_event_get_target(e)));
+}
+
+// Keyboard "OK": save the network and (re)connect.
+void action_settings_apply_wifi(lv_event_t *)
+{
+    const char *ssid = lv_textarea_get_text(objects.txt_settings_ssid);
+    const bool applied = eez_wifi_apply(ssid, lv_textarea_get_text(objects.txt_settings_password));
+    settings_message(!applied ? "Could not save the WiFi settings"
+                              : ssid[0] != '\0' ? "Saved - connecting..." : "WiFi network removed", 5000000);
+    if (applied) lv_textarea_set_text(objects.txt_settings_password, "");
+}
+
+void action_settings_pick_network(lv_event_t *e)
+{
+    const auto index = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    if (s_scan != nullptr && index < s_scan->count) {
+        lv_textarea_set_text(objects.txt_settings_ssid, s_scan->networks[index].ssid);
+        lv_textarea_set_text(objects.txt_settings_password, "");
+        lv_keyboard_set_textarea(objects.settings_keyboard, objects.txt_settings_password);
+        settings_message("Enter the password, then press OK on the keyboard", 8000000);
+    }
+    // Async: this handler runs on a button inside the box being closed.
+    if (s_scan_box != nullptr) lv_msgbox_close_async(s_scan_box);
+}
+
+void show_scan_results()
+{
+    if (s_scan_box != nullptr || s_scan == nullptr) return;
+    lv_obj_t *box = lv_msgbox_create(nullptr);
+    s_scan_box = box;
+    lv_obj_add_event_cb(box, [](lv_event_t *) { s_scan_box = nullptr; }, LV_EVENT_DELETE, nullptr);
+    lv_obj_set_width(box, 560);
+    lv_obj_set_style_text_font(lv_msgbox_add_title(box, "WiFi networks"), &lv_font_montserrat_18, 0);
+    // Tapping the dimmed backdrop (outside the box) closes the popup.
+    lv_obj_add_event_cb(lv_obj_get_parent(box), [](lv_event_t *e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e))
+            lv_msgbox_close(static_cast<lv_obj_t *>(lv_event_get_user_data(e)));
+    }, LV_EVENT_CLICKED, box);
+
+    lv_obj_t *content = lv_msgbox_get_content(box);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    lv_obj_t *list = lv_list_create(content);
+    lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(list, 380, 0);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    uint16_t shown = 0;
+    for (uint16_t i = 0; i < s_scan->count; ++i) {
+        const EezWifiNetwork &network = s_scan->networks[i];
+        bool duplicate = network.ssid[0] == '\0'; // hidden networks cannot be picked by name
+        for (uint16_t k = 0; k < i && !duplicate; ++k) duplicate = strcmp(s_scan->networks[k].ssid, network.ssid) == 0;
+        if (duplicate) continue;
+        char text[64];
+        snprintf(text, sizeof(text), "%s   %d dBm%s", network.ssid, network.rssi, network.secured ? "" : "  (open)");
+        lv_obj_t *button = lv_list_add_button(list, LV_SYMBOL_WIFI, text);
+        lv_obj_set_height(button, 56);
+        lv_obj_set_style_text_font(button, &lv_font_montserrat_18, 0);
+        lv_obj_add_event_cb(button, action_settings_pick_network, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+        ++shown;
+    }
+    if (shown == 0) lv_label_set_text(lv_label_create(content), "No networks found");
+}
+
+void action_settings_scan(lv_event_t *)
+{
+    if (s_scan_running) return;
+    if (s_scan == nullptr)
+        s_scan = static_cast<EezWifiScan *>(heap_caps_calloc(1, sizeof(EezWifiScan), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (s_scan == nullptr || !eez_wifi_scan_start()) {
+        settings_message("Scan could not be started", 4000000);
+        return;
+    }
+    s_scan_running = true;
+    settings_message("Scanning...", 30000000);
+}
+
+void action_autosave_changed(lv_event_t *)
+{
+    eez_autosave_set(lv_obj_has_state(objects.chk_settings_autosave, LV_STATE_CHECKED));
+}
+
+void action_open_settings(lv_event_t *)
+{
+    if (eez_wifi_available()) {
+        char ssid[33] = {};
+        eez_wifi_configured_ssid(ssid, sizeof(ssid));
+        lv_textarea_set_text(objects.txt_settings_ssid, ssid);
+        lv_textarea_set_text(objects.txt_settings_password, "");
+        lv_keyboard_set_textarea(objects.settings_keyboard, objects.txt_settings_ssid);
+    }
+    s_settings_status_hold_us = 0;
+    loadScreen(SCREEN_ID_PAGE_SETTINGS);
+}
+
+void action_close_settings(lv_event_t *)
+{
+    if (s_scan_box != nullptr) lv_msgbox_close(s_scan_box);
+    loadScreen(SCREEN_ID_MAIN);
+}
+
+// Save button on the main screen: one explicit save of the Knob/Button changes; the button
+// text confirms for a moment what happened.
+void action_save_parameters(lv_event_t *)
+{
+    lv_label_set_text(lv_obj_get_child(objects.btn_save_parameter, 0), eez_save_parameters() ? "Saved" : "No changes");
+    if (s_save_label_timer != nullptr) lv_timer_delete(s_save_label_timer);
+    s_save_label_timer = lv_timer_create([](lv_timer_t *) {
+        lv_label_set_text(lv_obj_get_child(objects.btn_save_parameter, 0), "Save Parameter");
+        s_save_label_timer = nullptr; // one-shot: LVGL deletes it after this call
+    }, 1500, nullptr);
+    lv_timer_set_repeat_count(s_save_label_timer, 1);
+}
+
+void setup_settings_page()
+{
+    lv_obj_add_event_cb(objects.btn_settings, action_open_settings, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(objects.btn_back_1, action_close_settings, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(objects.btn_save_parameter, action_save_parameters, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(objects.chk_settings_autosave, action_autosave_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    s_settings_status = lv_label_create(objects.page_settings);
+    lv_obj_set_pos(s_settings_status, 270, 99);
+    lv_obj_set_width(s_settings_status, 520);
+    lv_label_set_long_mode(s_settings_status, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_style_text_font(s_settings_status, &lv_font_montserrat_18, 0);
+    lv_label_set_text(s_settings_status, "");
+
+    lv_obj_t *const wifi_objects[] = {objects.lbl_title_settings_1, objects.lbl_title_settings_2, objects.txt_settings_ssid,
+                                      objects.txt_settings_password, objects.btn_setting_scan, objects.settings_keyboard};
+    if (!eez_wifi_available()) {
+        // No Wi-Fi in this firmware: only the Autosave switch remains.
+        for (lv_obj_t *obj : wifi_objects) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    for (lv_obj_t *field : {objects.txt_settings_ssid, objects.txt_settings_password}) {
+        lv_textarea_set_one_line(field, true);
+        lv_obj_set_style_text_font(field, &lv_font_montserrat_18, 0);
+        lv_obj_add_event_cb(field, action_settings_focus, LV_EVENT_FOCUSED, nullptr);
+        lv_obj_add_event_cb(field, action_settings_focus, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_textarea_set_max_length(objects.txt_settings_ssid, 32);
+    lv_textarea_set_max_length(objects.txt_settings_password, 64);
+    lv_textarea_set_password_mode(objects.txt_settings_password, true);
+    lv_textarea_set_placeholder_text(objects.txt_settings_ssid, "Network name");
+    lv_textarea_set_placeholder_text(objects.txt_settings_password, "Password (empty = keep / open network)");
+    lv_keyboard_set_textarea(objects.settings_keyboard, objects.txt_settings_ssid);
+    lv_obj_add_event_cb(objects.settings_keyboard, action_settings_apply_wifi, LV_EVENT_READY, nullptr);
+    lv_obj_add_event_cb(objects.btn_setting_scan, action_settings_scan, LV_EVENT_CLICKED, nullptr);
+}
+
+// Only while the settings page is shown: follow the Autosave setting (it can change in the
+// web UI too), collect a finished scan, refresh the connection status line.
+void settings_tick()
+{
+    if (lv_screen_active() != objects.page_settings) return;
+    const bool autosave = eez_autosave_get();
+    if (lv_obj_has_state(objects.chk_settings_autosave, LV_STATE_CHECKED) != autosave)
+        lv_obj_set_state(objects.chk_settings_autosave, LV_STATE_CHECKED, autosave);
+    if (!eez_wifi_available()) return;
+
+    if (s_scan_running) {
+        const int state = eez_wifi_scan_poll(s_scan);
+        if (state == 0) return;
+        s_scan_running = false;
+        if (state < 0) {
+            settings_message("Scan failed", 4000000);
+        } else {
+            s_settings_status_hold_us = 0;
+            show_scan_results();
+        }
+    }
+    static int64_t previous_status_us = 0;
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us < s_settings_status_hold_us || now_us - previous_status_us < 2000000) return;
+    previous_status_us = now_us;
+    char status[72] = {};
+    eez_wifi_status(status, sizeof(status));
+    set_label_text(s_settings_status, status);
+}
+#else
+void setup_settings_page() {}
+void settings_tick() {}
+#endif
+
 void timer_callback(lv_timer_t *)
 {
     update_runtime_labels();
+    settings_tick();
     ui_tick();
 }
 
@@ -511,6 +715,7 @@ void init()
     lv_obj_add_event_cb(objects.tbl_presets, action_select_preset, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(objects.btn_back, action_back_to_main, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(objects.btn_pages, action_open_pages, LV_EVENT_CLICKED, nullptr);
+    setup_settings_page();
     // Populate caches while the startup splash is still visible.
     s_timer = lv_timer_create(timer_callback, 33, nullptr);
 }

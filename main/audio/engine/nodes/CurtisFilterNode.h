@@ -150,7 +150,7 @@ inline void updateCoefficients(CurtisFilterState &s, float cutoffCv, float reson
 // Derives the requested response from the ladder taps. `last`/`prev` are the
 // final two one-pole outputs, which behave like a two-pole section - the same
 // identity the CEM3320's configurable wiring exploits (LP + 2*BP + HP = in).
-inline float outputForKind(FilterKind kind, float input, float prev, float last, float shelfGainDb)
+inline float outputForKind(FilterKind kind, float input, float prev, float last, float shelfMix)
 {
     const float lowpass = last;
     const float bandpass = prev - last;
@@ -170,9 +170,9 @@ inline float outputForKind(FilterKind kind, float input, float prev, float last,
     case FilterKind::AllPass:
         return input - 4.0f * bandpass;
     case FilterKind::LowShelf:
-        return input + (powf(10.0f, shelfGainDb / 20.0f) - 1.0f) * lowpass;
+        return input + shelfMix * lowpass;
     case FilterKind::HighShelf:
-        return input + (powf(10.0f, shelfGainDb / 20.0f) - 1.0f) * highpass;
+        return input + shelfMix * highpass;
     }
     return lowpass;
 }
@@ -228,6 +228,10 @@ inline void render(NodeInstance &inst, size_t frames)
         updateCoefficients(s, s.cutoffCv, s.resonanceCv, poles);
     }
 
+    // Linear shelf gain minus one. It only depends on the scalar resonanceCv, so one powf()
+    // per block instead of one per sample.
+    const float shelfMix = isShelfKind(kind) ? powf(10.0f, shelfGainDbFromCv(s.resonanceCv) / 20.0f) - 1.0f : 0.0f;
+
     for (size_t i = 0; i < frames; ++i)
     {
         if (cutoffAudioFed || resonanceAudioFed)
@@ -257,8 +261,7 @@ inline void render(NodeInstance &inst, size_t frames)
             previous = chain;
             chain = processStage(s, p, chain);
         }
-        const float shelfGainDb = isShelfKind(kind) ? shelfGainDbFromCv(s.resonanceCv) : 0.0f;
-        const float output = outputForKind(kind, input, previous, chain, shelfGainDb);
+        const float output = outputForKind(kind, input, previous, chain, shelfMix);
         // tanhLookup is intrinsically bounded to +/-1, so asymmetricClip is
         // already guaranteed to remain inside the audio voltage domain.
         inst.outL[i] = asymmetricClip(output);

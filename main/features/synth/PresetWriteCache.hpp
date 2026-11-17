@@ -184,6 +184,20 @@ inline bool hasPending(const char *path)
     return pending;
 }
 
+// Drops a pending write for `path` without writing it (the file is being deleted).
+inline void discard(const char *path)
+{
+    if (!ready()) return;
+    detail::lock();
+    if (Entry *e = detail::find(path))
+    {
+        heap_caps_free(e->data);
+        e->data = nullptr;
+        e->size = 0;
+    }
+    detail::unlock();
+}
+
 // Writes everything pending now (preset change, backup export). Blocks the caller for the
 // flash write - only from tasks that may stall (httpd, LVGL), never the render task.
 inline void flushAll()

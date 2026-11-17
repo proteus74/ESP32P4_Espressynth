@@ -291,6 +291,34 @@ presetSelect.addEventListener("change", () => {
   loadPresetByName(presetSelect.value, { activate: true });
 });
 
+// "Autosave" toggle (device setting paramAutosave, shared by every browser and by the
+// device itself): parameter changes are saved into the current preset on their own - see
+// markDirty()/scheduleParamAutosave() for the browser side, ParamJournal.hpp for changes made
+// by MIDI CC or on the touch screen while no browser is open.
+const paramAutosaveBtn = document.getElementById("paramAutosaveBtn");
+
+function setParamAutosaveUi(on) {
+  paramAutosaveEnabled = on;
+  paramAutosaveBtn.classList.toggle("active", on);
+  paramAutosaveBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  paramAutosaveBtn.textContent = on ? "Autosave: On" : "Autosave: Off";
+}
+
+paramAutosaveBtn.addEventListener("click", () => {
+  const on = !paramAutosaveEnabled;
+  setParamAutosaveUi(on);
+  wsSend({ type: "paramUpdate", widgetId: "@deviceSettings", params: { paramAutosave: on } });
+  showToast(!on ? "Autosave off"
+    : currentPresetName === null ? "Autosave on - starts once this new preset has been saved"
+    : "Autosave on: every change is saved with the preset");
+  if (on) scheduleParamAutosave(); // what is on screen now becomes the saved state
+});
+
+fetch("/api/settings/device")
+  .then((res) => res.json())
+  .then((data) => { if (typeof data.paramAutosave === "boolean") setParamAutosaveUi(data.paramAutosave); })
+  .catch(() => {});
+
 document.getElementById("menuNew").addEventListener("click", (e) => {
   e.stopPropagation();
   menuItems.forEach((m) => m.classList.remove("open"));
@@ -1426,7 +1454,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "value", label: "" }],
   },
   switch: {
-    label: "Input-Switch",
+    label: "Input Switch",
     icon: "🔀",
     inputs: [
       { id: "in1", label: "In 1" },
@@ -1435,7 +1463,7 @@ const WIDGET_TYPES = {
     outputs: [{ id: "value", label: "Out" }],
   },
   multiplexer: {
-    label: "Input-Multiplexer",
+    label: "Input Multiplexer",
     icon: "🎯",
     // Static/default shape (2 inputs) - live input count (2-16) is handled by
     // renderMultiplexerPorts() below, same pattern as Mixer.
@@ -2848,6 +2876,69 @@ function switchPage(name) {
 }
 
 const pageTabList = document.getElementById("pageTabList");
+
+// Tab bar overflow: no scrollbar. While the tabs do not fit, an arrow at each end scrolls the
+// bar and a menu button lists every page for direct selection.
+const pageTabScrollLeft = document.getElementById("pageTabScrollLeft");
+const pageTabScrollRight = document.getElementById("pageTabScrollRight");
+const pageTabMenuBtn = document.getElementById("pageTabMenuBtn");
+const pageTabListMenu = document.getElementById("pageTabListMenu");
+
+function updatePageTabScrollButtons() {
+  const overflow = pageTabList.scrollWidth > pageTabList.clientWidth + 1;
+  [pageTabScrollLeft, pageTabScrollRight, pageTabMenuBtn].forEach((btn) => btn.classList.toggle("hidden", !overflow));
+  pageTabScrollLeft.disabled = pageTabList.scrollLeft <= 0;
+  pageTabScrollRight.disabled = pageTabList.scrollLeft + pageTabList.clientWidth >= pageTabList.scrollWidth - 1;
+}
+
+function scrollPageTabs(direction) {
+  pageTabList.scrollBy({ left: direction * Math.max(pageTabList.clientWidth * 0.6, 120), behavior: "smooth" });
+}
+
+pageTabScrollLeft.addEventListener("click", () => scrollPageTabs(-1));
+pageTabScrollRight.addEventListener("click", () => scrollPageTabs(1));
+pageTabList.addEventListener("scroll", updatePageTabScrollButtons);
+pageTabList.addEventListener("wheel", (event) => {
+  if (event.deltaY === 0 || pageTabList.scrollWidth <= pageTabList.clientWidth) return;
+  event.preventDefault();
+  pageTabList.scrollLeft += event.deltaY;
+}, { passive: false });
+new ResizeObserver(updatePageTabScrollButtons).observe(pageTabList);
+// Tabs added, removed, renamed or reordered change the overflow; a tab that becomes the active
+// one (also when picked from the menu or switched to by code) is scrolled into view.
+new MutationObserver((mutations) => {
+  mutations.forEach((mutation) => {
+    const tab = mutation.target;
+    if (mutation.type === "attributes" && tab.classList?.contains("page-tab") && tab.classList.contains("active") &&
+        !(mutation.oldValue || "").split(" ").includes("active")) {
+      tab.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    }
+  });
+  updatePageTabScrollButtons();
+}).observe(pageTabList, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+
+pageTabMenuBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (!pageTabListMenu.classList.contains("hidden")) {
+    pageTabListMenu.classList.add("hidden");
+    return;
+  }
+  pageTabListMenu.innerHTML = "";
+  pageTabList.querySelectorAll(".page-tab").forEach((tab) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = tab.textContent;
+    item.classList.toggle("current", tab.classList.contains("active"));
+    item.addEventListener("click", () => switchPage(tab.dataset.page));
+    pageTabListMenu.appendChild(item);
+  });
+  pageTabListMenu.classList.remove("hidden");
+  const anchor = pageTabMenuBtn.getBoundingClientRect();
+  const menu = pageTabListMenu.getBoundingClientRect();
+  pageTabListMenu.style.top = `${anchor.bottom + 2}px`;
+  pageTabListMenu.style.left = `${Math.max(8, Math.min(anchor.right - menu.width, window.innerWidth - menu.width - 8))}px`;
+});
+document.addEventListener("click", () => pageTabListMenu.classList.add("hidden"));
 const pageTabContextMenu = document.getElementById("pageTabContextMenu");
 let contextPageName = null;
 
@@ -3723,12 +3814,12 @@ function createWidget(type, label, x, y, forcedId) {
     });
     const body = document.createElement("div");
     body.className = "widget-instance-body midi-filter-body";
-    for (const [parameter, title, maximum] of [["channel", "Kanal", 15], ["note", "Note", 127]]) {
+    for (const [parameter, title, maximum] of [["channel", "Channel", 15], ["note", "Note", 127]]) {
       const label = document.createElement("label");
       label.textContent = title;
       const select = document.createElement("select");
       select.dataset.role = `midi-filter-${parameter}`;
-      select.add(new Option("Alle", "-1"));
+      select.add(new Option("All", "-1"));
       for (let value = 0; value <= maximum; value += 1) {
         const name = parameter === "channel" ? String(value + 1) :
           `${value} · ${["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"][value % 12]}${Math.floor(value / 12) - 1}`;
@@ -4499,7 +4590,7 @@ function createWidget(type, label, x, y, forcedId) {
     const selector = document.createElement("div");
     selector.className = "switch multiplexer-switch";
     selector.setAttribute("role", "img");
-    selector.setAttribute("aria-label", "Aktiver Multiplexer-Eingang");
+    selector.setAttribute("aria-label", "Active multiplexer input");
     const track = document.createElement("span");
     track.className = "switch-track";
     const thumb = document.createElement("span");
@@ -4548,7 +4639,7 @@ function createWidget(type, label, x, y, forcedId) {
     const selector = document.createElement("div");
     selector.className = "switch multiplexer-switch";
     selector.setAttribute("role", "img");
-    selector.setAttribute("aria-label", "Aktiver Output-Multiplexer-Ausgang");
+    selector.setAttribute("aria-label", "Active output multiplexer output");
     const track = document.createElement("span");
     track.className = "switch-track";
     const thumb = document.createElement("span");
@@ -5274,7 +5365,7 @@ function createWidget(type, label, x, y, forcedId) {
     const downButton = document.createElement("button");
     downButton.className = "button-trigger up-down-button-down";
     downButton.type = "button";
-    downButton.title = "Wert verringern";
+    downButton.title = "Decrease value";
     downButton.textContent = "▼";
     downButton.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -5288,7 +5379,7 @@ function createWidget(type, label, x, y, forcedId) {
     const upButton = document.createElement("button");
     upButton.className = "button-trigger up-down-button-up";
     upButton.type = "button";
-    upButton.title = "Wert erhoehen";
+    upButton.title = "Increase value";
     upButton.textContent = "▲";
     upButton.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -13361,6 +13452,7 @@ function learnedOrNull(value) {
 
 // Mirrors GET /api/settings/device (DeviceSettings.h's formatDeviceSettingsJson()).
 function applyGlobalMidiDeviceSettings(data) {
+  if (typeof data.paramAutosave === "boolean") setParamAutosaveUi(data.paramAutosave);
   presetPrevCc = learnedOrNull(data.prevCc);
   presetPrevChannel = learnedOrNull(data.prevChannel);
   presetNextCc = learnedOrNull(data.nextCc);
@@ -15989,17 +16081,17 @@ document.getElementById("graphicEqSettingsSave").addEventListener("click", () =>
     });
     const rangeIndex = frequencies.findIndex((hz) => !Number.isFinite(hz) || hz < 20 || hz > 20000);
     if (rangeIndex >= 0) {
-      setGraphicEqSettingsError(`Band ${rangeIndex + 1} muss zwischen 20 und 20000 Hz liegen.`);
+      setGraphicEqSettingsError(`Band ${rangeIndex + 1} must be between 20 and 20000 Hz.`);
       return;
     }
     const integerIndex = frequencies.findIndex((hz) => !Number.isInteger(hz));
     if (integerIndex >= 0) {
-      setGraphicEqSettingsError(`Band ${integerIndex + 1} muss eine ganze Zahl sein.`);
+      setGraphicEqSettingsError(`Band ${integerIndex + 1} must be a whole number.`);
       return;
     }
     const orderIndex = frequencies.findIndex((hz, i) => i > 0 && hz <= frequencies[i - 1]);
     if (orderIndex >= 0) {
-      setGraphicEqSettingsError(`Band ${orderIndex + 1} muss höher als Band ${orderIndex} liegen.`);
+      setGraphicEqSettingsError(`Band ${orderIndex + 1} must be higher than band ${orderIndex}.`);
       return;
     }
     state.frequencies = frequencies;
@@ -20371,7 +20463,7 @@ function dedupeConnections(list) {
     deduped.push(c);
   });
   if (removedCount > 0) {
-    appendLog(`${removedCount} doppelte Verbindung(en) beim Laden entfernt.`);
+    appendLog(`Removed ${removedCount} duplicate connection(s) while loading.`);
   }
   return deduped;
 }
@@ -21028,12 +21120,12 @@ function startConnectionDrag(e, fromDot) {
       const toPortId = target.dataset.portId;
 
       if (fromWidgetId === toWidgetId) {
-        appendLog("Verbindung abgelehnt: Ausgang und Eingang gehoeren zum selben Widget.");
+        appendLog("Connection rejected: output and input belong to the same widget.");
         return;
       }
 
       if (connectionExists(fromWidgetId, fromPortId, toWidgetId, toPortId)) {
-        appendLog("Verbindung abgelehnt: Diese Verbindung existiert bereits.");
+        appendLog("Connection rejected: this connection already exists.");
         return;
       }
 
@@ -24511,9 +24603,26 @@ let pendingPresetName = null;
 let presetLoadGeneration = 0;
 let presetDescription = { title: "", description: "", longDescription: "", author: "" };
 
-async function saveToServer(name) {
+// Every save of a named preset shows on the Autosave button while Autosave is on: its ring
+// flashes green once the device has confirmed the save, red when the save failed. That covers
+// the debounced autosave as well as the immediate saves of structural edits (new cable,
+// added/removed widget - savePresetNow()) and the explicit Save.
+async function saveToServer(name, options) {
+  const saved = await postPresetToServer(name, options);
+  if (paramAutosaveEnabled && name) {
+    paramAutosaveBtn.classList.remove("saved", "save-failed");
+    void paramAutosaveBtn.offsetWidth; // restart the animation when saves follow each other
+    paramAutosaveBtn.classList.add(saved ? "saved" : "save-failed");
+  }
+  return saved;
+}
+
+async function postPresetToServer(name, { reload = true } = {}) {
   try {
-    const url = name ? `/api/preset?name=${encodeURIComponent(name)}` : "/api/preset";
+    // reload=0: only parameter values changed - the device keeps its running graph instead of
+    // rebuilding it (a rebuild drops every held note), see scheduleParamAutosave().
+    const query = [name ? `name=${encodeURIComponent(name)}` : "", reload ? "" : "reload=0"].filter(Boolean).join("&");
+    const url = query ? `/api/preset?${query}` : "/api/preset";
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -24671,7 +24780,116 @@ async function handleNewPreset({ template = "empty" } = {}) {
 // scheduleAnnotationSave's pattern) to fix call sites that had NO other
 // persistence path - that reintroduced exactly the audio-dropout-on-tweak
 // problem this comment now documents, so it was reverted back to a no-op.
-function markDirty() {}
+//
+// With "Autosave" on (paramAutosaveBtn) it IS an autosave trigger, without the dropout: the
+// save goes out with reload=0, so the firmware only stores the file and keeps the running
+// graph - which already has every value through the live paramUpdate path.
+// `var`, not `let`: markDirty() may run before this line during module start-up.
+var paramAutosaveEnabled = false;
+var paramAutosaveTimer = null;
+var deviceFollowDepth = 0; // > 0 while a change made ON the device (MIDI CC, touch) is followed
+const PARAM_AUTOSAVE_DELAY_MS = 1500;
+
+function scheduleParamAutosave() {
+  // A new preset that was never saved (unnamed slot) is left alone until its first Save As.
+  if (!paramAutosaveEnabled || restoringPreset || currentPresetName === null) return;
+  clearTimeout(paramAutosaveTimer);
+  paramAutosaveTimer = setTimeout(() => {
+    paramAutosaveTimer = null;
+    runParamAutosave();
+  }, PARAM_AUTOSAVE_DELAY_MS);
+}
+
+// The autosave itself; saveToServer() flashes the button's ring.
+async function runParamAutosave() {
+  if (!paramAutosaveEnabled || restoringPreset || currentPresetName === null) return;
+  await saveToServer(currentPresetName, { reload: false });
+}
+
+// A pending autosave must reach the device before the preset is switched away from.
+async function flushParamAutosave() {
+  if (!paramAutosaveTimer) return;
+  clearTimeout(paramAutosaveTimer);
+  paramAutosaveTimer = null;
+  await runParamAutosave();
+}
+
+// Marks the rest of the current (synchronous) WebSocket message handler as following the
+// device: what it changes are real edits made there, unlike cable-driven value changes.
+function followDeviceMessage() {
+  deviceFollowDepth++;
+  queueMicrotask(() => { deviceFollowDepth--; });
+}
+
+function markDirty() {
+  // Under deviceSyncMuteDepth a value merely follows a cable (see deliverToWidget()) - not an
+  // edit, unless it mirrors a change made on the device itself.
+  if (deviceSyncMuteDepth > 0 && deviceFollowDepth === 0) return;
+  scheduleParamAutosave();
+}
+
+// Applies one journaled Knob/Button value (ParamJournal.hpp) to this page's state, also on a
+// layer that is not the active one - applyDeviceParamUpdate() only follows the active layer.
+function applyJournalEntry(widgetId, params) {
+  if (typeof params.knobIndex === "number" && typeof params.raw === "number") {
+    const state = knobStates.get(widgetId);
+    const controlIndex = params.knobIndex - 1;
+    const layerIndex = Math.floor(controlIndex / KNOB_MAX_COUNT);
+    if (state && layerIndex !== state.activeLayer) {
+      const control = knobLayer(state, layerIndex)?.controls[controlIndex % KNOB_MAX_COUNT];
+      if (control) {
+        control.raw = clamp(Math.round(params.raw), 0, 127);
+        markDirty();
+      }
+      return;
+    }
+  } else if (typeof params.buttonIndex === "number") {
+    const state = buttonStates.get(widgetId);
+    const controlIndex = params.buttonIndex - 1;
+    const layerIndex = Math.floor(controlIndex / BUTTON_MAX_COUNT);
+    if (state && layerIndex !== state.activeLayer) {
+      const control = buttonLayer(state, layerIndex)?.controls[controlIndex % BUTTON_MAX_COUNT];
+      if (control) {
+        if (typeof params.listIndex === "number") control.listIndex = params.listIndex;
+        if (typeof params.wasAbove === "number") control.wasAbove = params.wasAbove !== 0;
+        markDirty();
+      }
+      return;
+    }
+  }
+  applyDeviceParamUpdate(widgetId, params);
+}
+
+// After a preset load: Knob/Button values the device saved on its own (MIDI CC or touch
+// screen, no browser open) live in a journal next to the preset, not in the preset file.
+// Taking them over here makes this page's state complete again; the next save (automatic
+// with Autosave on) writes them into the preset and the device clears the journal.
+async function applyDeviceJournal() {
+  const generation = presetLoadGeneration;
+  const expected = currentPresetName ? `/${currentPresetName}.json` : "/current.json";
+  try {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const res = await fetch("/api/preset/live");
+      if (!res.ok || generation !== presetLoadGeneration) return;
+      const journal = await res.json();
+      // The device attaches a newly selected preset a moment after the select request.
+      if (typeof journal.path !== "string" || !journal.path.endsWith(expected)) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        continue;
+      }
+      if (generation !== presetLoadGeneration || !Array.isArray(journal.entries)) return;
+      deviceFollowDepth++;
+      try {
+        journal.entries.forEach((entry) => applyJournalEntry(entry.widgetId, entry.params || {}));
+      } finally {
+        deviceFollowDepth--;
+      }
+      return;
+    }
+  } catch (err) {
+    // Firmware without a journal: nothing to take over.
+  }
+}
 
 
 
@@ -24717,6 +24935,9 @@ function applyDeviceParamUpdate(widgetId, params) {
 function sendLiveParamUpdate(widgetId, params) {
   if (deviceSyncMuteDepth > 0) return; // see deliverToWidget()
   wsSend({ type: "paramUpdate", widgetId, params });
+  // Every value sent to the running engine is an edit worth saving - not every call site
+  // also calls markDirty(). Device-global settings ("@deviceSettings", ...) are not preset data.
+  if (!widgetId.startsWith("@")) scheduleParamAutosave();
 }
 
 
@@ -25199,6 +25420,7 @@ async function loadPresetOnStartup() {
     const data = await res.json();
     currentPresetName = headerName || null;
     await applyPresetData(data, { fitToView: true });
+    await applyDeviceJournal();
     await refreshPresetMenu();
   } catch (err) {
     appendLog(`Preset could not be loaded: ${err.message}`);
@@ -25211,6 +25433,7 @@ async function loadPresetOnStartup() {
 async function loadPresetByName(name, { activate = true } = {}) {
   const generation = ++presetLoadGeneration;
   if (activate) pendingPresetName = name || "";
+  if (activate) await flushParamAutosave();
   try {
     if (activate) {
       const selectUrl = name
@@ -25228,6 +25451,7 @@ async function loadPresetByName(name, { activate = true } = {}) {
     if (generation !== presetLoadGeneration) return;
     currentPresetName = headerName || null;
     await applyPresetData(data, { fitToView: true });
+    await applyDeviceJournal();
     await refreshPresetMenu();
   } catch (err) {
     if (generation !== presetLoadGeneration) return;
@@ -25520,9 +25744,14 @@ function connectWs() {
       }
     } else if (data.type === "masterClock") {
       applyMasterClockBroadcast(data);
+    } else if (data.type === "deviceSettings") {
+      // Autosave switched on the device's touch screen.
+      if (typeof data.paramAutosave === "boolean") setParamAutosaveUi(data.paramAutosave);
     } else if (data.type === "deviceParamUpdate") {
+      followDeviceMessage();
       applyDeviceParamUpdate(data.widgetId, data.params || {});
     } else if (data.type === "midi") {
+      followDeviceMessage();
       appendLog(`[${data.time}] ${data.port}: ${data.message}`);
       // A CC consumed by an FM8 MIDI learn is not routed anywhere else.
       if (handleFm8Midi(data, fm8States, refreshFm8Summary)) {

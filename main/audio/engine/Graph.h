@@ -322,6 +322,17 @@ public:
     ControlRoute controlRoutes[synth::kMaxConnections];
     uint16_t controlRouteCount = 0;
     ControlDebugEvent controlDebugEvents[32] = {};
+    // Controls (widget, control index) whose value changed since the render task last looked -
+    // every change passes recordControlDebug(). SynthEngine reports them to the parameter
+    // journal (ParamJournal.hpp); journalTag names this graph there.
+    struct ControlChange
+    {
+        uint16_t widget;
+        uint8_t side;
+    };
+    ControlChange changedControls[32] = {};
+    uint8_t changedControlCount = 0;
+    uint16_t journalTag = 0;
     uint8_t controlDebugEventCount = 0;
     uint32_t controlDebugDropped = 0;
 
@@ -1194,6 +1205,11 @@ inline void deliverRawMidi(Graph &graph, uint16_t source, const UsbMidiEvent &ev
 inline void Graph::recordControlDebug(uint16_t widget, uint8_t side, bool fromUi,
                                      uint8_t channel, uint8_t cc, uint8_t raw)
 {
+    bool alreadyChanged = false;
+    for (uint8_t i = 0; i < changedControlCount && !alreadyChanged; ++i)
+        alreadyChanged = changedControls[i].widget == widget && changedControls[i].side == side;
+    if (!alreadyChanged && changedControlCount < 32) changedControls[changedControlCount++] = {widget, side};
+
     // Coalesce successive positions of the same control until it is flushed
     // (possibly several blocks later - see flushControlDebug's maxEvents).
     for (uint8_t i = 0; i < controlDebugEventCount; ++i)
