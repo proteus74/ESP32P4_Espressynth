@@ -27,6 +27,7 @@ Built with ESP-IDF 6.1 · [Apache License 2.0](LICENSE)
 | JC8012P4A1 | 10.1" 1280x800 MIPI DSI, touch | ES8311 | ESP32-C6 co-processor |
 | JC1060P470C | 7" 1024x600 MIPI DSI, touch | ES8311 | ESP32-C6 co-processor, Ethernet |
 | Waveshare ESP32-P4-WIFI6-DEV-KIT | none | ES8311 | ESP32-P4 v1.x, Ethernet; WM8960 Audio HAT supported ([wiring](documentation/Boards/Waveshare_ESP32-P4-WIFI6_mit_WM8960_HAT.md)) |
+| Waveshare ESP32-P4-Nano | optional MIPI DSI | ES8311 + mono speaker amp, microphone | ESP32-P4 v1.x, Ethernet, one USB-A port; pin layout like the dev kit ([notes](documentation/Boards/Waveshare_ESP32-P4-Nano.md), not yet run on hardware) |
 | Elecrow CrowPanel Advanced 5" | 5" 800x480 parallel RGB, touch | NS4168 amp, PDM mic | ESP32-P4 v1.x |
 | Custom ESP32-P4 board | configurable | configurable | all pins set in menuconfig |
 
@@ -43,7 +44,7 @@ Add-on hardware is not tied to a board. Enable and wire it in menuconfig on whic
 
 ### Option A: flash a ready-made image
 
-Release images for every board (merged bootloader, firmware, co-processor firmware, web editor and seed data) can be flashed from the browser with ESP Web Tools: [jolabi.de, Espressynth flashen](https://jolabi.de/de/projekte/espressynth/flashen). With `esptool`:
+Release images for every board (merged bootloader, firmware, co-processor firmware, web editor and seed data) can be flashed from the browser with ESP Web Tools: [jolabi.de, Espressynth flashen](https://jolabi.de/en/projects/espressynth/flash). With `esptool`:
 
 ```powershell
 python -m esptool --chip esp32p4 -p <COM-Port> write-flash 0x0 EspressiveSynths-<board>.bin

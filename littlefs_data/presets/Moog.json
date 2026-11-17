@@ -81,7 +81,7 @@
           "params": {
             "waveType": "triangle",
             "amplitude": 1,
-            "tune": 4.9942,
+            "tune": 4.9953,
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 5,
@@ -106,7 +106,7 @@
           "params": {
             "waveType": "linear-up",
             "amplitude": 1,
-            "tune": 4.9942,
+            "tune": 4.9953,
             "ratioCoarse": 0.3225806451612903,
             "ratioFine": 0,
             "detune": 8.5,
@@ -606,6 +606,20 @@
             "dryLevelCurve": "linear",
             "bypass": false
           }
+        },
+        {
+          "id": "widget-152",
+          "type": "es8311-out",
+          "label": "ES8311-Out",
+          "ui": {
+            "x": -800,
+            "y": -420,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
         }
       ],
       "connections": [
@@ -656,9 +670,33 @@
             "portId": "right"
           },
           "color": "#fbbf24"
+        },
+        {
+          "id": "conn-295",
+          "from": {
+            "widgetId": "widget-72",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-152",
+            "portId": "left"
+          },
+          "color": "#f87171"
+        },
+        {
+          "id": "conn-296",
+          "from": {
+            "widgetId": "widget-72",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-152",
+            "portId": "right"
+          },
+          "color": "#fbbf24"
         }
       ]
     }
   },
-  "firmwareVersion": "0.35"
+  "firmwareVersion": "0.36"
 }

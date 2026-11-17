@@ -1,0 +1,111 @@
+#pragma once
+#include "sdkconfig.h"
+#include "driver/gpio.h"
+#include "boards/reserved_pin.hpp"
+// https://docs.waveshare.com/ESP32-P4-NANO (schematic: files.waveshare.com/wiki/ESP32-P4-NANO/ESP32-P4-NANO-schematic.pdf)
+// Same pin layout as the ESP32-P4-WIFI6-DEV-KIT (checked against the Nano schematic: C6 SDIO on GPIO14-19,
+// C6 reset GPIO54, wake GPIO6, TF card GPIO39-44 + GPIO45, I2C GPIO7/8, ES8311 I2S GPIO9-13 + PA GPIO53).
+
+// Repository: https://github.com/waveshareteam/ESP32-P4-Platform
+namespace Board::WaveshareP4Nano {
+
+constexpr const char* BOARD_NAME = "Waveshare ESP32-P4-Nano";
+
+// Display Specifications (MIPI DSI 2-lane, Supports Waveshare DSI displays e.g., 7-inch 1024x600 or 10.1-inch 1280x800)
+constexpr int DISPLAY_WIDTH       = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_HEIGHT      = CONFIG_APP_DISPLAY_HEIGHT;
+constexpr int DISPLAY_NATIVE_WIDTH  = CONFIG_APP_DISPLAY_WIDTH;
+constexpr int DISPLAY_NATIVE_HEIGHT = CONFIG_APP_DISPLAY_HEIGHT;
+constexpr int DISPLAY_DSI_LANES   = 2;
+constexpr int DISPLAY_REFRESH_HZ  = 60;
+constexpr gpio_num_t PIN_LCD_RST   = static_cast<gpio_num_t>(CONFIG_WAVESHARE_P4_PIN_LCD_RST);
+constexpr gpio_num_t PIN_BACKLIGHT  = static_cast<gpio_num_t>(CONFIG_WAVESHARE_P4_PIN_BACKLIGHT);
+constexpr int DISPLAY_DSI_LDO_CHANNEL = 3;
+constexpr int DISPLAY_DSI_LDO_VOLTAGE_MV = 2500;
+
+// I2C Bus: see "I2C Subsystem" Kconfig (I2C0_PIN_SDA/SCL) - not board-fixed anymore.
+
+// Touch Controller Defaults
+constexpr gpio_num_t PIN_TOUCH_RST = GPIO_NUM_NC;
+constexpr gpio_num_t PIN_TOUCH_INT = GPIO_NUM_NC;
+
+// Audio Codec (ES8311 + NS4150B mono speaker amplifier, onboard microphone)
+constexpr gpio_num_t PIN_I2S_MCLK  = GPIO_NUM_13;
+constexpr gpio_num_t PIN_I2S_BCLK  = GPIO_NUM_12;
+constexpr gpio_num_t PIN_I2S_DOUT  = GPIO_NUM_9;   // DSDIN on Codec
+constexpr gpio_num_t PIN_I2S_DIN   = GPIO_NUM_11;  // ASDOUT on Codec
+constexpr gpio_num_t PIN_I2S_LRCK  = GPIO_NUM_10;
+constexpr gpio_num_t PIN_AUDIO_PA  = GPIO_NUM_53;  // PA_Ctrl (active high)
+
+// ESP32-C6 Hosted Co-Processor (SDIO 4-bit Transport)
+constexpr gpio_num_t PIN_SDIO_CLK  = GPIO_NUM_18;
+constexpr gpio_num_t PIN_SDIO_CMD  = GPIO_NUM_19;
+constexpr gpio_num_t PIN_SDIO_D0   = GPIO_NUM_14;
+constexpr gpio_num_t PIN_SDIO_D1   = GPIO_NUM_15;
+constexpr gpio_num_t PIN_SDIO_D2   = GPIO_NUM_16;
+constexpr gpio_num_t PIN_SDIO_D3   = GPIO_NUM_17;
+constexpr gpio_num_t PIN_C6_RESET  = GPIO_NUM_54;
+constexpr gpio_num_t PIN_C6_WAKEUP = GPIO_NUM_6;
+// C6 reset line as the ESP-Hosted driver must see it (checked in board_config.hpp).
+constexpr gpio_num_t HOSTED_RESET_GPIO = PIN_C6_RESET;
+
+// TF Card Slot (SDMMC Slot 0, 4-line SDIO 3.0)
+constexpr gpio_num_t PIN_SDMMC_CLK = GPIO_NUM_43;
+constexpr gpio_num_t PIN_SDMMC_CMD = GPIO_NUM_44;
+constexpr gpio_num_t PIN_SDMMC_D0  = GPIO_NUM_39;
+constexpr gpio_num_t PIN_SDMMC_D1  = GPIO_NUM_40;
+constexpr gpio_num_t PIN_SDMMC_D2  = GPIO_NUM_41;
+constexpr gpio_num_t PIN_SDMMC_D3  = GPIO_NUM_42;
+constexpr gpio_num_t PIN_SDMMC_PWR_EN = GPIO_NUM_45; // Active-low SD card power enable
+constexpr int        SDMMC_LDO_CHANNEL = CONFIG_SDMMC_LDO_CHANNEL; // ESP_LDO_VO4 by default
+
+// Ethernet (RMII EMAC + IP101/LAN8720 PHY)
+constexpr bool       HAS_ETHERNET         = true;
+constexpr gpio_num_t PIN_ETH_MDC          = GPIO_NUM_31;
+constexpr gpio_num_t PIN_ETH_MDIO         = GPIO_NUM_52;
+constexpr gpio_num_t PIN_ETH_PHY_RST      = GPIO_NUM_51;
+constexpr int        ETH_PHY_ADDR         = 1;
+// RMII data/clock pins - hardcoded directly in ethernet_manager.hpp's emac_config (not
+// Kconfig-selectable), so listed here as fixed constants purely so RESERVED_PINS below can
+// include them.
+constexpr gpio_num_t PIN_ETH_RMII_CLK     = GPIO_NUM_50;
+constexpr gpio_num_t PIN_ETH_RMII_TX_EN   = GPIO_NUM_49;
+constexpr gpio_num_t PIN_ETH_RMII_TXD0    = GPIO_NUM_34;
+constexpr gpio_num_t PIN_ETH_RMII_TXD1    = GPIO_NUM_35;
+constexpr gpio_num_t PIN_ETH_RMII_CRS_DV  = GPIO_NUM_28;
+constexpr gpio_num_t PIN_ETH_RMII_RXD0    = GPIO_NUM_29;
+constexpr gpio_num_t PIN_ETH_RMII_RXD1    = GPIO_NUM_30;
+
+// USB Host: one USB-A 2.0 OTG port, no hub
+constexpr bool       HAS_USB_HOST         = true;
+constexpr bool       HAS_4PORT_USB_HUB    = false;
+constexpr gpio_num_t PIN_USB_HUB_RST      = GPIO_NUM_NC;
+constexpr gpio_num_t PIN_USB_HOST_PWR_EN  = GPIO_NUM_NC; // Power control for USB-A ports
+
+// Every named pin above that's physically wired on this board (GPIO_NUM_NC entries are
+// harmless - filtered out by conflict checks). Used to catch a user-chosen pin (e.g. the
+// generic WM8960 codec's I2S/button pins) colliding with something already in use here.
+// PIN_AUDIO_PA and PIN_SDMMC_PWR_EN are only listed while their owning feature (ES8311 /
+// the SD card slot) is actually enabled: with the feature off, nothing in this project ever
+// configures that GPIO, so it's genuinely free for another use (e.g. a WM8960 codec wired
+// to this board's 40-pin header, which reuses both pins at the standard RPi HAT positions).
+constexpr ReservedPin RESERVED_PINS[] = {
+    BOARD_PIN(PIN_TOUCH_RST), BOARD_PIN(PIN_TOUCH_INT),
+    BOARD_PIN(PIN_LCD_RST), BOARD_PIN(PIN_BACKLIGHT),
+    BOARD_PIN(PIN_I2S_MCLK), BOARD_PIN(PIN_I2S_BCLK), BOARD_PIN(PIN_I2S_DOUT), BOARD_PIN(PIN_I2S_DIN), BOARD_PIN(PIN_I2S_LRCK),
+#if defined(CONFIG_ONBOARD_AUDIO_ES8311)
+    BOARD_PIN(PIN_AUDIO_PA),
+#endif
+    BOARD_PIN(PIN_SDIO_CLK), BOARD_PIN(PIN_SDIO_CMD), BOARD_PIN(PIN_SDIO_D0), BOARD_PIN(PIN_SDIO_D1), BOARD_PIN(PIN_SDIO_D2), BOARD_PIN(PIN_SDIO_D3),
+    BOARD_PIN(PIN_C6_RESET), BOARD_PIN(PIN_C6_WAKEUP),
+    BOARD_PIN(PIN_SDMMC_CLK), BOARD_PIN(PIN_SDMMC_CMD), BOARD_PIN(PIN_SDMMC_D0), BOARD_PIN(PIN_SDMMC_D1), BOARD_PIN(PIN_SDMMC_D2), BOARD_PIN(PIN_SDMMC_D3),
+#if defined(CONFIG_APP_ENABLE_SDCARD)
+    BOARD_PIN(PIN_SDMMC_PWR_EN),
+#endif
+    BOARD_PIN(PIN_ETH_MDC), BOARD_PIN(PIN_ETH_MDIO), BOARD_PIN(PIN_ETH_PHY_RST),
+    BOARD_PIN(PIN_ETH_RMII_CLK), BOARD_PIN(PIN_ETH_RMII_TX_EN), BOARD_PIN(PIN_ETH_RMII_TXD0), BOARD_PIN(PIN_ETH_RMII_TXD1),
+    BOARD_PIN(PIN_ETH_RMII_CRS_DV), BOARD_PIN(PIN_ETH_RMII_RXD0), BOARD_PIN(PIN_ETH_RMII_RXD1),
+    BOARD_PIN(PIN_USB_HUB_RST), BOARD_PIN(PIN_USB_HOST_PWR_EN),
+};
+
+} // namespace Board::WaveshareP4Nano

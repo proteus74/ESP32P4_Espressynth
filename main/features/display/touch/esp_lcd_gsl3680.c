@@ -22,7 +22,7 @@
 #define ESP_gsl3680_TOUCH_MAX_BUTTONS         (9)
 
 
-unsigned int gsl_config_data_id[] =
+const unsigned int gsl_config_data_id[] =
 {
 	0xccb69a,  
 	0x200,

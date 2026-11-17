@@ -33,6 +33,18 @@ menu "Espressynth"
                     This board uses an ESP32-P4 v1.x and therefore requires the pre-v3
                     compatibility mode and a 360 MHz CPU clock.
 
+            config WAVESHARE_P4_NANO_BOARD
+                bool "Waveshare ESP32-P4-Nano"
+                select ESP32P4_SELECTS_REV_LESS_V3
+                help
+                    Board support for the Waveshare ESP32-P4-Nano. Same pin layout as the
+                    ESP32-P4-WIFI6-DEV-KIT: ESP32-C6 Wi-Fi 6/BLE 5 co-processor via SDIO,
+                    ES8311 codec with an NS4150B mono speaker amplifier and a microphone,
+                    100M Ethernet (IP101), TF card slot, MIPI DSI/CSI connectors. The display
+                    is an optional add-on (detected at start), and there is one USB-A host
+                    port instead of a hub. Uses an ESP32-P4 v1.x and therefore the pre-v3
+                    compatibility mode and a 360 MHz CPU clock.
+
             config BOARD_CROWPANEL_5INCH
                 bool "Elecrow CrowPanel Advanced 5\" (800x480 RGB, NS4168, C6 Hosted)"
                 select ESP32P4_SELECTS_REV_LESS_V3
@@ -57,18 +69,23 @@ menu "Espressynth"
         # a symbol without a visible prompt is recomputed from its default on every run,
         # so switching boards can never leave stale pins of the previous board behind.
         # Only the Custom board exposes everything.
+        # Boards sharing the Waveshare ESP32-P4 pin layout and defaults (dev kit and Nano).
+        config BOARD_IS_WAVESHARE_P4
+            bool
+            default y if WAVESHARE_P4_WIFI_DEV_KIT_BOARD || WAVESHARE_P4_NANO_BOARD
+
         config BOARD_HAS_ETHERNET
             bool
-            default y if BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+            default y if BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4 || BOARD_CUSTOM_P4
 
         config BOARD_HAS_ES8311
             bool
-            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4 || BOARD_CUSTOM_P4
 
         # Panel connector accepts different displays (output type/size stay selectable).
         config BOARD_HAS_VARIABLE_DISPLAY
             bool
-            default y if WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CUSTOM_P4
+            default y if BOARD_IS_WAVESHARE_P4 || BOARD_CUSTOM_P4
 
         if BOARD_JC8012P4A1
             config JC8012P4A1_PIN_LCD_RST
@@ -80,8 +97,8 @@ menu "Espressynth"
                 default 23
         endif
 
-    if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
-        menu "Waveshare ESP32-P4-WIFI6-DEV-KIT Settings"
+    if BOARD_IS_WAVESHARE_P4
+        menu "Waveshare ESP32-P4 Board Settings"
             config WAVESHARE_P4_PIN_LCD_RST
                 int "Panel reset GPIO (-1 to disable)"
                 range -1 54
@@ -302,7 +319,7 @@ menu "Espressynth"
 
         config APP_ENABLE_WS2812
             bool "Enable WS2812 LED System"
-            default y
+            default y if BOARD_CUSTOM_P4
             help
                 Enables the WS2812 LED string driver and its update task.
                 The GPIO and LED count are configured at runtime in Settings.
@@ -311,7 +328,7 @@ menu "Espressynth"
 
         config APP_ADS1115_SUPPORT
             bool "DFRobot ADS1115 0-10V Support (external CV ADC)"
-            default n
+            default y if BOARD_CUSTOM_P4
             depends on APP_ENABLE_I2C
             help
                 Enables two-channel CV input support. At startup, every
@@ -332,7 +349,7 @@ menu "Espressynth"
 
         config APP_GP8413_SUPPORT
             bool "DFRobot GP8413 Support (2Ch 15 Bit DAC)"
-            default n
+            default y if BOARD_CUSTOM_P4
             depends on APP_ENABLE_I2C
             help
                 Enables two-channel 0-10V CV output support. At startup,
@@ -341,6 +358,7 @@ menu "Espressynth"
 
         config APP_ENABLE_GPIO_INPUT
             bool "Enable GPIO Digital Input"
+            default y if BOARD_CUSTOM_P4
             default n
             help
                 Enables user-configurable GPIO pins as Digital Input widgets
@@ -350,6 +368,7 @@ menu "Espressynth"
 
         config APP_ENABLE_GPIO_OUTPUTS
             bool "Enable GPIO Digital Output"
+            default y if BOARD_CUSTOM_P4
             default n
             help
                 Enables user-configurable GPIO pins as Digital Output
@@ -463,7 +482,7 @@ menu "Espressynth"
             config ONBOARD_AUDIO_ES8311
                 bool "Enable ES8311 Audio Codec (I2S + I2C)"
                 depends on BOARD_HAS_ES8311
-                default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4
                 default n
                 help
                     ES8311 mono audio codec support, e.g. the one found onboard the
@@ -498,7 +517,7 @@ menu "Espressynth"
                     int "I2S MCLK GPIO (-1 to disable)" if BOARD_CUSTOM_P4
                     default 13 if BOARD_JC8012P4A1
                     default 13 if BOARD_JC1060P470C_7_INCH
-                    default 13 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 13 if BOARD_IS_WAVESHARE_P4
                     default -1
                     help
                         ES8311 master clock input. -1 (GPIO_NUM_NC) if the codec
@@ -508,7 +527,7 @@ menu "Espressynth"
                     int "I2S BCLK GPIO" if BOARD_CUSTOM_P4
                     default 12 if BOARD_JC8012P4A1
                     default 12 if BOARD_JC1060P470C_7_INCH
-                    default 12 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 12 if BOARD_IS_WAVESHARE_P4
                     default -1
                     help
                         -1 (GPIO_NUM_NC) leaves the codec disabled at runtime.
@@ -517,21 +536,21 @@ menu "Espressynth"
                     int "I2S LRCLK (word-select) GPIO" if BOARD_CUSTOM_P4
                     default 10 if BOARD_JC8012P4A1
                     default 10 if BOARD_JC1060P470C_7_INCH
-                    default 10 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 10 if BOARD_IS_WAVESHARE_P4
                     default -1
 
                 config ONBOARD_AUDIO_ES8311_PIN_DOUT
                     int "I2S DOUT GPIO (ESP32 -> ES8311 DAC, speaker data)" if BOARD_CUSTOM_P4
                     default 9 if BOARD_JC8012P4A1
                     default 9 if BOARD_JC1060P470C_7_INCH
-                    default 9 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 9 if BOARD_IS_WAVESHARE_P4
                     default -1
 
                 config ONBOARD_AUDIO_ES8311_PIN_DIN
                     int "I2S DIN GPIO (ES8311 ADC -> ESP32, microphone data)" if BOARD_CUSTOM_P4
                     default 11 if BOARD_JC8012P4A1
                     default 48 if BOARD_JC1060P470C_7_INCH
-                    default 11 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 11 if BOARD_IS_WAVESHARE_P4
                     default -1
                     help
                         Set to -1 for playback-only operation.
@@ -540,7 +559,7 @@ menu "Espressynth"
                     int "PA enable GPIO, active high (-1 to disable)" if BOARD_CUSTOM_P4
                     default 20 if BOARD_JC8012P4A1
                     default 11 if BOARD_JC1060P470C_7_INCH
-                    default 53 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+                    default 53 if BOARD_IS_WAVESHARE_P4
                     default -1
             endif
 
@@ -731,7 +750,7 @@ menu "Espressynth"
 
         choice APP_DISPLAY_OUTPUT
             prompt "Output Type"
-            default APP_DISPLAY_OUTPUT_MIPI if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default APP_DISPLAY_OUTPUT_MIPI if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4
             default APP_DISPLAY_OUTPUT_RGB if BOARD_CROWPANEL_5INCH
             default APP_DISPLAY_OUTPUT_NONE
 
@@ -760,7 +779,7 @@ menu "Espressynth"
             range 1 4096
             default 240 if APP_DISPLAY_OUTPUT_SPI
             default 1280 if BOARD_JC8012P4A1
-            default 1024 if BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default 1024 if BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4
             default CUSTOM_DISPLAY_WIDTH if BOARD_CUSTOM_P4
             default 800
 
@@ -769,7 +788,7 @@ menu "Espressynth"
             range 1 4096
             default 320 if APP_DISPLAY_OUTPUT_SPI
             default 800 if BOARD_JC8012P4A1
-            default 600 if BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default 600 if BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4
             default CUSTOM_DISPLAY_HEIGHT if BOARD_CUSTOM_P4
             default 480
 
@@ -1051,7 +1070,7 @@ menu "Espressynth"
 
         config APP_ENABLE_HOSTED_COPROCESSOR
             bool "Enable Host Processor (ESP32-C6 / SDIO)" if BOARD_CUSTOM_P4
-            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || WAVESHARE_P4_WIFI_DEV_KIT_BOARD || BOARD_CROWPANEL_5INCH
+            default y if BOARD_JC8012P4A1 || BOARD_JC1060P470C_7_INCH || BOARD_IS_WAVESHARE_P4 || BOARD_CROWPANEL_5INCH
             default n
             help
                 Confirms an ESP32-C6 co-processor is actually wired up over SDIO to run
@@ -1164,6 +1183,7 @@ menu "Espressynth"
 
         config APP_ENABLE_COPROCESSOR_OTA
             bool "Push co-processor firmware update from the P4 at boot (Hosted OTA)"
+            default y if APP_ENABLE_HOSTED_COPROCESSOR
             default n
             depends on APP_ENABLE_WIFI || APP_ENABLE_BLUETOOTH
             help
@@ -1188,7 +1208,7 @@ menu "Espressynth"
             int "SDMMC on-chip LDO channel" if BOARD_CUSTOM_P4
             default 4 if BOARD_JC8012P4A1
             default 4 if BOARD_JC1060P470C_7_INCH
-            default 4 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+            default 4 if BOARD_IS_WAVESHARE_P4
             default 4 if BOARD_CROWPANEL_5INCH
             default 1
             range 1 4
@@ -1252,7 +1272,7 @@ menu "Espressynth"
 endmenu
 
 choice ESP32P4_REV_MIN
-    default ESP32P4_REV_MIN_100 if WAVESHARE_P4_WIFI_DEV_KIT_BOARD
+    default ESP32P4_REV_MIN_100 if BOARD_IS_WAVESHARE_P4
     default ESP32P4_REV_MIN_0 if BOARD_CROWPANEL_5INCH
 endchoice
 

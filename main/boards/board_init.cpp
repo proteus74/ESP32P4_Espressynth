@@ -153,7 +153,7 @@ esp_err_t init() {
 #endif
 
 #if defined(CONFIG_BOARD_JC8012P4A1) || defined(CONFIG_BOARD_JC1060P470C_7_INCH) || \
-    defined(CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD)
+    defined(CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD) || defined(CONFIG_WAVESHARE_P4_NANO_BOARD)
     // Board-specific init: ESP32-C6 Reset line
     if (CurrentBoard::PIN_C6_RESET != GPIO_NUM_NC) {
         gpio_config_t io_conf = {};

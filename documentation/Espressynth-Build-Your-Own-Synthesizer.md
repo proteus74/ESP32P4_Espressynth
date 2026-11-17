@@ -3,7 +3,7 @@
 Notizen zum Video `Espressynth-Build-Your-Own-Synthesizer.mp4` in diesem Ordner: was festgelegt
 ist, wie es gebaut wird und wo man weitermacht.
 
-Stand: 17.11.2026, neunter Schnitt, ca. 8:50 min, 1920×1080, 30 fps.
+Stand: 17.11.2026, zehnter Schnitt, ca. 9:40 min, 1920×1080, 30 fps.
 
 ## Festgelegt
 
@@ -21,7 +21,8 @@ Stand: 17.11.2026, neunter Schnitt, ca. 8:50 min, 1920×1080, 30 fps.
   Der Browser ist nur für das einmalige Patchen da.
 - Ein Display ist nicht nötig, es macht die Bedienung nur bequemer.
 - ESP32-C6 für WLAN/Bluetooth gibt es nur „on boards that have one".
-- Vier Boards laufen ohne Konfiguration; ein eigenes Board richtet man über Kconfig ein.
+- Fünf Boards laufen ohne Konfiguration (neu: Waveshare ESP32-P4-Nano, mit Foto auf der Folie);
+  ein eigenes Board richtet man über Kconfig ein.
 - Man braucht ein ESP32-P4-Board und ein **USB-MIDI-Keyboard** (nicht „USB-Kabel").
 - Flashen über die englische Seite `jolabi.de/en/projects/espressynth/flash`, mit markierter
   Klickstelle.
@@ -32,7 +33,14 @@ Stand: 17.11.2026, neunter Schnitt, ca. 8:50 min, 1920×1080, 30 fps.
 - Globale MIDI-Steuerung wird gezeigt: Preset vor/zurück, Master-Tempo, Master-Lautstärke.
 - Bluetooth-MIDI-Keyboards haben eine eigene Folie.
 - Ein Schema zeigt die Verbindungen: USB- und Bluetooth-Keyboard → Board → Lautsprecher,
-  Browser ↔ Board über WLAN oder Netzwerkkabel.
+  Browser ↔ Board über WLAN oder Netzwerkkabel. In der Mitte steht ein Foto eines echten Boards:
+  das Waveshare ESP32-P4 Wi-Fi 6 Dev Kit, freigestellt (`video-src/board-devkit.png`), nicht das Nano.
+- MCP hat eine eigene Folie („New: just tell it what you want") und eine Demo (Demo M): im
+  eingeblendeten Fenster „AI ASSISTANT" erscheint die gesprochene Bitte („Build me a synth: one
+  oscillator, a sawtooth wave, and an ADSR envelope."), danach laufen die Tool-Aufrufe durch und
+  der Patch entsteht im Editor. Die Spracheingabe ist gestellt (der Sprecher sagt den Satz, das
+  Fenster zeichnet `build5.py`, `Demo.chat`); die MCP-Aufrufe sind echt und gingen über `/mcp`
+  an das Board.
 - Die Patch-Folie („A playable patch in one minute") zeigt einen kompakten Patch, bei dem man
   den Kabeln folgen kann: `video-src/patch.png`, ein Bild aus Demo A.
 - In der MIDI-Learn-Demo ist ein kleines MIDI-Keyboard eingeblendet (eine Oktave, vier Knöpfe):
@@ -76,43 +84,44 @@ Stand: 17.11.2026, neunter Schnitt, ca. 8:50 min, 1920×1080, 30 fps.
 - „A display is optional" zeigt echte Screenshots vom Display: erst die offene Preset-Liste,
   dann die Hauptseite.
 
-## Aufbau (achter Schnitt; Zeiten ab der zweiten Zeile jetzt etwa 10 s früher, Zeile 0:10 entfällt)
+## Aufbau (zehnter Schnitt)
 
 | Start | Folie |
 |------:|-------|
 | 0:00 | Titel: Build your own synthesizer |
-| 0:10 | Months of work. |
-| 0:15 | One chip. One browser. Your own synth. |
-| 0:27 | What is Espressynth? (mit „about 20 dollars") |
-| 0:53 | How it all connects (Schema) |
-| 1:10 | A playable patch in one minute |
-| 1:21 | Let's build one. (Hinweis Browser-Engine) |
-| 1:37 | **Demo A:** Synth bauen – Oszillator, Filter, ADSR, Sinus, Sägezahn, Cutoff, SuperSaw |
-| 2:13 | And that is just the start. |
-| 2:18 | **Demo B:** FM8 (Editor, E.PIANO 1, FX-Seite), Mini Lead, TR-808 mit E-Piano |
-| 3:01 | A Eurorack in your browser (Widgets: Control, Mixing/Output, Misc, External Hardware) |
-| 3:19 | Add Node: right-click the canvas |
-| 3:30 | From fat 70s analog bass to glassy 80s FM. |
-| 3:41 | Sound sources (Widgets: Generator ohne MDA Piano, Midi) |
-| 3:56 | Shape it, move it, polish it (Widgets: Filter, Effects, Modulator) |
-| 4:13 | **Demo C:** Oszilloskop, Spektrum, VU-Meter live |
-| 4:32 | Sequences and rhythm (Widgets: Sequencer, Math) |
-| 4:45 | Your MIDI keyboard is the front panel |
-| 5:03 | **Demo D, Teil 1:** MIDI-Learn – CC-Slider, Learn, Knopf drehen, auf Cutoff verkabeln, spielen |
-| 5:24 | **Demo D, Teil 2:** Kabel-Darstellung umstellen |
-| 5:33 | **Demo D, Teil 3:** Global MIDI Controls |
-| 5:45 | No cable? Bluetooth MIDI |
-| 6:05 | A display is optional (Display-Screenshots) |
-| 6:18 | Connected to the real world |
-| 6:34 | Presets, samples and files (File Explorer) |
-| 6:44 | Under the hood |
-| 7:07 | Four boards, ready to go |
-| 7:27 | Ready to build yours? (mit „about 20 dollars") |
-| 7:37 | Flash it from your browser |
-| 7:48 | Select your board, click Flash (markierte Flash-Seite) |
-| 7:56 | Your first five minutes |
-| 8:14 | What will you build? |
-| 8:28 | Schlusstitel |
+| 0:10 | One chip. One browser. Your own synth. |
+| 0:22 | What is Espressynth? (mit „about 20 dollars") |
+| 0:48 | How it all connects (Schema mit Foto des Waveshare Dev Kit) |
+| 1:05 | A playable patch in one minute |
+| 1:17 | Let's build one. (Hinweis Browser-Engine) |
+| 1:33 | **Demo A:** Synth bauen – Oszillator, Filter, ADSR, Sinus, Sägezahn, Cutoff, SuperSaw |
+| 2:08 | And that is just the start. |
+| 2:13 | **Demo B:** FM8 (Editor, E.PIANO 1, FX-Seite), Mini Lead, TR-808 mit E-Piano |
+| 2:56 | A Eurorack in your browser (Widgets: Control, Mixing/Output, Misc, External Hardware) |
+| 3:15 | Add Node: right-click the canvas |
+| 3:25 | From fat 70s analog bass to glassy 80s FM. |
+| 3:36 | Sound sources (Widgets: Generator ohne MDA Piano, Midi) |
+| 3:51 | Shape it, move it, polish it (Widgets: Filter, Effects, Modulator) |
+| 4:08 | **Demo C:** Oszilloskop, Spektrum, VU-Meter live |
+| 4:34 | Sequences and rhythm (Widgets: Sequencer, Math) |
+| 4:47 | Your MIDI keyboard is the front panel |
+| 5:08 | **Demo D, Teil 1:** MIDI-Learn – CC-Slider, Learn, Knopf drehen, Layer, auf Cutoff verkabeln, spielen |
+| 5:33 | **Demo D, Teil 2:** Kabel-Darstellung umstellen |
+| 5:42 | **Demo D, Teil 3:** Global MIDI Controls |
+| 5:54 | No cable? Bluetooth MIDI |
+| 6:14 | A display is optional (Display-Screenshots) |
+| 6:34 | **neu:** New: just tell it what you want (MCP) |
+| 6:56 | **neu, Demo M:** ein KI-Assistent baut per MCP Midi-In, Oszillator (Sägezahn), ADSR und spielt den Patch |
+| 7:22 | Connected to the real world |
+| 7:37 | Presets, samples and files (File Explorer) |
+| 7:48 | Under the hood |
+| 8:04 | Five boards, ready to go (mit Foto des Waveshare ESP32-P4-Nano) |
+| 8:30 | Ready to build yours? (mit „about 20 dollars") |
+| 8:39 | Flash it from your browser |
+| 8:51 | Select your board, click Flash (markierte Flash-Seite) |
+| 8:59 | Your first five minutes |
+| 9:17 | What will you build? |
+| 9:31 | Schlusstitel |
 
 Die Länge jeder Folie folgt dem Sprechertext; die Zeiten verschieben sich, sobald Text
 geändert wird.
@@ -132,8 +141,10 @@ ausgeschlossen.
 | `tts5.py` | Sprecher über OpenRouter; ein Clip pro Folie, nach Text-Hash in `tts/` zwischengespeichert |
 | `music.js` | Erzeugt die Hintergrundmusik passend zur Gesamtlänge |
 | `build5.py` | Schneidet alles: Zeitplan aus dem Sprechertext, Tonmischung, Bilder, Logo, Spektrum-Balken, ffmpeg |
-| `demo5-a/`, `-b/`, `-c/`, `-d/` | Aufnahmen der vier Demos: Einzelbilder mit Zeitstempeln, `audio.wav`, `timeline.json`, `sync.json` |
-| `make_demo_scripts5.py` | Erzeugt die vier Playwright-Skripte für die Demos (Abläufe stehen darin) |
+| `demo5-a/`, `-b/`, `-c/`, `-d/`, `-m/` | Aufnahmen der fünf Demos: Einzelbilder mit Zeitstempeln, `audio.wav`, `timeline.json`, `sync.json` |
+| `make_demo_scripts5.py` | Erzeugt die Playwright-Skripte für die Demos (Abläufe stehen darin); `demo-m.js` braucht das MCP-Token als viertes Argument |
+| `mcp_call.py`, `board_ws.py` | Einzelner MCP-Aufruf an `/mcp`; einzelne WebSocket-Nachricht ans Board (z. B. MCP ein- und ausschalten) |
+| `board-devkit.png`, `board-nano.png` | Freigestellte Produktfotos der beiden Waveshare-Boards (Quelle: `JoLaBi_Homepage/static/img/espressynth/boards/`) |
 | `demo-init-real.js` | Wird in die Editor-Seite eingeschleust: Töne einspeisen, ans Gerät spiegeln, Ton mitschneiden, sichtbarer Mauszeiger |
 | `sync5.py` | Wandelt den Demo-Ton um und gleicht Ton und Bild ab |
 | `board_backup.py` | Liest alle Presets und Einstellungen vom Board und merkt sich Prüfsummen |
@@ -199,6 +210,29 @@ Was dabei mit dem Board passiert:
 - Für den Ton im Browser bekommt jedes Preset beim Laden einen „JS Audio-Out" dazugesetzt –
   nur im Browser, nicht auf dem Gerät.
 
+**Demo M (MCP) neu aufnehmen**
+
+Aufgenommen am 17.11.2026 auf dem Board `192.168.1.118` (ES8311, ohne Display; `current.json`
+gab es dort vorher nicht, deshalb läuft `board_backup.py` auf diesem Board in einen 404 –
+die Presets wurden trotzdem gesichert, siehe `board-backup/before10/`).
+
+1. MCP einschalten:
+   `python board_ws.py <ip> '{"type":"paramUpdate","widgetId":"@deviceSettings","params":{"mcpEnabled":true}}'`,
+   Token aus `http://<ip>/api/settings/device` (`mcpToken`) lesen.
+2. `python make_demo_scripts5.py <repo>/.playwright-mcp/vid real <ip> <token>`, dann `demo-m.js` ausführen.
+   Das Skript schickt echte `tools/call`-Anfragen an `http://<ip>/mcp`: `new_preset`, `move_widget`,
+   `add_widget` (es8311-out und JS Audio-Out auf der FX-Seite, midi-in, oscillator, adsr), `connect`,
+   `set_params` (Sägezahn, Attack 0,02 s), `play_sequence`. Für ein Board mit anderem Ausgang den
+   Typ `es8311-out` in `M_BODY` ändern.
+3. `play_sequence` klingt nur auf dem Gerät. Für den Ton im Video spielt das Skript dieselben
+   Noten zusätzlich in die Browser-Engine (`window.__play`, ohne Spiegelung ans Gerät).
+4. Aufnahme nach `demo5-m/` kopieren, `python sync5.py demo5-m`.
+5. Aufräumen: MCP wieder ausschalten (`"mcpEnabled":false`), das vorher gewählte Preset wählen
+   (`POST /api/preset/select?name=…`), `presets/current.json` löschen, wenn es vorher keine gab.
+6. Die Schritte sind in `build5.py` (`DEMOS['m']`, `anchors`) an den Sprechertext gebunden; nur das
+   Abspielen am Ende läuft in Echtzeit. Ändert sich der Sprechertext der Demo, die Zeiten dort und
+   `chat.speak` (Beginn und Ende des gesprochenen Wunsches, in Sekunden ab Folienbeginn) anpassen.
+
 **Display-Screenshot**
 
 Seit diesem Stand kann die Firmware das (nur RGB-Display, also CrowPanel 5"):
@@ -236,6 +270,11 @@ Hinterlegung in `build5.py` (`LOGO_POS`).
   „Pages" → Seite antippen. In den Display-Bildern ist der falsche Name deshalb übermalt.
 - Das eingeblendete Keyboard gibt es bisher nur in Demo D, Teil 1; in den anderen Demos leuchten
   keine Tasten mit.
-- Das Schema ist schlicht (Kästen und Pfeile); Symbole für Keyboard, Board und Laptop wären schöner.
+- Das Schema zeigt jetzt ein Foto des Boards; Keyboard, Browser und Lautsprecher sind weiter Kästen.
+- Die Board-Fotos sind Produktfotos von Waveshare (von der Projektseite übernommen), keine eigenen Aufnahmen.
+- Das Nano-Board ist laut `Boards/Waveshare_ESP32-P4-Nano.md` noch als „nicht auf Hardware geprüft" vermerkt;
+  im Video steht es als unterstützt.
+- Das MCP-Token des Boards `192.168.1.118` steht im erzeugten `.playwright-mcp/vid/demo-m.js`
+  (nicht in Git). MCP ist dort wieder aus; wer sichergehen will, erzeugt im Editor ein neues Token.
 - „about 20 dollars" ist eine Angabe des Autors und nirgends im Projekt belegt.
 - `documentation/voice-samples/` enthält 21 Stimmproben von der Stimmenauswahl und kann weg.

@@ -211,10 +211,9 @@ inline void init() {
 
     ESP_ERROR_CHECK(Board::init());
 
+#if defined(CONFIG_APP_ADS1115_SUPPORT) || defined(CONFIG_APP_GP8413_SUPPORT)
     ESP_LOGI(TAG, "Scanning for optional I2C devices (ADS1115/GP8413)...");
     Feature::IO::scan_configured_devices();
-
-#if defined(CONFIG_APP_ADS1115_SUPPORT) || defined(CONFIG_APP_GP8413_SUPPORT)
     ESP_ERROR_CHECK(Feature::IO::i2c_bus_manager_init());
 #endif
 
@@ -247,7 +246,12 @@ inline void init() {
 
 #if defined(CONFIG_APP_ENABLE_LVGL)
     ESP_LOGI(TAG, "Feature: LVGL enabled -> Initializing...");
-    ESP_ERROR_CHECK(Feature::LVGL::init());
+    const esp_err_t lvgl_err = Feature::LVGL::init();
+    if (lvgl_err == ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "No display connected: running without display and UI tasks");
+    } else {
+        ESP_ERROR_CHECK(lvgl_err);
+    }
 #endif
 
 #if defined(CONFIG_APP_ENABLE_SSD1306)

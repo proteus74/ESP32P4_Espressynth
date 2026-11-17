@@ -2245,7 +2245,7 @@ static void ResetMask(void)
 		reset_mask_max = 0xfffffff1;
 }
 
-static int ConfigCoorMulti(unsigned int data[])
+static int ConfigCoorMulti(const unsigned int data[])
 {
 	int i, j;
 	int n = 0;
@@ -2282,7 +2282,7 @@ static int ConfigCoorMulti(unsigned int data[])
 	return TRUE;
 }
 
-static int ConfigFilter(unsigned int data[])
+static int ConfigFilter(const unsigned int data[])
 {
 	int i;
 	unsigned int ps_c[8];
@@ -2307,7 +2307,7 @@ static int ConfigFilter(unsigned int data[])
 	return FALSE;
 }
 
-static int ConfigKeyMap(unsigned int data[])
+static int ConfigKeyMap(const unsigned int data[])
 {
 	int i;
 
@@ -2742,7 +2742,7 @@ static int DataCheck(void)
 	return 1;
 }
 
-void gsl_DataInit(unsigned int *conf_in)
+void gsl_DataInit(const unsigned int *conf_in)
 {
 	ESP_LOGI(TAG,"gsl_DataInit");
 	int i, j;

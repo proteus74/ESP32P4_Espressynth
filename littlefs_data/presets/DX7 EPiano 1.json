@@ -99,11 +99,11 @@
             "time4Curve": "linear",
             "livePhase": "idle",
             "liveLevel": 0,
-            "liveSegment": 4,
-            "liveSegmentStartedAt": 1270243.400000006,
-            "liveSegmentStartLevel": 9.355,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
             "liveGate": false,
-            "liveVoiceIndex": 0,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
@@ -260,11 +260,11 @@
             "time4Curve": "linear",
             "livePhase": "idle",
             "liveLevel": 0,
-            "liveSegment": 4,
-            "liveSegmentStartedAt": 1270243.5,
-            "liveSegmentStartLevel": 7.507159999930858,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
             "liveGate": false,
-            "liveVoiceIndex": 0,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
@@ -296,11 +296,11 @@
             "time4Curve": "linear",
             "livePhase": "idle",
             "liveLevel": 0,
-            "liveSegment": 4,
-            "liveSegmentStartedAt": 1270243.599999994,
-            "liveSegmentStartLevel": 1.155,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
             "liveGate": false,
-            "liveVoiceIndex": 0,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
@@ -332,11 +332,11 @@
             "time4Curve": "linear",
             "livePhase": "idle",
             "liveLevel": 0,
-            "liveSegment": 4,
-            "liveSegmentStartedAt": 1270243.699999988,
-            "liveSegmentStartLevel": 7.506,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
             "liveGate": false,
-            "liveVoiceIndex": 0,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
@@ -391,11 +391,11 @@
             "time4Curve": "linear",
             "livePhase": "idle",
             "liveLevel": 0,
-            "liveSegment": 4,
-            "liveSegmentStartedAt": 1270243.699999988,
-            "liveSegmentStartLevel": 8.730136363601144,
+            "liveSegment": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
             "liveGate": false,
-            "liveVoiceIndex": 0,
+            "liveVoiceIndex": null,
             "graphCollapsed": false
           }
         },
@@ -940,6 +940,20 @@
             "dryLevelCurve": "linear",
             "bypass": false
           }
+        },
+        {
+          "id": "widget-154",
+          "type": "es8311-out",
+          "label": "ES8311-Out",
+          "ui": {
+            "x": 620,
+            "y": 120,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
         }
       ],
       "connections": [
@@ -1002,9 +1016,33 @@
             "portId": "right"
           },
           "color": "#e5e7eb"
+        },
+        {
+          "id": "conn-299",
+          "from": {
+            "widgetId": "widget-105",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-154",
+            "portId": "right"
+          },
+          "color": "#e5e7eb"
+        },
+        {
+          "id": "conn-300",
+          "from": {
+            "widgetId": "widget-105",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-154",
+            "portId": "left"
+          },
+          "color": "#f472b6"
         }
       ]
     }
   },
-  "firmwareVersion": "0.35"
+  "firmwareVersion": "0.36"
 }

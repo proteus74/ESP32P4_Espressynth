@@ -430,6 +430,20 @@
             "mixCurve": "linear",
             "bypass": true
           }
+        },
+        {
+          "id": "widget-153",
+          "type": "es8311-out",
+          "label": "ES8311-Out",
+          "ui": {
+            "x": 440,
+            "y": -60,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
         }
       ],
       "connections": [
@@ -504,9 +518,33 @@
             "portId": "inR"
           },
           "color": "#a3e635"
+        },
+        {
+          "id": "conn-297",
+          "from": {
+            "widgetId": "widget-6",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-153",
+            "portId": "right"
+          },
+          "color": "#c084fc"
+        },
+        {
+          "id": "conn-298",
+          "from": {
+            "widgetId": "widget-6",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-153",
+            "portId": "left"
+          },
+          "color": "#818cf8"
         }
       ]
     }
   },
-  "firmwareVersion": "0.35"
+  "firmwareVersion": "0.36"
 }

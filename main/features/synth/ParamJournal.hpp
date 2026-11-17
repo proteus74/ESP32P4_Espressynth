@@ -71,7 +71,8 @@ inline QueueHandle_t gQueue = nullptr;
 
 namespace detail
 {
-inline Entry gEntries[kMaxEntries] = {};
+// In PSRAM: a static array here (4.6 KB) overflowed the internal RAM of rev <3 ESP32-P4 boards.
+inline Entry *gEntries = nullptr;
 inline size_t gCount = 0;
 inline char gPath[presetcache::kMaxPathLen] = {}; // preset the journal belongs to, "" = none
 inline uint16_t gTag = 0;
@@ -225,11 +226,18 @@ inline void loadLocked()
 }
 } // namespace detail
 
-inline bool ready() { return detail::gMutex != nullptr; }
+inline bool ready() { return detail::gMutex != nullptr && detail::gEntries != nullptr; }
 
 // Once, before the engine starts (the first preset build already calls attach()).
 inline void init()
 {
+    detail::gEntries = static_cast<Entry *>(
+        heap_caps_calloc(kMaxEntries, sizeof(Entry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (detail::gEntries == nullptr)
+    {
+        ESP_LOGW(kTag, "no memory for the parameter journal, disabled");
+        return;
+    }
     detail::gMutex = xSemaphoreCreateMutex();
     gQueue = xQueueCreate(32, sizeof(ControlChangeMsg));
 }

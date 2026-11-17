@@ -10,6 +10,9 @@
 #elif defined(CONFIG_WAVESHARE_P4_WIFI_DEV_KIT_BOARD)
     #include "waveshare_p4_wifi_dev_kit.hpp"
     namespace CurrentBoard = Board::WaveshareP4WiFiDevKit;
+#elif defined(CONFIG_WAVESHARE_P4_NANO_BOARD)
+    #include "waveshare_p4_nano.hpp"
+    namespace CurrentBoard = Board::WaveshareP4Nano;
 #elif defined(CONFIG_BOARD_CROWPANEL_5INCH)
     #include "crowpanel_5inch.hpp"
     namespace CurrentBoard = Board::CrowPanel5Inch;

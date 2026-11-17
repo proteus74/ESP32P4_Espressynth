@@ -1229,7 +1229,7 @@
             "gain": 10,
             "fmIndex": 0,
             "feedback": 0,
-            "dutyCycle": 4.9637,
+            "dutyCycle": 3.6134,
             "superSawDetune": 5,
             "superSawMix": 5,
             "morph": 0
@@ -2210,6 +2210,20 @@
             "dryLevelCurve": "linear",
             "bypass": false
           }
+        },
+        {
+          "id": "widget-151",
+          "type": "es8311-out",
+          "label": "ES8311-Out",
+          "ui": {
+            "x": -940,
+            "y": -460,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
+          }
         }
       ],
       "connections": [
@@ -2404,9 +2418,33 @@
             "portId": "in"
           },
           "color": "#f87171"
+        },
+        {
+          "id": "conn-293",
+          "from": {
+            "widgetId": "widget-138",
+            "portId": "outR"
+          },
+          "to": {
+            "widgetId": "widget-151",
+            "portId": "right"
+          },
+          "color": "#22d3ee"
+        },
+        {
+          "id": "conn-294",
+          "from": {
+            "widgetId": "widget-138",
+            "portId": "outL"
+          },
+          "to": {
+            "widgetId": "widget-151",
+            "portId": "left"
+          },
+          "color": "#2dd4bf"
         }
       ]
     }
   },
-  "firmwareVersion": "0.35"
+  "firmwareVersion": "0.36"
 }

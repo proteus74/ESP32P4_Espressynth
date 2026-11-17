@@ -116,6 +116,7 @@ static uint8_t s_next_frame_buffer = 1;
 #endif
 static esp_lcd_touch_handle_t s_touch_handle = nullptr;
 static std::atomic<bool> s_touch_down{false}; // last polled state, see touch_pressed()
+static std::atomic<bool> s_initialized{false}; // init() finished: display, LVGL and its tasks exist
 #if APP_BOOT_SPLASH
 static std::atomic<bool> s_splash_frame_pending{false};
 static std::atomic<TickType_t> s_splash_visible_since{0};
@@ -1016,6 +1017,7 @@ inline const uint8_t* frame_buffer() {
 }
 
 inline void finish_startup_screen() {
+    if (!s_initialized.load(std::memory_order_acquire)) return; // no display: nothing to finish
 #if APP_BOOT_SPLASH
     constexpr const char* TAG = "FeatureLVGL";
     if (s_splash_background == nullptr) {
@@ -1077,8 +1079,48 @@ inline void finish_startup_screen() {
 #endif
 }
 
+#if defined(CONFIG_APP_ENABLE_MIPI_DSI) && defined(CONFIG_BOARD_HAS_VARIABLE_DISPLAY) && !defined(CONFIG_APP_DISPLAY_MIPI_JD9165)
+/**
+ * @brief True when a MIPI-DSI panel answers a DCS read (RDDID, 0x04).
+ *
+ * The ESP-IDF DSI read waits for the panel without a timeout, so with no panel connected it
+ * spins forever and the whole boot stops. The read runs in a helper task instead and is given
+ * a short time; if the panel stays silent the task is deleted and the display is left alone.
+ * Only used on boards whose display is an optional add-on (BOARD_HAS_VARIABLE_DISPLAY).
+ */
+struct DsiProbe {
+    esp_lcd_panel_io_handle_t io;
+    TaskHandle_t waiter;
+};
+
+static void dsi_probe_task(void* arg) {
+    auto* probe = static_cast<DsiProbe*>(arg);
+    uint8_t id[3] = {};
+    esp_lcd_panel_io_rx_param(probe->io, 0x04, id, sizeof(id));
+    xTaskNotifyGive(probe->waiter);
+    vTaskDelete(nullptr);
+}
+
+static bool dsi_panel_responds(esp_lcd_panel_io_handle_t io) {
+    constexpr uint32_t kProbeTimeoutMs = 500;
+    static DsiProbe probe; // outlives the helper task, which may be deleted mid-read
+    probe = {io, xTaskGetCurrentTaskHandle()};
+    ulTaskNotifyTake(pdTRUE, 0); // clear a stale notification
+    TaskHandle_t task = nullptr;
+    // Core 1: the helper may spin for the whole timeout and must not block the main task's core.
+    if (xTaskCreatePinnedToCore(dsi_probe_task, "dsi_probe", 3072, &probe, 5, &task, 1) != pdPASS) {
+        return true; // cannot probe: assume present, as before
+    }
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kProbeTimeoutMs)) != 0) return true;
+    vTaskDelete(task);
+    return false;
+}
+#endif
+
 /**
  * @brief Initialize the selected MIPI/SPI panel and LVGL screen.
+ * @return ESP_ERR_NOT_FOUND if the display is an optional add-on and none answers: nothing is
+ *         started for it (no LVGL, no tasks) and the caller carries on without a display.
  */
 inline esp_err_t init() {
     constexpr const char* TAG = "FeatureLVGL";
@@ -1235,6 +1277,13 @@ inline esp_err_t init() {
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_jd9365(dbi_io, &panel_config, &panel), TAG,
                         "JD9365 panel creation failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "JD9365 panel reset failed");
+#if defined(CONFIG_BOARD_HAS_VARIABLE_DISPLAY)
+    if (!dsi_panel_responds(dbi_io)) {
+        ESP_LOGW(TAG, "No MIPI-DSI display answered: continuing without a display");
+        esp_lcd_panel_del(panel);
+        return ESP_ERR_NOT_FOUND;
+    }
+#endif
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "JD9365 panel initialization failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), TAG,
                         "JD9365 display enable failed");
@@ -1503,6 +1552,7 @@ inline esp_err_t init() {
 #if defined(CONFIG_APP_ENABLE_MIPI_DSI)
     (void)dsi_phy_ldo; // Keep the PHY rail acquired for the lifetime of the display.
 #endif
+    s_initialized.store(true, std::memory_order_release);
     return ESP_OK;
 }
 

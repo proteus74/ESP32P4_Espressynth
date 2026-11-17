@@ -1,31 +1,45 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 4,
+  "masterClock": {
+    "bpm": 77.48
+  },
+  "controlStride": 4,
+  "title": "",
+  "description": "",
+  "longDescription": "",
+  "author": "",
+  "uiTabOrder": [
+    "generator",
+    "fx"
+  ],
+  "uiPages": [
+    {
+      "id": "generator",
+      "title": "Sound Generation",
+      "toMasterUi": {
+        "x": -137,
+        "y": 37
+      }
+    }
+  ],
   "pages": {
     "generator": {
       "widgets": [
-        {
-          "id": "widget-1",
-          "type": "audio-output-link",
-          "label": "To Master",
-          "ui": {
-            "x": -137,
-            "y": 37
-          },
-          "params": {}
-        },
         {
           "id": "widget-3",
           "type": "oscillator",
           "label": "WaveGen",
           "ui": {
             "x": -544,
-            "y": -36
+            "y": -36,
+            "pageId": "generator"
           },
           "params": {
             "waveType": "sine",
             "amplitude": 1,
             "tune": 5,
-            "gain": 10
+            "gain": 10,
+            "feedback": 0
           }
         },
         {
@@ -34,14 +48,19 @@
           "label": "Midi-In",
           "ui": {
             "x": -1373,
-            "y": -78
+            "y": -78,
+            "pageId": "generator"
           },
           "params": {
             "channel": null,
             "voices": 4,
             "overflowMode": "steal-oldest",
             "glide": false,
-            "glideTime": 0
+            "glideTime": 0,
+            "pitchBendRangeCents": 200,
+            "pitchBendQuantizeCents": false,
+            "keyMask": "ffffffffffffffffffffffffffffffff",
+            "program": 0
           }
         },
         {
@@ -50,7 +69,8 @@
           "label": "ADSR",
           "ui": {
             "x": -958,
-            "y": 112
+            "y": 112,
+            "pageId": "generator"
           },
           "params": {
             "attack": 0.088,
@@ -62,7 +82,35 @@
             "decayMaxSeconds": 4,
             "decayCurve": "linear",
             "releaseMaxSeconds": 4,
-            "releaseCurve": "linear"
+            "releaseCurve": "linear",
+            "livePhase": "idle",
+            "liveLevel": 0,
+            "liveSegmentStartedAt": 0,
+            "liveSegmentStartLevel": 0,
+            "liveGate": false,
+            "liveVoiceIndex": null,
+            "graphCollapsed": false
+          }
+        },
+        {
+          "id": "widget-1",
+          "type": "audio-output-link",
+          "label": "To Master",
+          "ui": {
+            "x": -137,
+            "y": 37
+          },
+          "params": {
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
           }
         }
       ],
@@ -125,7 +173,8 @@
           "label": "Audio Outputs",
           "ui": {
             "x": -420,
-            "y": -320
+            "y": -320,
+            "pageId": "fx"
           },
           "params": {
             "gains": [
@@ -137,6 +186,16 @@
               10,
               10,
               10
+            ],
+            "labels": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
             ]
           }
         },
@@ -146,7 +205,8 @@
           "label": "ES8311-Out",
           "ui": {
             "x": -80,
-            "y": -320
+            "y": -320,
+            "pageId": "fx"
           },
           "params": {
             "muted": false,
@@ -159,7 +219,8 @@
           "label": "JS Audio-Out",
           "ui": {
             "x": -80,
-            "y": -140
+            "y": -140,
+            "pageId": "fx"
           },
           "params": {
             "muted": false,
@@ -172,11 +233,26 @@
           "label": "WM8960-Out",
           "ui": {
             "x": -80,
-            "y": 40
+            "y": 40,
+            "pageId": "fx"
           },
           "params": {
             "muted": false,
             "gain": 5
+          }
+        },
+        {
+          "id": "widget-151",
+          "type": "ns4168-out",
+          "label": "NS4168-Out",
+          "ui": {
+            "x": -80,
+            "y": -500,
+            "pageId": "fx"
+          },
+          "params": {
+            "muted": false,
+            "gain": 10
           }
         }
       ],
@@ -240,8 +316,33 @@
             "portId": "left"
           },
           "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-293",
+          "from": {
+            "widgetId": "widget-2",
+            "portId": "out1"
+          },
+          "to": {
+            "widgetId": "widget-151",
+            "portId": "left"
+          },
+          "color": "#2dd4bf"
+        },
+        {
+          "id": "conn-294",
+          "from": {
+            "widgetId": "widget-2",
+            "portId": "out1"
+          },
+          "to": {
+            "widgetId": "widget-151",
+            "portId": "right"
+          },
+          "color": "#2dd4bf"
         }
       ]
     }
-  }
+  },
+  "firmwareVersion": "0.35"
 }
