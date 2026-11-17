@@ -89,3 +89,6 @@ documentation/openrouterapi.txt
 documentation/Espressynth-Build-Your-Own-Synthesizer.mp4
 documentation/video-src/
 documentation/voice-samples/
+
+# Creative Labs GM soundfont: not redistributable, keep local only
+littlefs_data_optional/soundfonts/Creative Labs 4M GM.sf2
